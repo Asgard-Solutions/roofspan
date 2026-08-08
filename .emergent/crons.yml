@@ -1,0 +1,8 @@
+crons:
+  - name: nightly-db-backup
+    description: "Nightly RoofSpan PostgreSQL pg_dump to the persistent volume with 14-day retention"
+    cron: "0 8 * * *"
+    endpoint: "{{BASE_URL}}/api/cron/backup"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

@@ -18,7 +18,7 @@ from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
-from routers import operations, purchasing
+from routers import operations, purchasing, cron
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -48,6 +48,7 @@ app.include_router(invoices.router)
 app.include_router(jobs.router)
 app.include_router(operations.router)
 app.include_router(purchasing.router)
+app.include_router(cron.router)
 
 app.add_middleware(
     CORSMiddleware,
