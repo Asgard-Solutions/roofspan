@@ -1,0 +1,29 @@
+{
+  "summary": "Phase 3 (Sales) end-to-end verification. Backend pytest: 14/14 PASS (phase3_test.py) covering enriched lead detail, idempotent customer-from-lead, inspections, estimate server-side totals (subtotal=6200, tax=511.50, total=6711.50, EST-xxxx), Idempotency-Key on estimates, optimistic If-Match=999 -> 409, quote-from-estimate with copied items + QUO-xxxx + total match, idempotent /accept returning same job_id + JOB-xxxx + total match, edit-locked-on-accepted -> 400, invoice-from-quote (INV-xxxx, job_id linked, items copied, total match), invoice status transition to paid, RBAC (sales can POST /customers + /estimates; sales gets 403 on POST /invoices, /quotes/{id}/accept, /territories, and GET /invoices), and audit trail contains estimate.create/customer.create/quote.accept/invoice.create. Regression: 36/36 backend tests (phase1 + phase2) still PASS. Frontend Playwright: owner workflow on seeded lead — create-customer -> add-inspection -> new-estimate (2 line items @ 8.25% tax, client displays $6,711.50 which matches server) -> generate-quote -> send-quote -> accept-quote (accept-dialog + confirm) -> job appears in Jobs section -> create-invoice -> invoice appears in Invoices section. /jobs page (jobs-table with 2 rows including new job). /finance shows Quotes tab (2 quotes) + Invoices tab (2 invoices) + invoice-status-{id} -> paid succeeds. /customers lists 5 customers including 'TEST_UI_P3_Lead'; Add-customer dialog creates a new customer. RBAC UI as sales user: on lead detail — accept-quote-* buttons hidden (0), create-invoice-* buttons hidden (0), section-invoices hidden; /finance tab-invoices hidden, tab-quotes visible. Everything green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/phase3_test.py",
+    "/app/backend/tests/phase2_test.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/phase3_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "quotes.py PUT /api/quotes/{id}: when only tax_rate is updated (no items), compute_totals is called with QuoteLineItem ORM rows — this works via duck-typing (quantity/unit_price attrs exist) but is fragile; consider fetching as LineItemIn or explicit tuples.",
+    "invoices.py create_invoice does not check quote status before copying — an invoice can currently be created from a 'draft' or 'declined' quote. Business rule likely requires status=='accepted'. Consider guarding this on the server (owner/admin path).",
+    "quotes.py accept_quote is idempotent for job creation (unique quote_id) but a repeat call still updates accepted_at/accepted_by/acceptance_name on the quote when status='accepted' branch is not first-checked. The current code path returns early before those mutations, but any refactor should preserve that guard.",
+    "invoices.py set_status has no state-machine (draft -> issued -> paid -> void). A voided invoice can still be flipped back to 'paid'. Acceptable for records-only tracking but note for compliance.",
+    "estimate & invoice idempotency key rows never expire — IdempotencyKey table will grow unbounded. Add a TTL sweep job.",
+    "LeadDetail.jsx onclick handlers do not disable buttons during in-flight calls (only setBusy on some), so rapid double-clicks on generate-quote / send-quote could produce duplicate quotes. Backend has no dedup for quotes.",
+    "Backend has no server-side check that the invoice's quote is 'accepted' — a sales role would 403 anyway, but an office/admin could create an invoice from a draft quote."
+  ],
+  "updated_files": ["/app/backend/tests/phase3_test.py (new)"],
+  "success_rate": {"backend": "100% (50/50: 14 phase 3 + 17 phase 2 + 19 phase 1)", "frontend": "100% — full sales workflow (customer -> inspection -> estimate -> quote -> accept -> job -> invoice), Jobs/Finance/Customers pages, and sales RBAC UI all verified"},
+  "test_credentials": "Owner unchanged. Created two sales test users during backend RBAC tests (TEST_sales_p3_*) and one UI sales user 'TEST_uisales_f804d6@example.com' / 'UISales#2026'. All TEST_-prefixed and safe to leave or clean up later.",
+  "seed_data_creation": "Territory TEST_UI_P3_* + 1 property + 1 lead (id 6748706d-0900-4194-93f7-047e3cbbf97c) + 1 customer + 1 inspection + 2 estimates (EST-0001, EST-0002) + 2 quotes (QUO-0001, QUO-0002) + 2 jobs (JOB-0001, JOB-0002) + 2 invoices (INV-0001 paid, INV-0002 draft). Plus backend test artifacts (TEST_P3_Terr_*, TEST_SalesCust_*).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && REACT_APP_BACKEND_URL=https://roofspan-core.preview.emergentagent.com python -m pytest tests/ -q -o addopts=''  (pytest.ini pins -n 2 --dist loadscope which triggers on default addopts). Territory POST needs 'geometry': {'type':'Polygon','coordinates':[[...]]}, not 'polygon'. Sample import is async (202) — for fast setup just POST /api/properties directly (owner/office role). Lead POST is via /api/properties/{id}/convert-to-lead. Idempotency-Key and If-Match are lower-case-friendly custom HTTP headers. Estimate/quote/invoice numbers use single shared counter table so counter values persist across test runs (EST-0002 is next).",
+  "rca of the issue": "N/A — no blocking bugs. Two initial 'FAIL' Playwright reports (finance/quotes=0, customers=0 rows) were verified as test-script timing false-negatives: with a 2s explicit wait after page load both showed the expected 2 quotes and 5 customers. Underlying integration is correct."
+}

@@ -15,6 +15,7 @@ from db import Base, engine, SessionLocal
 from models import User
 from core import hash_password, verify_password
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
+from routers import customers, inspections, estimates, quotes, invoices, jobs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -36,6 +37,12 @@ app.include_router(territories.router)
 app.include_router(properties.router)
 app.include_router(imports.router)
 app.include_router(leads.router)
+app.include_router(customers.router)
+app.include_router(inspections.router)
+app.include_router(estimates.router)
+app.include_router(quotes.router)
+app.include_router(invoices.router)
+app.include_router(jobs.router)
 
 app.add_middleware(
     CORSMiddleware,

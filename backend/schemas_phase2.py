@@ -176,6 +176,8 @@ class LeadPatch(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    customer_id: Optional[str] = None
+    assigned_to: Optional[str] = None
 
 
 # ---- Account ----

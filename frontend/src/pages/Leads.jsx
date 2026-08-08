@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -71,7 +72,7 @@ export default function Leads() {
               <TableBody>
                 {leads.map((l) => (
                   <TableRow key={l.id} data-testid={`lead-row-${l.id}`}>
-                    <TableCell className="font-medium text-slate-900">{l.name}</TableCell>
+                    <TableCell className="font-medium text-slate-900"><Link to={`/leads/${l.id}`} className="hover:text-orange-600 hover:underline" data-testid={`lead-link-${l.id}`}>{l.name}</Link></TableCell>
                     <TableCell className="text-slate-600">{l.property_address || l.address || "—"}</TableCell>
                     <TableCell className="text-slate-600">{l.phone || "—"}</TableCell>
                     <TableCell className="text-slate-500">{l.created_by || "—"}</TableCell>

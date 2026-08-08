@@ -8,6 +8,10 @@ import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import MapView from "@/pages/MapView";
 import Leads from "@/pages/Leads";
+import LeadDetail from "@/pages/LeadDetail";
+import Customers from "@/pages/Customers";
+import Jobs from "@/pages/Jobs";
+import Finance from "@/pages/Finance";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
@@ -30,10 +34,11 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/leads" element={<Leads />} />
-            <Route path="/customers" element={<Placeholder title="Customers" />} />
-            <Route path="/jobs" element={<Placeholder title="Jobs" />} />
+            <Route path="/leads/:id" element={<LeadDetail />} />
+            <Route path="/customers" element={<Customers />} />
+            <Route path="/jobs" element={<Jobs />} />
             <Route path="/inventory" element={<Placeholder title="Inventory" />} />
-            <Route path="/finance" element={<Placeholder title="Finance" />} />
+            <Route path="/finance" element={<Finance />} />
             <Route path="/reports" element={<Placeholder title="Reports" />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />
