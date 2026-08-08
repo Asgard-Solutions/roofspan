@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
-import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck } from "lucide-react";
+import PhotoGallery from "@/components/PhotoGallery";
+import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck, Camera } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
@@ -172,6 +173,11 @@ export default function JobDetail() {
               <Link to="/inventory" className="text-xs text-orange-600 hover:underline">Receive materials in Inventory →</Link>
             </div>
           )}
+        </Section>
+
+        {/* Field Photos */}
+        <Section icon={Camera} title="Field photos" testid="section-job-photos">
+          <PhotoGallery recordType="job" recordId={id} testid="job-photos" />
         </Section>
       </div>
 

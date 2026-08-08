@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LineItemsEditor, { computeTotals } from "@/components/LineItemsEditor";
-import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck } from "lucide-react";
+import PhotoGallery from "@/components/PhotoGallery";
+import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
@@ -185,10 +186,19 @@ export default function LeadDetail() {
                   <div className="flex justify-between"><span className="font-medium text-slate-800">{i.roof_condition || "Inspection"}</span><span className="text-xs text-slate-400">{shortDate(i.inspection_date)}</span></div>
                   {i.recommended_work && <div className="text-slate-500">Recommended: {i.recommended_work}</div>}
                   {i.inspector && <div className="text-xs text-slate-400">by {i.inspector}</div>}
+                  <div className="mt-2">
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Field photos</div>
+                    <PhotoGallery recordType="inspection" recordId={i.id} compact testid={`insp-photos-${i.id}`} />
+                  </div>
                 </div>
               ))}
             </div>
           )}
+        </Section>
+
+        {/* Field Photos (lead-level) */}
+        <Section icon={Camera} title="Field photos" testid="section-lead-photos">
+          <PhotoGallery recordType="lead" recordId={id} testid="lead-photos" />
         </Section>
 
         {/* Estimates */}

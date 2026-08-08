@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import PhotoGallery from "@/components/PhotoGallery";
 import { Ban, User, Home, MapPin, Loader2, UserPlus, Bed, Bath, Ruler, CalendarClock } from "lucide-react";
 
 const OUTCOMES = [
@@ -173,6 +174,14 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                 </div>
               </div>
             )}
+
+            {/* Field photos */}
+            <div className="mt-5">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Field photos</div>
+              <div className="mt-2">
+                <PhotoGallery recordType="property" recordId={p.id} testid="property-photos" />
+              </div>
+            </div>
 
             {/* Convert to lead */}
             <div className="mt-6">
