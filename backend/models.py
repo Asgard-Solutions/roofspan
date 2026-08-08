@@ -426,3 +426,17 @@ class POLineItem(Base):
     line_total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     received_quantity: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0)
+
+
+
+class Photo(Base):
+    __tablename__ = "photos"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    object_path: Mapped[str] = mapped_column(String(400), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream", nullable=False)
+    record_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    record_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    uploaded_by: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

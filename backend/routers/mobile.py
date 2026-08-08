@@ -1,0 +1,194 @@
+"""Mobile field-app sync surface. Reuses existing business records; adds idempotent create,
+simple conflict detection, and backend-authorized photo upload (no object-storage creds on device)."""
+import os
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, UploadFile, File, Form
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from fastapi.responses import Response
+
+from db import get_db
+from models import Property, Visit, Inspection, Photo, IdempotencyKey, User
+from core import get_current_user, require_roles, FIELD_ROLES, log_action
+from offsite_backup import put_object, get_object
+
+router = APIRouter(prefix="/api/mobile", tags=["mobile"])
+
+
+async def _reserve_idem(db: AsyncSession, key: str | None, entity_type: str):
+    """Atomically reserve an Idempotency-Key. Returns existing entity_id on replay, else None."""
+    if not key:
+        return None, False
+    existing = await db.get(IdempotencyKey, key)
+    if existing:
+        if existing.entity_type != entity_type:
+            raise HTTPException(status_code=409, detail="Idempotency-Key already used for a different operation")
+        return existing.entity_id, True
+    db.add(IdempotencyKey(key=key, entity_type=entity_type, entity_id="pending"))
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        existing = await db.get(IdempotencyKey, key)
+        return (existing.entity_id if existing else None), True
+    return None, False
+
+
+class MobileVisitIn(BaseModel):
+    property_id: str
+    outcome: str = "no_answer"
+    notes: str | None = None
+    visited_at: datetime | None = None
+
+
+@router.post("/visits", status_code=201)
+async def create_visit(payload: MobileVisitIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_visit")
+    if replay and prior and prior != "pending":
+        v = await db.get(Visit, prior)
+        if v:
+            return _visit_out(v, replayed=True)
+    p = await db.get(Property, payload.property_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Property not found")
+    v = Visit(property_id=p.id, user_id=user.id, user_email=user.email,
+              visited_at=payload.visited_at or datetime.now(timezone.utc), outcome=payload.outcome, notes=payload.notes)
+    db.add(v)
+    if payload.outcome == "do_not_knock" and not p.do_not_knock:
+        p.do_not_knock = True
+        p.do_not_knock_reason = "Marked during visit"
+    await db.flush()
+    if idempotency_key:
+        k = await db.get(IdempotencyKey, idempotency_key)
+        if k:
+            k.entity_id = str(v.id)
+    await db.commit()
+    await db.refresh(v)
+    await log_action(db, user=user, action="visit.create", entity_type="property", entity_id=p.id, detail={"outcome": v.outcome, "via": "mobile"}, request=request)
+    return _visit_out(v)
+
+
+def _visit_out(v: Visit, replayed: bool = False) -> dict:
+    return {"id": str(v.id), "property_id": str(v.property_id), "outcome": v.outcome, "notes": v.notes,
+            "visited_at": v.visited_at.isoformat(), "user_email": v.user_email, "replayed": replayed}
+
+
+class MobileInspectionIn(BaseModel):
+    lead_id: str | None = None
+    customer_id: str | None = None
+    property_id: str | None = None
+    inspection_date: datetime | None = None
+    inspector: str | None = None
+    roof_condition: str | None = None
+    findings: str | None = None
+    recommended_work: str | None = None
+    measurements: str | None = None
+    notes: str | None = None
+
+
+@router.post("/inspections", status_code=201)
+async def create_inspection(payload: MobileInspectionIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_inspection")
+    if replay and prior and prior != "pending":
+        i = await db.get(Inspection, prior)
+        if i:
+            return _insp_out(i, replayed=True)
+    i = Inspection(**payload.model_dump(), created_by=user.email)
+    db.add(i)
+    await db.flush()
+    if idempotency_key:
+        k = await db.get(IdempotencyKey, idempotency_key)
+        if k:
+            k.entity_id = str(i.id)
+    await db.commit()
+    await db.refresh(i)
+    await log_action(db, user=user, action="inspection.create", entity_type="inspection", entity_id=i.id, detail={"via": "mobile"}, request=request)
+    return _insp_out(i)
+
+
+@router.patch("/inspections/{inspection_id}")
+async def update_inspection(inspection_id: str, payload: MobileInspectionIn, request: Request, if_match: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    i = await db.get(Inspection, inspection_id)
+    if not i:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    # Simple visible conflict detection: client sends the updated_at it last saw via If-Match.
+    server_token = _token(i)
+    if if_match and server_token and if_match != server_token:
+        raise HTTPException(status_code=409, detail={"message": "This inspection changed on the server since your copy.", "server": _insp_out(i)})
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(i, k, v)
+    await db.commit()
+    await db.refresh(i)
+    await log_action(db, user=user, action="inspection.update", entity_type="inspection", entity_id=i.id, detail={"via": "mobile"}, request=request)
+    return _insp_out(i)
+
+
+def _token(i: Inspection) -> str | None:
+    ts = getattr(i, "updated_at", None) or getattr(i, "created_at", None)
+    return ts.isoformat() if ts else None
+
+
+def _insp_out(i: Inspection, replayed: bool = False) -> dict:
+    return {"id": str(i.id), "lead_id": str(i.lead_id) if i.lead_id else None,
+            "property_id": str(i.property_id) if i.property_id else None,
+            "customer_id": str(i.customer_id) if i.customer_id else None,
+            "inspector": i.inspector, "roof_condition": i.roof_condition, "findings": i.findings,
+            "recommended_work": i.recommended_work, "measurements": i.measurements, "notes": i.notes,
+            "if_match": _token(i), "created_by": i.created_by, "replayed": replayed}
+
+
+# ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----
+_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic"}
+
+
+@router.post("/photos", status_code=201)
+async def upload_photo(request: Request, file: UploadFile = File(...), record_type: str = Form(...), record_id: str = Form(...),
+                       description: str | None = Form(None), category: str | None = Form(None),
+                       user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    if record_type not in ("property", "visit", "inspection", "job"):
+        raise HTTPException(status_code=422, detail="Invalid record_type")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty file")
+    ext = _EXT.get(file.content_type or "", "bin")
+    object_path = f"roofspan/photos/{record_type}/{record_id}/{uuid.uuid4()}.{ext}"
+    try:
+        put_object(object_path, data, file.content_type or "application/octet-stream")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Photo storage failed: {e.__class__.__name__}")
+    ph = Photo(object_path=object_path, content_type=file.content_type or "application/octet-stream",
+               record_type=record_type, record_id=record_id, description=description, category=category, uploaded_by=user.email)
+    db.add(ph)
+    await db.commit()
+    await db.refresh(ph)
+    await log_action(db, user=user, action="photo.upload", entity_type=record_type, entity_id=record_id, request=request)
+    return _photo_out(ph)
+
+
+@router.get("/photos")
+async def list_photos(record_type: str = Query(...), record_id: str = Query(...), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Photo).where(Photo.record_type == record_type, Photo.record_id == record_id).order_by(Photo.created_at.desc()))).scalars().all()
+    return [_photo_out(p) for p in rows]
+
+
+@router.get("/photos/{photo_id}/content")
+async def photo_content(photo_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    ph = await db.get(Photo, photo_id)
+    if not ph:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    try:
+        data = get_object(ph.object_path)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not retrieve photo")
+    return Response(content=data, media_type=ph.content_type)
+
+
+def _photo_out(p: Photo) -> dict:
+    return {"id": str(p.id), "record_type": p.record_type, "record_id": p.record_id,
+            "content_type": p.content_type, "description": p.description, "category": p.category,
+            "uploaded_by": p.uploaded_by, "created_at": p.created_at.isoformat(),
+            "content_url": f"/api/mobile/photos/{p.id}/content"}

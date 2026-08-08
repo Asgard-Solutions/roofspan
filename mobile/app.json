@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "RoofSpan Field",
+    "slug": "roofspan-field",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "roofspan",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": { "supportsTablet": true, "bundleIdentifier": "io.roofspan.field" },
+    "android": { "package": "io.roofspan.field" },
+    "plugins": ["expo-secure-store", "expo-image-picker"],
+    "extra": {
+      "apiBase": "https://roofspan-core.preview.emergentagent.com"
+    }
+  }
+}

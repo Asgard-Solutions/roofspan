@@ -97,6 +97,14 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Verification:** backend regression **86/86**; off-site upload/download + off-site restore drill PASS; admin endpoint RBAC (owner 200 / office-sales 403 / unauth 401) and page render + nav RBAC independently verified (iteration_7, 6/6); frontend production build clean. No defects.
 - **HUMAN ACTION:** ensure `EMERGENT_LLM_KEY` + `SECRETS_ENCRYPTION_KEY` are present in the production env/secret store; optionally prune old off-site objects if storage cost matters.
 
+## Mobile Field App — Milestone 1 (2026-08-08)
+- **Stack:** Expo / React Native at `/app/mobile` (separate from Office web + backend). `Mobile → RoofSpan FastAPI → PostgreSQL`; no direct DB/RentCast; no provider secrets on device. axios; `expo-secure-store` (token); `expo-sqlite` (cache + durable pending queue); `@react-navigation` tabs (Home/Leads/Map/Jobs/More); `@maplibre/maplibre-react-native` (native map, server-provided OSM config).
+- **Backend additions (`routers/mobile.py`, non-breaking):** idempotent `POST /api/mobile/visits` and `/inspections` (Idempotency-Key dedup via IdempotencyKey table); `PATCH /api/mobile/inspections/{id}` with If-Match → 409 conflict (server value returned, pending preserved); backend-authorized photo upload/list/content-proxy (`/api/mobile/photos*`) to Emergent object storage (creds stay server-side). New `photos` table + Alembic migration `e08723e6501e`. FIELD_ROLES-gated.
+- **Offline core (`src/queue.js`, pure/CJS):** stable client-generated IDs = idempotency key, never regenerated on retry; states pending/failed/conflict/synced; only a server ack flips to synced; pending never deleted until acknowledged; 5xx/offline stay pending, 4xx→failed, 409→conflict.
+- **Verified in-environment:** backend/API (curl: idempotent visit/inspection, 409 conflict, photo upload→storage→proxy 200); **offline sync lifecycle (Node test `sync.node.test.js`, 11/11):** offline→persist→restart→retry-same-key→server-accepts-once→Office shows exactly one record; conflict preserves pending data. Backend regression **92/92**. All 19 Expo files Babel-parse clean.
+- **REQUIRES device / Expo Go verification (NOT proven by web/Node):** SecureStore, SQLite persistence across real app kill, camera/photo capture, native MapLibre rendering, NetInfo offline transitions, tab UI on phone/tablet.
+- **HUMAN REQUIRED:** App Store / Play Store / EAS signing + publishing (deferred). `EMERGENT_LLM_KEY` present in mobile-serving backend env for photo storage.
+
 ## Next Tasks
 1. **Deployment prep complete — PAUSED. Awaiting explicit approval before the RoofSpan Mobile Field phase (do NOT auto-start).**
 2. Wire real RentCast key when provided (Settings → Integrations); SAMPLE/DEMO until then.
