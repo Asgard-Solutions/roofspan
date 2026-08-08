@@ -34,7 +34,17 @@ if pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Fc -f "$TMP"
     rm -f "$f" && log "PRUNED $f"
   done
   echo "OK $TS $OUT" > "$BACKUP_DIR/LAST_BACKUP_STATUS"
-  exit 0
+  # Off-site copy (only after a successful local backup). Local backup is retained regardless.
+  if OFFOUT=$(cd "$BACKEND_DIR" && python3 offsite_backup.py upload "$OUT" 2>>"$LOG"); then
+    log "OFFSITE_OK ${OFFOUT#OK }"
+    echo "OK $TS ${OFFOUT#OK }" > "$BACKUP_DIR/LAST_OFFSITE_STATUS"
+    log "COMPLETE local=OK offsite=OK"
+    exit 0
+  else
+    log "OFFSITE_FAILURE off-site copy failed — local backup retained; overall backup NOT healthy"
+    echo "FAIL $TS" > "$BACKUP_DIR/LAST_OFFSITE_STATUS"
+    exit 3
+  fi
 else
   rc=$?
   rm -f "$TMP"   # never leave a corrupt partial; existing good backups are untouched

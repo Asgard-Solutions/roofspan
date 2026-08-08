@@ -25,8 +25,25 @@ PSQL="psql -h $DB_HOST -p $DB_PORT -U $DB_USER -tAc"
 # Safety: never operate on the production database.
 if [ "$DRILL_DB" = "$DB_NAME" ]; then echo "FAIL: drill DB name equals production DB name"; exit 1; fi
 
-BACKUP="${1:-$(ls -1t "$BACKUP_DIR"/roofspan_*.dump 2>/dev/null | head -1)}"
-if [ -z "$BACKUP" ] || [ ! -f "$BACKUP" ]; then echo "FAIL: no backup file found in $BACKUP_DIR"; exit 1; fi
+OFFSITE=0
+if [ "${1:-}" = "--offsite" ]; then OFFSITE=1; shift; fi
+
+TMP_OFFSITE=""
+if [ "$OFFSITE" = "1" ]; then
+  NAME="$(cd "$BACKEND_DIR" && python3 offsite_backup.py latest-name 2>/dev/null)"
+  if [ -z "$NAME" ]; then echo "FAIL: no backup available to locate off-site copy"; exit 1; fi
+  TMP_OFFSITE="/tmp/offsite_restore_${NAME}"
+  if ! (cd "$BACKEND_DIR" && python3 offsite_backup.py download "roofspan/backups/${NAME}" "$TMP_OFFSITE"); then
+    echo "FAIL: could not RETRIEVE off-site backup ${NAME}"
+    echo "FAIL $(date -u +%Y%m%dT%H%M%SZ)" > "$BACKUP_DIR/LAST_OFFSITE_RESTORE_STATUS"
+    exit 1
+  fi
+  echo "Off-site RETRIEVAL OK: ${NAME}"
+  BACKUP="$TMP_OFFSITE"
+else
+  BACKUP="${1:-$(ls -1t "$BACKUP_DIR"/roofspan_*.dump 2>/dev/null | head -1)}"
+fi
+if [ -z "$BACKUP" ] || [ ! -f "$BACKUP" ]; then echo "FAIL: no backup file found"; exit 1; fi
 echo "Restore drill using backup: $BACKUP"
 
 $PSQL "SELECT 1" -d postgres >/dev/null 2>&1 || { echo "FAIL: cannot reach PostgreSQL server"; exit 1; }
@@ -52,10 +69,14 @@ STATUS="PASS"
 # Cleanup the isolated drill DB (leave production untouched).
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS $DRILL_DB;" >/dev/null 2>&1
 
+[ -n "$TMP_OFFSITE" ] && rm -f "$TMP_OFFSITE"
+
 if [ "$STATUS" = "PASS" ]; then
-  echo "RESTORE DRILL: PASS — backup is restorable and readable."
+  [ "$OFFSITE" = "1" ] && echo "PASS $(date -u +%Y%m%dT%H%M%SZ)" > "$BACKUP_DIR/LAST_OFFSITE_RESTORE_STATUS"
+  echo "RESTORE DRILL: PASS — backup is restorable and readable.${OFFSITE:+ (source: off-site)}"
   exit 0
 else
+  [ "$OFFSITE" = "1" ] && echo "FAIL $(date -u +%Y%m%dT%H%M%SZ)" > "$BACKUP_DIR/LAST_OFFSITE_RESTORE_STATUS"
   echo "RESTORE DRILL: FAILURE — see /tmp/restore_drill.log"
   exit 1
 fi

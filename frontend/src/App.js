@@ -18,6 +18,7 @@ import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
 import AuditLog from "@/pages/admin/AuditLog";
+import BackupStatus from "@/pages/admin/BackupStatus";
 import Settings from "@/pages/admin/Settings";
 
 function App() {
@@ -46,6 +47,7 @@ function App() {
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />
             <Route path="/admin/audit" element={<RequireSensitive><AuditLog /></RequireSensitive>} />
+            <Route path="/admin/backups" element={<RequireSensitive><BackupStatus /></RequireSensitive>} />
             <Route path="/admin/settings" element={<RequireSensitive><Settings /></RequireSensitive>} />
           </Route>
         </Routes>
