@@ -15,7 +15,7 @@ API base is resolved in `src/config.js`, in this priority order:
 3. Hardcoded fallback (current preview URL)
 
 **After migrating to a new project:** update the backend URL by either setting
-`EXPO_PUBLIC_API_BASE=https://<new-project>.preview.emergentagent.com` (e.g. in a `.env`
+`EXPO_PUBLIC_API_BASE=https://unified-mono-deploy.preview.emergentagent.com` (e.g. in a `.env`
 file or the mono-template's env) OR editing `app.json` → `extra.apiBase`. No code changes needed.
 
 ## Key pieces

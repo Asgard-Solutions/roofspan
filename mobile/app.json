@@ -11,7 +11,7 @@
     "android": { "package": "io.roofspan.field" },
     "plugins": ["expo-secure-store", "expo-image-picker"],
     "extra": {
-      "apiBase": "https://field-photo-capture.preview.emergentagent.com"
+      "apiBase": "https://unified-mono-deploy.preview.emergentagent.com"
     }
   }
 }

@@ -7,7 +7,7 @@ import io
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://roofspan-core.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://unified-mono-deploy.preview.emergentagent.com").rstrip("/")
 OWNER_EMAIL = "pjacobsen@asgardsolution.io"
 OWNER_PASSWORD = "RoofSpan#Owner2026"
 

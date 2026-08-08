@@ -12,7 +12,7 @@ const path = require("path");
 const axios = require("axios");
 const queue = require("../queue");
 
-const API = (process.env.REACT_APP_BACKEND_URL || "https://roofspan-core.preview.emergentagent.com").replace(/\/$/, "") + "/api";
+const API = (process.env.REACT_APP_BACKEND_URL || "https://unified-mono-deploy.preview.emergentagent.com").replace(/\/$/, "") + "/api";
 const EMAIL = "pjacobsen@asgardsolution.io";
 const PASSWORD = "RoofSpan#Owner2026";
 const DEVICE_FILE = path.join(os.tmpdir(), "roofspan_mobile_pending.json");

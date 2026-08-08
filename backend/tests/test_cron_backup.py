@@ -3,7 +3,7 @@ import os
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://roofspan-core.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://unified-mono-deploy.preview.emergentagent.com").rstrip("/")
 CRON_SECRET = "rs_cron_9b1f7c2e4a6d8f0b3c5e7a9d1f2b4c6e8a0d2f4b6c8e0a1d3f5b7c9e1a3d5f7"
 OWNER_EMAIL = "pjacobsen@asgardsolution.io"
 OWNER_PASS = "RoofSpan#Owner2026"
