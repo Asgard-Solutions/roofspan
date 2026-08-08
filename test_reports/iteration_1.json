@@ -1,0 +1,46 @@
+{
+  "summary": "Backend + Frontend Phase 1 review. Backend 19/19 pytest passing (health, auth JWT+audit, RBAC enforcement for owner/administrator/office/sales, users CRUD with owner-role guard + self-deactivation guard + 409 dup email, integrations encrypted secret set/mask/clear + test-connection graceful failure, map-config with maptiler gating, audit list). Frontend: login flow, sidebar admin nav, all admin pages, users create dialog, settings tabs (integrations masked password input, satellite disabled without MapTiler, company save), RBAC hide/no-permission for sales — all pass. One CRITICAL UI bug found: the /map page renders MapView header + tiles are fetched (HTTP 200 from OSM) but the map canvas is invisible because the `[data-testid=map-container]` element resolves to height=0.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MapView (/app/frontend/src/pages/MapView.jsx line 103)",
+        "issue": "map-container has height=0 so the map is invisible even though MapLibre initializes and OSM tiles load with HTTP 200. Root cause: div uses className='absolute inset-0' but maplibre-gl.css defines '.maplibregl-map { position: relative }' which overrides the Tailwind 'absolute' rule (same specificity, imported after Tailwind). Result: position becomes relative, inset-0 no longer affects height, and the div collapses to 0. Parent 'relative flex-1' correctly measures 803px. Fix: replace 'absolute inset-0' with 'h-full w-full' on the map div (parent is already 'relative flex-1' with a known height).",
+        "selector": "[data-testid='map-container']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix MapView container sizing: change `<div ref={containerRef} className=\"absolute inset-0\" data-testid=\"map-container\" />` to `className=\"h-full w-full\"` (parent already provides 'relative flex-1' bounds). This one-line change makes the OSM map actually visible."
+  ],
+  "critical_code_review_comments": [
+    "Brute-force lockout in routers/auth.py is in-memory (module-level dict _attempts). This is fine for single-instance local deployment but will not survive restarts and won't work across workers. Documented behavior matches phase 1 scope but worth noting.",
+    "Settings router uses prefix '/api' (not '/api/settings'), so endpoints live at /api/map-config, /api/company, /api/dashboard/summary. Working as designed but slightly inconsistent with other routers.",
+    "core.py hash_password truncates password to 72 bytes to match bcrypt limit — correct. Good.",
+    "AES-GCM secret encryption + last4-masking correctly avoids leaking plaintext. Verified: PUT rentcast/secret with 'rc_test_ABCD1234WXYZ' returned masked '••••••••WXYZ' with no plaintext in body.",
+    "AppShell '<main>' uses `flex-1 pt-14 md:ml-64 md:pt-0` with no explicit height. MapView uses `md:h-screen` on its own root, which works because it's viewport-relative, but future full-height pages should be aware of this."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (19/19)",
+    "frontend": "95% (all flows pass; map visually broken but non-blocking for phase 1 nav/RBAC/settings testing)"
+  },
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (seeded). Test users (TEST_*) created during tests; they persist in Postgres but are prefixed for easy cleanup.",
+  "seed_data_creation": "Created several TEST_ prefixed users (sales/office/administrator/promo/reset/dup) during backend tests; a TEST_ui_* user + TEST_uisales_* user via frontend automation. All prefixed with 'TEST_' or 'test_' after lowercasing. Nothing else seeded.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests live in /app/backend/tests/backend_test.py and can be re-run with `cd /app/backend && pytest tests/backend_test.py -v`. Emails are lowercased by the server, so assertions must compare against email.lower(). The satellite/map-config flow correctly stays disabled until BOTH the MapTiler key is stored AND the integration is enabled. When retesting after the MapView CSS fix, verify: (1) [data-testid=map-container] has non-zero clientHeight (~800px on 1440x900), (2) canvas fills the container, (3) OSM tiles render visually.",
+  "rca of the issue": "Bug: /map page renders blank. Reproduction: log in as owner, navigate to /map. Header 'Property Map' and Street/Satellite buttons render, but the map area is white. Evidence: getBoundingClientRect on [data-testid=map-container] returns {w:1184, h:0} while its parent '.relative.flex-1' is 803px tall. OSM tile requests return 200. Canvas child exists at 1184x300 (initial MapLibre size before resize). Root cause: `.maplibregl-map` CSS rule (from maplibre-gl/dist/maplibre-gl.css) sets `position: relative`, which overrides the Tailwind `absolute` utility (same specificity, later in cascade). With position:relative + no explicit height, `inset-0` no longer determines height, so the div collapses. Mitigation: change className on the map container from 'absolute inset-0' to 'h-full w-full' (or add explicit height:100%; width:100% inline styles). The parent 'relative flex-1' already provides bounded dimensions."
+}
