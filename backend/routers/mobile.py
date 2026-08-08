@@ -154,6 +154,8 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
     data = await file.read()
     if not data:
         raise HTTPException(status_code=422, detail="Empty file")
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Photo too large (max 15MB)")
     ext = _EXT.get(file.content_type or "", "bin")
     object_path = f"roofspan/photos/{record_type}/{record_id}/{uuid.uuid4()}.{ext}"
     try:
