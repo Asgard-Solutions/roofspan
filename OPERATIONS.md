@@ -35,7 +35,8 @@ The PostgreSQL data directory was moved off the ephemeral container overlay onto
 - **Safety:** writes to `.partial` then atomic `mv` (never corrupts/overwrites the only good backup); failures are logged and never delete good backups.
 - **Detectability:** every run logs to `/data/db/roofspan_backups/backup.log`; last outcome in `/data/db/roofspan_backups/LAST_BACKUP_STATUS` (`OK ...` / `FAIL ... rc=N`, non-zero exit on failure).
 - **Run manually:** `bash /app/backend/scripts/backup_db.sh`
-- **Off-site (recommended HUMAN ACTION):** periodically copy `/data/db/roofspan_backups/*.dump` **and** the `SECRETS_ENCRYPTION_KEY` to storage outside this pod (object storage / another host).
+- **Off-site copy (IMPLEMENTED):** after each successful local backup, `backup_db.sh` copies the completed `.dump` to **Emergent managed object storage** (pod-independent) via `backend/offsite_backup.py` at object path `roofspan/backups/<filename>`. Uses `EMERGENT_LLM_KEY` + `INTEGRATION_PROXY_URL` from `backend/.env` — **no external account/credentials required**. The local backup is always retained even if the off-site copy fails; an off-site failure is logged (`OFFSITE_FAILURE`), recorded in `LAST_OFFSITE_STATUS`, and makes the script exit non-zero (the run is NOT reported healthy). Off-site status is separate from `LAST_BACKUP_STATUS` (local).
+- **Retention:** local keeps the newest 14 dumps. Off-site copies are **not auto-pruned** (never delete the only known-good remote backup); prune the remote manually if storage cost requires it.
 
 ## 5. Restore procedure (recover into production)
 1. Stop the backend: `sudo supervisorctl stop backend`.
@@ -48,9 +49,14 @@ The PostgreSQL data directory was moved off the ephemeral container overlay onto
 4. Start the backend: `sudo supervisorctl start backend` (Alembic reconciles to head; owner seed is idempotent).
 
 ## 6. Restore-verification drill (operational tool — run periodically)
-- One command: `bash /app/backend/scripts/restore_drill.sh` (or pass a specific dump path).
-- It restores the latest backup into an **isolated** DB `roofspan_restore_drill`, checks tables/users/`alembic_version`/key tables, prints **PASS/FAIL**, then drops the isolated DB. It **never** touches the production `roofspan` database.
-- **Verified:** PASS on the current backup (tables=29, users present, alembic at head), drill DB cleaned up, production untouched. Recommend the administrator run it monthly.
+- Local source: `bash /app/backend/scripts/restore_drill.sh` (or pass a specific dump path).
+- **Off-site source: `bash /app/backend/scripts/restore_drill.sh --offsite`** — retrieves the latest backup FROM object storage, restores it into an **isolated** DB `roofspan_restore_drill`, verifies tables/users/`alembic_version`/key tables, prints **PASS/FAIL**, records `LAST_OFFSITE_RESTORE_STATUS`, then drops the isolated DB. It **never** touches production.
+- **Verified:** both local and `--offsite` drills PASS (tables=29, users present, alembic at head); production untouched; isolated DB cleaned up.
+- **Admin visibility:** owner/administrator can see last-local / last-off-site / last-off-site-restore-drill status (OK/PASS/FAILED + timestamp) at **Administration → Backups** (read-only; served by `GET /api/admin/backup-status`).
+- Recommend the administrator run the `--offsite` drill monthly.
+
+## 6b. Secrets recovery strategy (off-container)
+- `SECRETS_ENCRYPTION_KEY` is **never** placed in the DB dump. Preserve it in the deployment's secret store / an `.env` kept outside disposable container state. A complete RoofSpan recovery set = **{ off-site DB dump } + { SECRETS_ENCRYPTION_KEY }**. On restore, put the same key in `backend/.env` before starting the backend so stored provider credentials decrypt; otherwise re-enter provider keys via Administration → Settings → Integrations.
 
 ## 7. Alembic migrations
 - Revisions: `61f7ea11c757` (baseline, all Phase 1–4 tables) → `7a95fb788bfd` (unique `uq_materials_name`).

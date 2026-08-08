@@ -88,6 +88,15 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Verification reruns**: backend regression **76/76**; frontend production build clean; cron+regression sanity **10/10** (iteration_6). No defects.
 - **HUMAN ACTION (deploy)**: (1) if a from-scratch container rebuild recreates system config from the base image, re-apply the two PGDATA path settings or restore from backup — backups+key are the guaranteed recovery set; (2) periodically copy `/data/db/roofspan_backups/*.dump` + `SECRETS_ENCRYPTION_KEY` truly off-pod.
 
+## Off-site Backup Protection (2026-08-08) — operational durability (no product changes beyond a read-only admin status page)
+- **Off-site target:** Emergent **managed object storage** (pod/host-independent) via `backend/offsite_backup.py` (`EMERGENT_LLM_KEY` + `INTEGRATION_PROXY_URL`; no external account). Object path `roofspan/backups/<filename>`. Verified: byte-identical upload+download.
+- **Flow:** PostgreSQL → local pg_dump (`/data/db/roofspan_backups`) → off-site copy. `backup_db.sh` copies after a successful local backup; **local retained even if off-site fails**; off-site failure logged + `LAST_OFFSITE_STATUS=FAIL` + non-zero exit (never silently "healthy"). Local retention 14; off-site not auto-pruned.
+- **Off-site restore drill:** `restore_drill.sh --offsite` retrieves from object storage → restores into isolated `roofspan_restore_drill` → verifies schema/alembic/business data → PASS/FAIL → drops drill DB; production untouched. **Verified PASS** (tables=29, users, alembic head).
+- **Encryption key:** `SECRETS_ENCRYPTION_KEY` kept off-container and OUT of the DB dump; documented recovery set = off-site dump + key.
+- **Admin status page:** read-only **Administration → Backups** (`/admin/backups`, `GET /api/admin/backup-status`, SENSITIVE_ROLES) shows last local / last off-site / last off-site restore-drill (OK/PASS/FAILED + timestamp) + retained count. No charts/analytics/restore buttons.
+- **Verification:** backend regression **86/86**; off-site upload/download + off-site restore drill PASS; admin endpoint RBAC (owner 200 / office-sales 403 / unauth 401) and page render + nav RBAC independently verified (iteration_7, 6/6); frontend production build clean. No defects.
+- **HUMAN ACTION:** ensure `EMERGENT_LLM_KEY` + `SECRETS_ENCRYPTION_KEY` are present in the production env/secret store; optionally prune old off-site objects if storage cost matters.
+
 ## Next Tasks
 1. **Deployment prep complete — PAUSED. Awaiting explicit approval before the RoofSpan Mobile Field phase (do NOT auto-start).**
 2. Wire real RentCast key when provided (Settings → Integrations); SAMPLE/DEMO until then.
