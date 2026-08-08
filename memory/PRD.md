@@ -50,10 +50,21 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Audit**: estimate/customer/quote.accept/invoice actions logged.
 - Verified: backend 50/50 pytest (14 Phase 3 + 17 Phase 2 + 19 Phase 1); full browser Sales workflow + Jobs/Finance/Customers + sales RBAC UI (iteration_3). No blocking defects.
 
+## Implemented (2026-08-08) — Office Phase 4: Operations
+- **Workflow verified end-to-end**: Job → Schedule → Add/Review Materials → Check Inventory → Create PO → Receive (partial → remaining) → Inventory updates.
+- **Materials catalog** (`/api/materials`): CRUD + `POST /materials/{id}/adjust` (+/- stock, negative-below-zero guarded). `low_stock` flag = quantity_on_hand <= reorder_threshold; list supports `low_stock=true` filter.
+- **Suppliers** (`/api/suppliers`): list/create.
+- **Job scheduling** (`PATCH /api/jobs/{id}`): status pipeline (created/pending/scheduled/in_progress/completed/cancelled) + scheduled_start/end, schedule_notes, assigned_to. Audit `job.update` writes ISO datetimes via `model_dump(mode="json")` — **datetime-JSONB serialization bug FIXED & verified**.
+- **Job materials** (`/api/jobs/{id}/materials`): add/list/delete; JobDetail returns materials[] (planned qty, on-hand, low-stock) + purchase_orders[].
+- **Purchase Orders** (`/api/purchase-orders`): create with line items (server-computed total, PO-xxxx number), list/filter by job_id, get, status.
+- **Receiving** (`POST /api/purchase-orders/{id}/receive`): partial + full; increments material stock via `inventory_txns`; **Idempotency-Key protects against double-count**; over-receive after full → 400.
+- **RBAC**: MANAGE_ROLES (owner/admin/office) for materials-create, job PATCH, PO create/receive; sales = read-only on materials, 403 on manage. Backend-enforced.
+- **Frontend**: Inventory page (materials + Purchase Orders tab + ReceiveDialog), JobDetail page (schedule, job materials, PODialog). Nav `nav-inventory`, route `/jobs/:id`.
+- Verified: backend 19/19 pytest (phase4_test.py); frontend Playwright full ops flow (iteration_4). No blocking defects. **Paused before Phase 5 per user.**
+
 ## Backlog (Not Built — by design)
-- **P0 (next, awaiting approval): Office Phase 4 — Operations**: jobs (expand), scheduling, materials, inventory, low-stock, purchase orders, receiving. Workflow: Job → Schedule → Materials → PO → Receive.
 - **P2 sales polish (backlog)**: idempotency-key TTL sweep; invoice status state-machine; double-submit dedup on quote generation; customer detail drawer with full history.
-- **P1: Office Phase 4 — Operations**: jobs, scheduling, materials/inventory, low-stock, purchase orders, receiving.
+- **P2 ops polish (backlog, from iteration_4 code review)**: unique material-name guard (409); SQL-side low_stock filter + `low_stock=false` semantics; atomic idempotency on receive (INSERT ON CONFLICT / SELECT FOR UPDATE) for concurrent requests; PO line `quantity gt=0` + material `ge=0` constraints; job PATCH optimistic concurrency + status state-machine; supplier N+1 (joinedload) & active filter; DialogContent aria-describedby a11y; silence benign ResizeObserver dev-overlay noise.
 - **P2: Office Phase 5 — Production Readiness**: full regression, backups/recovery, Alembic migrations, hardening.
 - **P2: Mobile field app** (after Phase 5): Home/Leads/Map/Jobs/More, offline-safe writes.
 - Explicit non-goals (Stripe/payments, accounting, portals, BI, PostGIS, queues, etc.) — do not build.
