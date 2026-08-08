@@ -1,0 +1,33 @@
+{
+  "summary": "Independently verified /api/mobile/* backend surface (visits, inspections, photos, RBAC) plus Office regression. 10/10 pytest cases pass against the public preview URL. Env was initially down (supervisor not running + PostgreSQL 'roofspan' role missing/password mismatch causing app startup crash with 502 at ingress); recovered by starting supervisord and running /app/backend/scripts/bootstrap_postgres.sh. After recovery all mobile+regression tests pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "startup", "issue": "Preview pod started with no supervisord running AND the postgres 'roofspan' role auth failed (password authentication failed for user 'roofspan'), causing backend lifespan startup to abort and Cloudflare to return 502 for all /api/* routes. Fixed by running supervisord + bash /app/backend/scripts/bootstrap_postgres.sh. Consider making bootstrap idempotent-on-boot (or documenting that main agent should run it after container restarts)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_mobile_api.py",
+    "/app/test_reports/pytest/mobile_api_results.xml"
+  ],
+  "action_items": [
+    "None functional. Optional: auto-run bootstrap_postgres.sh (or fold DO/CREATE ROLE into migrations_runner) so preview cold-starts don't 502."
+  ],
+  "critical_code_review_comments": [
+    "routers/mobile.py: _reserve_idem sets entity_id='pending' before the real record is created; if the request errors between reservation and commit, the IdempotencyKey row is rolled back with the transaction (good) — behavior verified via test_visit_idempotent_replay + cross-op 409 test.",
+    "routers/mobile.py upload_photo: file size is unbounded (await file.read() with no MAX_BYTES check) — recommend adding a max size guard (e.g. 15MB) to prevent memory abuse.",
+    "routers/mobile.py PATCH /inspections/{id}: if_match compares raw isoformat strings — works but is fragile to microsecond precision differences across DB drivers. Consider hashing (etag) or using updated_at monotonic integer.",
+    "routers/mobile.py list_photos & photo_content: only require get_current_user (any authenticated user) — no per-record RBAC check that user can view that property/job. Low priority but worth noting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_mobile_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "N/A (skipped per instructions)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (worked). Sales user created dynamically per-run with random email.",
+  "seed_data_creation": "One TEST_ property, a couple of TEST_ visits, one TEST_ inspection, one 1x1 PNG photo, and one random TEST sales user were created against the preview DB during testing.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Preview pod may boot with no supervisord and/or postgres role missing; run `supervisord -c /etc/supervisor/supervisord.conf` and `bash /app/backend/scripts/bootstrap_postgres.sh` if /api/health returns 502. Mobile test suite at /app/backend/tests/test_mobile_api.py covers idempotent visit+inspection, If-Match 409, cross-op key reuse 409, photo upload/list/content/422, RBAC 401, sales positive case, and Office regression (health/leads/jobs/backup-status).",
+  "rca of the issue": "N/A - no product bug. Only environment RCA: backend startup crashed because postgres role 'roofspan' authentication failed. Fix: run bootstrap_postgres.sh which creates the role via DO block."
+}
