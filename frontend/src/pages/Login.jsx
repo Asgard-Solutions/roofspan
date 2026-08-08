@@ -8,8 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HardHat, Eye, EyeOff, Loader2 } from "lucide-react";
 
-const BG_IMAGE =
-  "https://images.unsplash.com/photo-1587061633437-187ac80e8e7a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxyb29maW5nJTIwcmVzaWRlbnRpYWwlMjBob3VzZXN8ZW58MHx8fHwxNzg2MTU5NTE5fDA&ixlib=rb-4.1.0&q=85";
+const BG_IMAGE = "/brand/roofspan-login-bg.png";
 
 export default function Login() {
   const { login } = useAuth();
@@ -36,7 +35,7 @@ export default function Login() {
   return (
     <div className="relative flex min-h-screen items-center justify-center p-4">
       <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${BG_IMAGE})` }} />
-      <div className="absolute inset-0 bg-slate-900/80" />
+      <div className="absolute inset-0 bg-gradient-to-b from-slate-900/85 via-slate-900/55 to-slate-900/75" />
 
       <div className="relative z-10 w-full max-w-md" data-testid="login-card">
         <img src="/brand/roofspan-wordmark-dark.webp" alt="RoofSpan" className="mx-auto mb-6 h-16 w-auto" />
