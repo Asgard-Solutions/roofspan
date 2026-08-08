@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { UserPlus, Loader2, Search } from "lucide-react";
 
 export default function Customers() {
@@ -63,7 +63,7 @@ export default function Customers() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent data-testid="create-customer-dialog">
-          <DialogHeader><DialogTitle>Add customer</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Add customer</DialogTitle><DialogDescription>Create a new customer record.</DialogDescription></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="cust-name" /></div>
             <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="cust-phone" /></div>

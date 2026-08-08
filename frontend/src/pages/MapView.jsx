@@ -7,7 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import ImportDialog from "@/components/ImportDialog";
 import PropertySheet from "@/components/PropertySheet";
 import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2 } from "lucide-react";
@@ -348,7 +348,7 @@ export default function MapView() {
       {/* Save territory dialog */}
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
         <DialogContent data-testid="save-territory-dialog">
-          <DialogHeader><DialogTitle>Name this territory</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Name this territory</DialogTitle><DialogDescription>Give the drawn territory a name and color.</DialogDescription></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label>Territory name</Label>

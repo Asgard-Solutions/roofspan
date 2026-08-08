@@ -62,13 +62,24 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Frontend**: Inventory page (materials + Purchase Orders tab + ReceiveDialog), JobDetail page (schedule, job materials, PODialog). Nav `nav-inventory`, route `/jobs/:id`.
 - Verified: backend 19/19 pytest (phase4_test.py); frontend Playwright full ops flow (iteration_4). No blocking defects. **Paused before Phase 5 per user.**
 
+## Implemented (2026-08-08) — Office Phase 5: Production Readiness
+- **Alembic migrations = authoritative schema path.** `create_all` removed; startup runs `alembic upgrade head` via `migrations_runner.run_migrations()`. Revisions: `61f7ea11c757` baseline (all Phase 1–4 tables), `7a95fb788bfd` hardening (unique `uq_materials_name`). Verified: fresh DB builds full schema from history; existing dev DB migrated forward non-destructively (stamped baseline → hardening); model↔schema parity (empty autogenerate diff). Config in `backend/alembic.ini` + `backend/alembic/env.py` (async URL → sync `psycopg`).
+- **Startup robustness (fixes 502-hang found in iteration_5):** `ensure_database()` self-heals a missing DB (auto-CREATE when role can connect) and **fails loudly in ~5s** with an actionable error if the server/role is unreachable (no more silent hang). One-time role bootstrap: `backend/scripts/bootstrap_postgres.sh`. Documented in `/app/OPERATIONS.md`.
+- **Approved Operations hardening (+ tests):** PO line `quantity > 0` (422); material `quantity_on_hand`/`reorder_threshold` `>= 0` (422); material name normalized (trim + collapse whitespace) + case/space-insensitive uniqueness (409) backed by DB `uq_materials_name`; **atomic idempotent receiving** — Idempotency-Key row reserved before inventory mutation (flush + IntegrityError guard) so concurrent/repeat requests never double-post; key reuse for a different PO → 409.
+- **Security review (pass):** bcrypt passwords; HS256 JWT (strong non-default secret, expiry, `type=access`); disabled users rejected (401) even with a valid token; brute-force lockout (5/15min); integration API keys AES-GCM encrypted at rest, only masked `••••LAST4` ever returned (plaintext never); MapTiler proxied server-side; RBAC backend-enforced; DB creds never sent to browser.
+- **Backup/recovery (actually tested):** `pg_dump -Fc` → restore into isolated DB → row counts matched exactly (users/materials/audit) + Alembic version preserved. Data dir `/var/lib/postgresql/15/main`.
+- **Restart/persistence (actually tested):** after Postgres + backend restart — users, encrypted secrets (AES key preserved), audit, materials, and the hardening constraint all persisted; auth worked. **Known limitation:** persistence across full container/pod redeploy requires the PG data dir on a persistent volume (documented; human action for production).
+- **Accessibility:** added `DialogDescription` to all flagged dialogs (Inventory material/adjust, JobDetail job-material, Customers add, MapView save-territory) — Radix a11y warnings eliminated (verified in console). Benign dev-only ResizeObserver overlay noise documented, not a production issue.
+- **Full regression:** **76/76 backend pytest PASS** (19 P1 + 17 P2 + 14 P3 + 19 P4 + 7 P5). One documented command: `cd /app/backend && python -m pytest tests/ -q` (a `tests/conftest.py` auto-loads `REACT_APP_BACKEND_URL` from the frontend .env). Frontend production build (`yarn build`) succeeds. Browser flows for all phases verified (iteration_5).
+
 ## Backlog (Not Built — by design)
 - **P2 sales polish (backlog)**: idempotency-key TTL sweep; invoice status state-machine; double-submit dedup on quote generation; customer detail drawer with full history.
-- **P2 ops polish (backlog, from iteration_4 code review)**: unique material-name guard (409); SQL-side low_stock filter + `low_stock=false` semantics; atomic idempotency on receive (INSERT ON CONFLICT / SELECT FOR UPDATE) for concurrent requests; PO line `quantity gt=0` + material `ge=0` constraints; job PATCH optimistic concurrency + status state-machine; supplier N+1 (joinedload) & active filter; DialogContent aria-describedby a11y; silence benign ResizeObserver dev-overlay noise.
-- **P2: Office Phase 5 — Production Readiness**: full regression, backups/recovery, Alembic migrations, hardening.
-- **P2: Mobile field app** (after Phase 5): Home/Leads/Map/Jobs/More, offline-safe writes.
-- Explicit non-goals (Stripe/payments, accounting, portals, BI, PostGIS, queues, etc.) — do not build.
+- **P2 ops polish (backlog)**: SQL-side low_stock filter + `low_stock=false` semantics; job PATCH optimistic concurrency + status state-machine; supplier N+1 (joinedload) & active filter.
+- **Product enhancements (explicitly NOT approved for Phase 5)**: Low-Stock dashboard tile; "Jobs This Week" schedule board.
+- **P2: Mobile field app** (after approval): Home/Leads/Map/Jobs/More, offline-safe writes.
+- Explicit non-goals (Stripe/payments, accounting, portals, BI, PostGIS, queues, SSO/MFA/OAuth) — do not build.
 
 ## Next Tasks
-1. Begin Office Phase 2 (Territories + RentCast import) when approved.
-2. Add Alembic migrations before Phase 5.
+1. **Phase 5 complete — paused awaiting user approval before any next step (Mobile app is NOT to start).**
+2. Wire real RentCast key when user provides it (Settings → Integrations); SAMPLE/DEMO until then.
+3. For production deploy: mount PG data dir on a persistent volume + schedule pg_dump backups (see /app/OPERATIONS.md).

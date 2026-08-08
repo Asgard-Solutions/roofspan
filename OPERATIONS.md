@@ -11,6 +11,12 @@ Local single-company app. Architecture: **Office Browser → FastAPI → Postgre
 | Connection | `DATABASE_URL` in `backend/.env` (`postgresql+asyncpg://roofspan:***@127.0.0.1:5432/roofspan`) |
 | Schema management | **Alembic** (authoritative). Applied automatically at backend startup. |
 
+**First-run bootstrap (one time):** the backend **auto-creates the `roofspan` database and runs migrations at startup** as long as the login role exists. Creating the *role* requires a superuser, so on a brand-new PostgreSQL server run once:
+```bash
+bash /app/backend/scripts/bootstrap_postgres.sh   # creates the role (with CREATEDB) from backend/.env
+```
+If the database or server is unreachable, startup now **fails loudly with an actionable error** (5s connect timeout) instead of hanging — check `backend.err.log`.
+
 **What survives what:**
 - **Backend restart / frontend restart / PostgreSQL restart (same container):** all business data, users, encrypted integration secrets, audit logs, and relationships **persist** — data lives in the PostgreSQL data directory, not in process memory. Verified.
 - **In-memory brute-force lockout** (`auth.py _attempts`) is intentionally ephemeral and resets on backend restart — by design for a local single-instance app.
