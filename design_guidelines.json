@@ -1,0 +1,88 @@
+{
+  "theme": "light",
+  "design_archetype": "SWISS & HIGH-CONTRAST / Industrial Dashboard",
+  "typography": {
+    "headings_font": "Manrope",
+    "body_font": "IBM Plex Sans",
+    "description": "Clear, legible, highly functional typography. Do not use Inter or Space Grotesk.",
+    "hierarchy": {
+      "h1": "text-2xl sm:text-3xl tracking-tight font-bold text-slate-900",
+      "h2": "text-xl sm:text-2xl tracking-tight font-semibold text-slate-900",
+      "h3": "text-lg font-semibold text-slate-800",
+      "body": "text-base leading-relaxed text-slate-700",
+      "small": "text-sm text-slate-500",
+      "labels": "text-sm font-semibold uppercase tracking-wider text-slate-500"
+    }
+  },
+  "colors": {
+    "background": "#F8FAFC", 
+    "surface": "#FFFFFF",
+    "primary": "#0F172A", 
+    "primary_hover": "#1E293B",
+    "accent": "#EA580C", 
+    "text_main": "#020617",
+    "text_muted": "#475569",
+    "border": "#E2E8F0",
+    "destructive": "#EF4444",
+    "success": "#16A34A"
+  },
+  "visual_enhancers": {
+    "shadows": "Minimal. Use shadow-sm for active elements, avoid large diffuse shadows. Flat UI preferred.",
+    "border_radius": "rounded-md (6px) or rounded-sm (4px). Avoid completely rounded pill shapes.",
+    "borders": "1px solid #E2E8F0. Critical for structuring data tables, settings panels, and navigation separation."
+  },
+  "components": {
+    "buttons": "Solid slate-900 for primary. Outline for secondary. Sharp or lightly rounded (rounded-md). Minimal hover (opacity or slight color shift).",
+    "tables": "Shadcn Table. Flat design, visible borders between rows, clear column headers, p-4 padding. Left-align data.",
+    "cards": "Cardless or minimal 1px bordered containers. Do not nest cards inside cards.",
+    "forms": "Shadcn Form/Input. Stacked labels (label above input). Clear focus rings. Masked input for API Keys (RentCast / MapTiler).",
+    "navigation": "Fixed left sidebar. High contrast active states (e.g., bg-slate-100 border-l-4 border-slate-900).",
+    "map": "MapLibre GL implementation with explicit configuration for OpenStreetMap (default) and MapTiler (BYOK satellite)."
+  },
+  "layouts": {
+    "general": "High density grid for data, 1-column max-w-3xl for forms/settings. No complex workflow builders.",
+    "spacing": "p-6 to p-8 for main content containers. gap-6 between major sections. K.I.S.S. principle.",
+    "sidebar": "w-64 fixed on desktop. Mobile off-canvas (Shadcn Sheet)."
+  },
+  "motion": {
+    "interactions": "Fast and snappy. 150ms transitions for hover states. No complex entrance animations. Avoid layout shifts.",
+    "page_transitions": "None. Keep it feeling like a highly responsive local application."
+  },
+  "accessibility": {
+    "contrast": "Strict APCA/WCAG AA compliance. High contrast text.",
+    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute (e.g., data-testid='login-button', data-testid='sidebar-nav-dashboard', data-testid='save-settings').",
+    "focus": "Clear focus rings (focus:ring-2 focus:ring-slate-900 focus:ring-offset-2) on all interactive elements."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.unsplash.com/photo-1587061633437-187ac80e8e7a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxyb29maW5nJTIwcmVzaWRlbnRpYWwlMjBob3VzZXN8ZW58MHx8fHwxNzg2MTU5NTE5fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Roofing residential house. Use as full-screen background for the login page with a dark overlay (bg-slate-900/80) to ensure the login card stands out.",
+        "category": "login_background"
+      }
+    ],
+    "icons": "lucide-react (default choice). Use clear, universally recognized icons."
+  },
+  "3d_libraries": "Not applicable for this context. Use 2D MapLibre GL for the map interface.",
+  "instructions_to_main_agent": [
+    "Strictly follow K.I.S.S. (Keep It Simple, Stupid). Design for a roofing salesperson or office manager who needs no training.",
+    "Do NOT create complex dashboard clutter or excessive cards. Prefer clear lists and simple detail screens.",
+    "For Settings (under Administration), implement Tabs: Integrations (RentCast API key, toggle, Test Connection), Map Configuration (OpenStreetMap vs MapTiler), Company Profile.",
+    "For API key inputs, use masked inputs (type='password') with a toggle visibility button.",
+    "Implement a clean left-sidebar App Shell with the exact navigation items: Dashboard, Leads, Map, Customers, Jobs, Inventory, Finance, Reports, Administration.",
+    "Make Phase 1 sections functional (Auth, Users, Roles, Audit Logs, Settings, Map). Other links can point to empty shell placeholders.",
+    "Use HTML/Tailwind for basic structural layout. Use Shadcn for interactive components (Forms, Tables, Dropdowns, Tabs, Modals).",
+    "Ensure `data-testid` attributes are present on every interactive and key element for automated testing."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Prioritize using pre-existing components from src/components/ui.",
+    "Do NOT apply universal transition (transition: all). Use specific properties.",
+    "Do NOT center align the app container in App.css.",
+    "Use sonner for toasts.",
+    "Ensure buttons are functional and clear, with hover animations limited to color shifts or slight shadow changes.",
+    "Avoid generic AI design slop. Create distinct layout hierarchy utilizing borders and padding.",
+    "All components must be accessible and responsive. NEVER use transparent backgrounds where content sits below.",
+    "Avoid using Shadcn Card component excessively for layout structuring: Go flat, rectangular, dense styles instead."
+  ],
+  "component_path": "/app/frontend/src/components/ui/"
+}
