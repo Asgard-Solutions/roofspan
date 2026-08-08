@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from fastapi.responses import Response
 
 from db import get_db
-from models import Property, Visit, Inspection, Photo, IdempotencyKey, User
+from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User
 from core import get_current_user, require_roles, FIELD_ROLES, log_action
 from offsite_backup import put_object, get_object
 
@@ -142,15 +142,26 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
 
 
 # ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----
-_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic"}
+_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+_CATS = {"Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"}
 
 
 @router.post("/photos", status_code=201)
 async def upload_photo(request: Request, file: UploadFile = File(...), record_type: str = Form(...), record_id: str = Form(...),
                        description: str | None = Form(None), category: str | None = Form(None),
+                       idempotency_key: str | None = Header(None),
                        user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    if record_type not in ("property", "visit", "inspection", "job"):
+    if record_type not in ("lead", "property", "visit", "inspection", "job"):
         raise HTTPException(status_code=422, detail="Invalid record_type")
+    if category and category not in _CATS:
+        raise HTTPException(status_code=422, detail="Invalid category")
+    if (file.content_type or "") not in _EXT:  # server-side file-type validation
+        raise HTTPException(status_code=422, detail="Unsupported image type")
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_photo")
+    if replay and prior and prior != "pending":
+        ph = await db.get(Photo, prior)
+        if ph:
+            return _photo_out(ph, replayed=True)
     data = await file.read()
     if not data:
         raise HTTPException(status_code=422, detail="Empty file")
@@ -165,6 +176,11 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
     ph = Photo(object_path=object_path, content_type=file.content_type or "application/octet-stream",
                record_type=record_type, record_id=record_id, description=description, category=category, uploaded_by=user.email)
     db.add(ph)
+    await db.flush()
+    if idempotency_key:
+        k = await db.get(IdempotencyKey, idempotency_key)
+        if k:
+            k.entity_id = str(ph.id)
     await db.commit()
     await db.refresh(ph)
     await log_action(db, user=user, action="photo.upload", entity_type=record_type, entity_id=record_id, request=request)
@@ -189,8 +205,69 @@ async def photo_content(photo_id: str, user: User = Depends(get_current_user), d
     return Response(content=data, media_type=ph.content_type)
 
 
-def _photo_out(p: Photo) -> dict:
+def _photo_out(p: Photo, replayed: bool = False) -> dict:
     return {"id": str(p.id), "record_type": p.record_type, "record_id": p.record_id,
             "content_type": p.content_type, "description": p.description, "category": p.category,
             "uploaded_by": p.uploaded_by, "created_at": p.created_at.isoformat(),
-            "content_url": f"/api/mobile/photos/{p.id}/content"}
+            "content_url": f"/api/mobile/photos/{p.id}/content", "replayed": replayed}
+
+
+# ---- My Assignments (backend is authoritative on what the field user may retrieve) ----
+class AssignIn(BaseModel):
+    user_id: str | None = None
+
+
+def _field_only(user: User) -> bool:
+    return user.role == "sales"
+
+
+def _lead_row(l: Lead) -> dict:
+    return {"id": str(l.id), "name": l.name, "address": l.address, "status": l.status,
+            "property_id": str(l.property_id) if l.property_id else None,
+            "assigned_user_id": str(l.assigned_user_id) if l.assigned_user_id else None, "phone": l.phone}
+
+
+def _job_row(j: Job) -> dict:
+    return {"id": str(j.id), "number": j.number, "scope": j.scope, "status": j.status,
+            "scheduled_start": j.scheduled_start.isoformat() if j.scheduled_start else None,
+            "assigned_to": j.assigned_to, "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}
+
+
+@router.get("/leads")
+async def my_leads(scope: str = Query("auto"), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    stmt = select(Lead).order_by(Lead.created_at.desc())
+    if _field_only(user) or scope == "mine":
+        stmt = stmt.where((Lead.assigned_user_id == user.id) | (Lead.created_by == user.email))
+    rows = (await db.execute(stmt)).scalars().all()
+    return [_lead_row(l) for l in rows]
+
+
+@router.get("/jobs")
+async def my_jobs(scope: str = Query("auto"), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    stmt = select(Job).order_by(Job.created_at.desc())
+    if _field_only(user) or scope == "mine":
+        stmt = stmt.where(Job.assigned_user_id == user.id)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [_job_row(j) for j in rows]
+
+
+@router.post("/leads/{lead_id}/assign")
+async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    l = await db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    target = user.id if (_field_only(user) or not payload.user_id) else uuid.UUID(payload.user_id)
+    l.assigned_user_id = target
+    await db.commit()
+    return {"id": str(l.id), "assigned_user_id": str(l.assigned_user_id)}
+
+
+@router.post("/jobs/{job_id}/assign")
+async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    target = user.id if (_field_only(user) or not payload.user_id) else uuid.UUID(payload.user_id)
+    j.assigned_user_id = target
+    await db.commit()
+    return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id)}
