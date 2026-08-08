@@ -9,7 +9,14 @@ yarn        # install
 yarn web    # Expo web preview
 yarn start  # Expo Go on a device/emulator
 ```
-API base is in `app.json` → `extra.apiBase`.
+API base is resolved in `src/config.js`, in this priority order:
+1. `EXPO_PUBLIC_API_BASE` environment variable (recommended — set this in the new project)
+2. `app.json` → `extra.apiBase`
+3. Hardcoded fallback (current preview URL)
+
+**After migrating to a new project:** update the backend URL by either setting
+`EXPO_PUBLIC_API_BASE=https://<new-project>.preview.emergentagent.com` (e.g. in a `.env`
+file or the mono-template's env) OR editing `app.json` → `extra.apiBase`. No code changes needed.
 
 ## Key pieces
 - `src/queue.js` — pure offline mutation queue + sync core (idempotency-key preserved on retry). Node-testable.

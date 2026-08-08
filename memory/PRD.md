@@ -113,7 +113,15 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Verified:** backend pytest 102/102 + `tests/test_assignments.py` 3/3; curl photo upload (Overview 201, bad category 422, list); mobile Node sync lifecycle 11/11; all mobile JS babel-parse clean; office LeadDetail assignment dropdown renders.
 - **REQUIRES device / Expo Go verification (NOT proven by web/Node):** native camera capture, expo-file-system persistence across real app kill, multipart upload from device, thumbnail rendering with auth headers, SecureStore, offline→online transitions.
 
+## Migration Prep for Mono-Template (2026-06)
+- **Reason:** Web+Mobile preview toggle cannot be enabled on an existing web-only project (platform limitation). Path = Save to GitHub → new project with Mobile Agent → pull repo. Prepping repo for a clean handoff.
+- **Environment restore (post-fork):** PostgreSQL 15 binaries + `postgres` system user were missing after the fork; reinstalled `postgresql-15`, chowned the surviving persistent data dir `/data/db/roofspan_pgdata` to `postgres`, pointed `data_directory` there, started via supervisor. All data intact (44 users, 106/106 backend tests pass).
+- **Mobile API base made portable:** `src/config.js` now resolves in order → `EXPO_PUBLIC_API_BASE` env → `app.json` extra.apiBase → hardcoded fallback. Removed stale dead URL `roofspan-core...` from `config.js` + `app.json`. README documents: after migration, just set `EXPO_PUBLIC_API_BASE` (or `app.json` extra.apiBase) to the new project's backend URL — no code changes.
+- **Verified clean state:** 20/20 mobile JS babel-parse OK; offline sync lifecycle 11/11 PASS (against live backend); backend regression 106/106 PASS; web app renders. Git clean (only untracked yarn.lock files — keep them for reproducible installs).
+- **Test-only fallbacks** in `backend/tests/*` still reference the old URL but are always overridden by `REACT_APP_BACKEND_URL` (conftest) — harmless, left as-is per K.I.S.S.
+
 ## Next Tasks
-1. **Deployment prep complete — PAUSED. Awaiting explicit approval before the RoofSpan Mobile Field phase (do NOT auto-start).**
-2. Wire real RentCast key when provided (Settings → Integrations); SAMPLE/DEMO until then.
-3. Optional off-site backup copy to external storage once the user picks a target.
+1. **HUMAN: Migrate to mono-template** — Save to GitHub → start new project with Mobile Agent → pull repo → set `EXPO_PUBLIC_API_BASE` to the new backend URL.
+2. Native device verification (Expo Go): camera capture, SQLite persistence across app kill, SecureStore, offline→online transitions.
+3. Wire real RentCast key when provided (Settings → Integrations); SAMPLE/DEMO until then.
+4. Optional off-site backup copy to external storage once the user picks a target.
