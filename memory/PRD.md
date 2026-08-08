@@ -38,8 +38,21 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **RBAC**: MANAGE_ROLES (owner/admin/office) for territories+imports; FIELD_ROLES (all) for view/visits/DNK/leads. Backend-enforced; sales blocked from manage endpoints (403).
 - Verified: Phase 2 backend 17/17 pytest + Phase 1 19/19; UI flows verified via testing agent (iteration_2).
 
+## Implemented (2026-08-08) — Office Phase 3: Sales
+- **Workflow verified end-to-end**: Lead → Create/Link Customer → Inspection → Estimate → Quote → Acceptance → Job handoff → Invoice.
+- **Leads**: enriched detail (`GET /api/leads/{id}` returns property_address, owner_name, visits, customer link); Leads list rows open a per-lead Sales workspace (`/leads/:id`) that drives the whole pipeline.
+- **Customers**: CRUD + `from-lead` conversion (links property, flips lead to converted). Many properties per customer via association table. Customers nav page (list/search/create).
+- **Inspections**: tied to lead/customer/property (date, inspector, condition, findings, recommended work).
+- **Estimates & Quotes & Invoices**: line items (desc/qty/unit/price), **server-side totals** (subtotal/tax%/total). Numbers via counter table (EST-/QUO-/INV-/JOB-). Idempotency-Key on estimate & invoice creation; optimistic concurrency (version + If-Match → 409) on estimate/quote edits.
+- **Quote → Job handoff**: `POST /quotes/{id}/accept` records acceptance (accepted_by/at/name) and creates a Job **idempotently** (unique quote_id → re-accept returns same job). Accepted quotes are edit-locked.
+- **Invoices (records only)**: created from an **accepted** quote (guarded server-side), copies items/totals, links job; status draft/issued/paid/void. NO payment processing/accounting. Finance page (Quotes + Invoices tabs); Jobs page lists handoffs.
+- **RBAC**: owner/admin/office = full incl. acceptance/jobs/invoices; sales = leads/customers/inspections/estimates/quotes (403 on invoices, acceptance, territories). Backend-enforced; UI hides unavailable actions.
+- **Audit**: estimate/customer/quote.accept/invoice actions logged.
+- Verified: backend 50/50 pytest (14 Phase 3 + 17 Phase 2 + 19 Phase 1); full browser Sales workflow + Jobs/Finance/Customers + sales RBAC UI (iteration_3). No blocking defects.
+
 ## Backlog (Not Built — by design)
-- **P0 (next): Office Phase 3 — Sales**: leads mgmt (expand), customers, inspections, estimates, quotes, acceptance, invoices (records only). Preserve Property → Lead → Customer → Inspection → Estimate → Quote → Acceptance → Invoice.
+- **P0 (next, awaiting approval): Office Phase 4 — Operations**: jobs (expand), scheduling, materials, inventory, low-stock, purchase orders, receiving. Workflow: Job → Schedule → Materials → PO → Receive.
+- **P2 sales polish (backlog)**: idempotency-key TTL sweep; invoice status state-machine; double-submit dedup on quote generation; customer detail drawer with full history.
 - **P1: Office Phase 4 — Operations**: jobs, scheduling, materials/inventory, low-stock, purchase orders, receiving.
 - **P2: Office Phase 5 — Production Readiness**: full regression, backups/recovery, Alembic migrations, hardening.
 - **P2: Mobile field app** (after Phase 5): Home/Leads/Map/Jobs/More, offline-safe writes.

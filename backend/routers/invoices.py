@@ -51,6 +51,8 @@ async def create_invoice(payload: InvoiceIn, request: Request, idempotency_key: 
         q = await db.get(Quote, quote_id)
         if not q:
             raise HTTPException(status_code=404, detail="Quote not found")
+        if q.status != "accepted":
+            raise HTTPException(status_code=400, detail="Invoices can only be created from an accepted quote")
         qitems = (await db.execute(select(QuoteLineItem).where(QuoteLineItem.quote_id == q.id).order_by(QuoteLineItem.sort))).scalars().all()
         from schemas_phase3 import LineItemIn
         items = [LineItemIn(description=i.description, quantity=i.quantity, unit=i.unit, unit_price=i.unit_price) for i in qitems]
