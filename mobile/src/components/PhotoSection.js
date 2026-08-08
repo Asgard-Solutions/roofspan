@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { View, Text, Image, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { api } from "../api";
 import { API_BASE } from "../config";
 import { getToken } from "../auth";
@@ -67,7 +67,7 @@ export default function PhotoSection({ recordType, recordId }) {
   const pickPhoto = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) return Alert.alert("Permission needed", "Photo library access is required.");
-    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ["images"] });
     if (!res.canceled && res.assets && res.assets[0]) persistAndQueue(res.assets[0]);
   };
 
