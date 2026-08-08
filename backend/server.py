@@ -16,6 +16,7 @@ from models import User
 from core import hash_password, verify_password
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
+from routers import operations, purchasing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -43,6 +44,8 @@ app.include_router(estimates.router)
 app.include_router(quotes.router)
 app.include_router(invoices.router)
 app.include_router(jobs.router)
+app.include_router(operations.router)
+app.include_router(purchasing.router)
 
 app.add_middleware(
     CORSMiddleware,

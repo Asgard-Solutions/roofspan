@@ -295,6 +295,11 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(32), default="created", nullable=False, index=True)
     scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    schedule_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -338,3 +343,85 @@ class IdempotencyKey(Base):
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+# ---------- Phase 4: Operations ----------
+
+class Material(Base):
+    __tablename__ = "materials"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sku: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    unit: Mapped[str] = mapped_column(String(32), default="each", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    quantity_on_hand: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    reorder_threshold: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class InventoryTxn(Base):
+    __tablename__ = "inventory_txns"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), index=True)
+    delta: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), default="adjustment", nullable=False)
+    po_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class JobMaterial(Base):
+    __tablename__ = "job_materials"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), index=True)
+    planned_quantity: Mapped[float] = mapped_column(Float, default=1, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    number: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    order_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expected_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class POLineItem(Base):
+    __tablename__ = "po_line_items"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    po_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchase_orders.id", ondelete="CASCADE"), index=True)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, default=1, nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), default="each", nullable=False)
+    unit_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    line_total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    received_quantity: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0)

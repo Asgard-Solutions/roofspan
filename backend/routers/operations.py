@@ -1,0 +1,93 @@
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db import get_db
+from models import Material, InventoryTxn, Supplier, User
+from core import get_current_user, require_roles, MANAGE_ROLES, log_action
+from schemas_phase4 import MaterialIn, MaterialPatch, MaterialOut, AdjustIn, SupplierIn, SupplierOut
+
+router = APIRouter(prefix="/api", tags=["operations"])
+
+
+def _mat_out(m: Material) -> MaterialOut:
+    return MaterialOut(
+        id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
+        active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
+        low_stock=(m.quantity_on_hand <= m.reorder_threshold),
+    )
+
+
+@router.get("/materials", response_model=list[MaterialOut])
+async def list_materials(low_stock: bool | None = Query(None), q: str | None = Query(None), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    stmt = select(Material).order_by(Material.name)
+    if q:
+        stmt = stmt.where(Material.name.ilike(f"%{q}%"))
+    rows = (await db.execute(stmt)).scalars().all()
+    out = [_mat_out(m) for m in rows]
+    if low_stock:
+        out = [m for m in out if m.low_stock]
+    return out
+
+
+@router.post("/materials", response_model=MaterialOut, status_code=201)
+async def create_material(payload: MaterialIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    m = Material(**payload.model_dump(), created_by=user.email)
+    db.add(m)
+    await db.commit()
+    await db.refresh(m)
+    await log_action(db, user=user, action="material.create", entity_type="material", entity_id=m.id, request=request)
+    return _mat_out(m)
+
+
+@router.patch("/materials/{material_id}", response_model=MaterialOut)
+async def update_material(material_id: str, payload: MaterialPatch, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    m = await db.get(Material, material_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Material not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(m, k, v)
+    await db.commit()
+    await db.refresh(m)
+    await log_action(db, user=user, action="material.update", entity_type="material", entity_id=m.id, request=request)
+    return _mat_out(m)
+
+
+@router.post("/materials/{material_id}/adjust", response_model=MaterialOut)
+async def adjust_material(material_id: str, payload: AdjustIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    m = (await db.execute(select(Material).where(Material.id == material_id).with_for_update())).scalar_one_or_none()
+    if not m:
+        raise HTTPException(status_code=404, detail="Material not found")
+    new_qty = round(m.quantity_on_hand + payload.delta, 3)
+    if new_qty < 0:
+        raise HTTPException(status_code=400, detail=f"Adjustment would make quantity negative (on hand {m.quantity_on_hand})")
+    m.quantity_on_hand = new_qty
+    db.add(InventoryTxn(material_id=m.id, delta=payload.delta, reason=payload.reason, note=payload.note, created_by=user.email))
+    await db.commit()
+    await db.refresh(m)
+    await log_action(db, user=user, action="inventory.adjust", entity_type="material", entity_id=m.id, detail={"delta": payload.delta, "reason": payload.reason, "on_hand": new_qty}, request=request)
+    return _mat_out(m)
+
+
+# ---- Suppliers (minimal) ----
+def _sup_out(s: Supplier) -> SupplierOut:
+    return SupplierOut(id=str(s.id), name=s.name, contact_name=s.contact_name, phone=s.phone, email=s.email, notes=s.notes, active=s.active)
+
+
+@router.get("/suppliers", response_model=list[SupplierOut])
+async def list_suppliers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
+    return [_sup_out(s) for s in rows]
+
+
+@router.post("/suppliers", response_model=SupplierOut, status_code=201)
+async def create_supplier(payload: SupplierIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    existing = (await db.execute(select(Supplier).where(Supplier.name == payload.name))).scalar_one_or_none()
+    if existing:
+        return _sup_out(existing)
+    s = Supplier(**payload.model_dump())
+    db.add(s)
+    await db.commit()
+    await db.refresh(s)
+    await log_action(db, user=user, action="supplier.create", entity_type="supplier", entity_id=s.id, request=request)
+    return _sup_out(s)

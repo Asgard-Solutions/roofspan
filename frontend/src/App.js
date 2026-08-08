@@ -37,7 +37,8 @@ function App() {
             <Route path="/leads/:id" element={<LeadDetail />} />
             <Route path="/customers" element={<Customers />} />
             <Route path="/jobs" element={<Jobs />} />
-            <Route path="/inventory" element={<Placeholder title="Inventory" />} />
+            <Route path="/jobs/:id" element={<JobDetail />} />
+            <Route path="/inventory" element={<Inventory />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/reports" element={<Placeholder title="Reports" />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
@@ -49,6 +50,11 @@ function App() {
       </BrowserRouter>
       <Toaster position="top-right" richColors />
     </AuthProvider>
+  );
+}
+
+export default App;
+/AuthProvider>
   );
 }
 

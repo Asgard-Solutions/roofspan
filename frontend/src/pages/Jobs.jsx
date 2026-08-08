@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { money, shortDate } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
@@ -29,7 +30,7 @@ export default function Jobs() {
               <TableBody>
                 {jobs.map((j) => (
                   <TableRow key={j.id} data-testid={`job-row-${j.id}`}>
-                    <TableCell className="font-medium text-slate-900">{j.number}</TableCell>
+                    <TableCell className="font-medium text-slate-900"><Link to={`/jobs/${j.id}`} className="hover:text-orange-600 hover:underline" data-testid={`job-link-${j.id}`}>{j.number}</Link></TableCell>
                     <TableCell className="text-slate-600">{j.scope || "—"}</TableCell>
                     <TableCell><Badge variant="secondary">{j.status}</Badge></TableCell>
                     <TableCell className="tabular-nums">{money(j.total)}</TableCell>
