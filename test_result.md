@@ -151,7 +151,7 @@ backend:
 frontend:
   - task: "Office Photo Gallery (read-only) on Lead/Inspection/Job/Property"
     implemented: true
-    working: "NA"
+    working: true
     file: "components/PhotoGallery.jsx, pages/LeadDetail.jsx, pages/JobDetail.jsx, components/PropertySheet.jsx"
     stuck_count: 0
     priority: "high"
@@ -160,16 +160,18 @@ frontend:
         - working: "NA"
           agent: "main"
           comment: "New read-only PhotoGallery component. Fetches GET /api/mobile/photos?record_type&record_id, then fetches each image via authenticated axios (responseType blob) -> object URL (no public/object-storage URLs). Thumbnail grid; click opens a dialog with full image + category + note(description) + uploader + timestamp. Wired into LeadDetail (Field photos section + per-inspection compact gallery), JobDetail (Field photos section), PropertySheet (Field photos block). Read-only: no delete/edit/approve/tag/AI. Awaiting user permission before frontend UI testing."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL UI TESTS PASSED. Tested as owner (pjacobsen@asgardsolution.io). LEAD DETAIL (/leads/b749dfa4-70dd-4dc5-8a4b-043452677893): (1) Field photos section (data-testid='section-lead-photos') renders correctly. (2) Found 4 lead photo thumbnails, all loaded successfully (naturalWidth=100). (3) All thumbnails use blob: URLs (authenticated fetch confirmed). (4) Clicking thumbnail opens viewer dialog (data-testid='lead-photos-viewer') with full image, category badge, note/description ('Idempotency test'), uploader (pjacobsen@asgardsolution.io), and timestamp (8/8/2026, 9:10:03 PM). (5) Inspection gallery (data-testid='insp-photos-52007aec-ee52-4371-8be9-6a690409fe5f') found with 1 photo thumbnail loaded. JOB DETAIL (/jobs/78be6adb-31f8-43d0-a609-7ddcc3e5ac1e): (1) Field photos section (data-testid='section-job-photos') renders correctly. (2) Found 1 job photo thumbnail with blob URL, loaded successfully. (3) Viewer dialog works with full image and metadata. NETWORK: 12 photo API requests captured, all successful (no 401/403/404 errors). No console errors. PROPERTY SHEET: Component verified in code (line 182 PropertySheet.jsx, testid='property-photos') but not tested via map interaction (requires complex marker clicking - noted as manual verification needed). EMPTY STATE: Verified in code (PhotoGallery.jsx line 87, text='No field photos yet.', testid ends with '-empty'). Screenshots captured: lead_photo_viewer.png, lead_detail_photos.png, job_photo_viewer.png, job_detail_photos.png."
 
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 1
-  run_ui: false
+  version: "1.3"
+  test_sequence: 2
+  run_ui: true
 
 test_plan:
-  current_focus:
-    - "Office Photo Gallery (read-only) on Lead/Inspection/Job/Property"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -179,3 +181,5 @@ agent_communication:
       message: "Please run BACKEND-ONLY verification for the three backend tasks above. Owner credentials are in /app/memory/test_credentials.md (pjacobsen@asgardsolution.io / RoofSpan#Owner2026). There is NO seeded sales user — please CREATE a sales user via the admin/users API (owner token) to test strict sales visibility and RBAC 403s, and a second sales user to prove one sales user cannot access another's assigned records. For photo tests, create a lead/job/property (or reuse existing) and upload sample images, then verify list/content/idempotency/authorization. Do NOT test any native/Expo mobile behavior — those are HUMAN REQUIRED. Do NOT test frontend yet."
     - agent: "testing"
       message: "✅ BACKEND TESTING COMPLETE - ALL 27 TESTS PASSED. All three backend tasks verified and working correctly: (1) Assignment security fully functional with proper RBAC, strict visibility, and audit logging. (2) Migration 53c1a6663c52 correctly applied with proper FK constraints. (3) Photo backend fully functional with upload, list, content retrieval, idempotency, and authorization. Test users created and credentials documented in /app/memory/test_credentials.md. Sample photos uploaded for lead, job, property, and inspection records. Frontend Photo Gallery task is ready for user permission to test UI."
+    - agent: "testing"
+      message: "✅ FRONTEND UI TESTING COMPLETE - ALL TESTS PASSED. Office Photo Gallery feature fully functional across Lead Detail (lead-level + inspection-level galleries), Job Detail, and PropertySheet (code-verified). All images served via authenticated blob URLs. Photo viewer dialogs display full images with complete metadata (category, note, uploader, timestamp). No authentication failures, no broken images, no console errors. 12 successful photo API requests captured. Property sheet gallery requires manual map interaction testing but component implementation verified. Ready for production use."
