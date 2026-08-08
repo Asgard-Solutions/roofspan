@@ -11,10 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LineItemsEditor, { computeTotals } from "@/components/LineItemsEditor";
-import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin } from "lucide-react";
+import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
+const UNASSIGNED = "__unassigned__";
 
 function Section({ icon: Icon, title, action, children, testid }) {
   return (
@@ -50,6 +52,8 @@ export default function LeadDetail() {
   const [acceptOpen, setAcceptOpen] = useState(false);
   const [acceptTarget, setAcceptTarget] = useState(null);
   const [acceptName, setAcceptName] = useState("");
+  const [assignable, setAssignable] = useState([]);
+  const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -72,6 +76,20 @@ export default function LeadDetail() {
   }, [id, isManage]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (isManage) api.get("/users/assignable").then((r) => setAssignable(r.data)).catch(() => {});
+  }, [isManage]);
+
+  const assignLead = async (value) => {
+    setAssigning(true);
+    try {
+      const user_id = value === UNASSIGNED ? null : value;
+      const { data } = await api.put(`/leads/${id}/assign`, { user_id });
+      setLead(data);
+      toast.success(user_id ? `Assigned to ${data.assigned_user_name}` : "Assignment cleared");
+    } catch (e) { toast.error(apiError(e)); } finally { setAssigning(false); }
+  };
 
   const createCustomer = async () => {
     setBusy(true);
@@ -123,6 +141,26 @@ export default function LeadDetail() {
         actions={<Badge className={statusColor[lead.status] || ""} variant="secondary" data-testid="lead-status-badge">{lead.status}</Badge>}
       />
       <div className="grid grid-cols-1 gap-5 p-6 sm:p-8 lg:grid-cols-2">
+        {/* Assignment */}
+        <Section icon={UserCheck} title="Assignment" testid="section-assignment">
+          {isManage ? (
+            <div className="space-y-1.5">
+              <Label>Assigned to</Label>
+              <Select value={lead.assigned_user_id || UNASSIGNED} onValueChange={assignLead} disabled={assigning}>
+                <SelectTrigger data-testid="lead-assign-select"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNASSIGNED} data-testid="lead-assign-unassigned">Unassigned</SelectItem>
+                  {assignable.map((u) => (
+                    <SelectItem key={u.id} value={u.id} data-testid={`lead-assign-${u.id}`}>{u.full_name || u.email} · {u.role}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-600" data-testid="lead-assigned-readonly">{lead.assigned_user_name ? `Assigned to ${lead.assigned_user_name}` : "Unassigned"}</p>
+          )}
+        </Section>
+
         {/* Customer */}
         <Section icon={User} title="Customer" testid="section-customer"
           action={!lead.customer_id && <Button size="sm" onClick={createCustomer} disabled={busy} data-testid="create-customer-button"><Plus className="h-4 w-4" /> Create customer</Button>}>

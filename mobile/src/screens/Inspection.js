@@ -4,6 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api";
 import { queueMutation } from "../sync";
 import { C } from "../theme";
+import PhotoSection from "../components/PhotoSection";
 
 export default function Inspection({ route, navigation }) {
   const { lead_id, property_id } = route.params || {};
@@ -52,6 +53,8 @@ export default function Inspection({ route, navigation }) {
       <F label="Measurements" k="measurements" ph="e.g. 24 sq, 6:12 pitch" />
       <F label="Notes" k="notes" ph="Anything else" />
       <TouchableOpacity style={s.btn} onPress={save} testID="insp-save"><Text style={s.btnText}>Save inspection</Text></TouchableOpacity>
+
+      <PhotoSection recordType={lead_id ? "lead" : "property"} recordId={lead_id || property_id} />
     </ScrollView>
   );
 }

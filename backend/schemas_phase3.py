@@ -161,6 +161,8 @@ class JobOut(BaseModel):
     scope: Optional[str] = None
     total: float
     created_at: datetime
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
 
 
 # ---- Invoices ----
@@ -210,6 +212,8 @@ class LeadDetailOut(BaseModel):
     notes: Optional[str] = None
     customer_id: Optional[str] = None
     assigned_to: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     property_address: Optional[str] = None

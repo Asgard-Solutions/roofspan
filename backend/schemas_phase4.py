@@ -102,6 +102,8 @@ class JobDetailOut(BaseModel):
     scheduled_end: Optional[datetime] = None
     schedule_notes: Optional[str] = None
     assigned_to: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
     created_at: datetime
     materials: List[JobMaterialOut] = []
     purchase_orders: list = []

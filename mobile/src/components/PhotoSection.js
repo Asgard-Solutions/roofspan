@@ -1,0 +1,136 @@
+import React, { useCallback, useState } from "react";
+import { View, Text, Image, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
+import { api } from "../api";
+import { API_BASE } from "../config";
+import { getToken } from "../auth";
+import { queueMutation, pendingSummary } from "../sync";
+import { C, badge } from "../theme";
+
+// Preset categories (mirrors backend _CATS). Configurable admin intentionally NOT built (K.I.S.S.).
+const CATEGORIES = ["Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"];
+const PHOTO_DIR = FileSystem.documentDirectory + "roofspan_photos/";
+
+// Field photo capture + offline queue. Captured/selected files are copied to the app's document
+// directory so they survive restarts, then queued (upload on reconnect). The local copy is kept.
+export default function PhotoSection({ recordType, recordId }) {
+  const [serverPhotos, setServerPhotos] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [category, setCategory] = useState("Overview");
+  const [note, setNote] = useState("");
+  const [token, setToken] = useState(null);
+
+  const load = useCallback(async () => {
+    getToken().then(setToken);
+    try {
+      const r = await api.get("/mobile/photos", { params: { record_type: recordType, record_id: recordId } });
+      setServerPhotos(r.data || []);
+    } catch (e) { /* offline: keep last */ }
+    const { items } = await pendingSummary();
+    setPending(items.filter((m) => m.kind === "photo" && m.state !== "synced" && m.body && m.body.record_id === recordId));
+  }, [recordType, recordId]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const persistAndQueue = async (asset) => {
+    try {
+      await FileSystem.makeDirectoryAsync(PHOTO_DIR, { intermediates: true }).catch(() => {});
+      const ext = (asset.uri.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const dest = `${PHOTO_DIR}${Date.now()}.${ext}`;
+      await FileSystem.copyAsync({ from: asset.uri, to: dest });
+      const type = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      await queueMutation({
+        kind: "photo",
+        method: "post",
+        path: "/mobile/photos",
+        body: { record_type: recordType, record_id: recordId, category, description: note || null },
+        photo: { uri: dest, name: `photo.${ext}`, type },
+        label: `${category} photo`,
+      });
+      setNote("");
+      await load();
+      Alert.alert("Saved", "Photo saved and queued (will upload when online).");
+    } catch (e) {
+      Alert.alert("Error", "Could not save photo.");
+    }
+  };
+
+  const takePhoto = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) return Alert.alert("Permission needed", "Camera access is required.");
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
+    if (!res.canceled && res.assets && res.assets[0]) persistAndQueue(res.assets[0]);
+  };
+
+  const pickPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return Alert.alert("Permission needed", "Photo library access is required.");
+    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+    if (!res.canceled && res.assets && res.assets[0]) persistAndQueue(res.assets[0]);
+  };
+
+  return (
+    <View testID="photo-section">
+      <Text style={s.h}>Photos</Text>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.cats}>
+        {CATEGORIES.map((c) => (
+          <TouchableOpacity key={c} style={[s.cat, category === c && s.catOn]} onPress={() => setCategory(c)} testID={`photo-cat-${c}`}>
+            <Text style={[s.catText, category === c && s.catTextOn]}>{c}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <TextInput style={s.input} placeholder="Optional note…" value={note} onChangeText={setNote} testID="photo-note-input" />
+
+      <View style={s.btnRow}>
+        <TouchableOpacity style={s.btn} onPress={takePhoto} testID="photo-take"><Text style={s.btnText}>Take photo</Text></TouchableOpacity>
+        <TouchableOpacity style={s.btnOutline} onPress={pickPhoto} testID="photo-pick"><Text style={s.btnOutlineText}>Library</Text></TouchableOpacity>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.grid}>
+        {pending.map((m) => (
+          <View key={m.client_id} style={s.thumb} testID={`photo-pending-${m.client_id}`}>
+            <Image source={{ uri: m.photo.uri }} style={s.img} />
+            <View style={[s.pill, { backgroundColor: badge[m.state] ? badge[m.state].bg : badge.pending.bg }]}>
+              <Text style={[s.pillText, { color: badge[m.state] ? badge[m.state].fg : badge.pending.fg }]}>{(badge[m.state] || badge.pending).label}</Text>
+            </View>
+            <Text style={s.cap}>{m.body.category}</Text>
+          </View>
+        ))}
+        {serverPhotos.map((p) => (
+          <View key={p.id} style={s.thumb} testID={`photo-synced-${p.id}`}>
+            <Image source={{ uri: `${API_BASE}${p.content_url}`, headers: token ? { Authorization: `Bearer ${token}` } : undefined }} style={s.img} />
+            <View style={[s.pill, { backgroundColor: badge.synced.bg }]}><Text style={[s.pillText, { color: badge.synced.fg }]}>Synced</Text></View>
+            <Text style={s.cap}>{p.category || "—"}</Text>
+          </View>
+        ))}
+        {pending.length === 0 && serverPhotos.length === 0 && <Text style={s.empty}>No photos yet.</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  h: { fontSize: 16, fontWeight: "700", color: C.ink, marginTop: 20, marginBottom: 8 },
+  cats: { flexGrow: 0, marginBottom: 10 },
+  cat: { borderWidth: 2, borderColor: C.line, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 14, marginRight: 8 },
+  catOn: { borderColor: C.brand, backgroundColor: "#FFF7ED" },
+  catText: { color: C.sub, fontWeight: "700" },
+  catTextOn: { color: C.brand },
+  input: { backgroundColor: "#fff", borderRadius: 12, padding: 12, fontSize: 15, borderWidth: 1, borderColor: C.line, marginBottom: 10 },
+  btnRow: { flexDirection: "row", gap: 10 },
+  btn: { flex: 1, backgroundColor: C.brand, borderRadius: 12, padding: 14, alignItems: "center" },
+  btnText: { color: "#fff", fontWeight: "800" },
+  btnOutline: { flex: 1, borderWidth: 2, borderColor: C.brand, borderRadius: 12, padding: 12, alignItems: "center" },
+  btnOutlineText: { color: C.brand, fontWeight: "800" },
+  grid: { marginTop: 12, flexGrow: 0 },
+  thumb: { marginRight: 10, width: 110 },
+  img: { width: 110, height: 110, borderRadius: 10, backgroundColor: "#E2E8F0" },
+  pill: { position: "absolute", top: 6, left: 6, borderRadius: 8, paddingVertical: 2, paddingHorizontal: 6 },
+  pillText: { fontSize: 10, fontWeight: "800" },
+  cap: { fontSize: 12, color: C.sub, marginTop: 4, fontWeight: "700" },
+  empty: { color: C.sub, fontStyle: "italic", paddingVertical: 20 },
+});

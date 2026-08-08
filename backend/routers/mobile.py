@@ -13,7 +13,7 @@ from fastapi.responses import Response
 
 from db import get_db
 from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User
-from core import get_current_user, require_roles, FIELD_ROLES, log_action
+from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from offsite_backup import put_object, get_object
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
@@ -143,7 +143,7 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
 
 # ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----
 _EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
-_CATS = {"Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"}
+_CATS = {"Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"}
 
 
 @router.post("/photos", status_code=201)
@@ -237,7 +237,7 @@ def _job_row(j: Job) -> dict:
 async def my_leads(scope: str = Query("auto"), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     stmt = select(Lead).order_by(Lead.created_at.desc())
     if _field_only(user) or scope == "mine":
-        stmt = stmt.where((Lead.assigned_user_id == user.id) | (Lead.created_by == user.email))
+        stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
     return [_lead_row(l) for l in rows]
 
@@ -252,22 +252,20 @@ async def my_jobs(scope: str = Query("auto"), user: User = Depends(require_roles
 
 
 @router.post("/leads/{lead_id}/assign")
-async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     l = await db.get(Lead, lead_id)
     if not l:
         raise HTTPException(status_code=404, detail="Lead not found")
-    target = user.id if (_field_only(user) or not payload.user_id) else uuid.UUID(payload.user_id)
-    l.assigned_user_id = target
+    l.assigned_user_id = uuid.UUID(payload.user_id) if payload.user_id else None
     await db.commit()
-    return {"id": str(l.id), "assigned_user_id": str(l.assigned_user_id)}
+    return {"id": str(l.id), "assigned_user_id": str(l.assigned_user_id) if l.assigned_user_id else None}
 
 
 @router.post("/jobs/{job_id}/assign")
-async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     j = await db.get(Job, job_id)
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
-    target = user.id if (_field_only(user) or not payload.user_id) else uuid.UUID(payload.user_id)
-    j.assigned_user_id = target
+    j.assigned_user_id = uuid.UUID(payload.user_id) if payload.user_id else None
     await db.commit()
-    return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id)}
+    return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}

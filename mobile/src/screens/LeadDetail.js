@@ -4,6 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api";
 import { queueMutation } from "../sync";
 import { C } from "../theme";
+import PhotoSection from "../components/PhotoSection";
 
 const OUTCOMES = ["no_answer", "interested", "not_interested", "do_not_knock"];
 
@@ -70,6 +71,8 @@ export default function LeadDetail({ route, navigation }) {
       <TouchableOpacity style={s.btn} onPress={() => navigation.navigate("Inspection", { lead_id: id, property_id: lead.property_id })} testID="open-inspection">
         <Text style={s.btnText}>Inspection</Text>
       </TouchableOpacity>
+
+      <PhotoSection recordType="lead" recordId={id} />
 
       <Text style={s.h}>Visit history</Text>
       {(lead.visits || []).map((v) => (

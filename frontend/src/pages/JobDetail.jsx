@@ -13,9 +13,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
-import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2 } from "lucide-react";
+import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
+const UNASSIGNED = "__unassigned__";
 const STATUSES = ["created", "pending", "scheduled", "in_progress", "completed", "cancelled"];
 const sc = { created: "bg-slate-100 text-slate-600", pending: "bg-slate-100 text-slate-600", scheduled: "bg-blue-50 text-blue-700", in_progress: "bg-amber-50 text-amber-700", completed: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
 
@@ -41,6 +42,8 @@ export default function JobDetail() {
   const [addOpen, setAddOpen] = useState(false);
   const [pick, setPick] = useState({ material_id: "", planned_quantity: 1 });
   const [poOpen, setPoOpen] = useState(false);
+  const [assignable, setAssignable] = useState([]);
+  const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -57,6 +60,20 @@ export default function JobDetail() {
   }, [id]);
 
   useEffect(() => { load(); api.get("/materials").then((r) => setMaterials(r.data)).catch(() => {}); }, [load]);
+
+  useEffect(() => {
+    if (canManage) api.get("/users/assignable").then((r) => setAssignable(r.data)).catch(() => {});
+  }, [canManage]);
+
+  const assignJob = async (value) => {
+    setAssigning(true);
+    try {
+      const user_id = value === UNASSIGNED ? null : value;
+      const { data } = await api.put(`/jobs/${id}/assign`, { user_id });
+      setJob(data);
+      toast.success(user_id ? `Assigned to ${data.assigned_user_name}` : "Assignment cleared");
+    } catch (e) { toast.error(apiError(e)); } finally { setAssigning(false); }
+  };
 
   const saveSchedule = async () => {
     setBusy(true);
@@ -96,7 +113,22 @@ export default function JobDetail() {
                   <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5"><Label>Assigned to</Label><Input value={sched.assigned_to} onChange={(e) => setSched({ ...sched, assigned_to: e.target.value })} disabled={!canManage} data-testid="job-assigned" /></div>
+              <div className="space-y-1.5"><Label>Assigned to (crew)</Label><Input value={sched.assigned_to} onChange={(e) => setSched({ ...sched, assigned_to: e.target.value })} disabled={!canManage} data-testid="job-assigned" /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Assigned field user</Label>
+              {canManage ? (
+                <Select value={job.assigned_user_id || UNASSIGNED} onValueChange={assignJob} disabled={assigning}>
+                  <SelectTrigger data-testid="job-assign-select"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={UNASSIGNED} data-testid="job-assign-unassigned">Unassigned</SelectItem>
+                    {assignable.map((u) => (
+                      <SelectItem key={u.id} value={u.id} data-testid={`job-assign-${u.id}`}>{u.full_name || u.email} · {u.role}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="text-sm text-slate-600" data-testid="job-assigned-readonly">{job.assigned_user_name ? `Assigned to ${job.assigned_user_name}` : "Unassigned"}</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Start date</Label><Input type="date" value={sched.scheduled_start} onChange={(e) => setSched({ ...sched, scheduled_start: e.target.value })} disabled={!canManage} data-testid="job-start" /></div>

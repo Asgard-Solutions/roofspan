@@ -12,7 +12,7 @@ export default function Jobs({ navigation }) {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await api.get("/jobs");
+      const r = await api.get("/mobile/jobs");
       setRows(r.data);
       await putCache("jobs", r.data);
     } catch (e) {

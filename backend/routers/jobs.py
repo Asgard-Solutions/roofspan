@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,11 +12,25 @@ from schemas_phase4 import JobPatch, JobMaterialIn, JobMaterialOut, JobDetailOut
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-def _out(j: Job) -> JobOut:
+class AssignIn(BaseModel):
+    user_id: str | None = None
+
+
+async def _user_name_map(db: AsyncSession, ids) -> dict:
+    ids = [i for i in {x for x in ids} if i]
+    if not ids:
+        return {}
+    rows = (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()
+    return {u.id: (u.full_name or u.email) for u in rows}
+
+
+def _out(j: Job, user_name: str | None = None) -> JobOut:
     return JobOut(id=str(j.id), number=j.number, quote_id=str(j.quote_id) if j.quote_id else None,
                   customer_id=str(j.customer_id) if j.customer_id else None,
                   property_id=str(j.property_id) if j.property_id else None,
-                  status=j.status, scope=j.scope, total=j.total, created_at=j.created_at)
+                  status=j.status, scope=j.scope, total=j.total, created_at=j.created_at,
+                  assigned_user_id=str(j.assigned_user_id) if j.assigned_user_id else None,
+                  assigned_user_name=user_name)
 
 
 async def _job_material_out(db: AsyncSession, jm: JobMaterial) -> JobMaterialOut:
@@ -35,7 +50,11 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
         stmt = stmt.where(Job.customer_id == customer_id)
     if status:
         stmt = stmt.where(Job.status == status)
-    return [_out(j) for j in (await db.execute(stmt)).scalars().all()]
+    if user.role == "sales":  # strict: sales see only jobs assigned to them
+        stmt = stmt.where(Job.assigned_user_id == user.id)
+    rows = (await db.execute(stmt)).scalars().all()
+    umap = await _user_name_map(db, [j.assigned_user_id for j in rows])
+    return [_out(j, user_name=umap.get(j.assigned_user_id)) for j in rows]
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)
@@ -43,16 +62,24 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
     j = await db.get(Job, job_id)
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
+    if user.role == "sales" and j.assigned_user_id != user.id:  # strict visibility
+        raise HTTPException(status_code=403, detail="This job is not assigned to you")
     cust = await db.get(Customer, j.customer_id) if j.customer_id else None
     prop = await db.get(Property, j.property_id) if j.property_id else None
     jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == j.id))).scalars().all()
     pos = (await db.execute(select(PurchaseOrder).where(PurchaseOrder.job_id == j.id).order_by(PurchaseOrder.created_at.desc()))).scalars().all()
+    assigned_user_name = None
+    if j.assigned_user_id:
+        au = await db.get(User, j.assigned_user_id)
+        assigned_user_name = (au.full_name or au.email) if au else None
     return JobDetailOut(
         id=str(j.id), number=j.number, quote_id=str(j.quote_id) if j.quote_id else None,
         customer_id=str(j.customer_id) if j.customer_id else None, customer_name=cust.name if cust else None,
         property_id=str(j.property_id) if j.property_id else None, property_address=prop.formatted_address if prop else None,
         status=j.status, scope=j.scope, notes=j.notes, total=j.total, scheduled_start=j.scheduled_start,
-        scheduled_end=j.scheduled_end, schedule_notes=j.schedule_notes, assigned_to=j.assigned_to, created_at=j.created_at,
+        scheduled_end=j.scheduled_end, schedule_notes=j.schedule_notes, assigned_to=j.assigned_to,
+        assigned_user_id=str(j.assigned_user_id) if j.assigned_user_id else None, assigned_user_name=assigned_user_name,
+        created_at=j.created_at,
         materials=[await _job_material_out(db, jm) for jm in jms],
         purchase_orders=[{"id": str(p.id), "number": p.number, "status": p.status, "total": p.total} for p in pos],
     )
@@ -71,6 +98,24 @@ async def update_job(job_id: str, payload: JobPatch, request: Request, user: Use
         setattr(j, k, v)
     await db.commit()
     await log_action(db, user=user, action="job.update", entity_type="job", entity_id=j.id, detail=payload.model_dump(exclude_unset=True, mode="json"), request=request)
+    return await get_job(job_id, user, db)
+
+
+@router.put("/{job_id}/assign", response_model=JobDetailOut)
+async def assign_job(job_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if payload.user_id:
+        target = await db.get(User, payload.user_id)
+        if not target or not target.is_active:
+            raise HTTPException(status_code=422, detail="Assignee must be an active user")
+        j.assigned_user_id = target.id
+    else:
+        j.assigned_user_id = None
+    await db.commit()
+    await log_action(db, user=user, action="job.assign", entity_type="job", entity_id=j.id,
+                     detail={"assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}, request=request)
     return await get_job(job_id, user, db)
 
 

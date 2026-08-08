@@ -168,6 +168,8 @@ class LeadOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     property_address: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
 
 
 class LeadPatch(BaseModel):

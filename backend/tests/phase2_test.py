@@ -241,8 +241,8 @@ def test_convert_to_lead_falls_back_to_owner_name(sales_headers, owner_headers, 
         assert lead["name"] == owner_name
     assert lead["property_id"] == pid
 
-    # Lead appears in /leads
-    leads = requests.get(f"{API}/leads", headers=sales_headers, timeout=15).json()
+    # Lead appears in /leads (checked as owner; sales visibility is now strict/assignment-based)
+    leads = requests.get(f"{API}/leads", headers=owner_headers, timeout=15).json()
     assert any(l["id"] == lead["id"] for l in leads)
 
 

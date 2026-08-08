@@ -16,7 +16,7 @@ export default function Home({ navigation }) {
     setRefreshing(true);
     try {
       await runSync();
-      const [l, j] = await Promise.all([api.get("/leads"), api.get("/jobs")]);
+      const [l, j] = await Promise.all([api.get("/mobile/leads"), api.get("/mobile/jobs")]);
       setLeads(l.data); setJobs(j.data);
       await putCache("leads", l.data); await putCache("jobs", j.data);
     } catch (e) {

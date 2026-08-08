@@ -12,7 +12,7 @@ export default function Leads({ navigation }) {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await api.get("/leads");
+      const r = await api.get("/mobile/leads");
       setRows(r.data);
       await putCache("leads", r.data);
     } catch (e) {

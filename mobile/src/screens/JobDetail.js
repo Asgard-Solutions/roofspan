@@ -4,6 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api";
 import { queueMutation } from "../sync";
 import { C } from "../theme";
+import PhotoSection from "../components/PhotoSection";
 
 export default function JobDetail({ route }) {
   const { id } = route.params;
@@ -47,6 +48,8 @@ export default function JobDetail({ route }) {
       <Text style={s.h}>Field update</Text>
       <TextInput style={s.input} placeholder="Add a field note/update…" value={note} onChangeText={setNote} multiline testID="job-note-input" />
       <TouchableOpacity style={s.btn} onPress={addUpdate} testID="job-add-update"><Text style={s.btnText}>Add update</Text></TouchableOpacity>
+
+      <PhotoSection recordType="job" recordId={id} />
     </ScrollView>
   );
 }

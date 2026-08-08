@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_db
 from models import User
 from core import (
-    require_roles, get_current_user, hash_password, log_action, ROLES, SENSITIVE_ROLES,
+    require_roles, get_current_user, hash_password, log_action, ROLES, SENSITIVE_ROLES, MANAGE_ROLES,
 )
 from schemas import UserOut, UserCreate, UserUpdate, PasswordResetRequest, RoleInfo
 
@@ -26,6 +26,13 @@ def _out(u: User) -> UserOut:
 @router.get("/roles", response_model=list[RoleInfo])
 async def list_roles(user: User = Depends(get_current_user)):
     return ROLE_META
+
+
+@router.get("/assignable", response_model=list[UserOut])
+async def list_assignable(user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Active users available for lead/job assignment. Accessible to owner/admin/office (not sales)."""
+    result = await db.execute(select(User).where(User.is_active == True).order_by(User.full_name))
+    return [_out(u) for u in result.scalars().all()]
 
 
 @router.get("", response_model=list[UserOut])
