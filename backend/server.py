@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from pathlib import Path
 
@@ -11,9 +12,10 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from db import Base, engine, SessionLocal
+from db import engine, SessionLocal
 from models import User
 from core import hash_password, verify_password
+from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing
@@ -77,8 +79,9 @@ async def seed_owner():
 
 @app.on_event("startup")
 async def on_startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Migration-driven schema: Alembic is the single authoritative schema path (no create_all,
+    # no manual SQL). Fresh DB builds from full history; existing DB migrates forward non-destructively.
+    await asyncio.to_thread(run_migrations)
     await seed_owner()
     logger.info("RoofSpan Office backend ready")
 

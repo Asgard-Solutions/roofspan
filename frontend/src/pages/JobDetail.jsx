@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
 import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2 } from "lucide-react";
 
@@ -145,7 +145,7 @@ export default function JobDetail() {
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent data-testid="job-material-dialog">
-          <DialogHeader><DialogTitle>Add material to job</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Add material to job</DialogTitle><DialogDescription>Plan a material and quantity for this job.</DialogDescription></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5"><Label>Material</Label>
               <Select value={pick.material_id} onValueChange={(v) => setPick({ ...pick, material_id: v })}>

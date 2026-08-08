@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
@@ -125,7 +125,7 @@ export default function Inventory() {
 
       <Dialog open={matOpen} onOpenChange={setMatOpen}>
         <DialogContent data-testid="material-dialog">
-          <DialogHeader><DialogTitle>Add material</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Add material</DialogTitle><DialogDescription>Add a new material to the inventory catalog.</DialogDescription></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="mat-name" /></div>
             <div className="grid grid-cols-2 gap-3">
@@ -143,7 +143,7 @@ export default function Inventory() {
 
       <Dialog open={adjOpen} onOpenChange={setAdjOpen}>
         <DialogContent data-testid="adjust-dialog">
-          <DialogHeader><DialogTitle>Adjust — {adjTarget?.name}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Adjust — {adjTarget?.name}</DialogTitle><DialogDescription>Increase or decrease the quantity on hand.</DialogDescription></DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-slate-500">On hand: <span className="font-medium">{adjTarget?.quantity_on_hand}</span>. Use a negative number to decrease.</p>
             <div className="space-y-1.5"><Label>Change (+/-)</Label><Input type="number" value={adj.delta} onChange={(e) => setAdj({ ...adj, delta: e.target.value })} data-testid="adjust-delta" /></div>

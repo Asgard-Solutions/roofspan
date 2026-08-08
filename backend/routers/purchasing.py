@@ -2,13 +2,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, User
+from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase4 import POIn, POStatusIn, ReceiveIn, POOut, POLineOut
-from sales_common import next_number, check_idempotency, record_idempotency
+from sales_common import next_number
 
 router = APIRouter(prefix="/api/purchase-orders", tags=["purchasing"])
 VALID = ["draft", "ordered", "partially_received", "received", "cancelled"]
@@ -100,17 +101,29 @@ async def set_status(po_id: str, payload: POStatusIn, request: Request, user: Us
 
 @router.post("/{po_id}/receive", response_model=POOut)
 async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    # Idempotent receiving: same Idempotency-Key returns without double-incrementing inventory.
-    prior = await check_idempotency(db, idempotency_key, "receipt")
+    # Atomic idempotent receiving: a unique Idempotency-Key row is reserved BEFORE any inventory
+    # mutation, so concurrent or repeated requests with the same key cannot double-post inventory.
     po = await db.get(PurchaseOrder, po_id)
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
-    if prior:
-        return await _out(db, po)
     if po.status == "cancelled":
         raise HTTPException(status_code=400, detail="Cannot receive against a cancelled purchase order")
     if not payload.items:
         raise HTTPException(status_code=400, detail="No items to receive")
+
+    if idempotency_key:
+        existing = await db.get(IdempotencyKey, idempotency_key)
+        if existing:
+            if existing.entity_type == "receipt" and existing.entity_id == str(po.id):
+                return await _out(db, po)  # replay -> return current state, no mutation
+            raise HTTPException(status_code=409, detail="Idempotency-Key already used for a different operation")
+        db.add(IdempotencyKey(key=idempotency_key, entity_type="receipt", entity_id=str(po.id)))
+        try:
+            await db.flush()  # unique PK enforces atomicity against concurrent duplicates
+        except IntegrityError:
+            await db.rollback()
+            po = await db.get(PurchaseOrder, po_id)
+            return await _out(db, po)
 
     for line in payload.items:
         item = await db.get(POLineItem, line.po_item_id)
@@ -130,7 +143,6 @@ async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_
     fully = all(i.received_quantity >= i.quantity - 1e-9 for i in items)
     any_recv = any(i.received_quantity > 0 for i in items)
     po.status = "received" if fully else ("partially_received" if any_recv else po.status)
-    await record_idempotency(db, idempotency_key, "receipt", po.id)
     await db.commit()
     await db.refresh(po)
     await log_action(db, user=user, action="po.receive", entity_type="purchase_order", entity_id=po.id, detail={"status": po.status, "lines": len(payload.items)}, request=request)

@@ -1,5 +1,7 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
@@ -8,6 +10,23 @@ from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase4 import MaterialIn, MaterialPatch, MaterialOut, AdjustIn, SupplierIn, SupplierOut
 
 router = APIRouter(prefix="/api", tags=["operations"])
+
+
+def _norm_name(name: str) -> str:
+    """Trim and collapse internal whitespace so case/spacing dupes don't create competing inventory."""
+    return re.sub(r"\s+", " ", (name or "").strip())
+
+
+async def _assert_unique_material_name(db: AsyncSession, name: str, exclude_id=None) -> str:
+    norm = _norm_name(name)
+    if not norm:
+        raise HTTPException(status_code=422, detail="Material name is required")
+    stmt = select(Material).where(func.lower(Material.name) == norm.lower())
+    if exclude_id is not None:
+        stmt = stmt.where(Material.id != exclude_id)
+    if (await db.execute(stmt)).scalars().first():
+        raise HTTPException(status_code=409, detail=f"A material named '{norm}' already exists")
+    return norm
 
 
 def _mat_out(m: Material) -> MaterialOut:
@@ -32,7 +51,9 @@ async def list_materials(low_stock: bool | None = Query(None), q: str | None = Q
 
 @router.post("/materials", response_model=MaterialOut, status_code=201)
 async def create_material(payload: MaterialIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    m = Material(**payload.model_dump(), created_by=user.email)
+    data = payload.model_dump()
+    data["name"] = await _assert_unique_material_name(db, data["name"])
+    m = Material(**data, created_by=user.email)
     db.add(m)
     await db.commit()
     await db.refresh(m)
@@ -45,7 +66,10 @@ async def update_material(material_id: str, payload: MaterialPatch, request: Req
     m = await db.get(Material, material_id)
     if not m:
         raise HTTPException(status_code=404, detail="Material not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("name") is not None:
+        data["name"] = await _assert_unique_material_name(db, data["name"], exclude_id=m.id)
+    for k, v in data.items():
         setattr(m, k, v)
     await db.commit()
     await db.refresh(m)

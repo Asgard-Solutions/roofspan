@@ -11,8 +11,8 @@ class MaterialIn(BaseModel):
     unit: str = "each"
     description: Optional[str] = None
     active: bool = True
-    reorder_threshold: float = 0
-    quantity_on_hand: float = 0
+    reorder_threshold: float = Field(default=0, ge=0)
+    quantity_on_hand: float = Field(default=0, ge=0)
 
 
 class MaterialPatch(BaseModel):
@@ -22,7 +22,7 @@ class MaterialPatch(BaseModel):
     unit: Optional[str] = None
     description: Optional[str] = None
     active: Optional[bool] = None
-    reorder_threshold: Optional[float] = None
+    reorder_threshold: Optional[float] = Field(default=None, ge=0)
 
 
 class MaterialOut(BaseModel):
@@ -111,9 +111,9 @@ class JobDetailOut(BaseModel):
 class POLineIn(BaseModel):
     material_id: Optional[str] = None
     description: str = ""
-    quantity: float = 1
+    quantity: float = Field(default=1, gt=0)
     unit: str = "each"
-    unit_cost: float = 0
+    unit_cost: float = Field(default=0, ge=0)
 
 
 class POLineOut(POLineIn):
