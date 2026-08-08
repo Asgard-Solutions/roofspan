@@ -79,7 +79,16 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **P2: Mobile field app** (after approval): Home/Leads/Map/Jobs/More, offline-safe writes.
 - Explicit non-goals (Stripe/payments, accounting, portals, BI, PostGIS, queues, SSO/MFA/OAuth) — do not build.
 
+## Deployment Durability (2026-08-08) — production preparation (no product changes)
+- **PostgreSQL persistence**: relocated PGDATA from the ephemeral overlay to the **persistent volume** at `/data/db/roofspan_pgdata` (updated `postgresql.conf data_directory` + supervisor `-D`). **Destructive test PASSED**: created a record → deleted the old overlay dir → restarted PG from the persistent path → record survived, app normal.
+- **Automated backups**: platform cron `nightly-db-backup` (`.emergent/crons.yml`, 08:00 UTC) → `POST /api/cron/backup` (bearer `WEBHOOK_CRON_SECRET`, constant-time compare, backgrounds the work) → `backend/scripts/backup_db.sh` (`pg_dump -Fc`). Stored on persistent volume `/data/db/roofspan_backups/`, timestamped, atomic `.partial`→`mv`, **14-dump retention**, logged to `backup.log` + `LAST_BACKUP_STATUS`, non-zero exit on failure. Verified: cron auth 401/200, background dump created.
+- **Restore drill**: `backend/scripts/restore_drill.sh` restores latest dump into isolated `roofspan_restore_drill`, checks tables/users/alembic/key-tables, prints PASS/FAIL, drops the drill DB, never touches production. **Verified PASS** (tables=29, alembic head; production untouched).
+- **Secrets recovery**: `SECRETS_ENCRYPTION_KEY` documented as an off-container recovery requirement kept OUT of the DB backup (needed to decrypt stored provider keys). One-time role bootstrap: `backend/scripts/bootstrap_postgres.sh`.
+- **Runbook**: `/app/OPERATIONS.md` rewritten (start/persistence/env-secrets/backup/restore/drill/alembic/restart/PG-unavailable/pre-rebuild-preserve).
+- **Verification reruns**: backend regression **76/76**; frontend production build clean; cron+regression sanity **10/10** (iteration_6). No defects.
+- **HUMAN ACTION (deploy)**: (1) if a from-scratch container rebuild recreates system config from the base image, re-apply the two PGDATA path settings or restore from backup — backups+key are the guaranteed recovery set; (2) periodically copy `/data/db/roofspan_backups/*.dump` + `SECRETS_ENCRYPTION_KEY` truly off-pod.
+
 ## Next Tasks
-1. **Phase 5 complete — paused awaiting user approval before any next step (Mobile app is NOT to start).**
-2. Wire real RentCast key when user provides it (Settings → Integrations); SAMPLE/DEMO until then.
-3. For production deploy: mount PG data dir on a persistent volume + schedule pg_dump backups (see /app/OPERATIONS.md).
+1. **Deployment prep complete — PAUSED. Awaiting explicit approval before the RoofSpan Mobile Field phase (do NOT auto-start).**
+2. Wire real RentCast key when provided (Settings → Integrations); SAMPLE/DEMO until then.
+3. Optional off-site backup copy to external storage once the user picks a target.
