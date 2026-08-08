@@ -11,6 +11,8 @@ import Leads from "@/pages/Leads";
 import LeadDetail from "@/pages/LeadDetail";
 import Customers from "@/pages/Customers";
 import Jobs from "@/pages/Jobs";
+import JobDetail from "@/pages/JobDetail";
+import Inventory from "@/pages/Inventory";
 import Finance from "@/pages/Finance";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
@@ -50,11 +52,6 @@ function App() {
       </BrowserRouter>
       <Toaster position="top-right" richColors />
     </AuthProvider>
-  );
-}
-
-export default App;
-/AuthProvider>
   );
 }
 
