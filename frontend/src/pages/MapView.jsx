@@ -100,7 +100,7 @@ export default function MapView() {
         }
       />
       <div className="relative flex-1">
-        <div ref={containerRef} className="absolute inset-0" data-testid="map-container" />
+        <div ref={containerRef} className="h-full w-full" data-testid="map-container" />
       </div>
     </div>
   );
