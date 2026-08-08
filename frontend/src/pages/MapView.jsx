@@ -135,10 +135,15 @@ export default function MapView() {
         map.addLayer({
           id: "prop-points", type: "circle", source: "properties",
           paint: {
-            "circle-radius": 6,
+            "circle-radius": 8,
             "circle-color": ["case", ["get", "do_not_knock"], "#DC2626", "#2563EB"],
             "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
           },
+        });
+        // Larger invisible hit target for easier clicking / touch (accessibility)
+        map.addLayer({
+          id: "prop-hit", type: "circle", source: "properties",
+          paint: { "circle-radius": 16, "circle-color": "#000000", "circle-opacity": 0 },
         });
 
         map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -161,8 +166,13 @@ export default function MapView() {
           const id = e.features?.[0]?.properties?.id;
           if (id && openSheetRef.current) openSheetRef.current(id);
         });
-        map.on("mouseenter", "prop-points", () => { map.getCanvas().style.cursor = "pointer"; });
-        map.on("mouseleave", "prop-points", () => { map.getCanvas().style.cursor = ""; });
+        map.on("click", "prop-hit", (e) => {
+          if (drawing.current) return;
+          const id = e.features?.[0]?.properties?.id;
+          if (id && openSheetRef.current) openSheetRef.current(id);
+        });
+        map.on("mouseenter", "prop-hit", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "prop-hit", () => { map.getCanvas().style.cursor = ""; });
 
         loadTerritories().then((list) => setTerritorySource(list, null));
       });

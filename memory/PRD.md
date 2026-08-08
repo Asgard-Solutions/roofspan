@@ -26,9 +26,20 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Pages**: Login, Dashboard, Map (MapLibre+OSM), Admin → Users/Roles/Audit/Settings(tabs: Integrations, Map, Company). Placeholder pages for other nav areas.
 - Verified: backend 19/19 pytest; frontend flows (login, RBAC hide/deny, users CRUD, settings tabs, masked keys, map) via testing agent.
 
+## Implemented (2026-08-08) — Office Phase 2: Property Acquisition
+- **Workflow verified end-to-end**: Create Territory → Draw on map → Preview import → Confirm import → Properties as pins → Open property → Owner/Renter → Do Not Knock → Visit → Convert to Lead.
+- **Territories**: CRUD (`/api/territories`), simple GeoJSON Polygon geometry (no PostGIS), on-map polygon drawing, per-territory property_count. Delete preserves properties (sets territory_id=NULL).
+- **RentCast import** (server-side only): `/api/territories/{id}/import/preview` (est. request count + sample) and `/import` (in-process asyncio tracked job, no queue). Idempotent upsert keyed on external_id (re-import = 0 created / N updated). NO real key configured yet → uses a clearly-labeled **SAMPLE/DEMO data generator**; real RentCast client + Test Connection implemented and auto-used once a key is added in Settings.
+- **Properties**: list, `/geojson` for map pins (blue = normal, red = Do Not Knock), detail with owner/renter contacts + visit history. DNK toggle (`PATCH`).
+- **Visits**: `/api/properties/{id}/visits` (outcome + notes; `do_not_knock` outcome flips the flag).
+- **Leads**: `/api/properties/{id}/convert-to-lead` + `/api/leads` list with status pipeline (new→working→qualified→lost→converted). Leads nav page now functional.
+- **Account**: self-service `POST /api/auth/change-password` (foundation completion, not expanded).
+- **Branding**: RoofSpan wordmark on login, app-icon in sidebar, favicon + apple-touch-icon applied (assets in `/frontend/public/brand`, unaltered).
+- **RBAC**: MANAGE_ROLES (owner/admin/office) for territories+imports; FIELD_ROLES (all) for view/visits/DNK/leads. Backend-enforced; sales blocked from manage endpoints (403).
+- Verified: Phase 2 backend 17/17 pytest + Phase 1 19/19; UI flows verified via testing agent (iteration_2).
+
 ## Backlog (Not Built — by design)
-- **P0 (next): Office Phase 2 — Property Acquisition**: territories (GeoJSON), RentCast import (preview + est. request count + idempotent), property records, owner/renter, Do Not Knock, visits, property/visit → lead.
-- **P1: Office Phase 3 — Sales**: leads, customers, inspections, estimates, quotes, acceptance, invoices (records only).
+- **P0 (next): Office Phase 3 — Sales**: leads mgmt (expand), customers, inspections, estimates, quotes, acceptance, invoices (records only). Preserve Property → Lead → Customer → Inspection → Estimate → Quote → Acceptance → Invoice.
 - **P1: Office Phase 4 — Operations**: jobs, scheduling, materials/inventory, low-stock, purchase orders, receiving.
 - **P2: Office Phase 5 — Production Readiness**: full regression, backups/recovery, Alembic migrations, hardening.
 - **P2: Mobile field app** (after Phase 5): Home/Leads/Map/Jobs/More, offline-safe writes.
