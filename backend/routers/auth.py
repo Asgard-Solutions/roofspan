@@ -9,6 +9,8 @@ from db import get_db
 from models import User
 from core import verify_password, create_access_token, get_current_user, log_action
 from schemas import LoginRequest, TokenResponse, UserOut
+from schemas_phase2 import ChangePasswordIn
+from core import hash_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -65,4 +67,14 @@ async def me(user: User = Depends(get_current_user)):
 @router.post("/logout")
 async def logout(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await log_action(db, user=user, action="auth.logout", entity_type="user", entity_id=user.id, request=request)
+    return {"ok": True}
+
+
+@router.post("/change-password")
+async def change_password(payload: ChangePasswordIn, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
+    await log_action(db, user=user, action="auth.change_password", entity_type="user", entity_id=user.id, request=request)
     return {"ok": True}

@@ -7,6 +7,7 @@ import AppShell from "@/components/AppShell";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import MapView from "@/pages/MapView";
+import Leads from "@/pages/Leads";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
@@ -28,7 +29,7 @@ function App() {
           >
             <Route path="/" element={<Dashboard />} />
             <Route path="/map" element={<MapView />} />
-            <Route path="/leads" element={<Placeholder title="Leads" />} />
+            <Route path="/leads" element={<Leads />} />
             <Route path="/customers" element={<Placeholder title="Customers" />} />
             <Route path="/jobs" element={<Placeholder title="Jobs" />} />
             <Route path="/inventory" element={<Placeholder title="Inventory" />} />

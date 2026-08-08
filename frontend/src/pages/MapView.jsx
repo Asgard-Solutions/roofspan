@@ -1,107 +1,371 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { api, getToken, BACKEND_URL } from "@/lib/api";
-import { PageHeader } from "@/components/PageHeader";
+import { toast } from "sonner";
+import { api, apiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Layers, Map as MapIcon } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import ImportDialog from "@/components/ImportDialog";
+import PropertySheet from "@/components/PropertySheet";
+import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2 } from "lucide-react";
 
-function buildStyle(cfg, mode) {
-  if (mode === "satellite") {
-    return {
-      version: 8,
-      sources: {
-        sat: {
-          type: "raster",
-          tiles: [`${BACKEND_URL}/api/map/tiles/satellite/{z}/{x}/{y}`],
-          tileSize: 256,
-          attribution: "© MapTiler © OpenStreetMap contributors",
-        },
-      },
-      layers: [{ id: "sat", type: "raster", source: "sat" }],
-    };
-  }
+const OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const MANAGE = ["owner", "administrator", "office"];
+const COLORS = ["#2563EB", "#EA580C", "#16A34A", "#9333EA", "#DC2626", "#0891B2"];
+
+function baseStyle() {
   return {
     version: 8,
-    sources: {
-      osm: { type: "raster", tiles: [cfg.osm_tile_url], tileSize: 256, attribution: cfg.attribution },
-    },
+    sources: { osm: { type: "raster", tiles: [OSM], tileSize: 256, attribution: "© OpenStreetMap contributors" } },
     layers: [{ id: "osm", type: "raster", source: "osm" }],
   };
 }
 
 export default function MapView() {
+  const { user } = useAuth();
+  const canManage = MANAGE.includes(user?.role);
+
   const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const [cfg, setCfg] = useState(null);
-  const [mode, setMode] = useState("street");
+  const loadedRef = useRef(false);
+  const drawing = useRef(false);
+  const drawPts = useRef([]);
+  const openSheetRef = useRef(null);
 
-  useEffect(() => {
-    api.get("/map-config").then((r) => setCfg(r.data)).catch(() => {});
+  const [territories, setTerritories] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [propCount, setPropCount] = useState(0);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawCount, setDrawCount] = useState(0);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(COLORS[0]);
+  const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [sheetId, setSheetId] = useState(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  const selected = territories.find((t) => t.id === selectedId);
+
+  const loadTerritories = useCallback(async () => {
+    try {
+      const { data } = await api.get("/territories");
+      setTerritories(data);
+      return data;
+    } catch (e) {
+      toast.error(apiError(e));
+      return [];
+    }
   }, []);
 
-  useEffect(() => {
-    if (!cfg || !containerRef.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: buildStyle(cfg, "street"),
-      center: cfg.default_center,
-      zoom: cfg.default_zoom,
-      transformRequest: (url) => {
-        if (url.startsWith(`${BACKEND_URL}/api/`)) {
-          return { url, headers: { Authorization: `Bearer ${getToken()}` } };
-        }
-        return { url };
-      },
+  const setTerritorySource = useCallback((list, selId) => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("territories")) return;
+    map.getSource("territories").setData({
+      type: "FeatureCollection",
+      features: list.map((t) => ({
+        type: "Feature",
+        geometry: t.geometry,
+        properties: { id: t.id, color: t.color, selected: t.id === selId },
+      })),
     });
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
-    mapRef.current = map;
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [cfg]);
+  }, []);
 
-  const switchMode = (next) => {
-    if (!mapRef.current || !cfg) return;
-    setMode(next);
-    mapRef.current.setStyle(buildStyle(cfg, next));
+  const loadProperties = useCallback(async (territoryId) => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("properties")) return;
+    if (!territoryId) {
+      map.getSource("properties").setData({ type: "FeatureCollection", features: [] });
+      setPropCount(0);
+      return;
+    }
+    try {
+      const { data } = await api.get(`/properties/geojson?territory_id=${territoryId}`);
+      map.getSource("properties").setData(data);
+      setPropCount(data.features.length);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  }, []);
+
+  const fitToTerritory = useCallback((t) => {
+    const map = mapRef.current;
+    if (!map || !t) return;
+    const b = new maplibregl.LngLatBounds();
+    t.geometry.coordinates[0].forEach((c) => b.extend(c));
+    map.fitBounds(b, { padding: 60, maxZoom: 15, duration: 600 });
+  }, []);
+
+  const updateDrawSource = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("draw")) return;
+    const pts = drawPts.current;
+    let feat = { type: "FeatureCollection", features: [] };
+    if (pts.length >= 3) {
+      feat = { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "Polygon", coordinates: [[...pts, pts[0]]] }, properties: {} }] };
+    } else if (pts.length >= 2) {
+      feat = { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "LineString", coordinates: pts }, properties: {} }] };
+    }
+    map.getSource("draw").setData(feat);
+    map.getSource("draw-pts").setData({ type: "FeatureCollection", features: pts.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
+  }, []);
+
+  // init map once
+  useEffect(() => {
+    api.get("/map-config").then(({ data }) => {
+      if (mapRef.current || !containerRef.current) return;
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style: baseStyle(),
+        center: data.default_center,
+        zoom: data.default_zoom,
+      });
+      map.addControl(new maplibregl.NavigationControl(), "top-right");
+      mapRef.current = map;
+
+      map.on("load", () => {
+        map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
+        map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
+
+        map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+          id: "prop-points", type: "circle", source: "properties",
+          paint: {
+            "circle-radius": 6,
+            "circle-color": ["case", ["get", "do_not_knock"], "#DC2626", "#2563EB"],
+            "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
+          },
+        });
+
+        map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "draw-fill", type: "fill", source: "draw", paint: { "fill-color": "#EA580C", "fill-opacity": 0.15 } });
+        map.addLayer({ id: "draw-line", type: "line", source: "draw", paint: { "line-color": "#EA580C", "line-width": 2, "line-dasharray": [2, 1] } });
+        map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 4, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
+
+        loadedRef.current = true;
+
+        map.on("click", (e) => {
+          if (drawing.current) {
+            drawPts.current = [...drawPts.current, [e.lngLat.lng, e.lngLat.lat]];
+            updateDrawSource();
+            setDrawCount(drawPts.current.length);
+          }
+        });
+        map.on("click", "prop-points", (e) => {
+          if (drawing.current) return;
+          const id = e.features?.[0]?.properties?.id;
+          if (id && openSheetRef.current) openSheetRef.current(id);
+        });
+        map.on("mouseenter", "prop-points", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "prop-points", () => { map.getCanvas().style.cursor = ""; });
+
+        loadTerritories().then((list) => setTerritorySource(list, null));
+      });
+    });
+    return () => {
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+    };
+  }, [loadTerritories, setTerritorySource, updateDrawSource]);
+
+  openSheetRef.current = (id) => { setSheetId(id); setSheetOpen(true); };
+
+  const selectTerritory = (t) => {
+    setSelectedId(t.id);
+    setTerritorySource(territories, t.id);
+    fitToTerritory(t);
+    loadProperties(t.id);
+  };
+
+  const startDraw = () => {
+    drawing.current = true;
+    drawPts.current = [];
+    setIsDrawing(true);
+    setDrawCount(0);
+    updateDrawSource();
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = "crosshair";
+    toast.info("Click on the map to add territory corners");
+  };
+
+  const cancelDraw = () => {
+    drawing.current = false;
+    drawPts.current = [];
+    setIsDrawing(false);
+    setDrawCount(0);
+    updateDrawSource();
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = "";
+  };
+
+  const finishDraw = () => {
+    if (drawPts.current.length < 3) {
+      toast.error("Add at least 3 points to form a territory");
+      return;
+    }
+    drawing.current = false;
+    setIsDrawing(false);
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = "";
+    setNewName("");
+    setSaveOpen(true);
+  };
+
+  const saveTerritory = async () => {
+    if (!newName.trim()) { toast.error("Enter a territory name"); return; }
+    setSaving(true);
+    const ring = [...drawPts.current, drawPts.current[0]];
+    try {
+      const { data } = await api.post("/territories", {
+        name: newName.trim(), color: newColor,
+        geometry: { type: "Polygon", coordinates: [ring] },
+      });
+      toast.success("Territory created");
+      setSaveOpen(false);
+      drawPts.current = [];
+      setDrawCount(0);
+      updateDrawSource();
+      const list = await loadTerritories();
+      setTerritorySource(list, data.id);
+      const created = list.find((t) => t.id === data.id);
+      if (created) selectTerritory(created);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTerritory = async (t) => {
+    if (!window.confirm(`Delete territory "${t.name}"? Imported properties are kept.`)) return;
+    try {
+      await api.delete(`/territories/${t.id}`);
+      toast.success("Territory deleted (properties preserved)");
+      if (selectedId === t.id) { setSelectedId(null); loadProperties(null); }
+      const list = await loadTerritories();
+      setTerritorySource(list, null);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
   };
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col md:h-screen">
-      <PageHeader
-        title="Property Map"
-        description="OpenStreetMap base layer. Satellite imagery requires a MapTiler key."
-        testid="page-map"
-        actions={
-          <div className="flex overflow-hidden rounded-md border border-border">
-            <Button
-              variant={mode === "street" ? "default" : "ghost"}
-              size="sm"
-              className="rounded-none"
-              onClick={() => switchMode("street")}
-              data-testid="map-mode-street"
-            >
-              <MapIcon className="h-4 w-4" /> Street
-            </Button>
-            <Button
-              variant={mode === "satellite" ? "default" : "ghost"}
-              size="sm"
-              className="rounded-none"
-              disabled={!cfg?.maptiler_configured}
-              onClick={() => switchMode("satellite")}
-              data-testid="map-mode-satellite"
-              title={cfg?.maptiler_configured ? "Satellite" : "Add a MapTiler key in Settings to enable satellite"}
-            >
-              <Layers className="h-4 w-4" /> Satellite
-            </Button>
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left panel */}
+        <div className="hidden w-80 shrink-0 flex-col border-r border-border bg-white md:flex" data-testid="territory-panel">
+          <div className="border-b border-border px-5 py-4">
+            <h1 className="font-heading text-lg font-bold text-slate-900">Property Acquisition</h1>
+            <p className="text-xs text-slate-500">Territories, imports & properties</p>
           </div>
-        }
-      />
-      <div className="relative flex-1">
-        <div ref={containerRef} className="h-full w-full" data-testid="map-container" />
+
+          <div className="flex-1 overflow-y-auto">
+            {/* Draw controls */}
+            {canManage && (
+              <div className="border-b border-border p-4">
+                {!isDrawing ? (
+                  <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button">
+                    <PencilRuler className="h-4 w-4" /> Draw new territory
+                  </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div>
+                    <div className="flex gap-2">
+                      <Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button>
+                      <Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Territory list */}
+            <div className="p-2">
+              {territories.length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>
+              )}
+              {territories.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => selectTerritory(t)}
+                  className={`mb-1 cursor-pointer rounded-md border p-3 transition-colors ${selectedId === t.id ? "border-slate-900 bg-slate-50" : "border-transparent hover:bg-slate-50"}`}
+                  data-testid={`territory-item-${t.id}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: t.color }} />
+                      <span className="font-medium text-slate-900">{t.name}</span>
+                    </div>
+                    {canManage && (
+                      <button onClick={(e) => { e.stopPropagation(); deleteTerritory(t); }} className="text-slate-300 hover:text-red-500" data-testid={`delete-territory-${t.id}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
+                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {t.property_count} properties</span>
+                  </div>
+                  {selectedId === t.id && canManage && (
+                    <Button size="sm" variant="outline" className="mt-2 w-full" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }} data-testid="import-button">
+                      <Download className="h-4 w-4" /> Import properties
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {selected && (
+            <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary">
+              <span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map
+              <span className="ml-2 inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-600" /> Do Not Knock</span>
+            </div>
+          )}
+        </div>
+
+        {/* Map */}
+        <div className="relative flex-1">
+          <div ref={containerRef} className="h-full w-full" data-testid="map-container" />
+          {isDrawing && (
+            <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-1.5 text-sm text-white shadow">
+              Click to place corners · Finish when done
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Save territory dialog */}
+      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
+        <DialogContent data-testid="save-territory-dialog">
+          <DialogHeader><DialogTitle>Name this territory</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Territory name</Label>
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. North Austin" data-testid="territory-name-input" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Color</Label>
+              <div className="flex gap-2">
+                {COLORS.map((c) => (
+                  <button key={c} onClick={() => setNewColor(c)} className={`h-7 w-7 rounded-md border-2 ${newColor === c ? "border-slate-900" : "border-transparent"}`} style={{ backgroundColor: c }} data-testid={`color-${c}`} />
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setSaveOpen(false); cancelDraw(); }}>Cancel</Button>
+            <Button onClick={saveTerritory} disabled={saving} data-testid="save-territory-button">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create territory</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {selected && (
+        <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={() => loadProperties(selectedId)} />
+      )}
+      <PropertySheet propertyId={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} onChanged={() => loadProperties(selectedId)} />
     </div>
   );
 }

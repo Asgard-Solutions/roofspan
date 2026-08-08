@@ -16,6 +16,8 @@ from models import User, AuditLog
 # ---- Roles ----
 ROLES = ["owner", "administrator", "office", "sales"]
 SENSITIVE_ROLES = ["owner", "administrator"]  # manage users, settings, integrations, audit
+MANAGE_ROLES = ["owner", "administrator", "office"]  # manage territories, run imports
+FIELD_ROLES = ["owner", "administrator", "office", "sales"]  # field work: visits, DNK, leads
 
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))

@@ -38,17 +38,9 @@ export default function Login() {
       <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${BG_IMAGE})` }} />
       <div className="absolute inset-0 bg-slate-900/80" />
 
-      <div className="relative z-10 w-full max-w-md rounded-lg border border-white/10 bg-white p-8 shadow-xl" data-testid="login-card">
-        <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-md bg-slate-900">
-            <HardHat className="h-6 w-6 text-orange-500" />
-          </div>
-          <div>
-            <div className="font-heading text-xl font-bold leading-none text-slate-900">RoofSpan</div>
-            <div className="text-xs text-slate-400">Office Sign In</div>
-          </div>
-        </div>
-
+      <div className="relative z-10 w-full max-w-md" data-testid="login-card">
+        <img src="/brand/roofspan-wordmark-dark.webp" alt="RoofSpan" className="mx-auto mb-6 h-16 w-auto" />
+        <div className="rounded-lg border border-white/10 bg-white p-8 shadow-xl">
         <h1 className="font-heading text-2xl font-bold tracking-tight text-slate-900">Sign in</h1>
         <p className="mt-1 text-sm text-slate-500">Access your local RoofSpan Office application.</p>
 
@@ -95,6 +87,7 @@ export default function Login() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sign in"}
           </Button>
         </form>
+        </div>
       </div>
     </div>
   );

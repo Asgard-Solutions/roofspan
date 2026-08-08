@@ -4,10 +4,14 @@ import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import ChangePasswordDialog from "@/components/ChangePasswordDialog";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, HardHat, ShieldCheck, ScrollText, KeyRound,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound,
 } from "lucide-react";
+
+const APPICON = "/brand/roofspan-appicon.png";
+const WORDMARK_LIGHT = "/brand/roofspan-wordmark-light.webp";
 
 const MAIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
@@ -46,9 +50,7 @@ function NavContent({ onNavigate, isSensitive }) {
       ))}
       {isSensitive && (
         <>
-          <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Administration
-          </div>
+          <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Administration</div>
           {ADMIN_NAV.map((item) => (
             <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate} data-testid={item.testid}>
               <item.icon className="h-4 w-4" />
@@ -64,9 +66,7 @@ function NavContent({ onNavigate, isSensitive }) {
 function Brand() {
   return (
     <div className="flex items-center gap-2.5 border-b border-border px-5 py-4">
-      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-slate-900">
-        <HardHat className="h-5 w-5 text-orange-500" />
-      </div>
+      <img src={APPICON} alt="RoofSpan" className="h-9 w-9 rounded-md" />
       <div>
         <div className="font-heading text-base font-bold leading-none text-slate-900">RoofSpan</div>
         <div className="text-[11px] text-slate-400">Office</div>
@@ -89,61 +89,43 @@ export default function AppShell() {
 
   const UserFooter = () => (
     <div className="border-t border-border p-4">
-      <div className="mb-3">
-        <div className="truncate text-sm font-semibold text-slate-900" data-testid="current-user-name">
-          {user?.full_name || user?.email}
-        </div>
+      <div className="mb-2">
+        <div className="truncate text-sm font-semibold text-slate-900" data-testid="current-user-name">{user?.full_name || user?.email}</div>
         <div className="flex items-center gap-1.5 text-xs text-slate-500">
           <KeyRound className="h-3 w-3" />
           <span data-testid="current-user-role">{roleLabel}</span>
         </div>
       </div>
-      <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={handleLogout} data-testid="logout-button">
-        <LogOut className="h-4 w-4" />
-        Sign out
+      <ChangePasswordDialog />
+      <Button variant="outline" size="sm" className="mt-1 w-full justify-start gap-2" onClick={handleLogout} data-testid="logout-button">
+        <LogOut className="h-4 w-4" /> Sign out
       </Button>
     </div>
   );
 
   return (
     <div className="App flex min-h-screen bg-background">
-      {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-border bg-white md:flex" data-testid="desktop-sidebar">
         <Brand />
-        <div className="flex-1 overflow-y-auto">
-          <NavContent isSensitive={isSensitive} />
-        </div>
+        <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} /></div>
         <UserFooter />
       </aside>
 
-      {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-border bg-white px-4 py-3 md:hidden">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900">
-            <HardHat className="h-4 w-4 text-orange-500" />
-          </div>
-          <span className="font-heading font-bold text-slate-900">RoofSpan</span>
-        </div>
+      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-border bg-white px-4 py-2.5 md:hidden">
+        <img src={WORDMARK_LIGHT} alt="RoofSpan" className="h-8 rounded" />
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" data-testid="mobile-menu-button">
-              <Menu className="h-5 w-5" />
-            </Button>
+            <Button variant="ghost" size="icon" data-testid="mobile-menu-button"><Menu className="h-5 w-5" /></Button>
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0">
             <Brand />
-            <div className="flex-1 overflow-y-auto">
-              <NavContent isSensitive={isSensitive} onNavigate={() => setOpen(false)} />
-            </div>
+            <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} onNavigate={() => setOpen(false)} /></div>
             <UserFooter />
           </SheetContent>
         </Sheet>
       </div>
 
-      {/* Main content */}
-      <main className="flex-1 pt-14 md:ml-64 md:pt-0">
-        <Outlet />
-      </main>
+      <main className="flex-1 pt-14 md:ml-64 md:pt-0"><Outlet /></main>
     </div>
   );
 }

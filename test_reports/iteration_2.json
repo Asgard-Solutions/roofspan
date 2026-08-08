@@ -1,0 +1,32 @@
+{
+  "summary": "Phase 2 (Property Acquisition) end-to-end review. Backend pytest: 17/17 PASS covering Territory CRUD + RBAC (sales 403 on POST/PUT/DELETE, 200 on GET), invalid polygon 422, import preview (mode=sample, rentcast_configured=false, estimated_properties>0), import run + strict idempotency (2nd run created=0, updated>0, total property count unchanged), properties list/geojson/detail, DNK toggle by sales, visit with outcome=do_not_knock flips property, convert-to-lead fallback to owner name, /leads listing, change-password (wrong -> 400, correct -> 200 -> revert to original -> re-login OK), and territory-delete preserves properties (territory_id becomes null on kept properties). Frontend: login + RoofSpan wordmark render, sidebar app icon visible, /map renders territory-panel + non-zero map-container (864x900) with OSM tiles, draw-territory workflow (4 clicks -> Finish -> name dialog -> Save) creates a territory that appears in the list, import dialog shows amber SAMPLE-DATA notice + estimated properties = 25, confirm import completes and property_count updates to '25 properties', change-password dialog opens with wrong current password showing 'Current password is incorrect' toast. All primary Phase 2 flows verified via a combination of API tests and UI automation.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/phase2_test.py",
+    "/app/test_reports/pytest/phase2_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "imports.py _run_import commits every 10 processed rows but sets job.status='completed' only at the end. If the process crashes mid-run, the job stays 'running' forever with no watchdog. Consider a background sweeper or persist heartbeat/last-updated timestamp. Non-blocking for Phase 2.",
+    "properties.py convert_to_lead uses payload.name.strip() but does not enforce upper cap or validate visit_id ownership (source_visit_id could point to any visit). Low risk in a trusted office app but worth constraining.",
+    "MapView.jsx uses window.confirm for destructive delete; consider replacing with shadcn AlertDialog for consistency with the rest of the UI.",
+    "MapView 'prop-points' click handler ignores clicks that fall on the territory fill layer if a pin sits on the outline — MapLibre delegates the top-most feature so it usually works, but the 6px pin radius makes precise pixel clicks brittle for automated tests. Consider increasing circle-radius to 8-10 or adding an invisible larger hit-layer for better accessibility (tap targets ~44px on mobile).",
+    "ImportDialog polls at 700ms for up to 120 iterations (~84s). If the sample generator generates 500 records it can exceed that; consider dynamic timeout based on max_records or a websocket/SSE.",
+    "auth.py change-password does not invalidate existing JWTs on password change. Non-blocking for phase 2 but a common security-review item."
+  ],
+  "updated_files": [
+    "/app/backend/tests/phase2_test.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17 phase 2 tests + 19/19 phase 1 tests)", "frontend": "~90% — every Phase 2 flow verified except the map-pin-click → PropertySheet interaction, which is a Playwright automation limitation (6px circle radius makes headless pixel-hits brittle). All required data-testids are present on PropertySheet/owner-info/dnk-toggle/add-visit/convert-lead/convert-lead-dialog/lead-name/save-lead."},
+  "test_credentials": "Owner unchanged: pjacobsen@asgardsolution.io / RoofSpan#Owner2026. Change-password test successfully reverted to original after roundtrip (verified with final login post-test).",
+  "seed_data_creation": "Created 1 test territory 'TEST_UI_Terr_405150' with 25 sample properties via UI; multiple TEST_Territory_* (backend) territories — the phase2 test suite deletes its own territory at the end via test_delete_territory_preserves_properties but the imported properties are preserved (with territory_id=null) per business rule. UI-created territory + its 25 sample properties + 1 TEST UI Lead were left in DB. Cleanup optional per problem statement.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 backend tests live at /app/backend/tests/phase2_test.py. Run with: cd /app/backend && REACT_APP_BACKEND_URL=https://roofspan-core.preview.emergentagent.com pytest tests/phase2_test.py -v (the .env is not auto-loaded by pytest). Pytest.ini pins -n 2 --dist loadscope. Sample properties have deterministic external_id 'sample-<territory>-<n>' so idempotent re-runs work. Territory delete preserves properties by setting territory_id=NULL. Change-password test intentionally reverts to the seeded password — do not skip the revert step.",
+  "rca of the issue": "N/A — no blocking bugs found in Phase 2. One minor UX/testability observation: map pin circle-radius=6 makes pixel-precise automated clicks unreliable; if UI regression testing needs to click pins, either enlarge the hit target or expose a debug helper (e.g., window.__testOpenProperty(id)) in dev builds."
+}

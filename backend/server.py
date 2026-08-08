@@ -14,7 +14,7 @@ from sqlalchemy import select
 from db import Base, engine, SessionLocal
 from models import User
 from core import hash_password, verify_password
-from routers import auth, users, audit, integrations, settings
+from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -32,6 +32,10 @@ app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(integrations.router)
 app.include_router(settings.router)
+app.include_router(territories.router)
+app.include_router(properties.router)
+app.include_router(imports.router)
+app.include_router(leads.router)
 
 app.add_middleware(
     CORSMiddleware,
