@@ -167,6 +167,7 @@ class MobileDevice(CPBase):
     installation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")  # ACTIVE | REVOKED
+    credential_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)  # SHA-256 of durable device secret (never plaintext)
     paired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

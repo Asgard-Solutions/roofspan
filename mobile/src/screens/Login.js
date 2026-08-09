@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Image } from "react-native";
 import { useAuth } from "../auth";
+import { usePairing } from "../pairingContext";
 import { C } from "../theme";
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, loginViaRelay } = useAuth();
+  const { pairing } = usePairing();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -12,9 +14,15 @@ export default function Login() {
   const onSubmit = async () => {
     setBusy(true);
     try {
-      await login(email.trim(), password);
+      // Paired devices transport credentials through the relay to the local RoofSpan server.
+      if (pairing) await loginViaRelay(pairing, email.trim(), password);
+      else await login(email.trim(), password);
     } catch (e) {
-      Alert.alert("Sign in failed", "Check your email and password.");
+      const msg = e && e.code === "bad_credentials" ? "Check your email and password."
+        : e && (e.code === "tunnel_unavailable" || e.code === "request_timeout")
+          ? "Can't reach your company's RoofSpan system right now. Please try again shortly."
+          : "Check your email and password.";
+      Alert.alert("Sign in failed", msg);
     } finally {
       setBusy(false);
     }

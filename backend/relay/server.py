@@ -146,6 +146,15 @@ async def mobile_ws(ws: WebSocket):
                 await _send(ws, {"type": P.T_ERROR, "code": "device_not_paired"})
                 await ws.close()
                 return
+            # Proof-of-possession of the durable per-device credential (device_id alone is insufficient).
+            import hashlib as _hashlib
+            import hmac as _hmac
+            cred = hello.get("device_credential") or ""
+            if not dev.credential_hash or not cred or not _hmac.compare_digest(
+                    _hashlib.sha256(cred.encode()).hexdigest(), dev.credential_hash):
+                await _send(ws, {"type": P.T_ERROR, "code": "device_auth_failed"})
+                await ws.close()
+                return
             state = await _entitlement_state(db, inst.company_id)
             if state not in ("ACTIVE", "GRACE"):
                 # Mobile license-lock: routing is blocked; the app shows the subscription-inactive screen.

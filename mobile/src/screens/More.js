@@ -1,13 +1,15 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
+import { usePairing } from "../pairingContext";
 import { pendingSummary, runSync } from "../sync";
 import { API_BASE } from "../config";
 import { C, badge } from "../theme";
 
 export default function More() {
   const { user, logout } = useAuth();
+  const { unpair } = usePairing();
   const [counts, setCounts] = useState({ pending: 0, failed: 0, conflict: 0, synced: 0 });
   const [attention, setAttention] = useState([]);
   const [syncing, setSyncing] = useState(false);
@@ -81,6 +83,22 @@ export default function More() {
       </View>
 
       <TouchableOpacity style={s.logout} onPress={logout} testID="more-logout"><Text style={s.logoutText}>Log out</Text></TouchableOpacity>
+      <TouchableOpacity
+        style={s.unpair}
+        testID="more-unpair"
+        onPress={() =>
+          Alert.alert(
+            "Disconnect device?",
+            "This unpairs the device from your company. An administrator will need to pair it again. Your saved offline work is kept.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Disconnect", style: "destructive", onPress: async () => { await logout(); await unpair(); } },
+            ]
+          )
+        }
+      >
+        <Text style={s.unpairText}>Disconnect / Unpair Device</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -107,4 +125,6 @@ const s = StyleSheet.create({
   metaSm: { color: C.sub, fontSize: 12, marginTop: 2 },
   logout: { borderWidth: 2, borderColor: C.danger, borderRadius: 12, padding: 16, alignItems: "center", marginTop: 24 },
   logoutText: { color: C.danger, fontWeight: "800", fontSize: 16 },
+  unpair: { alignItems: "center", padding: 14, marginTop: 8, marginBottom: 24 },
+  unpairText: { color: C.sub, fontWeight: "700", fontSize: 14 },
 });

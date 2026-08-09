@@ -55,7 +55,7 @@ def _pair(data, priv):
     h = _sign_get(data["installation_id"], priv)
     p = requests.post(f"{CP}/pairing/create", headers=h, timeout=15).json()
     res = requests.post(f"{CP}/pairing/resolve", json={"token": p["token"], "label": "Test iPhone"}, timeout=15).json()
-    return res["device_id"]
+    return res["device_id"], res["device_credential"]
 
 
 def _owner_jwt():
@@ -70,10 +70,13 @@ def _set_cp_state(company_id, state):
     cn.close()
 
 
-async def _mobile_open(installation_id, device_id):
+async def _mobile_open(installation_id, device_id, credential=None):
     ws = await websockets.connect(WS_MOBILE)
-    await ws.send(P.dumps({"type": P.T_HELLO, "installation_id": installation_id,
-                           "device_id": device_id, "protocol": P.PROTOCOL_VERSION}))
+    hello = {"type": P.T_HELLO, "installation_id": installation_id,
+             "device_id": device_id, "protocol": P.PROTOCOL_VERSION}
+    if credential is not None:
+        hello["device_credential"] = credential
+    await ws.send(P.dumps(hello))
     first = P.loads(await ws.recv())
     return ws, first
 
@@ -103,12 +106,12 @@ async def _with_tunnel(installation_id, priv, coro):
 
 def test_relay_routes_mobile_request_with_local_rbac():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
     token = _owner_jwt()
 
     async def scenario():
         async def inner():
-            ws, ready = await _mobile_open(data["installation_id"], device_id)
+            ws, ready = await _mobile_open(data["installation_id"], device_id, cred)
             assert ready.get("type") == P.T_READY, ready
             # 1) health routed (no auth)
             h = await _mobile_request(ws, "GET", "/api/health")
@@ -140,11 +143,11 @@ def test_relay_rejects_unpaired_device():
 
 def test_relay_rejects_revoked_device():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
     assert requests.post(f"{CP}/pairing/devices/{device_id}/revoke", headers=ADMIN, timeout=15).status_code == 200
 
     async def scenario():
-        ws, first = await _mobile_open(data["installation_id"], device_id)
+        ws, first = await _mobile_open(data["installation_id"], device_id, cred)
         await ws.close()
         return first
 
@@ -154,11 +157,11 @@ def test_relay_rejects_revoked_device():
 
 def test_relay_blocks_suspended_subscription():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
     _set_cp_state(data["company_id"], "SUSPENDED")
 
     async def scenario():
-        ws, first = await _mobile_open(data["installation_id"], device_id)
+        ws, first = await _mobile_open(data["installation_id"], device_id, cred)
         await ws.close()
         return first
 
@@ -192,7 +195,7 @@ def test_relay_installation_bad_signature_fails_auth():
 
 def test_relay_protocol_mismatch():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
 
     async def scenario():
         ws = await websockets.connect(WS_MOBILE)
@@ -208,11 +211,11 @@ def test_relay_protocol_mismatch():
 
 def test_relay_tunnel_unavailable_when_installation_offline():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
     token = _owner_jwt()
 
     async def scenario():
-        ws, ready = await _mobile_open(data["installation_id"], device_id)  # no tunnel started
+        ws, ready = await _mobile_open(data["installation_id"], device_id, cred)  # no tunnel started
         assert ready.get("type") == P.T_READY
         r = await _mobile_request(ws, "GET", "/api/health", token=token)
         await ws.close()
@@ -224,11 +227,11 @@ def test_relay_tunnel_unavailable_when_installation_offline():
 
 def test_relay_duplicate_request_id_rejected():
     data, priv = _activate()
-    device_id = _pair(data, priv)
+    device_id, cred = _pair(data, priv)
 
     async def scenario():
         async def inner():
-            ws, ready = await _mobile_open(data["installation_id"], device_id)
+            ws, ready = await _mobile_open(data["installation_id"], device_id, cred)
             rid = uuid.uuid4().hex
             r1 = await _mobile_request(ws, "GET", "/api/health", request_id=rid)
             assert r1["type"] == P.T_RESPONSE and r1["status"] == 200
@@ -239,3 +242,44 @@ def test_relay_duplicate_request_id_rejected():
 
     r2 = asyncio.run(scenario())
     assert r2.get("type") == P.T_ERROR and r2.get("code") == "duplicate_request"
+
+
+def test_relay_rejects_wrong_device_credential():
+    data, priv = _activate()
+    device_id, _cred = _pair(data, priv)
+
+    async def scenario():
+        ws, first = await _mobile_open(data["installation_id"], device_id, "wrong-secret")
+        await ws.close()
+        return first
+
+    first = asyncio.run(scenario())
+    assert first.get("code") == "device_auth_failed"
+
+
+def test_relay_sign_in_through_relay():
+    """Mobile sign-in flow: route POST /api/auth/login through the relay to the local FastAPI,
+    which authenticates and returns a JWT (relay carries credentials, does not authenticate)."""
+    import base64
+    data, priv = _activate()
+    device_id, cred = _pair(data, priv)
+
+    async def scenario():
+        async def inner():
+            ws, ready = await _mobile_open(data["installation_id"], device_id, cred)
+            assert ready.get("type") == P.T_READY
+            rid = uuid.uuid4().hex
+            body = base64.b64encode(json.dumps(OWNER).encode()).decode()
+            await ws.send(P.dumps({"type": P.T_REQUEST, "request_id": rid, "method": "POST",
+                                   "path": "/api/auth/login", "headers": {"content-type": "application/json"},
+                                   "body": body}))
+            resp = P.loads(await ws.recv())
+            await ws.close()
+            return resp
+        return await _with_tunnel(data["installation_id"], priv, inner)
+
+    resp = asyncio.run(scenario())
+    assert resp["type"] == P.T_RESPONSE and resp["status"] == 200, resp
+    import base64 as _b
+    payload = json.loads(_b.b64decode(resp["body"]))
+    assert payload.get("access_token") and payload.get("user")

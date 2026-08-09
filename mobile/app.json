@@ -22,7 +22,7 @@
       }
     },
     "web": { "favicon": "./assets/favicon.png" },
-    "plugins": ["expo-secure-store", "expo-image-picker", "expo-dev-client", "@maplibre/maplibre-react-native"],
+    "plugins": ["expo-secure-store", "expo-image-picker", "expo-dev-client", "@maplibre/maplibre-react-native", ["expo-camera", { "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office." }]],
     "extra": {
       "apiBase": "https://unified-mono-deploy.preview.emergentagent.com"
     }

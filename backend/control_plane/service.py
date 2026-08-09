@@ -725,13 +725,18 @@ async def resolve_pairing(db: AsyncSession, *, token: str | None, numeric_code: 
     if now > pt.expires_at:
         raise CPError(410, "Pairing code expired")
     pt.used_at = now
-    device = MobileDevice(installation_id=pt.installation_id, label=label, status="ACTIVE", last_seen_at=now)
+    import secrets as _secrets
+    import hashlib as _hashlib
+    device_secret = _secrets.token_urlsafe(32)  # durable per-device credential — returned ONCE
+    device = MobileDevice(installation_id=pt.installation_id, label=label, status="ACTIVE", last_seen_at=now,
+                          credential_hash=_hashlib.sha256(device_secret.encode()).hexdigest())
     db.add(device)
     await db.commit()
     await db.refresh(device)
     await audit(db, actor=str(pt.installation_id), action="pairing.resolve", entity_type="mobile_device", entity_id=str(device.id))
     vp = await get_version_policy(db)
     return {"installation_id": str(pt.installation_id), "device_id": str(device.id),
+            "device_credential": device_secret,  # store in Mobile secure storage; never returned again
             "relay_endpoint": config.RELAY_ENDPOINT, "protocol_version": config.PROTOCOL_VERSION,
             "min_mobile_version": vp.mobile_min_supported}
 
