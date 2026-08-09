@@ -68,11 +68,23 @@ function buildMapStyle(cfg) {
   };
 }
 
+/*
+ * Whether the native MapLibre module can actually be used.
+ * Expo Go (Constants.executionEnvironment === "storeClient") does NOT bundle custom native
+ * modules like MapLibre, so importing the JS succeeds but rendering native components crashes.
+ * In that case we must show the fallback list. Dev-client / standalone / bare builds include it.
+ */
+function isNativeMapAvailable(executionEnvironment) {
+  if (executionEnvironment === "storeClient") return false; // Expo Go
+  return true;
+}
+
 module.exports = {
   DEFAULT_CENTER,
   DEFAULT_ZOOM,
   isValidTileUrl,
   isValidMapConfig,
+  isNativeMapAvailable,
   safeCenter,
   safeZoom,
   buildMapStyle,

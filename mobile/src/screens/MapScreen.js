@@ -1,16 +1,21 @@
 import React, { useCallback, useState } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
+import Constants from "expo-constants";
 import { api } from "../api";
 import { putCache, getCache } from "../storage";
 import { C } from "../theme";
-import { buildMapStyle, safeCenter, safeZoom } from "../mapConfig";
+import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
 
 // Native MapLibre is loaded lazily so the web target (and Node) don't crash on the native module.
 let MapLibre = null;
 if (Platform.OS !== "web") {
   try { MapLibre = require("@maplibre/maplibre-react-native"); } catch (e) { MapLibre = null; }
 }
+
+// Expo Go cannot load MapLibre's native module (only dev/standalone builds can). Detect it so the
+// Map tab degrades to the list fallback instead of erroring with "View config not found for MLRNCamera".
+const NATIVE_MAP_OK = MapLibre && isNativeMapAvailable(Constants.executionEnvironment);
 
 // Catch any JS-level render error from the native map and fall back gracefully (never crash the app).
 class MapErrorBoundary extends React.Component {
@@ -46,7 +51,7 @@ export default function MapScreen({ navigation }) {
   const openProp = (pid) => navigation.getParent()?.navigate("LeadsTab", { screen: "LeadDetail", params: { id: pid } });
 
   // Build a validated style JSON from server config. Null => config missing/invalid/malformed => fallback.
-  const mapStyle = MapLibre ? buildMapStyle(cfg) : null;
+  const mapStyle = NATIVE_MAP_OK ? buildMapStyle(cfg) : null;
 
   // Fallback list view (web/dev, offline, or invalid/unavailable map config). DNK is unmistakable.
   const renderFallback = (reason) => (
@@ -69,7 +74,7 @@ export default function MapScreen({ navigation }) {
   );
 
   // Native map (device builds) — only when we have a VALID style JSON. Server-provided OSM raster; no provider secret on device.
-  if (MapLibre && mapStyle) {
+  if (NATIVE_MAP_OK && mapStyle) {
     const { MapView, Camera, ShapeSource, CircleLayer } = MapLibre;
     const fc = { type: "FeatureCollection", features };
     const fallback = renderFallback("Map unavailable — showing list view.");
@@ -88,11 +93,14 @@ export default function MapScreen({ navigation }) {
   }
 
   // No valid map: explain briefly (only once config has actually loaded) and keep the app usable.
+  const inExpoGo = Constants.executionEnvironment === "storeClient";
   const reason = !MapLibre
     ? "Map list view (native MapLibre renders on device)."
-    : cfgLoaded && !mapStyle
-      ? "Map unavailable — showing list view."
-      : "Loading map…";
+    : inExpoGo
+      ? "Map requires a development build (Expo Go can't load native maps) — showing list view."
+      : cfgLoaded && !mapStyle
+        ? "Map unavailable — showing list view."
+        : "Loading map…";
   return renderFallback(reason);
 }
 

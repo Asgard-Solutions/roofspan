@@ -62,6 +62,12 @@ ok(mc.safeZoom({ default_zoom: 999 }) === mc.DEFAULT_ZOOM, "out-of-range zoom ->
 ok(mc.safeZoom({ default_zoom: "x" }) === mc.DEFAULT_ZOOM, "malformed zoom -> default");
 ok(mc.safeZoom(null) === mc.DEFAULT_ZOOM, "null cfg zoom -> default");
 
+// 4) Native availability gate (Expo Go cannot load MapLibre's native module)
+ok(mc.isNativeMapAvailable("storeClient") === false, "Expo Go (storeClient) => native map NOT available (use fallback)");
+ok(mc.isNativeMapAvailable("bare") === true, "dev/bare build => native map available");
+ok(mc.isNativeMapAvailable("standalone") === true, "standalone build => native map available");
+noThrow(() => mc.isNativeMapAvailable(undefined), "isNativeMapAvailable handles undefined without throwing");
+
 if (failures) { console.error(`\nMAP CONFIG TEST: ${failures} FAILURE(S)`); process.exit(1); }
 console.log("\nMAP CONFIG TEST: PASS");
 process.exit(0);

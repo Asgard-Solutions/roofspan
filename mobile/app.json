@@ -9,7 +9,7 @@
     "assetBundlePatterns": ["**/*"],
     "ios": { "supportsTablet": true, "bundleIdentifier": "io.roofspan.field" },
     "android": { "package": "io.roofspan.field" },
-    "plugins": ["expo-secure-store", "expo-image-picker"],
+    "plugins": ["expo-secure-store", "expo-image-picker", "expo-dev-client", "@maplibre/maplibre-react-native"],
     "extra": {
       "apiBase": "https://unified-mono-deploy.preview.emergentagent.com"
     }
