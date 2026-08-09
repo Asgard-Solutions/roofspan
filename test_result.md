@@ -161,6 +161,20 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ ALL 17 TESTS PASSED. Map Config API Contract: (1) Authentication works correctly - 401 without token, 200 with valid owner token. (2) Response shape fully validated: osm_tile_url='https://tile.openstreetmap.org/{z}/{x}/{y}.png' is a valid http(s) URL containing ALL required placeholders {z}, {x}, {y} (CRITICAL for mobile MapLibre crash prevention). (3) default_center=[-97.7431, 30.2672] is valid [lng, lat] with lng in [-180,180] and lat in [-90,90]. (4) default_zoom=11.0 is a number in [0,24]. (5) satellite_enabled=false (boolean) when maptiler_configured=false (boolean). (6) attribution='© OpenStreetMap contributors' is non-empty string. (7) Idempotent GET confirmed - 3 consecutive calls returned identical responses. (8) Valid JSON object returned. Regression Tests: (1) POST /api/auth/login works (200 with token). (2) GET /api/mobile/photos?record_type=lead&record_id=b749dfa4-70dd-4dc5-8a4b-043452677893 returns 4 photos (confirms PostgreSQL data persisted after volume reconfiguration). (3) GET /api/audit returns 200. Backend contract is SOLID - mobile app will receive well-formed config and avoid native crash."
+  - task: "Backend regression for Mobile Native Production-Readiness (post-PostgreSQL persistent volume reconfiguration)"
+    implemented: true
+    working: true
+    file: "routers/auth.py, routers/mobile.py, routers/leads.py, routers/jobs.py, routers/settings.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "BACKEND regression for the RoofSpan Mobile Native Production-Readiness pass. No backend code changed recently, but the environment recycled (PostgreSQL now runs from a persistent volume) so confirm the backend the Mobile app depends on is fully healthy. Verify: (1) AUTH / SecureStore backend contract: POST /api/auth/login for owner + sales1 returns 200 + token; wrong password returns 401; GET /api/auth/me with token returns user; no-token -> 401. (2) RBAC / strict assignment visibility: sales1 sees ONLY their assigned leads/jobs; sales2 cannot access sales1's records; sales users cannot call assign endpoints. (3) PHOTOS: upload, list, content, idempotency, validation, persistence (lead b749dfa4 should have >=4 photos). (4) MAP CONFIG: auth + structure validation. (5) Office<->Mobile consistency: visit/photo created via mobile endpoints visible via standard endpoints. (6) Idempotency for visits: same Idempotency-Key -> no duplicate."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL 24 REGRESSION TESTS PASSED. Backend is fully healthy after PostgreSQL persistent volume reconfiguration. SECTION 1 - AUTH / SecureStore Backend Contract (5/5 PASS): (1) Owner login returns 200 + token. (2) Sales1 login returns 200 + token. (3) Wrong password returns 401. (4) GET /api/auth/me with token returns user. (5) GET /api/auth/me without token returns 401. SECTION 2 - RBAC / Strict Assignment Visibility (5/5 PASS): (1) Sales1 sees only their assigned leads (1 lead, all assigned to sales1). (2) Sales1 sees only their assigned jobs (1 job, all assigned to sales1). (3) Sales2 cannot access Sales1's lead (403). (4) Sales2 cannot access Sales1's job (403). (5) Sales1 cannot assign leads (403). SECTION 3 - PHOTOS (9/9 PASS): (1) Owner can upload photo (201, photo_id returned). (2) List photos returns data (5 photos for lead b749dfa4). (3) Content retrieval returns image bytes (825 bytes). (4) Idempotency prevents duplicate (same ID, replayed=true). (5) Invalid record_type returns 422. (6) Invalid category returns 422. (7) Unsupported content-type returns 422. (8) Unauthenticated upload returns 401. (9) Persistence check: lead b749dfa4 has 6 photos (>=4 required). SECTION 4 - MAP CONFIG (2/2 PASS): (1) Requires auth (401 without token). (2) Valid structure (osm_tile_url with {z}{x}{y}, valid default_center [-97.7431, 30.2672], valid default_zoom 11.0). SECTION 5 - Office<->Mobile Consistency (2/2 PASS): (1) Visit created via POST /api/mobile/visits visible via GET /api/properties/{id} visits array. (2) Photo created via POST /api/mobile/photos visible via GET /api/mobile/photos list. SECTION 6 - Idempotency (1/1 PASS): Visit with same Idempotency-Key creates only one visit (same ID, replayed=true). Test file: /app/backend_regression_test.py. All backend APIs are working correctly. PostgreSQL data persistence confirmed."
 
 frontend:
   - task: "Mobile MapLibre crash fix (validated style + graceful fallback)"
@@ -195,13 +209,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.3"
-  test_sequence: 2
+  version: "1.4"
+  test_sequence: 3
   run_ui: true
 
 test_plan:
   current_focus:
-    - "Map configuration API (/api/map-config) contract for Mobile"
+    - "Backend regression for Mobile Native Production-Readiness (post-PostgreSQL persistent volume reconfiguration)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -215,3 +229,5 @@ agent_communication:
       message: "✅ FRONTEND UI TESTING COMPLETE - ALL TESTS PASSED. Office Photo Gallery feature fully functional across Lead Detail (lead-level + inspection-level galleries), Job Detail, and PropertySheet (code-verified). All images served via authenticated blob URLs. Photo viewer dialogs display full images with complete metadata (category, note, uploader, timestamp). No authentication failures, no broken images, no console errors. 12 successful photo API requests captured. Property sheet gallery requires manual map interaction testing but component implementation verified. Ready for production use."
     - agent: "testing"
       message: "✅ MAP CONFIG API CONTRACT VERIFICATION COMPLETE - ALL 17 TESTS PASSED. Backend API contract for mobile MapLibre crash fix fully verified. GET /api/map-config: (1) Requires authentication (401 without token, 200 with valid token). (2) Returns well-formed osm_tile_url='https://tile.openstreetmap.org/{z}/{x}/{y}.png' with ALL required placeholders {z}, {x}, {y} (critical for mobile). (3) default_center=[-97.7431, 30.2672] valid [lng,lat]. (4) default_zoom=11.0 in [0,24]. (5) satellite_enabled=false when maptiler_configured=false. (6) attribution present. (7) Idempotent GET confirmed. Regression tests confirm PostgreSQL persistence: login works, 4 photos persisted for lead b749dfa4-70dd-4dc5-8a4b-043452677893, audit endpoint works. Backend contract is SOLID - mobile app will receive valid config and avoid native crash. NATIVE DEVICE TESTING REMAINS HUMAN REQUIRED."
+    - agent: "testing"
+      message: "✅ BACKEND REGRESSION TESTING COMPLETE - ALL 24 TESTS PASSED. Backend is fully healthy after PostgreSQL persistent volume reconfiguration. Comprehensive regression test verified: (1) AUTH / SecureStore backend contract - owner/sales1 login works, wrong password rejected, /api/auth/me works with/without token correctly. (2) RBAC / strict assignment visibility - sales users see only their assigned leads/jobs, cannot access other sales users' records, cannot call assign endpoints. (3) PHOTOS - upload/list/content/idempotency all working, validation correct (invalid record_type/category/content-type rejected), unauthenticated requests rejected, persistence confirmed (lead b749dfa4 has 6 photos). (4) MAP CONFIG - auth required, structure valid (osm_tile_url with placeholders, valid center/zoom). (5) Office<->Mobile consistency - visits and photos created via mobile endpoints visible via standard endpoints. (6) Idempotency - visits with same Idempotency-Key create only one record. Test file: /app/backend_regression_test.py. All backend APIs working correctly. PostgreSQL data persistence confirmed. Mobile app backend dependencies are production-ready."

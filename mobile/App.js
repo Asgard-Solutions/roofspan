@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View, Text } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { AuthProvider, useAuth } from "./src/auth";
 import { startAutoSync } from "./src/sync";
@@ -54,7 +55,23 @@ function Shell() {
     );
   if (!user) return <Login />;
   return (
-    <Tab.Navigator screenOptions={{ tabBarActiveTintColor: C.brand, headerShown: true }}>
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        tabBarActiveTintColor: C.brand,
+        tabBarInactiveTintColor: "#64748B",
+        tabBarIcon: ({ color, size, focused }) => {
+          const icons = {
+            Home: focused ? "home" : "home-outline",
+            LeadsTab: focused ? "people" : "people-outline",
+            Map: focused ? "map" : "map-outline",
+            JobsTab: focused ? "briefcase" : "briefcase-outline",
+            More: focused ? "ellipsis-horizontal-circle" : "ellipsis-horizontal-circle-outline",
+          };
+          return <Ionicons name={icons[route.name] || "ellipse-outline"} size={size} color={color} />;
+        },
+      })}
+    >
       <Tab.Screen name="Home" component={Home} />
       <Tab.Screen name="LeadsTab" component={LeadsNav} options={{ title: "Leads", headerShown: false }} />
       <Tab.Screen name="Map" component={MapScreen} />
