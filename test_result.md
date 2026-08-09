@@ -147,8 +147,34 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ ALL TESTS PASSED (13 tests). Verified: (1) Owner can upload photos for lead, job, property, inspection via POST /api/mobile/photos (multipart/form-data). (2) Category, description, uploaded_by, record_type, record_id all persist correctly. (3) GET /api/mobile/photos?record_type&record_id returns list of photos. (4) GET /api/mobile/photos/{id}/content returns image bytes with correct content-type header. (5) Idempotency-Key header prevents duplicates (replayed=true on second upload). (6) Validation works: invalid record_type -> 422, invalid category -> 422, unsupported content_type -> 422, empty file -> 422. (7) Authorization: unauthenticated requests -> 401. Sample photos uploaded for lead, job, property, and inspection records for Office gallery display."
+  - task: "Map configuration API (/api/map-config) contract for Mobile"
+    implemented: true
+    working: true
+    file: "routers/settings.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Server side of the mobile map fix (no backend code change; verifying the contract the mobile crash-fix relies on). Verify GET /api/map-config: requires auth (401 without token); returns osm_tile_url that is an http(s) URL containing {z},{x},{y}; default_center is a [lng,lat] pair within valid ranges; default_zoom is a number in [0,24]; satellite_enabled is false when maptiler not configured. This confirms 'API map configuration response / URL formatting / auth loading sequence'."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL 17 TESTS PASSED. Map Config API Contract: (1) Authentication works correctly - 401 without token, 200 with valid owner token. (2) Response shape fully validated: osm_tile_url='https://tile.openstreetmap.org/{z}/{x}/{y}.png' is a valid http(s) URL containing ALL required placeholders {z}, {x}, {y} (CRITICAL for mobile MapLibre crash prevention). (3) default_center=[-97.7431, 30.2672] is valid [lng, lat] with lng in [-180,180] and lat in [-90,90]. (4) default_zoom=11.0 is a number in [0,24]. (5) satellite_enabled=false (boolean) when maptiler_configured=false (boolean). (6) attribution='© OpenStreetMap contributors' is non-empty string. (7) Idempotent GET confirmed - 3 consecutive calls returned identical responses. (8) Valid JSON object returned. Regression Tests: (1) POST /api/auth/login works (200 with token). (2) GET /api/mobile/photos?record_type=lead&record_id=b749dfa4-70dd-4dc5-8a4b-043452677893 returns 4 photos (confirms PostgreSQL data persisted after volume reconfiguration). (3) GET /api/audit returns 200. Backend contract is SOLID - mobile app will receive well-formed config and avoid native crash."
 
 frontend:
+  - task: "Mobile MapLibre crash fix (validated style + graceful fallback)"
+    implemented: true
+    working: "NA"
+    file: "mobile/src/mapConfig.js, mobile/src/screens/MapScreen.js, mobile/src/tests/mapconfig.node.test.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NATIVE crash fix. Root cause: MapView was rendered with NO mapStyle, so MapLibre 10 passed undefined to native which then tried to load a null/default style URL -> hard native crash. Fix: new pure module mapConfig.js validates server map-config and builds a MapLibre style JSON from cfg.osm_tile_url (isValidMapConfig / buildMapStyle / safeCenter / safeZoom); MapScreen renders native MapView with mapStyle only when a valid style is produced, wrapped in a MapErrorBoundary, else shows the existing list fallback. No provider URLs/keys hardcoded; config still comes from RoofSpan API. Regression test mapconfig.node.test.js proves invalid/missing/malformed config -> null (fallback, no throw) and valid config -> renderable style; also caught+fixed a safeZoom(null) bug. NATIVE device rendering remains HUMAN REQUIRED (testing agent cannot run Expo Go)."
+
   - task: "Office Photo Gallery (read-only) on Lead/Inspection/Job/Property"
     implemented: true
     working: true
@@ -171,15 +197,18 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Map configuration API (/api/map-config) contract for Mobile"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
     - agent: "main"
-      message: "Please run BACKEND-ONLY verification for the three backend tasks above. Owner credentials are in /app/memory/test_credentials.md (pjacobsen@asgardsolution.io / RoofSpan#Owner2026). There is NO seeded sales user — please CREATE a sales user via the admin/users API (owner token) to test strict sales visibility and RBAC 403s, and a second sales user to prove one sales user cannot access another's assigned records. For photo tests, create a lead/job/property (or reuse existing) and upload sample images, then verify list/content/idempotency/authorization. Do NOT test any native/Expo mobile behavior — those are HUMAN REQUIRED. Do NOT test frontend yet."
+      message: "MOBILE MAP CRASH FIX (SDK 54). Fixed a native MapLibre crash: MapView had no mapStyle so native loaded a null style URL and crashed. New pure module mobile/src/mapConfig.js validates server config and builds a style JSON from osm_tile_url; MapScreen only renders the native map with a valid style (else clean list fallback) inside an error boundary. Regression test mobile/src/tests/mapconfig.node.test.js PASSES (I ran it): invalid/missing/malformed config -> fallback (no throw); valid -> renderable style. iOS+Android Metro bundles build clean. NATIVE device rendering is HUMAN REQUIRED (you cannot run Expo Go). PLEASE VERIFY THE BACKEND CONTRACT the fix relies on: task 'Map configuration API (/api/map-config) contract for Mobile' — GET /api/map-config requires auth (401 without token) and returns a well-formed osm_tile_url (http(s) + {z}/{x}/{y}), valid [lng,lat] default_center, numeric default_zoom in [0,24]. Owner creds in /app/memory/test_credentials.md. BACKEND-ONLY; do not touch frontend or native."
     - agent: "testing"
       message: "✅ BACKEND TESTING COMPLETE - ALL 27 TESTS PASSED. All three backend tasks verified and working correctly: (1) Assignment security fully functional with proper RBAC, strict visibility, and audit logging. (2) Migration 53c1a6663c52 correctly applied with proper FK constraints. (3) Photo backend fully functional with upload, list, content retrieval, idempotency, and authorization. Test users created and credentials documented in /app/memory/test_credentials.md. Sample photos uploaded for lead, job, property, and inspection records. Frontend Photo Gallery task is ready for user permission to test UI."
     - agent: "testing"
       message: "✅ FRONTEND UI TESTING COMPLETE - ALL TESTS PASSED. Office Photo Gallery feature fully functional across Lead Detail (lead-level + inspection-level galleries), Job Detail, and PropertySheet (code-verified). All images served via authenticated blob URLs. Photo viewer dialogs display full images with complete metadata (category, note, uploader, timestamp). No authentication failures, no broken images, no console errors. 12 successful photo API requests captured. Property sheet gallery requires manual map interaction testing but component implementation verified. Ready for production use."
+    - agent: "testing"
+      message: "✅ MAP CONFIG API CONTRACT VERIFICATION COMPLETE - ALL 17 TESTS PASSED. Backend API contract for mobile MapLibre crash fix fully verified. GET /api/map-config: (1) Requires authentication (401 without token, 200 with valid token). (2) Returns well-formed osm_tile_url='https://tile.openstreetmap.org/{z}/{x}/{y}.png' with ALL required placeholders {z}, {x}, {y} (critical for mobile). (3) default_center=[-97.7431, 30.2672] valid [lng,lat]. (4) default_zoom=11.0 in [0,24]. (5) satellite_enabled=false when maptiler_configured=false. (6) attribution present. (7) Idempotent GET confirmed. Regression tests confirm PostgreSQL persistence: login works, 4 photos persisted for lead b749dfa4-70dd-4dc5-8a4b-043452677893, audit endpoint works. Backend contract is SOLID - mobile app will receive valid config and avoid native crash. NATIVE DEVICE TESTING REMAINS HUMAN REQUIRED."

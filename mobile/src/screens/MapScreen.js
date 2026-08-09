@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api";
 import { putCache, getCache } from "../storage";
 import { C } from "../theme";
+import { buildMapStyle, safeCenter, safeZoom } from "../mapConfig";
 
 // Native MapLibre is loaded lazily so the web target (and Node) don't crash on the native module.
 let MapLibre = null;
@@ -11,9 +12,18 @@ if (Platform.OS !== "web") {
   try { MapLibre = require("@maplibre/maplibre-react-native"); } catch (e) { MapLibre = null; }
 }
 
+// Catch any JS-level render error from the native map and fall back gracefully (never crash the app).
+class MapErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(err) { /* swallow: map is non-critical, fallback UI is shown */ }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+}
+
 export default function MapScreen({ navigation }) {
   const [features, setFeatures] = useState([]);
   const [cfg, setCfg] = useState(null);
+  const [cfgLoaded, setCfgLoaded] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -23,8 +33,11 @@ export default function MapScreen({ navigation }) {
       await putCache("geojson", g.data.features || []);
       await putCache("mapcfg", m.data);
     } catch (e) {
+      // Offline / server error: fall back to last cached values (may be null → list view).
       setFeatures((await getCache("geojson")) || []);
       setCfg((await getCache("mapcfg")) || null);
+    } finally {
+      setCfgLoaded(true);
     }
   }, []);
 
@@ -32,32 +45,17 @@ export default function MapScreen({ navigation }) {
 
   const openProp = (pid) => navigation.getParent()?.navigate("LeadsTab", { screen: "LeadDetail", params: { id: pid } });
 
-  // Native map (device builds). Server-provided OSM raster style; no provider secret on device.
-  if (MapLibre && cfg) {
-    const { MapView, Camera, RasterSource, RasterLayer, ShapeSource, CircleLayer } = MapLibre;
-    const fc = { type: "FeatureCollection", features };
-    return (
-      <View style={{ flex: 1 }}>
-        <MapView style={{ flex: 1 }} testID="map-view">
-          <Camera zoomLevel={cfg.default_zoom || 11} centerCoordinate={cfg.default_center || [-97.74, 30.27]} />
-          <RasterSource id="osm" tileUrlTemplates={[cfg.osm_tile_url]} tileSize={256}>
-            <RasterLayer id="osm-layer" />
-          </RasterSource>
-          <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
-            <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: ["case", ["get", "do_not_knock"], C.dnk, C.brand], circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
-          </ShapeSource>
-        </MapView>
-      </View>
-    );
-  }
+  // Build a validated style JSON from server config. Null => config missing/invalid/malformed => fallback.
+  const mapStyle = MapLibre ? buildMapStyle(cfg) : null;
 
-  // Fallback list view (web/dev). DNK is unmistakable.
-  return (
+  // Fallback list view (web/dev, offline, or invalid/unavailable map config). DNK is unmistakable.
+  const renderFallback = (reason) => (
     <FlatList
       style={s.wrap}
       data={features}
       keyExtractor={(f) => f.properties.id}
-      ListHeaderComponent={<Text style={s.note}>Map list view (native MapLibre renders on device).</Text>}
+      ListHeaderComponent={<Text style={s.note}>{reason}</Text>}
+      ListEmptyComponent={<Text style={s.empty}>No properties to show yet.</Text>}
       renderItem={({ item }) => {
         const p = item.properties;
         return (
@@ -69,11 +67,39 @@ export default function MapScreen({ navigation }) {
       }}
     />
   );
+
+  // Native map (device builds) — only when we have a VALID style JSON. Server-provided OSM raster; no provider secret on device.
+  if (MapLibre && mapStyle) {
+    const { MapView, Camera, ShapeSource, CircleLayer } = MapLibre;
+    const fc = { type: "FeatureCollection", features };
+    const fallback = renderFallback("Map unavailable — showing list view.");
+    return (
+      <MapErrorBoundary fallback={fallback}>
+        <View style={{ flex: 1 }} testID="map-container">
+          <MapView style={{ flex: 1 }} mapStyle={mapStyle} testID="map-view">
+            <Camera zoomLevel={safeZoom(cfg)} centerCoordinate={safeCenter(cfg)} />
+            <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
+              <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: ["case", ["get", "do_not_knock"], C.dnk, C.brand], circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
+            </ShapeSource>
+          </MapView>
+        </View>
+      </MapErrorBoundary>
+    );
+  }
+
+  // No valid map: explain briefly (only once config has actually loaded) and keep the app usable.
+  const reason = !MapLibre
+    ? "Map list view (native MapLibre renders on device)."
+    : cfgLoaded && !mapStyle
+      ? "Map unavailable — showing list view."
+      : "Loading map…";
+  return renderFallback(reason);
 }
 
 const s = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#F8FAFC", padding: 14 },
   note: { color: C.sub, fontStyle: "italic", marginBottom: 10 },
+  empty: { color: C.sub, fontStyle: "italic", paddingVertical: 20 },
   card: { backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: C.line },
   dnkCard: { backgroundColor: C.dnk, borderColor: C.dnk },
   addr: { fontSize: 15, fontWeight: "700", color: C.ink },
