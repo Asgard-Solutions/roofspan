@@ -173,6 +173,59 @@ async def billing_portal(company_id: str, _: bool = Depends(_require_admin), db:
         raise _cp_error(e)
 
 
+# ---------------- Stripe billing engine (authoritative) ----------------
+
+@router.post("/billing/stripe/webhook")
+async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_cp_db)):
+    body = await request.body()
+    try:
+        return await service.process_stripe_webhook(db, headers=dict(request.headers), body=body)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/stripe/checkout")
+async def stripe_checkout(company_id: str, payload: dict | None = None, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    payload = payload or {}
+    try:
+        return await service.stripe_create_checkout(db, company_id=company_id, seats=payload.get("seats"),
+                                                    origin_url=payload.get("origin_url"))
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.put("/billing/stripe/seats")
+async def stripe_seats(company_id: str, seats: int, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.stripe_update_seats(db, company_id=company_id, seats=seats)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/stripe/cancel")
+async def stripe_cancel(company_id: str, cancel: bool = True, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.stripe_set_cancel(db, company_id=company_id, cancel=cancel)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.get("/billing/stripe/portal-url")
+async def stripe_portal(company_id: str, return_url: str | None = None, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.stripe_portal(db, company_id=company_id, return_url=return_url)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/stripe/reconcile")
+async def stripe_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.stripe_reconcile(db, company_id=company_id)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
 # ---------------- pairing + version (Phase C3) ----------------
 
 async def _authed_installation(request: Request, db: AsyncSession):

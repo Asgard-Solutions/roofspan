@@ -98,8 +98,17 @@ async def refresh_subscription(request: Request, user: User = Depends(require_ro
 
 @router.get("/billing/portal-url", response_model=BillingLinkOut)
 async def billing_portal(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
-    from control_plane import billing as cp_billing
+    from control_plane import billing as cp_billing, config as cp_config
     _, company_id = await service.get_installation(db)
+    if cp_config.BILLING_MODE == "stripe":
+        from control_plane.db import SessionLocal as CPSession
+        from control_plane import service as cp_service
+        try:
+            async with CPSession() as cpdb:
+                r = await cp_service.stripe_portal(cpdb, company_id=company_id, return_url=cp_config.APP_BASE_URL)
+            return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="ok")
+        except cp_service.CPError as e:
+            return BillingLinkOut(configured=False, provider="stripe", url=None, message=e.detail)
     provider = cp_billing.get_provider()
     if provider.name == "stub":
         return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
@@ -111,9 +120,23 @@ async def billing_portal(user: User = Depends(require_roles(*SENSITIVE_ROLES)), 
 
 
 @router.post("/billing/checkout", response_model=BillingLinkOut)
-async def billing_checkout(user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
-    from control_plane import billing as cp_billing
+async def billing_checkout(request: Request, user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
+    from control_plane import billing as cp_billing, config as cp_config
     _, company_id = await service.get_installation(db)
+    if cp_config.BILLING_MODE == "stripe":
+        from control_plane.db import SessionLocal as CPSession
+        from control_plane import service as cp_service
+        origin = None
+        try:
+            origin = str(request.headers.get("origin") or "") or None
+        except Exception:
+            origin = None
+        try:
+            async with CPSession() as cpdb:
+                r = await cp_service.stripe_create_checkout(cpdb, company_id=company_id, seats=None, origin_url=origin)
+            return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="ok")
+        except cp_service.CPError as e:
+            return BillingLinkOut(configured=False, provider="stripe", url=None, message=e.detail)
     provider = cp_billing.get_provider()
     if provider.name == "stub":
         return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
@@ -122,6 +145,49 @@ async def billing_checkout(user: User = Depends(require_roles("owner")), db: Asy
         return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
     except cp_billing.BillingAuthError as e:
         return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
+
+
+@router.post("/billing/add-seats", response_model=BillingLinkOut)
+async def billing_add_seats(request: Request, delta: int, user: User = Depends(require_roles("owner")),
+                            db: AsyncSession = Depends(get_db)):
+    """Add or remove seats by a delta (+1/+5/+10, or negative to schedule a reduction). Same Stripe
+    subscription item quantity. Increases are immediate (prorated); decreases schedule at renewal."""
+    from control_plane import config as cp_config
+    if cp_config.BILLING_MODE != "stripe":
+        raise HTTPException(status_code=400, detail="Stripe billing is not enabled (BILLING_MODE != stripe)")
+    from control_plane.db import SessionLocal as CPSession
+    from control_plane import service as cp_service
+    _, company_id = await service.get_installation(db)
+    async with CPSession() as cpdb:
+        sub = await cp_service._get_sub(cpdb, company_id)
+        target = sub.seats + int(delta)
+        try:
+            result = await cp_service.stripe_update_seats(cpdb, company_id=company_id, seats=target)
+        except cp_service.CPError as e:
+            raise HTTPException(status_code=e.status, detail=e.detail)
+    await log_action(db, user=user, action="billing.add_seats", entity_type="license",
+                     detail={"delta": delta, **result}, request=request)
+    return BillingLinkOut(configured=True, provider="stripe", url=None, message=str(result))
+
+
+@router.post("/billing/cancel", response_model=BillingLinkOut)
+async def billing_cancel(request: Request, reactivate: bool = False, user: User = Depends(require_roles("owner")),
+                         db: AsyncSession = Depends(get_db)):
+    """Schedule cancellation at period end (or reverse it). Access continues through the paid term."""
+    from control_plane import config as cp_config
+    if cp_config.BILLING_MODE != "stripe":
+        raise HTTPException(status_code=400, detail="Stripe billing is not enabled (BILLING_MODE != stripe)")
+    from control_plane.db import SessionLocal as CPSession
+    from control_plane import service as cp_service
+    _, company_id = await service.get_installation(db)
+    async with CPSession() as cpdb:
+        try:
+            result = await cp_service.stripe_set_cancel(cpdb, company_id=company_id, cancel=not reactivate)
+        except cp_service.CPError as e:
+            raise HTTPException(status_code=e.status, detail=e.detail)
+    await log_action(db, user=user, action="billing.cancel", entity_type="license",
+                     detail={"reactivate": reactivate, **result}, request=request)
+    return BillingLinkOut(configured=True, provider="stripe", url=None, message=str(result))
 
 
 @router.post("/admin/mobile/pair")

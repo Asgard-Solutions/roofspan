@@ -61,6 +61,7 @@ class Subscription(CPBase):
     seats: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     provider_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     renewal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # C2 billing-rule refinements
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

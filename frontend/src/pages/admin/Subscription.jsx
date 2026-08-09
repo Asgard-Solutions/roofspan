@@ -50,8 +50,26 @@ export default function Subscription() {
       if (r.data.configured && r.data.url) {
         window.open(r.data.url, "_blank", "noopener");
       } else {
-        toast.message("Billing not connected yet", { description: r.data.message || "Configure your RevenueCat/Stripe account to enable hosted billing." });
+        toast.message("Billing not connected yet", { description: r.data.message || "Configure your Stripe account to enable hosted billing." });
       }
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
+  };
+
+  const addSeats = async (delta) => {
+    setBusy(`seats-${delta}`);
+    try {
+      const r = await api.post(`/billing/add-seats?delta=${delta}`);
+      toast.success(delta > 0 ? `Seat change requested (+${delta})` : `Seat reduction scheduled (${delta})`, { description: r.data.message });
+      load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
+  };
+
+  const toggleCancel = async (reactivate) => {
+    setBusy("cancel");
+    try {
+      const r = await api.post(`/billing/cancel?reactivate=${reactivate ? "true" : "false"}`);
+      toast.success(reactivate ? "Subscription reactivated" : "Cancellation scheduled at period end", { description: r.data.message });
+      load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
   };
 
@@ -136,10 +154,43 @@ export default function Subscription() {
           <Button variant="outline" className="gap-2" onClick={() => openBilling("portal")} disabled={busy === "portal"} data-testid="manage-billing-button">
             <CreditCard className="h-4 w-4" /> Manage Billing
           </Button>
-          <Button className="gap-2 bg-orange-600 hover:bg-orange-700" onClick={() => openBilling("checkout")} disabled={busy === "checkout"} data-testid="add-seats-button">
-            <UserPlus className="h-4 w-4" /> Add Seats
+          <Button className="gap-2 bg-orange-600 hover:bg-orange-700" onClick={() => openBilling("checkout")} disabled={busy === "checkout"} data-testid="buy-seats-checkout-button">
+            <CreditCard className="h-4 w-4" /> Buy Seats (Checkout)
           </Button>
         </div>
+
+        <div className="mt-6 rounded-md border border-border bg-white p-4" data-testid="seat-controls">
+          <div className="mb-3 text-sm font-medium text-slate-700">Add seats</div>
+          <p className="mb-3 text-xs text-slate-400">Each added seat is $49/month. Increases apply immediately (prorated). Reductions take effect at your next renewal.</p>
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" className="gap-2" onClick={() => addSeats(1)} disabled={busy === "seats-1"} data-testid="seat-add-1">
+              <UserPlus className="h-4 w-4" /> +1 Seat
+            </Button>
+            <Button variant="outline" className="gap-2" onClick={() => addSeats(5)} disabled={busy === "seats-5"} data-testid="seat-add-5">
+              <UserPlus className="h-4 w-4" /> +5 Seats
+            </Button>
+            <Button variant="outline" className="gap-2" onClick={() => addSeats(10)} disabled={busy === "seats-10"} data-testid="seat-add-10">
+              <UserPlus className="h-4 w-4" /> +10 Seats
+            </Button>
+            <Button variant="ghost" className="gap-2 text-slate-500" onClick={() => addSeats(-1)} disabled={busy === "seats--1"} data-testid="seat-remove-1">
+              −1 Seat (next renewal)
+            </Button>
+          </div>
+        </div>
+
+        {(sub?.state === "ACTIVE" || sub?.state === "GRACE") && (
+          <div className="mt-6" data-testid="cancel-controls">
+            {sub?.cancel_at_period_end ? (
+              <Button variant="outline" className="gap-2" onClick={() => toggleCancel(true)} disabled={busy === "cancel"} data-testid="reactivate-subscription-button">
+                Resume Subscription (undo cancellation)
+              </Button>
+            ) : (
+              <Button variant="ghost" className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => toggleCancel(false)} disabled={busy === "cancel"} data-testid="cancel-subscription-button">
+                <XCircle className="h-4 w-4" /> Cancel Subscription (at period end)
+              </Button>
+            )}
+          </div>
+        )}
 
         <p className="mt-4 max-w-3xl text-xs text-slate-400" data-testid="seat-bounds-note">
           Licensed seats range from {sub?.min_seats ?? 5} to {sub?.max_seats ?? 50}. The Owner counts as a licensed seat; deactivated users do not consume a seat.

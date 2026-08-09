@@ -63,3 +63,15 @@ MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
 RELAY_ENDPOINT = os.environ.get("ROOFSPAN_RELAY_ENDPOINT", "wss://relay.roofspan.dev/v1")
 PROTOCOL_VERSION = os.environ.get("ROOFSPAN_PROTOCOL_VERSION", "1")
 PAIRING_TTL_SECONDS = int(os.environ.get("PAIRING_TTL_SECONDS", "300"))
+
+# ---- Billing (Phase C2/Stripe) ----
+# BILLING_MODE: mock (safe dev/test default) | stripe (production authoritative engine) | revenuecat | stub.
+# Production configuration failure must FAIL CLEARLY — never silently fall back to mock (see billing.get_provider).
+BILLING_MODE = os.environ.get("BILLING_MODE", "mock").strip().lower()
+
+# Stripe Billing is the authoritative subscription/payment engine.
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_SEAT_LOOKUP_KEY = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat_monthly")
+SEAT_PRICE_USD = float(os.environ.get("ROOFSPAN_SEAT_PRICE_USD", "49"))  # informational; Stripe Price is source of truth
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")

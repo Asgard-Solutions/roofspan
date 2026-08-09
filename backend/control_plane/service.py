@@ -446,6 +446,236 @@ async def sweep_billing(db: AsyncSession) -> dict:
     return {"swept": len(subs), "changed": changed}
 
 
+# ---------------- Stripe billing engine (authoritative) ----------------
+
+async def _find_subscription_for_event(db: AsyncSession, parsed):
+    """Resolve the CP Subscription row for a Stripe event, by company_id -> sub id -> customer id."""
+    from control_plane.models import Subscription as _Sub
+    # 1) company reference (metadata/client_reference_id) if it is a valid company UUID
+    if parsed.company_reference:
+        try:
+            cu = uuid.UUID(parsed.company_reference)
+            sub = (await db.execute(select(_Sub).where(_Sub.company_id == cu))).scalar_one_or_none()
+            if sub is not None:
+                return sub
+        except (ValueError, Exception):
+            pass
+    # 2) by stripe subscription id
+    if parsed.provider_subscription_id:
+        sub = (await db.execute(select(_Sub).where(_Sub.provider_subscription_id == parsed.provider_subscription_id))).scalar_one_or_none()
+        if sub is not None:
+            return sub
+    # 3) by stripe customer id
+    if parsed.provider_customer_id:
+        sub = (await db.execute(select(_Sub).where(_Sub.provider_customer_id == parsed.provider_customer_id))).scalar_one_or_none()
+        if sub is not None:
+            return sub
+    return None
+
+
+async def _apply_stripe_event(db: AsyncSession, *, parsed, provider) -> str | None:
+    sub = await _find_subscription_for_event(db, parsed)
+    if sub is None:
+        return None
+    now = datetime.now(timezone.utc)
+    sub.provider = "stripe"
+    if parsed.provider_customer_id:
+        sub.provider_customer_id = parsed.provider_customer_id
+    if parsed.provider_subscription_id:
+        sub.provider_subscription_id = parsed.provider_subscription_id
+
+    if parsed.event_type == "checkout.session.completed":
+        # Fetch authoritative subscription details (seats/period/cancel) from Stripe.
+        if parsed.provider_subscription_id:
+            norm = provider.normalize_subscription(provider.retrieve_subscription(parsed.provider_subscription_id))
+            sub.seats = norm["seats"] or sub.seats
+            sub.current_period_end = norm["current_period_end"] or sub.current_period_end
+            sub.cancel_at_period_end = bool(norm["cancel_at_period_end"])
+        sub.state = "ACTIVE"
+        sub.grace_started_at = None
+    elif parsed.normalized_state == "GRACE":
+        if sub.state != "GRACE":
+            sub.grace_started_at = now
+        sub.state = "GRACE"
+    elif parsed.normalized_state == "ACTIVE":
+        sub.state = "ACTIVE"
+        sub.grace_started_at = None
+        if parsed.seats is not None:
+            # Stripe quantity is authoritative (a scheduled decrease materialized at renewal clears pending).
+            if sub.pending_seats is not None and parsed.seats == sub.pending_seats:
+                sub.pending_seats = None
+                sub.pending_seats_effective_at = None
+            sub.seats = parsed.seats
+        if parsed.current_period_end is not None:
+            sub.current_period_end = parsed.current_period_end
+        if parsed.cancel_at_period_end is not None:
+            sub.cancel_at_period_end = parsed.cancel_at_period_end
+    elif parsed.normalized_state == "SUSPENDED":
+        sub.state = "SUSPENDED"
+    elif parsed.normalized_state == "CANCELLED":
+        sub.state = "CANCELLED"
+    await db.commit()
+    return sub.state
+
+
+async def process_stripe_webhook(db: AsyncSession, *, headers: dict, body: bytes) -> dict:
+    """Verify a Stripe webhook (signature), idempotently record it, guard ordering, and transition state.
+
+    Stripe is the authoritative billing engine: signature-verified event -> normalized boundary ->
+    subscription state. No card data is ever stored.
+    """
+    from control_plane import billing as cp_billing
+    from control_plane.models import BillingEvent
+
+    provider = cp_billing.get_stripe_provider()
+    try:
+        parsed = provider.verify_and_parse_webhook(headers, body, {})
+    except cp_billing.BillingAuthError as e:
+        raise CPError(401, str(e))
+    if not parsed.event_id:
+        raise CPError(400, "Missing event id")
+
+    existing = (await db.execute(select(BillingEvent).where(BillingEvent.event_id == parsed.event_id))).scalar_one_or_none()
+    if existing is not None:
+        return {"ok": True, "status": "duplicate", "event_id": parsed.event_id}
+
+    evt = BillingEvent(provider="stripe", event_id=parsed.event_id, event_type=parsed.event_type,
+                       event_timestamp_ms=parsed.timestamp_ms, company_reference=parsed.company_reference,
+                       status="received")
+    db.add(evt)
+    await db.commit()
+
+    # Out-of-order guard: skip a state mutation older than the newest processed event for this reference.
+    if parsed.normalized_state is not None and parsed.company_reference and parsed.timestamp_ms is not None:
+        newest = (await db.execute(
+            select(BillingEvent.event_timestamp_ms)
+            .where(BillingEvent.provider == "stripe",
+                   BillingEvent.company_reference == parsed.company_reference,
+                   BillingEvent.status == "processed", BillingEvent.event_timestamp_ms.isnot(None))
+            .order_by(BillingEvent.event_timestamp_ms.desc()).limit(1))).scalar_one_or_none()
+        if newest is not None and parsed.timestamp_ms < newest:
+            evt.status = "ignored"
+            evt.error = "out-of-order (older than last processed)"
+            await db.commit()
+            return {"ok": True, "status": "ignored", "event_id": parsed.event_id}
+
+    try:
+        applied = await _apply_stripe_event(db, parsed=parsed, provider=provider)
+        evt.status = "processed"
+        evt.resulting_state = applied
+        await db.commit()
+    except Exception as e:
+        evt.status = "error"
+        evt.error = str(e)[:400]
+        await db.commit()
+        raise CPError(500, "Failed to process billing event")
+
+    await audit(db, actor="billing", action="billing.stripe.processed", entity_type="company",
+                entity_id=parsed.company_reference, detail={"event_type": parsed.event_type, "state": applied})
+    return {"ok": True, "status": "processed", "event_id": parsed.event_id, "state": applied}
+
+
+async def _get_sub(db: AsyncSession, company_id: str):
+    from control_plane.models import Subscription as _Sub
+    sub = (await db.execute(select(_Sub).where(_Sub.company_id == uuid.UUID(company_id)))).scalar_one_or_none()
+    if sub is None:
+        raise CPError(404, "Unknown company subscription")
+    return sub
+
+
+async def stripe_create_checkout(db: AsyncSession, *, company_id: str, seats: int | None, origin_url: str | None) -> dict:
+    from control_plane import billing as cp_billing
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    want = seats if seats is not None else max(config.MIN_SEATS, sub.seats)
+    try:
+        url = provider.create_checkout_session(company_id, want, origin_url)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    await audit(db, actor="admin", action="billing.stripe.checkout", entity_type="company", entity_id=company_id,
+                detail={"seats": provider._clamp(want)})
+    return {"url": url, "company_id": company_id, "seats": provider._clamp(want)}
+
+
+async def stripe_update_seats(db: AsyncSession, *, company_id: str, seats: int) -> dict:
+    from control_plane import billing as cp_billing
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    if not sub.provider_subscription_id:
+        raise CPError(409, "No active Stripe subscription — complete checkout first")
+    seats = max(config.MIN_SEATS, min(config.MAX_SEATS, int(seats)))
+    try:
+        result = provider.update_seats(sub.provider_subscription_id, seats)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    if result["effect"] == "immediate":
+        sub.seats = seats
+        sub.pending_seats = None
+        sub.pending_seats_effective_at = None
+    else:
+        sub.pending_seats = seats
+        sub.pending_seats_effective_at = result.get("effective_at") or sub.current_period_end
+        result["effective_at"] = sub.pending_seats_effective_at.isoformat() if sub.pending_seats_effective_at else None
+    await db.commit()
+    await audit(db, actor="admin", action="billing.stripe.seats", entity_type="company", entity_id=company_id, detail=result)
+    return result
+
+
+async def stripe_set_cancel(db: AsyncSession, *, company_id: str, cancel: bool) -> dict:
+    from control_plane import billing as cp_billing
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    if not sub.provider_subscription_id:
+        raise CPError(409, "No active Stripe subscription")
+    try:
+        result = provider.set_cancel_at_period_end(sub.provider_subscription_id, cancel)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    sub.cancel_at_period_end = result["cancel_at_period_end"]
+    if result.get("current_period_end"):
+        sub.current_period_end = result["current_period_end"]
+    await db.commit()
+    await audit(db, actor="admin", action="billing.stripe.cancel", entity_type="company", entity_id=company_id,
+                detail={"cancel_at_period_end": sub.cancel_at_period_end})
+    return {"cancel_at_period_end": sub.cancel_at_period_end,
+            "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None}
+
+
+async def stripe_portal(db: AsyncSession, *, company_id: str, return_url: str | None) -> dict:
+    from control_plane import billing as cp_billing
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    if not sub.provider_customer_id:
+        raise CPError(409, "No Stripe customer yet — complete checkout first")
+    try:
+        url = provider.create_portal_session(sub.provider_customer_id, return_url)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    return {"url": url, "company_id": company_id}
+
+
+async def stripe_reconcile(db: AsyncSession, *, company_id: str) -> dict:
+    from control_plane import billing as cp_billing
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    if not sub.provider_subscription_id:
+        raise CPError(409, "No Stripe subscription to reconcile")
+    norm = provider.normalize_subscription(provider.retrieve_subscription(sub.provider_subscription_id))
+    if norm["state"]:
+        sub.state = norm["state"]
+    if norm["seats"]:
+        sub.seats = norm["seats"]
+    if norm["current_period_end"]:
+        sub.current_period_end = norm["current_period_end"]
+    sub.cancel_at_period_end = bool(norm["cancel_at_period_end"])
+    if norm["state"] == "ACTIVE":
+        sub.grace_started_at = None
+    await db.commit()
+    await audit(db, actor="admin", action="billing.stripe.reconcile", entity_type="company", entity_id=company_id,
+                detail={"state": norm["state"], "seats": norm["seats"]})
+    return norm
+
+
 # ---------------- pairing + version (Phase C3) ----------------
 
 import random  # noqa: E402
