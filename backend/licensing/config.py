@@ -41,4 +41,18 @@ DEV_DEFAULT_STATE = os.environ.get("LICENSING_DEV_STATE", "ACTIVE")
 DEV_DEFAULT_SEATS = int(os.environ.get("LICENSING_DEV_SEATS", str(MAX_SEATS)))
 
 # ---- HTTP Control Plane (Phase C1+) --------------------------------------------
-CONTROL_PLANE_URL = os.environ.get("LICENSING_CONTROL_PLANE_URL")  # None in C0
+CONTROL_PLANE_URL = os.environ.get("LICENSING_CONTROL_PLANE_URL")  # None in C0; set for http mode
+
+# DEV activation bootstrap credential (installer/first-run). Isolated dev mechanism; production
+# activation credential/checkout linkage is finalized with C2 billing. Never a long-lived master
+# credential embedded in the installer.
+ACTIVATION_BOOTSTRAP_CREDENTIAL = os.environ.get("LICENSING_ACTIVATION_CREDENTIAL", "dev-bootstrap-roofspan")
+ACTIVATION_COMPANY_NAME = os.environ.get("LICENSING_ACTIVATION_COMPANY", "RoofSpan Roofing Co.")
+ACTIVATION_REQUESTED_SEATS = int(os.environ.get("LICENSING_ACTIVATION_SEATS", str(MIN_SEATS)))
+SOFTWARE_VERSION = os.environ.get("ROOFSPAN_VERSION", "1.0.0")
+
+# Trusted Control-Plane entitlement verification public keys are cached here (written by the http
+# client after activation/refresh). In production these are baked into the release + refreshable.
+TRUSTED_KEYS_DIR = os.environ.get(
+    "LICENSING_TRUSTED_KEYS_DIR", os.path.join(os.path.dirname(__file__), "trusted_keys")
+)

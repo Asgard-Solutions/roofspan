@@ -1,3 +1,5 @@
-# Licensing dev signing keys — DEV ONLY, never used in production. Never commit real keys.
+# Installation identity + cached trusted Control-Plane verify keys — local, never committed.
+installation_keys/
+trusted_keys/
 dev_keys/
 *.private.pem

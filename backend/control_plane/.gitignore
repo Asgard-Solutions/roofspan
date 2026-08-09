@@ -1,0 +1,3 @@
+# Control Plane DEV signing keys — DEV ONLY. Production keys live in AWS KMS/Secrets Manager.
+dev_signing_keys/
+*.private.pem

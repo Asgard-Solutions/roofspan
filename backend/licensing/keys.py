@@ -59,8 +59,9 @@ def get_dev_signing_key() -> tuple[str, Ed25519PrivateKey]:
 def get_trusted_verify_keys() -> dict[str, Ed25519PublicKey]:
     """Map of kid -> public verify key trusted by the local installation.
 
-    In production this is populated from keys baked into the release (+ refreshable signed
-    version policy). In dev it is the locally-generated dev public key.
+    In production this is populated from keys baked into the release (+ refreshable signed version
+    policy). In dev it is the locally-generated dev public key PLUS any Control-Plane public keys
+    cached under TRUSTED_KEYS_DIR (written by the http client after activation/refresh).
     """
     keys: dict[str, Ed25519PublicKey] = {}
     if os.path.exists(_pub_path):
@@ -71,4 +72,31 @@ def get_trusted_verify_keys() -> dict[str, Ed25519PublicKey]:
         _ensure_dev_keypair()
         with open(_pub_path, "rb") as f:
             keys[config.DEV_KID] = serialization.load_pem_public_key(f.read())
+    # Merge cached Control-Plane verification keys.
+    keys.update(load_trusted_cp_keys())
     return keys
+
+
+def load_trusted_cp_keys() -> dict[str, Ed25519PublicKey]:
+    """Load Control-Plane public keys cached under TRUSTED_KEYS_DIR (kid.public.pem)."""
+    out: dict[str, Ed25519PublicKey] = {}
+    d = config.TRUSTED_KEYS_DIR
+    if not os.path.isdir(d):
+        return out
+    for fname in os.listdir(d):
+        if fname.endswith(".public.pem"):
+            kid = fname[: -len(".public.pem")]
+            try:
+                with open(os.path.join(d, fname), "rb") as f:
+                    out[kid] = serialization.load_pem_public_key(f.read())
+            except Exception:
+                continue
+    return out
+
+
+def cache_trusted_cp_keys(keys: dict[str, str]) -> None:
+    """Persist Control-Plane public keys (kid -> PEM) so entitlements verify offline."""
+    os.makedirs(config.TRUSTED_KEYS_DIR, exist_ok=True)
+    for kid, pem in keys.items():
+        with open(os.path.join(config.TRUSTED_KEYS_DIR, f"{kid}.public.pem"), "w") as f:
+            f.write(pem)

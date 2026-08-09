@@ -15,7 +15,7 @@ from licensing.state import BUSINESS_ALLOWED
 
 logger = logging.getLogger("roofspan")
 
-# Always-allowed API prefixes (auth + licensing/billing/recovery + health + dev tooling).
+# Always-allowed API prefixes (auth + licensing/billing/recovery + health + dev tooling + Control Plane).
 _ALLOWLIST = (
     "/api/health",
     "/api/auth",
@@ -23,6 +23,7 @@ _ALLOWLIST = (
     "/api/license",
     "/api/billing",
     "/api/dev/",
+    "/api/control-plane",
 )
 
 
@@ -39,10 +40,21 @@ class SubscriptionGuardMiddleware(BaseHTTPMiddleware):
         if _is_guarded(request.url.path, request.method):
             try:
                 state = await service.effective_state_cached()
-            except Exception as e:  # never hard-fail a request because the guard errored
-                logger.warning("Subscription guard check failed (allowing request): %s", e)
-                state = None
-            if state is not None and state not in BUSINESS_ALLOWED:
+            except Exception:
+                # Unexpected internal licensing/guard failure: FAIL SAFE (do not allow protected
+                # business routes). The recovery allowlist (auth/subscription/license/billing) is not
+                # guarded and remains reachable. Note: a Control Plane/network outage does NOT reach
+                # here — it uses the valid cached entitlement by design.
+                logger.exception("Subscription guard internal error; blocking protected route %s", request.url.path)
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "RoofSpan licensing is temporarily unavailable. Please try again shortly "
+                                  "or contact your RoofSpan administrator.",
+                        "code": "licensing_error",
+                    },
+                )
+            if state not in BUSINESS_ALLOWED:
                 return JSONResponse(
                     status_code=403,
                     content={

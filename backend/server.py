@@ -21,6 +21,8 @@ from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
+from control_plane.router import router as control_plane_router
+from control_plane.service import init_control_plane
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -57,6 +59,7 @@ app.include_router(licensing_router.router)
 if licensing_config.LICENSING_MODE == "dev":
     from routers import licensing_dev
     app.include_router(licensing_dev.router)
+app.include_router(control_plane_router)
 
 # Guard business workflows when the subscription is not ACTIVE/GRACE. Added before CORS so CORS
 # remains the outermost middleware (guard 403 responses still receive CORS headers).
@@ -98,6 +101,10 @@ async def on_startup():
     await seed_owner()
     async with SessionLocal() as db:
         await licensing_service.bootstrap(db)
+    try:
+        await init_control_plane()
+    except Exception as e:
+        logger.warning("Control Plane init skipped/failed (non-fatal for the local installation): %s", e)
     logger.info("RoofSpan Office backend ready")
 
 

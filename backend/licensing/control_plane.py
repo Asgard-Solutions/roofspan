@@ -77,9 +77,80 @@ class DevControlPlaneClient:
 class HttpControlPlaneClient:
     mode = "http"
 
+    def _base(self) -> str:
+        base = config.CONTROL_PLANE_URL
+        if not base:
+            raise ControlPlaneUnavailable("Control Plane URL not configured")
+        return base.rstrip("/")
+
+    async def activate(self, db: AsyncSession) -> dict:
+        """First-run activation: register the installation public key and receive the first
+        entitlement. Stores the Control-Plane-assigned ids and caches its verification keys."""
+        import time
+        import httpx
+        from sqlalchemy import select as _select
+        from licensing import identity, keys as lkeys
+
+        _priv, pub_pem = identity.get_or_create_identity()
+        payload = {
+            "company_name": config.ACTIVATION_COMPANY_NAME,
+            "requested_seats": config.ACTIVATION_REQUESTED_SEATS,
+            "installation_public_key": pub_pem,
+            "software_version": config.SOFTWARE_VERSION,
+            "bootstrap_credential": config.ACTIVATION_BOOTSTRAP_CREDENTIAL,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(f"{self._base()}/activate", json=payload)
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Activation request failed: {e}") from e
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Activation rejected ({resp.status_code}): {resp.text[:200]}")
+        data = resp.json()
+        lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
+        # Adopt the Control-Plane-assigned identity ids.
+        row = (await db.execute(_select(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
+        value = {"installation_id": data["installation_id"], "company_id": data["company_id"],
+                 "license_id": data["license_id"]}
+        if row is None:
+            db.add(AppConfig(key="installation", value=value))
+        else:
+            row.value = value
+        await db.commit()
+        return data
+
     async def fetch_entitlement(self, db: AsyncSession, *, installation_id: str, company_id: str) -> str:
-        # Phase C1+: HTTPS call to the (AWS-hosted) Control Plane. Not implemented in C0.
-        raise ControlPlaneUnavailable("HTTP Control Plane not configured (Phase C1+).")
+        import time
+        import uuid as _uuid
+        import httpx
+        from licensing import identity, keys as lkeys, reqsig
+
+        priv = identity.load_private_key()
+        if priv is None:
+            raise ControlPlaneUnavailable("Installation not activated (no installation identity)")
+        timestamp = str(int(time.time()))
+        nonce = _uuid.uuid4().hex
+        body = b""
+        signature = reqsig.sign_request(priv, installation_id=installation_id, timestamp=timestamp, nonce=nonce, body=body)
+        headers = {
+            reqsig.H_INSTALLATION: installation_id,
+            reqsig.H_TIMESTAMP: timestamp,
+            reqsig.H_NONCE: nonce,
+            reqsig.H_SIGNATURE: signature,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(f"{self._base()}/entitlement/refresh", content=body, headers=headers)
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Entitlement refresh failed: {e}") from e
+        if resp.status_code == 403:
+            # Explicit revocation is authoritative — surface as an error (not a transient outage).
+            raise RuntimeError("Installation identity revoked by Control Plane")
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Refresh rejected ({resp.status_code}): {resp.text[:200]}")
+        data = resp.json()
+        lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
+        return data["entitlement_jws"]
 
 
 def get_client():
