@@ -95,11 +95,65 @@ def test_webhook_out_of_order_ignored():
     assert _current_state(data, priv) == "ACTIVE"
 
 
-def test_webhook_cancellation_recorded_no_state_change():
+def _entitlement_for(data, priv):
+    ts, nonce = str(int(time.time())), uuid.uuid4().hex
+    sig = reqsig.sign_request(priv, installation_id=data["installation_id"], timestamp=ts, nonce=nonce, body=b"")
+    h = {reqsig.H_INSTALLATION: data["installation_id"], reqsig.H_TIMESTAMP: ts,
+         reqsig.H_NONCE: nonce, reqsig.H_SIGNATURE: sig}
+    r = requests.post(f"{CP}/entitlement/refresh", data=b"", headers=h, timeout=15)
+    assert r.status_code == 200, r.text
+    return ent.verify_entitlement(r.json()["entitlement_jws"],
+                                  {k: serialization.load_pem_public_key(v.encode()) for k, v in r.json()["signing_public_keys"].items()})
+
+
+def test_webhook_cancellation_stays_active_until_period_end():
     data, priv = _activate()
     r = _webhook(data["company_id"], "CANCELLATION")
-    assert r.status_code == 200 and r.json().get("state") is None
-    assert _current_state(data, priv) == "ACTIVE"  # access continues until expiration
+    assert r.status_code == 200 and r.json()["state"] == "ACTIVE"  # remains usable through paid period
+    e = _entitlement_for(data, priv)
+    assert e.subscription_state == "ACTIVE"
+    assert e.cancel_at_period_end is True
+    assert e.current_period_end is not None
+
+
+def test_seat_increase_is_immediate():
+    data, priv = _activate(seats=10)
+    r = requests.put(f"{CP}/subscriptions/{data['company_id']}/seats", params={"seats": 15}, headers=ADMIN, timeout=15)
+    assert r.status_code == 200 and r.json()["effect"] == "immediate"
+    assert _entitlement_for(data, priv).seats_licensed == 15
+
+
+def test_seat_decrease_is_scheduled():
+    data, priv = _activate(seats=15)
+    r = requests.put(f"{CP}/subscriptions/{data['company_id']}/seats", params={"seats": 10}, headers=ADMIN, timeout=15)
+    assert r.status_code == 200 and r.json()["effect"] == "scheduled"
+    e = _entitlement_for(data, priv)
+    assert e.seats_licensed == 15               # still 15 through current period
+    assert e.scheduled_seats == 10              # scheduled reduction surfaced
+    assert e.scheduled_seats_at is not None
+
+
+def test_grace_started_surfaced_on_billing_issue():
+    data, priv = _activate()
+    _webhook(data["company_id"], "BILLING_ISSUE")
+    e = _entitlement_for(data, priv)
+    assert e.subscription_state == "GRACE"
+    assert e.grace_started_at is not None
+
+
+def test_grace_expiry_transitions_to_suspended_via_sweep():
+    data, priv = _activate()
+    _webhook(data["company_id"], "BILLING_ISSUE")
+    # backdate grace_started beyond the 7-day window, then sweep
+    import psycopg
+    from datetime import datetime, timezone, timedelta
+    cn = psycopg.connect(host="127.0.0.1", port=5432, user="roofspan", password="roofspan_local_pwd", dbname="roofspan_control_plane")
+    cn.execute("UPDATE subscriptions SET grace_started_at=%s WHERE company_id=%s",
+               (datetime.now(timezone.utc) - timedelta(days=8), data["company_id"]))
+    cn.commit()
+    sw = requests.post(f"{CP}/billing/sweep", headers=ADMIN, timeout=15)
+    assert sw.status_code == 200
+    assert _entitlement_for(data, priv).subscription_state == "SUSPENDED"
 
 
 def test_reconcile_mock():

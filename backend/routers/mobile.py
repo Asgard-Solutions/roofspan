@@ -19,6 +19,31 @@ from offsite_backup import put_object, get_object
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
 
+def _vtuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split(".")[:3])
+    except (ValueError, AttributeError):
+        return (0,)
+
+
+async def require_min_mobile_version(x_roofspan_app_version: str | None = Header(default=None)):
+    """Version negotiation: reject Mobile clients below the minimum supported app version.
+
+    An absent header is allowed (older clients / non-mobile callers); a present-but-too-old version
+    is rejected with 426 so an outdated client cannot make incompatible API assumptions.
+    """
+    from licensing import config as lic_config
+    if x_roofspan_app_version and _vtuple(x_roofspan_app_version) < _vtuple(lic_config.MIN_MOBILE_VERSION):
+        raise HTTPException(
+            status_code=426,
+            detail={"code": "must_update", "message": "A newer version of RoofSpan Mobile is required to connect to your company's RoofSpan system.",
+                    "min_supported": lic_config.MIN_MOBILE_VERSION},
+        )
+
+
+router.dependencies.append(Depends(require_min_mobile_version))
+
+
 async def _reserve_idem(db: AsyncSession, key: str | None, entity_type: str):
     """Atomically reserve an Idempotency-Key. Returns existing entity_id on replay, else None."""
     if not key:

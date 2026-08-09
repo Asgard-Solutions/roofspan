@@ -13,7 +13,7 @@ LICENSING_MODE = os.environ.get("LICENSING_MODE", "dev").strip().lower()
 # Timing windows (config-driven per approved decisions).
 REFRESH_INTERVAL_HOURS = float(os.environ.get("LICENSING_REFRESH_HOURS", "12"))
 OFFLINE_GRACE_DAYS = float(os.environ.get("LICENSING_OFFLINE_GRACE_DAYS", "7"))
-PAYMENT_GRACE_DAYS = float(os.environ.get("LICENSING_PAYMENT_GRACE_DAYS", "14"))
+PAYMENT_GRACE_DAYS = float(os.environ.get("LICENSING_PAYMENT_GRACE_DAYS", "7"))
 
 # Seat bounds are product-locked (not pricing). Do NOT hardcode pricing anywhere.
 MIN_SEATS = int(os.environ.get("LICENSING_MIN_SEATS", "5"))
@@ -21,6 +21,8 @@ MAX_SEATS = int(os.environ.get("LICENSING_MAX_SEATS", "50"))
 
 PRODUCT = os.environ.get("LICENSING_PRODUCT", "roofspan-office")
 MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
+# Minimum Mobile app version the local backend accepts (version negotiation). Below this -> 426.
+MIN_MOBILE_VERSION = os.environ.get("ROOFSPAN_MIN_MOBILE_VERSION", "1.0.0")
 
 # In-memory effective-state snapshot TTL (seconds). Keeps entitlement checks off the
 # Control Plane and off the hot DB path for the guard middleware.

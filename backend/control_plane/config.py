@@ -46,6 +46,8 @@ PRODUCT = os.environ.get("LICENSING_PRODUCT", "roofspan-office")
 # Entitlement timing (mirror licensing.config so policy is not duplicated divergently).
 REFRESH_INTERVAL_HOURS = float(os.environ.get("LICENSING_REFRESH_HOURS", "12"))
 OFFLINE_GRACE_DAYS = float(os.environ.get("LICENSING_OFFLINE_GRACE_DAYS", "7"))
+PAYMENT_GRACE_DAYS = float(os.environ.get("LICENSING_PAYMENT_GRACE_DAYS", "7"))  # billing grace (separate from offline)
+BILLING_PERIOD_DAYS = int(os.environ.get("BILLING_PERIOD_DAYS", "30"))  # mock paid-through period length
 
 # DEV signing-key storage dir (git-ignored). Production signing keys live in AWS KMS/Secrets Manager
 # (HUMAN REQUIRED) — never in the repo or ordinary config.
@@ -54,3 +56,10 @@ DEV_SIGNING_KEYS_DIR = os.environ.get(
 )
 
 MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
+
+# C3: relay endpoint metadata (advertised to Mobile after pairing) + pairing token lifetime.
+# Actual relay transport is a secure outbound WebSocket-TLS tunnel hosted on AWS (HUMAN REQUIRED);
+# this value is metadata only and contains no secrets.
+RELAY_ENDPOINT = os.environ.get("ROOFSPAN_RELAY_ENDPOINT", "wss://relay.roofspan.dev/v1")
+PROTOCOL_VERSION = os.environ.get("ROOFSPAN_PROTOCOL_VERSION", "1")
+PAIRING_TTL_SECONDS = int(os.environ.get("PAIRING_TTL_SECONDS", "300"))

@@ -40,6 +40,12 @@ class Entitlement(BaseModel):
     refresh_at: datetime
     grace_until: datetime
     nonce: str
+    # Optional billing metadata (Phase C2 refinements) — informational for the installation UI.
+    cancel_at_period_end: bool = False
+    current_period_end: Optional[datetime] = None
+    scheduled_seats: Optional[int] = None
+    scheduled_seats_at: Optional[datetime] = None
+    grace_started_at: Optional[datetime] = None
 
 
 class EntitlementError(Exception):
@@ -71,6 +77,19 @@ def sign_entitlement(*, private_key, kid: str, claims: dict) -> str:
         "exp": int(grace_until.timestamp()),
         "nonce": claims.get("nonce") or uuid.uuid4().hex,
     }
+    # Optional billing metadata (only included when provided).
+    def _ts(dt):
+        return int(dt.timestamp()) if dt else None
+    if claims.get("cancel_at_period_end"):
+        payload["cancel_at_period_end"] = True
+    if claims.get("current_period_end"):
+        payload["current_period_end"] = _ts(claims["current_period_end"])
+    if claims.get("scheduled_seats") is not None:
+        payload["scheduled_seats"] = int(claims["scheduled_seats"])
+    if claims.get("scheduled_seats_at"):
+        payload["scheduled_seats_at"] = _ts(claims["scheduled_seats_at"])
+    if claims.get("grace_started_at"):
+        payload["grace_started_at"] = _ts(claims["grace_started_at"])
     return jwt.encode(payload, private_key, algorithm=ALG, headers={"kid": kid})
 
 
@@ -103,6 +122,11 @@ def verify_entitlement(token: str, trusted_keys: dict) -> Entitlement:
     state = payload.get("subscription_state")
     if state not in VALID_STATES:
         raise EntitlementError(f"Invalid subscription_state: {state!r}")
+
+    def _dt(key):
+        v = payload.get(key)
+        return datetime.fromtimestamp(v, tz=timezone.utc) if v else None
+
     return Entitlement(
         kid=kid,
         installation_id=payload["installation_id"],
@@ -116,4 +140,9 @@ def verify_entitlement(token: str, trusted_keys: dict) -> Entitlement:
         refresh_at=datetime.fromtimestamp(payload["refresh_at"], tz=timezone.utc),
         grace_until=datetime.fromtimestamp(payload["grace_until"], tz=timezone.utc),
         nonce=payload.get("nonce", ""),
+        cancel_at_period_end=bool(payload.get("cancel_at_period_end", False)),
+        current_period_end=_dt("current_period_end"),
+        scheduled_seats=payload.get("scheduled_seats"),
+        scheduled_seats_at=_dt("scheduled_seats_at"),
+        grace_started_at=_dt("grace_started_at"),
     )

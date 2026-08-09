@@ -4,7 +4,7 @@ Read-only status + admin refresh + billing link stubs. Business-data enforcement
 guard middleware; seat enforcement lives in the users router. These endpoints are always reachable
 (even when SUSPENDED) so an Owner can view status and reach billing recovery.
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
@@ -28,6 +28,10 @@ async def get_subscription(user: User = Depends(get_current_user), db: AsyncSess
     seats = entitlement.seats_licensed if entitlement else 0
     row = await service._get_cache_row(db)
     over_by = max(active - seats, 0)
+    grace_day = None
+    if entitlement and entitlement.grace_started_at and status.effective_state == "GRACE":
+        from datetime import datetime, timezone
+        grace_day = (datetime.now(timezone.utc) - entitlement.grace_started_at).days + 1
     return SubscriptionStatusOut(
         state=status.effective_state,
         reported_state=status.reported_state,
@@ -45,6 +49,12 @@ async def get_subscription(user: User = Depends(get_current_user), db: AsyncSess
         grace_until=status.grace_until,
         seat_action_required=over_by > 0,
         active_over_by=over_by,
+        cancel_at_period_end=entitlement.cancel_at_period_end if entitlement else False,
+        current_period_end=entitlement.current_period_end if entitlement else None,
+        scheduled_seats=entitlement.scheduled_seats if entitlement else None,
+        scheduled_seats_at=entitlement.scheduled_seats_at if entitlement else None,
+        grace_started_at=entitlement.grace_started_at if entitlement else None,
+        grace_day=grace_day,
     )
 
 
@@ -112,3 +122,30 @@ async def billing_checkout(user: User = Depends(require_roles("owner")), db: Asy
         return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
     except cp_billing.BillingAuthError as e:
         return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
+
+
+@router.post("/admin/mobile/pair")
+async def mobile_pair(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from licensing import pairing_client
+    try:
+        return await pairing_client.create_pairing(db)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane to pair device: {str(e)[:200]}")
+
+
+@router.get("/admin/mobile/devices")
+async def mobile_devices(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from licensing import pairing_client
+    try:
+        return await pairing_client.list_devices(db)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane: {str(e)[:200]}")
+
+
+@router.post("/admin/mobile/devices/{device_id}/revoke")
+async def mobile_revoke(device_id: str, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from licensing import pairing_client
+    try:
+        return await pairing_client.revoke_device(db, device_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane: {str(e)[:200]}")

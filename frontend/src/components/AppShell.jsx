@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import ChangePasswordDialog from "@/components/ChangePasswordDialog";
+import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
   Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard,
@@ -127,7 +128,10 @@ export default function AppShell() {
         </Sheet>
       </div>
 
-      <main className="flex-1 pt-14 md:ml-64 md:pt-0"><Outlet /></main>
+      <main className="flex-1 pt-14 md:ml-64 md:pt-0">
+        <SubscriptionBanner />
+        <Outlet />
+      </main>
     </div>
   );
 }

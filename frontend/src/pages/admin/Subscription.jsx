@@ -107,8 +107,24 @@ export default function Subscription() {
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${st.cls}`} data-testid="subscription-state-badge">
             <StateIcon className={`h-3.5 w-3.5 ${st.color}`} /> {sub?.state || (loading ? "…" : "—")}
           </span>
+          {sub?.cancel_at_period_end && sub?.current_period_end && (
+            <span className="text-xs font-medium text-amber-600" data-testid="cancels-on-note">
+              Cancels on {new Date(sub.current_period_end).toLocaleDateString()}
+            </span>
+          )}
           {sub && !sub.online && <span className="text-xs text-slate-400" data-testid="offline-note">(using cached entitlement — offline)</span>}
         </div>
+
+        {sub?.scheduled_seats != null && sub?.scheduled_seats_at && (
+          <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700" data-testid="scheduled-seat-note">
+            <strong>{sub.seats_licensed} licensed seats.</strong> Scheduled to reduce to <strong>{sub.scheduled_seats}</strong> on {new Date(sub.scheduled_seats_at).toLocaleDateString()}.
+            {sub.active_users > sub.scheduled_seats && (
+              <div className="mt-1 text-amber-700" data-testid="scheduled-compliance-warning">
+                You currently have {sub.active_users} active users. Disable at least {sub.active_users - sub.scheduled_seats} before the new limit takes effect — no users are disabled automatically.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid max-w-3xl grid-cols-1 gap-4 sm:grid-cols-3">
           <Stat label="Licensed Seats" value={sub?.seats_licensed ?? "—"} testid="stat-licensed-seats" />

@@ -136,6 +136,19 @@ async def billing_webhook(request: Request, db: AsyncSession = Depends(get_cp_db
         raise _cp_error(e)
 
 
+@router.put("/subscriptions/{company_id}/seats")
+async def set_seats(company_id: str, seats: int, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.set_subscription_seats(db, company_id=company_id, seats=seats)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/sweep")
+async def billing_sweep(_: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    return await service.sweep_billing(db)
+
+
 @router.post("/billing/reconcile")
 async def billing_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
     try:
@@ -158,3 +171,54 @@ async def billing_portal(company_id: str, _: bool = Depends(_require_admin), db:
         return {"url": await service.portal_url(company_id), "company_id": company_id}
     except service.CPError as e:
         raise _cp_error(e)
+
+
+# ---------------- pairing + version (Phase C3) ----------------
+
+async def _authed_installation(request: Request, db: AsyncSession):
+    body = await request.body()
+    h = request.headers
+    iid, ts, nonce, sig = (h.get(reqsig.H_INSTALLATION), h.get(reqsig.H_TIMESTAMP),
+                           h.get(reqsig.H_NONCE), h.get(reqsig.H_SIGNATURE))
+    if not all([iid, ts, nonce, sig]):
+        raise HTTPException(status_code=401, detail="Missing installation authentication headers")
+    try:
+        inst = await service._verify_installation_request(db, installation_id=iid, timestamp=ts, nonce=nonce, body=body, signature_b64=sig)
+    except service.CPError as e:
+        raise _cp_error(e)
+    return inst
+
+
+@router.post("/pairing/create")
+async def pairing_create(request: Request, db: AsyncSession = Depends(get_cp_db)):
+    inst = await _authed_installation(request, db)
+    return await service.create_pairing(db, installation_id=str(inst.id))
+
+
+@router.post("/pairing/resolve")
+async def pairing_resolve(payload: dict, db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.resolve_pairing(db, token=payload.get("token"),
+                                             numeric_code=payload.get("numeric_code"), label=payload.get("label"))
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.get("/pairing/devices")
+async def pairing_devices(request: Request, db: AsyncSession = Depends(get_cp_db)):
+    inst = await _authed_installation(request, db)
+    return {"devices": await service.list_devices(db, installation_id=str(inst.id))}
+
+
+@router.post("/pairing/devices/{device_id}/revoke")
+async def pairing_revoke(device_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        await service.revoke_device(db, device_id=device_id)
+        return {"ok": True, "device_id": device_id, "status": "REVOKED"}
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/mobile/version-check")
+async def mobile_version_check(payload: dict, db: AsyncSession = Depends(get_cp_db)):
+    return await service.version_check(db, app_version=str(payload.get("app_version", "0")))

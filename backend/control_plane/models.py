@@ -62,6 +62,12 @@ class Subscription(CPBase):
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     provider_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     renewal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # C2 billing-rule refinements
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # paid-through / next billing date
+    pending_seats: Mapped[int | None] = mapped_column(Integer, nullable=True)                            # scheduled seat reduction
+    pending_seats_effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    grace_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)     # start of payment grace
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
@@ -140,3 +146,26 @@ class BillingEvent(CPBase):
     resulting_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
     company_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)  # app_user_id (== company_id); not sensitive
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class PairingToken(CPBase):
+    """Short-lived, single-use Mobile pairing token (Phase C3). Contains NO secrets."""
+    __tablename__ = "pairing_tokens"
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    numeric_code: Mapped[str] = mapped_column(String(12), index=True, nullable=False)  # fallback code
+    installation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MobileDevice(CPBase):
+    """Paired Mobile device metadata (Phase C3). NOT the employee directory (auth stays local)."""
+    __tablename__ = "mobile_devices"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    installation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")  # ACTIVE | REVOKED
+    paired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

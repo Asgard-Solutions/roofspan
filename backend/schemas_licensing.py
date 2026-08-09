@@ -22,6 +22,13 @@ class SubscriptionStatusOut(BaseModel):
     grace_until: Optional[datetime] = None
     seat_action_required: bool = False   # active users exceed licensed seats (safe rule; no auto-disable)
     active_over_by: int = 0
+    # C2 billing-rule refinements (informational for the UI)
+    cancel_at_period_end: bool = False
+    current_period_end: Optional[datetime] = None
+    scheduled_seats: Optional[int] = None
+    scheduled_seats_at: Optional[datetime] = None
+    grace_started_at: Optional[datetime] = None
+    grace_day: Optional[int] = None       # 1-based day within the payment grace window (for banner escalation)
 
 
 class LicenseStatusOut(BaseModel):

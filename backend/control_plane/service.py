@@ -76,11 +76,34 @@ async def audit(db: AsyncSession, *, actor: str, action: str, entity_type: str |
 
 # ---------------- entitlement issuance ----------------
 
+def apply_billing_transitions(subscription, now=None) -> None:
+    """Apply time-based billing transitions to a subscription (mutates in place):
+      - due scheduled seat reduction -> seats lowered on/after the effective date
+      - cancel_at_period_end + past period end -> CANCELLED
+      - GRACE longer than the payment grace window -> SUSPENDED
+    These are idempotent and safe to call on every issuance/sweep.
+    """
+    now = now or datetime.now(timezone.utc)
+    if (subscription.pending_seats is not None and subscription.pending_seats_effective_at is not None
+            and now >= subscription.pending_seats_effective_at):
+        subscription.seats = max(config.MIN_SEATS, min(config.MAX_SEATS, subscription.pending_seats))
+        subscription.pending_seats = None
+        subscription.pending_seats_effective_at = None
+    if (subscription.cancel_at_period_end and subscription.current_period_end
+            and now >= subscription.current_period_end and subscription.state == "ACTIVE"):
+        subscription.state = "CANCELLED"
+    if (subscription.state == "GRACE" and subscription.grace_started_at
+            and now >= subscription.grace_started_at + timedelta(days=config.PAYMENT_GRACE_DAYS)):
+        subscription.state = "SUSPENDED"
+
+
 async def _issue_entitlement(db: AsyncSession, *, installation: Installation, license_row: License,
                              subscription: Subscription, reason: str) -> str:
     signing = await cp_keys.ensure_active_key(db)
     now = datetime.now(timezone.utc)
+    apply_billing_transitions(subscription, now)
     nonce = uuid.uuid4().hex
+    scheduled_seats = subscription.pending_seats if subscription.pending_seats is not None else None
     claims = {
         "installation_id": str(installation.id),
         "company_id": str(installation.company_id),
@@ -93,6 +116,11 @@ async def _issue_entitlement(db: AsyncSession, *, installation: Installation, li
         "refresh_at": now + timedelta(hours=config.REFRESH_INTERVAL_HOURS),
         "grace_until": now + timedelta(days=config.OFFLINE_GRACE_DAYS),
         "nonce": nonce,
+        "cancel_at_period_end": subscription.cancel_at_period_end,
+        "current_period_end": subscription.current_period_end,
+        "scheduled_seats": scheduled_seats,
+        "scheduled_seats_at": subscription.pending_seats_effective_at,
+        "grace_started_at": subscription.grace_started_at,
     }
     token = ent.sign_entitlement(private_key=cp_keys.load_private(signing), kid=signing.kid, claims=claims)
     db.add(EntitlementIssuance(
@@ -122,7 +150,8 @@ async def activate(db: AsyncSession, *, company_name: str, requested_seats: int,
     license_row = License(company_id=company.id, installation_id=installation.id, product=config.PRODUCT)
     db.add(license_row)
     await db.flush()
-    subscription = Subscription(company_id=company.id, license_id=license_row.id, state="ACTIVE", seats=seats)
+    subscription = Subscription(company_id=company.id, license_id=license_row.id, state="ACTIVE", seats=seats,
+                                current_period_end=datetime.now(timezone.utc) + timedelta(days=config.BILLING_PERIOD_DAYS))
     db.add(subscription)
     await db.commit()
     await db.refresh(installation)
@@ -309,8 +338,11 @@ async def process_webhook(db: AsyncSession, *, headers: dict, body: bytes) -> di
     db.add(evt)
     await db.commit()
 
-    # Out-of-order guard: skip a state change older than the newest processed event for this company.
-    if parsed.normalized_state is not None and company_uuid is not None and parsed.timestamp_ms is not None:
+    # Events that mutate subscription (state or billing metadata) are subject to ordering.
+    mutating = parsed.normalized_state is not None or parsed.event_type in ("CANCELLATION", "UNCANCELLATION")
+
+    # Out-of-order guard: skip a mutation older than the newest processed event for this company.
+    if mutating and company_uuid is not None and parsed.timestamp_ms is not None:
         newest = (await db.execute(
             select(BillingEvent.event_timestamp_ms)
             .where(BillingEvent.company_reference == parsed.company_reference,
@@ -327,10 +359,12 @@ async def process_webhook(db: AsyncSession, *, headers: dict, body: bytes) -> di
             return {"ok": True, "status": "ignored", "event_id": parsed.event_id}
 
     try:
-        if parsed.normalized_state is not None and company_uuid is not None:
-            await _apply_subscription_state(db, company_id=company_uuid, state=parsed.normalized_state, seats=None)
+        applied_state = None
+        if company_uuid is not None:
+            applied_state = await _apply_billing_event(db, company_id=company_uuid, event_type=parsed.event_type,
+                                                       normalized_state=parsed.normalized_state)
         evt.status = "processed"
-        evt.resulting_state = parsed.normalized_state
+        evt.resulting_state = applied_state
         await db.commit()
     except Exception as e:  # record failure without exposing internals
         evt.status = "error"
@@ -340,8 +374,168 @@ async def process_webhook(db: AsyncSession, *, headers: dict, body: bytes) -> di
 
     await audit(db, actor="billing", action="billing.event.processed", entity_type="company",
                 entity_id=parsed.company_reference,
-                detail={"event_type": parsed.event_type, "state": parsed.normalized_state})
-    return {"ok": True, "status": "processed", "event_id": parsed.event_id, "state": parsed.normalized_state}
+                detail={"event_type": parsed.event_type, "state": applied_state})
+    return {"ok": True, "status": "processed", "event_id": parsed.event_id, "state": applied_state}
+
+
+async def _apply_billing_event(db: AsyncSession, *, company_id, event_type: str, normalized_state: str | None) -> str | None:
+    """Apply event-specific billing effects per the locked C2 rules. Returns the resulting state."""
+    sub = (await db.execute(select(Subscription).where(Subscription.company_id == company_id))).scalar_one_or_none()
+    if sub is None:
+        return None
+    now = datetime.now(timezone.utc)
+    period_end = now + timedelta(days=config.BILLING_PERIOD_DAYS)
+    if event_type == "CANCELLATION":
+        # Auto-renew off: remain ACTIVE through the paid period; CANCELLED only at period end.
+        sub.cancel_at_period_end = True
+        if sub.current_period_end is None:
+            sub.current_period_end = period_end
+    elif event_type == "UNCANCELLATION":
+        sub.cancel_at_period_end = False
+        if sub.state == "ACTIVE":
+            sub.state = "ACTIVE"
+    elif normalized_state == "GRACE":
+        if sub.state != "GRACE":
+            sub.grace_started_at = now
+        sub.state = "GRACE"
+    elif normalized_state == "ACTIVE":
+        sub.state = "ACTIVE"
+        sub.grace_started_at = None
+        sub.cancel_at_period_end = False
+        sub.current_period_end = period_end
+    elif normalized_state == "SUSPENDED":
+        sub.state = "SUSPENDED"
+    elif normalized_state == "CANCELLED":
+        sub.state = "CANCELLED"
+    await db.commit()
+    return sub.state
+
+
+async def set_subscription_seats(db: AsyncSession, *, company_id: str, seats: int) -> dict:
+    """Seat increase = immediate; seat decrease = scheduled for the next billing date (locked rule)."""
+    seats = max(config.MIN_SEATS, min(config.MAX_SEATS, int(seats)))
+    sub = (await db.execute(select(Subscription).where(Subscription.company_id == uuid.UUID(company_id)))).scalar_one_or_none()
+    if sub is None:
+        raise CPError(404, "Unknown company subscription")
+    if seats >= sub.seats:
+        sub.seats = seats
+        sub.pending_seats = None
+        sub.pending_seats_effective_at = None
+        result = {"effect": "immediate", "seats": seats}
+    else:
+        sub.pending_seats = seats
+        sub.pending_seats_effective_at = sub.current_period_end or (datetime.now(timezone.utc) + timedelta(days=config.BILLING_PERIOD_DAYS))
+        result = {"effect": "scheduled", "current_seats": sub.seats, "pending_seats": seats,
+                  "effective_at": sub.pending_seats_effective_at.isoformat()}
+    await db.commit()
+    await audit(db, actor="admin", action="subscription.seats", entity_type="company", entity_id=company_id, detail=result)
+    return result
+
+
+async def sweep_billing(db: AsyncSession) -> dict:
+    """Apply time-based transitions (grace expiry, cancellation at period end, scheduled seat reductions)
+    across all subscriptions. Safe to run periodically (cron)."""
+    subs = (await db.execute(select(Subscription))).scalars().all()
+    changed = 0
+    for sub in subs:
+        before = (sub.state, sub.seats)
+        apply_billing_transitions(sub)
+        if (sub.state, sub.seats) != before:
+            changed += 1
+    await db.commit()
+    return {"swept": len(subs), "changed": changed}
+
+
+# ---------------- pairing + version (Phase C3) ----------------
+
+import random  # noqa: E402
+
+
+def _version_tuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split(".")[:3])
+    except ValueError:
+        return (0,)
+
+
+async def create_pairing(db: AsyncSession, *, installation_id: str) -> dict:
+    """Issue a short-lived, single-use pairing token (QR + numeric fallback). No secrets in payload."""
+    from control_plane.models import PairingToken
+    now = datetime.now(timezone.utc)
+    token = uuid.uuid4().hex
+    numeric = f"{random.randint(0, 999999):06d}"
+    expires = now + timedelta(seconds=config.PAIRING_TTL_SECONDS)
+    db.add(PairingToken(token=token, numeric_code=numeric, installation_id=uuid.UUID(installation_id), expires_at=expires))
+    await db.commit()
+    await audit(db, actor=installation_id, action="pairing.create", entity_type="installation", entity_id=installation_id)
+    qr_payload = {"v": config.PROTOCOL_VERSION, "installation_id": installation_id, "token": token,
+                  "relay": config.RELAY_ENDPOINT, "expires_at": int(expires.timestamp())}
+    return {"token": token, "numeric_code": numeric, "expires_at": expires.isoformat(),
+            "relay_endpoint": config.RELAY_ENDPOINT, "protocol_version": config.PROTOCOL_VERSION,
+            "qr_payload": qr_payload}
+
+
+async def resolve_pairing(db: AsyncSession, *, token: str | None, numeric_code: str | None, label: str | None) -> dict:
+    """Mobile resolves a pairing token/code -> installation binding + relay endpoint (no secrets).
+    Consumes the token (single-use) and registers the device."""
+    from control_plane.models import PairingToken, MobileDevice
+    now = datetime.now(timezone.utc)
+    q = select(PairingToken)
+    if token:
+        q = q.where(PairingToken.token == token)
+    elif numeric_code:
+        q = q.where(PairingToken.numeric_code == numeric_code)
+    else:
+        raise CPError(400, "token or numeric_code required")
+    pt = (await db.execute(q.order_by(PairingToken.created_at.desc()))).scalars().first()
+    if pt is None:
+        raise CPError(404, "Invalid pairing code")
+    if pt.used_at is not None:
+        raise CPError(409, "Pairing code already used")
+    if now > pt.expires_at:
+        raise CPError(410, "Pairing code expired")
+    pt.used_at = now
+    device = MobileDevice(installation_id=pt.installation_id, label=label, status="ACTIVE", last_seen_at=now)
+    db.add(device)
+    await db.commit()
+    await db.refresh(device)
+    await audit(db, actor=str(pt.installation_id), action="pairing.resolve", entity_type="mobile_device", entity_id=str(device.id))
+    vp = await get_version_policy(db)
+    return {"installation_id": str(pt.installation_id), "device_id": str(device.id),
+            "relay_endpoint": config.RELAY_ENDPOINT, "protocol_version": config.PROTOCOL_VERSION,
+            "min_mobile_version": vp.mobile_min_supported}
+
+
+async def list_devices(db: AsyncSession, *, installation_id: str) -> list[dict]:
+    from control_plane.models import MobileDevice
+    rows = (await db.execute(select(MobileDevice).where(MobileDevice.installation_id == uuid.UUID(installation_id))
+                             .order_by(MobileDevice.paired_at.desc()))).scalars().all()
+    return [{"id": str(d.id), "label": d.label, "status": d.status, "paired_at": d.paired_at.isoformat(),
+             "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None} for d in rows]
+
+
+async def revoke_device(db: AsyncSession, *, device_id: str) -> None:
+    from control_plane.models import MobileDevice
+    d = (await db.execute(select(MobileDevice).where(MobileDevice.id == uuid.UUID(device_id)))).scalar_one_or_none()
+    if d is None:
+        raise CPError(404, "Unknown device")
+    d.status = "REVOKED"
+    d.revoked_at = datetime.now(timezone.utc)
+    await db.commit()
+    await audit(db, actor="admin", action="mobile_device.revoke", entity_type="mobile_device", entity_id=device_id)
+
+
+async def version_check(db: AsyncSession, *, app_version: str) -> dict:
+    vp = await get_version_policy(db)
+    cur, minimum, latest = _version_tuple(app_version), _version_tuple(vp.mobile_min_supported), _version_tuple(vp.mobile_latest)
+    if cur < minimum:
+        status = "must_update"
+    elif cur < latest:
+        status = "update_available"
+    else:
+        status = "ok"
+    return {"status": status, "latest": vp.mobile_latest, "min_supported": vp.mobile_min_supported,
+            "mandatory": vp.mobile_update_mandatory}
 
 
 async def reconcile_subscription(db: AsyncSession, *, company_id: str) -> dict:
