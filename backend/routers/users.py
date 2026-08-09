@@ -7,6 +7,7 @@ from models import User
 from core import (
     require_roles, get_current_user, hash_password, log_action, ROLES, SENSITIVE_ROLES, MANAGE_ROLES,
 )
+from licensing import service as licensing_service
 from schemas import UserOut, UserCreate, UserUpdate, PasswordResetRequest, RoleInfo
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -51,6 +52,8 @@ async def create_user(payload: UserCreate, request: Request, user: User = Depend
     existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="A user with this email already exists")
+    # New users are active and consume a licensed seat — enforce server-side, race-safe.
+    await licensing_service.ensure_seat_available(db)
     new_user = User(email=email, full_name=payload.full_name, password_hash=hash_password(payload.password), role=payload.role)
     db.add(new_user)
     await db.commit()
@@ -73,6 +76,10 @@ async def update_user(user_id: str, payload: UserUpdate, request: Request, user:
         raise HTTPException(status_code=403, detail="Only an Owner can assign the Owner role")
     if payload.is_active is False and str(target.id) == str(user.id):
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+
+    # Reactivating a disabled user consumes a seat — enforce before flipping active.
+    if payload.is_active is True and target.is_active is False:
+        await licensing_service.ensure_seat_available(db)
 
     if payload.full_name is not None:
         target.full_name = payload.full_name

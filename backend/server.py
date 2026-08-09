@@ -18,7 +18,9 @@ from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
-from routers import operations, purchasing, cron, admin_ops, mobile
+from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
+from licensing import config as licensing_config, service as licensing_service
+from licensing.middleware import SubscriptionGuardMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -51,6 +53,14 @@ app.include_router(purchasing.router)
 app.include_router(cron.router)
 app.include_router(admin_ops.router)
 app.include_router(mobile.router)
+app.include_router(licensing_router.router)
+if licensing_config.LICENSING_MODE == "dev":
+    from routers import licensing_dev
+    app.include_router(licensing_dev.router)
+
+# Guard business workflows when the subscription is not ACTIVE/GRACE. Added before CORS so CORS
+# remains the outermost middleware (guard 403 responses still receive CORS headers).
+app.add_middleware(SubscriptionGuardMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,6 +96,8 @@ async def on_startup():
     # no manual SQL). Fresh DB builds from full history; existing DB migrates forward non-destructively.
     await asyncio.to_thread(run_migrations)
     await seed_owner()
+    async with SessionLocal() as db:
+        await licensing_service.bootstrap(db)
     logger.info("RoofSpan Office backend ready")
 
 

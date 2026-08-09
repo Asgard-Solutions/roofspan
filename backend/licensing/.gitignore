@@ -1,0 +1,3 @@
+# Licensing dev signing keys — DEV ONLY, never used in production. Never commit real keys.
+dev_keys/
+*.private.pem

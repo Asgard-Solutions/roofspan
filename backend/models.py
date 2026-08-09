@@ -442,3 +442,31 @@ class Photo(Base):
     category: Mapped[str | None] = mapped_column(String(60), nullable=True)
     uploaded_by: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+# ---------- Commercial Layer / Phase C0: Licensing ----------
+
+class LicenseCache(Base):
+    """Locally-cached signed entitlement (source of truth for offline licensing).
+
+    Single row per installation. The raw signed JWS is the trust anchor; decoded fields are stored
+    for fast reads and are re-verified against the JWS on load. Contains NO business data.
+    """
+    __tablename__ = "license_cache"
+    installation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    company_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    license_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entitlement_jws: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subscription_state: Mapped[str] = mapped_column(String(16), default="SUSPENDED", nullable=False)
+    seats_licensed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    product: Mapped[str] = mapped_column(String(64), default="roofspan-office", nullable=False)
+    min_supported_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
