@@ -40,7 +40,7 @@ def _create(headers, role="sales"):
 def restore():
     owner = _login()
     yield
-    _set_state(owner, "ACTIVE", 50)
+    _set_state(owner, "ACTIVE", 1000)
 
 
 def test_seat_limit_blocks_creation_over_limit():
@@ -59,7 +59,7 @@ def test_seat_limit_blocks_creation_over_limit():
     finally:
         for uid in created:
             requests.patch(f"{API}/users/{uid}", json={"is_active": False}, headers=owner, timeout=15)
-        _set_state(owner, "ACTIVE", 50)
+        _set_state(owner, "ACTIVE", 1000)
 
 
 def test_reactivation_respects_seat_limit():
@@ -67,7 +67,7 @@ def test_reactivation_respects_seat_limit():
     created = []
     try:
         # create a user (with a free seat) then disable it
-        _set_state(owner, "ACTIVE", 50)
+        _set_state(owner, "ACTIVE", 1000)
         r = _create(owner)
         assert r.status_code == 201, r.text
         uid = r.json()["id"]
@@ -85,14 +85,14 @@ def test_reactivation_respects_seat_limit():
     finally:
         for uid in created:
             requests.patch(f"{API}/users/{uid}", json={"is_active": False}, headers=owner, timeout=15)
-        _set_state(owner, "ACTIVE", 50)
+        _set_state(owner, "ACTIVE", 1000)
 
 
 def test_disabled_users_do_not_consume_seats():
     owner = _login()
     created = []
     try:
-        _set_state(owner, "ACTIVE", 50)
+        _set_state(owner, "ACTIVE", 1000)
         before = _active_users(owner)
         r = _create(owner)
         uid = r.json()["id"]
@@ -103,4 +103,23 @@ def test_disabled_users_do_not_consume_seats():
     finally:
         for uid in created:
             requests.patch(f"{API}/users/{uid}", json={"is_active": False}, headers=owner, timeout=15)
-        _set_state(owner, "ACTIVE", 50)
+        _set_state(owner, "ACTIVE", 1000)
+
+
+def test_seat_reduction_below_active_surfaces_action_not_disable():
+    """Safe rule: reducing licensed seats below currently-active users must NOT disable anyone;
+    it surfaces a clear Owner action requirement instead."""
+    owner = _login()
+    try:
+        active = _active_users(owner)
+        assert active >= 1
+        # simulate a seat reduction below active user count
+        _set_state(owner, "ACTIVE", max(active - 1, 5) if active - 1 >= 5 else active - 1)
+        sub = requests.get(f"{API}/subscription", headers=owner, timeout=15).json()
+        if sub["seats_licensed"] < active:
+            assert sub["seat_action_required"] is True
+            assert sub["active_over_by"] == active - sub["seats_licensed"]
+            # no user was disabled as a side effect
+            assert _active_users(owner) == active
+    finally:
+        _set_state(owner, "ACTIVE", 1000)

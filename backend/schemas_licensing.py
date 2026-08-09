@@ -20,6 +20,8 @@ class SubscriptionStatusOut(BaseModel):
     last_verified: Optional[datetime] = None
     next_refresh_at: Optional[datetime] = None
     grace_until: Optional[datetime] = None
+    seat_action_required: bool = False   # active users exceed licensed seats (safe rule; no auto-disable)
+    active_over_by: int = 0
 
 
 class LicenseStatusOut(BaseModel):

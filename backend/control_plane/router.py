@@ -123,3 +123,38 @@ async def update_version_policy(payload: VersionPolicyUpdateIn, _: bool = Depend
         office_update_mandatory=vp.office_update_mandatory, mobile_update_mandatory=vp.mobile_update_mandatory,
         updated_at=vp.updated_at,
     )
+
+
+# ---------------- billing (Phase C2) ----------------
+
+@router.post("/billing/webhook")
+async def billing_webhook(request: Request, db: AsyncSession = Depends(get_cp_db)):
+    body = await request.body()
+    try:
+        return await service.process_webhook(db, headers=dict(request.headers), body=body)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/reconcile")
+async def billing_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return await service.reconcile_subscription(db, company_id=company_id)
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.post("/billing/checkout")
+async def billing_checkout(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return {"url": await service.checkout_url(company_id), "company_id": company_id}
+    except service.CPError as e:
+        raise _cp_error(e)
+
+
+@router.get("/billing/portal-url")
+async def billing_portal(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+    try:
+        return {"url": await service.portal_url(company_id), "company_id": company_id}
+    except service.CPError as e:
+        raise _cp_error(e)

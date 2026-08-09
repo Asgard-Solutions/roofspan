@@ -19,6 +19,7 @@ import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
 import AuditLog from "@/pages/admin/AuditLog";
 import BackupStatus from "@/pages/admin/BackupStatus";
+import Subscription from "@/pages/admin/Subscription";
 import Settings from "@/pages/admin/Settings";
 
 function App() {
@@ -48,6 +49,7 @@ function App() {
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />
             <Route path="/admin/audit" element={<RequireSensitive><AuditLog /></RequireSensitive>} />
             <Route path="/admin/backups" element={<RequireSensitive><BackupStatus /></RequireSensitive>} />
+            <Route path="/admin/subscription" element={<RequireSensitive><Subscription /></RequireSensitive>} />
             <Route path="/admin/settings" element={<RequireSensitive><Settings /></RequireSensitive>} />
           </Route>
         </Routes>

@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import ChangePasswordDialog from "@/components/ChangePasswordDialog";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
@@ -29,6 +29,7 @@ const ADMIN_NAV = [
   { to: "/admin/roles", label: "Roles", icon: ShieldCheck, testid: "nav-admin-roles" },
   { to: "/admin/audit", label: "Audit Log", icon: ScrollText, testid: "nav-admin-audit" },
   { to: "/admin/backups", label: "Backups", icon: DatabaseBackup, testid: "nav-admin-backups" },
+  { to: "/admin/subscription", label: "Subscription", icon: CreditCard, testid: "nav-admin-subscription" },
   { to: "/admin/settings", label: "Settings", icon: Settings2, testid: "nav-admin-settings" },
 ];
 

@@ -38,7 +38,7 @@ DEV_KID = os.environ.get("LICENSING_DEV_KID", "dev-ed25519-1")
 # Dev default entitlement so an existing running installation is unaffected by the new
 # licensing layer. Production seat counts come from the signed entitlement (5..50).
 DEV_DEFAULT_STATE = os.environ.get("LICENSING_DEV_STATE", "ACTIVE")
-DEV_DEFAULT_SEATS = int(os.environ.get("LICENSING_DEV_SEATS", str(MAX_SEATS)))
+DEV_DEFAULT_SEATS = int(os.environ.get("LICENSING_DEV_SEATS", "1000"))  # dev convenience; real licenses 5..50 via CP
 
 # ---- HTTP Control Plane (Phase C1+) --------------------------------------------
 CONTROL_PLANE_URL = os.environ.get("LICENSING_CONTROL_PLANE_URL")  # None in C0; set for http mode

@@ -8,7 +8,7 @@ multi-tenant business data.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Boolean, DateTime, Integer, Text, ForeignKey
+from sqlalchemy import String, Boolean, DateTime, Integer, BigInteger, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -124,3 +124,19 @@ class CPAuditLog(CPBase):
     entity_type: Mapped[str | None] = mapped_column(String(48), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # never secrets/keys/payloads
+
+
+class BillingEvent(CPBase):
+    """Billing webhook idempotency + audit (Phase C2). Stores provider event metadata and the
+    normalized outcome only — NEVER card data, CVV, bank credentials, or full sensitive payloads."""
+    __tablename__ = "billing_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="revenuecat")
+    event_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)  # idempotency key
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    event_timestamp_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # provider event time (ordering)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received")  # received|processed|ignored|error
+    resulting_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    company_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)  # app_user_id (== company_id); not sensitive
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)

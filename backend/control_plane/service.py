@@ -52,10 +52,10 @@ def _ensure_database() -> None:
 
 
 async def init_control_plane() -> None:
-    """Ensure DB + schema + a signing key + a version-policy row exist. Idempotent."""
-    _ensure_database()
-    async with engine.begin() as conn:
-        await conn.run_sync(CPBase.metadata.create_all)
+    """Ensure DB + schema (via Alembic) + a signing key + a version-policy row exist. Idempotent."""
+    import asyncio
+    from control_plane.migrations_runner import run_cp_migrations
+    await asyncio.to_thread(run_cp_migrations)
     async with SessionLocal() as db:
         await cp_keys.ensure_active_key(db)
         vp = (await db.execute(select(VersionPolicy).where(VersionPolicy.key == "default"))).scalar_one_or_none()
@@ -252,3 +252,125 @@ async def update_version_policy(db: AsyncSession, changes: dict) -> VersionPolic
     await audit(db, actor="admin", action="version_policy.update", entity_type="version_policy",
                 entity_id="default", detail={k: v for k, v in changes.items() if v is not None})
     return vp
+
+
+# ---------------- billing (Phase C2) ----------------
+
+async def _apply_subscription_state(db: AsyncSession, *, company_id, state: str | None, seats: int | None) -> None:
+    if state is None and seats is None:
+        return
+    sub = (await db.execute(select(Subscription).where(Subscription.company_id == company_id))).scalar_one_or_none()
+    if sub is None:
+        return
+    if state is not None:
+        sub.state = state
+    if seats is not None:
+        sub.seats = max(config.MIN_SEATS, min(config.MAX_SEATS, int(seats)))
+    await db.commit()
+
+
+async def process_webhook(db: AsyncSession, *, headers: dict, body: bytes) -> dict:
+    """Validate + idempotently process a billing webhook, then transition subscription state.
+
+    A webhook can NEVER bypass the normalized boundary: provider event -> validation -> normalized
+    event -> subscription state transition. Only verified normalized state changes licensing state.
+    """
+    import json
+    from control_plane import billing as cp_billing
+    from control_plane.models import BillingEvent
+
+    provider = cp_billing.get_provider()
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except (ValueError, UnicodeDecodeError):
+        raise CPError(400, "Invalid webhook body")
+    try:
+        parsed = provider.verify_and_parse_webhook(headers, body, payload)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(401, str(e))
+    if not parsed.event_id:
+        raise CPError(400, "Missing event id")
+
+    # Idempotency: reject duplicate delivery by unique event_id.
+    existing = (await db.execute(select(BillingEvent).where(BillingEvent.event_id == parsed.event_id))).scalar_one_or_none()
+    if existing is not None:
+        return {"ok": True, "status": "duplicate", "event_id": parsed.event_id}
+
+    company_uuid = None
+    if parsed.company_reference:
+        try:
+            company_uuid = uuid.UUID(parsed.company_reference)
+        except ValueError:
+            company_uuid = None
+
+    evt = BillingEvent(provider=provider.name, event_id=parsed.event_id, event_type=parsed.event_type,
+                       event_timestamp_ms=parsed.timestamp_ms, company_reference=parsed.company_reference,
+                       status="received")
+    db.add(evt)
+    await db.commit()
+
+    # Out-of-order guard: skip a state change older than the newest processed event for this company.
+    if parsed.normalized_state is not None and company_uuid is not None and parsed.timestamp_ms is not None:
+        newest = (await db.execute(
+            select(BillingEvent.event_timestamp_ms)
+            .where(BillingEvent.company_reference == parsed.company_reference,
+                   BillingEvent.status == "processed",
+                   BillingEvent.event_timestamp_ms.isnot(None))
+            .order_by(BillingEvent.event_timestamp_ms.desc()).limit(1)
+        )).scalar_one_or_none()
+        if newest is not None and parsed.timestamp_ms < newest:
+            evt.status = "ignored"
+            evt.error = "out-of-order (older than last processed)"
+            await db.commit()
+            await audit(db, actor="billing", action="billing.event.ignored", entity_type="company",
+                        entity_id=parsed.company_reference, detail={"event_type": parsed.event_type})
+            return {"ok": True, "status": "ignored", "event_id": parsed.event_id}
+
+    try:
+        if parsed.normalized_state is not None and company_uuid is not None:
+            await _apply_subscription_state(db, company_id=company_uuid, state=parsed.normalized_state, seats=None)
+        evt.status = "processed"
+        evt.resulting_state = parsed.normalized_state
+        await db.commit()
+    except Exception as e:  # record failure without exposing internals
+        evt.status = "error"
+        evt.error = str(e)[:400]
+        await db.commit()
+        raise CPError(500, "Failed to process billing event")
+
+    await audit(db, actor="billing", action="billing.event.processed", entity_type="company",
+                entity_id=parsed.company_reference,
+                detail={"event_type": parsed.event_type, "state": parsed.normalized_state})
+    return {"ok": True, "status": "processed", "event_id": parsed.event_id, "state": parsed.normalized_state}
+
+
+async def reconcile_subscription(db: AsyncSession, *, company_id: str) -> dict:
+    """Provider reconciliation: authoritatively re-derive current subscription state from the provider
+    (recovers from missed/delayed/out-of-order webhooks). Provider-neutral."""
+    from control_plane import billing as cp_billing
+    provider = cp_billing.get_provider()
+    try:
+        result = await provider.reconcile(company_id)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    await _apply_subscription_state(db, company_id=uuid.UUID(company_id),
+                                    state=result.get("state"), seats=result.get("seats"))
+    await audit(db, actor="admin", action="billing.reconcile", entity_type="company", entity_id=company_id,
+                detail={"state": result.get("state")})
+    return result
+
+
+async def checkout_url(company_id: str) -> str:
+    from control_plane import billing as cp_billing
+    try:
+        return cp_billing.get_provider().checkout_url(company_id)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+
+
+async def portal_url(company_id: str) -> str | None:
+    from control_plane import billing as cp_billing
+    try:
+        return await cp_billing.get_provider().portal_url(company_id)
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))

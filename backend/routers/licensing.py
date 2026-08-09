@@ -27,6 +27,7 @@ async def get_subscription(user: User = Depends(get_current_user), db: AsyncSess
     active = await service.count_active_users(db)
     seats = entitlement.seats_licensed if entitlement else 0
     row = await service._get_cache_row(db)
+    over_by = max(active - seats, 0)
     return SubscriptionStatusOut(
         state=status.effective_state,
         reported_state=status.reported_state,
@@ -42,6 +43,8 @@ async def get_subscription(user: User = Depends(get_current_user), db: AsyncSess
         last_verified=row.fetched_at if row else None,
         next_refresh_at=entitlement.refresh_at if entitlement else None,
         grace_until=status.grace_until,
+        seat_action_required=over_by > 0,
+        active_over_by=over_by,
     )
 
 
@@ -85,22 +88,27 @@ async def refresh_subscription(request: Request, user: User = Depends(require_ro
 
 @router.get("/billing/portal-url", response_model=BillingLinkOut)
 async def billing_portal(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
-    provider = get_billing_provider()
+    from control_plane import billing as cp_billing
     _, company_id = await service.get_installation(db)
+    provider = cp_billing.get_provider()
+    if provider.name == "stub":
+        return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
     try:
-        url = provider.manage_billing_url(company_id)
+        url = await provider.portal_url(company_id)
         return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
-    except BillingNotConfigured as e:
-        return BillingLinkOut(configured=False, provider=None, url=None, message=str(e))
+    except cp_billing.BillingAuthError as e:
+        return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
 
 
 @router.post("/billing/checkout", response_model=BillingLinkOut)
 async def billing_checkout(user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
-    provider = get_billing_provider()
+    from control_plane import billing as cp_billing
     _, company_id = await service.get_installation(db)
-    seats = await service.seats_licensed(db)
+    provider = cp_billing.get_provider()
+    if provider.name == "stub":
+        return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
     try:
-        session = provider.start_checkout(company_id, seats)
-        return BillingLinkOut(configured=True, provider=session.provider, url=session.url, message="ok")
-    except BillingNotConfigured as e:
-        return BillingLinkOut(configured=False, provider=None, url=None, message=str(e))
+        url = provider.checkout_url(company_id)
+        return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
+    except cp_billing.BillingAuthError as e:
+        return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))

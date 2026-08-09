@@ -29,9 +29,9 @@ def _set_state(headers, state, seats=50):
 def restore_active():
     """Ensure every test leaves the installation ACTIVE with 50 seats."""
     owner = _login()
-    _set_state(owner, "ACTIVE", 50)
+    _set_state(owner, "ACTIVE", 1000)
     yield
-    _set_state(owner, "ACTIVE", 50)
+    _set_state(owner, "ACTIVE", 1000)
 
 
 def test_subscription_status_shape():
@@ -96,14 +96,19 @@ def test_reactivation_unlocks_business():
     owner = _login()
     _set_state(owner, "SUSPENDED", 50)
     assert requests.get(f"{API}/leads", headers=owner, timeout=15).status_code == 403
-    _set_state(owner, "ACTIVE", 50)
+    _set_state(owner, "ACTIVE", 1000)
     assert requests.get(f"{API}/leads", headers=owner, timeout=15).status_code == 200
 
 
-def test_billing_stub_not_configured():
+def test_billing_link_endpoint():
     owner = _login()
     r = requests.get(f"{API}/billing/portal-url", headers=owner, timeout=15)
-    assert r.status_code == 200 and r.json()["configured"] is False
+    assert r.status_code == 200
+    d = r.json()
+    assert "configured" in d
+    # default BILLING_MODE=mock -> a hosted URL is returned; stub mode -> not configured
+    if d["configured"]:
+        assert d["url"]
 
 
 def test_refresh_endpoint():
