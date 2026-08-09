@@ -24,6 +24,7 @@ _ALLOWLIST = (
     "/api/billing",
     "/api/dev/",
     "/api/control-plane",
+    "/api/relay",
 )
 
 

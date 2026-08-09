@@ -229,6 +229,9 @@ class StripeBillingProvider(BillingProvider):
             client_reference_id=company_id,
             subscription_data={"metadata": {"company_id": company_id}},
             metadata={"company_id": company_id},
+            automatic_tax={"enabled": True},                 # Stripe Tax calculates sales tax by location
+            billing_address_collection="required",           # required for Stripe Tax
+            tax_id_collection={"enabled": True},             # B2B tax id capture
             success_url=f"{origin}/admin/subscription?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{origin}/admin/subscription?checkout=cancel",
         )

@@ -53,7 +53,24 @@ def ensure_price(product, price):
     )
 
 
+def ensure_tax_settings():
+    """Configure Stripe Tax: head-office origin + tax added on top of the $49 base (exclusive).
+    Actual tax REGISTRATIONS / nexus are HUMAN REQUIRED (handled in the Stripe Dashboard)."""
+    s = stripe.tax.Settings.retrieve()
+    if s.head_office and getattr(s.head_office, "address", None):
+        return
+    stripe.tax.Settings.modify(
+        head_office={"address": {"country": os.environ.get("ROOFSPAN_TAX_COUNTRY", "US"),
+                                 "line1": os.environ.get("ROOFSPAN_TAX_LINE1", "1 Main St"),
+                                 "city": os.environ.get("ROOFSPAN_TAX_CITY", "Denver"),
+                                 "state": os.environ.get("ROOFSPAN_TAX_STATE", "CO"),
+                                 "postal_code": os.environ.get("ROOFSPAN_TAX_POSTAL", "80202")}},
+        defaults={"tax_behavior": "exclusive"},
+    )
+
+
 def main():
+    ensure_tax_settings()
     product = get_or_create_product(CATALOG)
     price = ensure_price(product, CATALOG["price"])
     print("Product:", product.id, "-", product.name)

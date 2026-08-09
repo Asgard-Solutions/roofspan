@@ -60,6 +60,8 @@ if licensing_config.LICENSING_MODE == "dev":
     from routers import licensing_dev
     app.include_router(licensing_dev.router)
 app.include_router(control_plane_router)
+from relay.server import router as relay_router  # noqa: E402
+app.include_router(relay_router)
 
 # Guard business workflows when the subscription is not ACTIVE/GRACE. Added before CORS so CORS
 # remains the outermost middleware (guard 403 responses still receive CORS headers).
