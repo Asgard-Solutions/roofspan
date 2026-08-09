@@ -9,7 +9,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { AuthProvider, useAuth } from "./src/auth";
 import { PairingProvider, usePairing } from "./src/pairingContext";
 import { STATES, COPY } from "./src/connectionState";
-import { versionGate } from "./src/version";
 import { startAutoSync } from "./src/sync";
 import { C } from "./src/theme";
 import Login from "./src/screens/Login";
@@ -75,10 +74,8 @@ function ConnBanner() {
 }
 
 function MainApp() {
-  const { pairing, appVersion } = usePairing();
-  const [showOptional, setShowOptional] = useState(
-    pairing && versionGate(appVersion, null, pairing.min_recommended_version) === "update_available"
-  );
+  const { optionalUpdate } = usePairing();
+  const [dismissedUpdate, setDismissedUpdate] = useState(false);
   useEffect(() => {
     const unsub = startAutoSync();
     return () => unsub && unsub();
@@ -86,7 +83,7 @@ function MainApp() {
   return (
     <View style={{ flex: 1 }}>
       <ConnBanner />
-      {showOptional ? <OptionalUpdateBanner onDismiss={() => setShowOptional(false)} /> : null}
+      {optionalUpdate && !dismissedUpdate ? <OptionalUpdateBanner onDismiss={() => setDismissedUpdate(true)} /> : null}
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: true,

@@ -34,13 +34,22 @@ class InstallationTunnel:
             q = frame.get("query", "")
             url = self.local + path + (("?" + q) if q else "")
             headers = dict(frame.get("headers", {}) or {})
-            headers.pop("host", None)
-            headers.pop("Host", None)
-            headers.pop("content-length", None)
-            headers.pop("Content-Length", None)
-            async with httpx.AsyncClient(timeout=25) as c:
-                r = await c.request(frame.get("method", "GET"), url, headers=headers,
-                                    content=P.b64d(frame.get("body", "")))
+            for h in ("host", "Host", "content-length", "Content-Length"):
+                headers.pop(h, None)
+            mp = frame.get("multipart")
+            async with httpx.AsyncClient(timeout=60) as c:
+                if mp and isinstance(mp, dict):
+                    # Reconstruct multipart/form-data (photos/files) — httpx sets the boundary.
+                    for h in ("content-type", "Content-Type"):
+                        headers.pop(h, None)
+                    f = mp.get("file") or {}
+                    files = {f.get("field", "file"): (f.get("name", "upload"), P.b64d(f.get("b64", "")),
+                                                       f.get("type", "application/octet-stream"))}
+                    r = await c.request(frame.get("method", "POST"), url, headers=headers,
+                                        data=mp.get("data", {}) or {}, files=files)
+                else:
+                    r = await c.request(frame.get("method", "GET"), url, headers=headers,
+                                        content=P.b64d(frame.get("body", "")))
             out = {"type": P.T_RESPONSE, "request_id": rid, "status": r.status_code,
                    "headers": {"content-type": r.headers.get("content-type", "application/json")},
                    "body": P.b64e(r.content)}

@@ -29,6 +29,25 @@ log = logging.getLogger("roofspan.relay")
 router = APIRouter(prefix="/api/relay", tags=["relay"])
 
 REQUEST_TIMEOUT = float(os.environ.get("RELAY_REQUEST_TIMEOUT", "30"))
+MAX_JSON_BYTES = int(os.environ.get("RELAY_MAX_JSON_BYTES", str(2 * 1024 * 1024)))       # 2 MB JSON
+MAX_UPLOAD_BYTES = int(os.environ.get("RELAY_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))  # 20 MB file
+
+
+def _b64_len(s: str) -> int:
+    n = len(s or "")
+    return (n * 3) // 4  # approximate decoded byte length
+
+
+def _too_large(frame: dict):
+    """Return an error code if the request frame exceeds RoofSpan relay payload limits."""
+    if _b64_len(frame.get("body", "")) > MAX_JSON_BYTES:
+        return "payload_too_large"
+    mp = frame.get("multipart")
+    if mp and isinstance(mp, dict):
+        f = mp.get("file") or {}
+        if _b64_len(f.get("b64", "")) > MAX_UPLOAD_BYTES:
+            return "payload_too_large"
+    return None
 
 
 async def _load_installation(db, installation_id: str):
@@ -180,9 +199,15 @@ async def mobile_ws(ws: WebSocket):
                 await _send(ws, {"type": P.T_ERROR, "request_id": rid, "code": "duplicate_request"})
                 continue
             seen.add(rid)
+            oversize = _too_large(frame)
+            if oversize:
+                await _send(ws, {"type": P.T_ERROR, "request_id": rid, "code": oversize})
+                continue
             req = {"type": P.T_REQUEST, "request_id": rid, "method": frame.get("method", "GET"),
                    "path": frame.get("path", "/"), "query": frame.get("query", ""),
                    "headers": frame.get("headers", {}) or {}, "body": frame.get("body", "")}
+            if frame.get("multipart"):
+                req["multipart"] = frame.get("multipart")
             status = "err"
             try:
                 resp = await hub.route(installation_id, req, REQUEST_TIMEOUT)

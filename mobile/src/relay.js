@@ -42,6 +42,17 @@ export async function resolvePairing({ token, numeric_code, label }) {
   );
 }
 
+// Control Plane version_policy is the single source of truth for Mobile version policy.
+// Returns { status: 'ok'|'update_available'|'must_update', latest, min_supported, mandatory } or null.
+export async function checkVersion(appVersion) {
+  try {
+    const r = await axios.post(`${API}/control-plane/mobile/version-check`, { app_version: appVersion },
+      { validateStatus: () => true, timeout: 12000 });
+    if (r.status === 200) return r.data;
+  } catch (e) { /* offline / unreachable */ }
+  return null;
+}
+
 // Open a relay session. Resolves {ok:true} on ready, or {ok:false, code} on error/timeout.
 // If onReady is provided, it drives the request/response exchange and calls done().
 function openSession(pairing, onReady) {

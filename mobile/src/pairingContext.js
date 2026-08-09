@@ -6,7 +6,8 @@ import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
 
 import { clearPairing, loadPairing, savePairing } from "./pairingStore";
-import { probeConnection, resolvePairing } from "./relay";
+import { probeConnection, resolvePairing, checkVersion } from "./relay";
+import { setActivePairing } from "./transport";
 import { versionGate } from "./version";
 import { STATES, mapRelayError } from "./connectionState";
 
@@ -21,10 +22,14 @@ export function PairingProvider({ children }) {
 
   const evaluate = useCallback(async (p) => {
     if (!p) return;
-    // 1) hard version gate (block) — protocol/app minimum
-    if (versionGate(APP_VERSION, p.min_mobile_version, null) === "must_update") {
-      setConn(STATES.UPDATE_REQUIRED);
-      return;
+    setActivePairing(p); // route transport through the relay for this pairing
+    // 1) version authority = Control Plane version_policy (fallback to stored minimum if offline)
+    const vp = await checkVersion(APP_VERSION);
+    if (vp) {
+      if (vp.status === "must_update") { setConn(STATES.UPDATE_REQUIRED); return; }
+      setOptionalUpdate(vp.status === "update_available");
+    } else if (versionGate(APP_VERSION, p.min_mobile_version, null) === "must_update") {
+      setConn(STATES.UPDATE_REQUIRED); return;
     }
     // 2) network
     try {
@@ -41,6 +46,7 @@ export function PairingProvider({ children }) {
     (async () => {
       const p = await loadPairing();
       setPairing(p);
+      setActivePairing(p);
       if (p) await evaluate(p);
       setReady(true);
     })();
@@ -56,6 +62,7 @@ export function PairingProvider({ children }) {
       };
       await savePairing(p);
       setPairing(p);
+      setActivePairing(p);
       await evaluate(p);
       return { ok: true };
     }
@@ -67,6 +74,7 @@ export function PairingProvider({ children }) {
   const unpair = useCallback(async () => {
     await clearPairing();
     setPairing(null);
+    setActivePairing(null);
     setConn(STATES.CONNECTING);
   }, []);
 

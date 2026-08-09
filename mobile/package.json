@@ -8,7 +8,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test:sync": "node src/tests/sync.node.test.js",
-    "test:map": "node src/tests/mapconfig.node.test.js"
+    "test:map": "node src/tests/mapconfig.node.test.js",
+    "test:pairing": "node src/tests/pairing.node.test.js",
+    "test:transport": "node src/tests/transport.node.test.js"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
