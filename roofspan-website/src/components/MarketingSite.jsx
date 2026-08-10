@@ -1,39 +1,12 @@
-import {
-  ClipboardList, Users2, Camera, MapPin, ShieldCheck, Server,
-  Download, MonitorDown, Smartphone, Check, ArrowRight, Clock,
-} from "lucide-react";
-import { SiteHeader } from "@/site/SiteHeader";
-import { SiteFooter } from "@/site/SiteFooter";
-import { WINDOWS_INSTALLER_AVAILABLE, WINDOWS_INSTALLER_URL } from "@/lib/config";
+import { Download, MonitorDown, Smartphone, Check, ArrowRight, Clock } from "lucide-react";
+import { SiteHeader } from "./SiteHeader";
+import { SiteFooter } from "./SiteFooter";
+import { WINDOWS_INSTALLER_AVAILABLE, WINDOWS_INSTALLER_URL } from "../config";
+import { FEATURES, STEPS, INCLUSIONS, PRICE_PER_SEAT, MIN_SEATS, STARTING_PRICE } from "../content";
 
 const HERO_BG = "/brand/roofspan-login-bg.png";
 const FIELD_IMG =
   "https://images.unsplash.com/photo-1659353586512-bcc4c7182d01?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200";
-
-const FEATURES = [
-  { icon: ClipboardList, title: "Leads & Jobs", body: "Manage roofing opportunities and active jobs from one system.", testid: "feature-leads-jobs" },
-  { icon: Users2, title: "Office + Field", body: "Keep office staff and field teams connected to the same company's RoofSpan system.", testid: "feature-office-field" },
-  { icon: Camera, title: "Inspections & Photos", body: "Capture inspections, field information, and photos against the right records.", testid: "feature-inspections" },
-  { icon: MapPin, title: "Properties & Maps", body: "Organize property and geographic information used by roofing teams.", testid: "feature-properties" },
-  { icon: ShieldCheck, title: "Team Access", body: "Manage users, roles, permissions, and licensed seats.", testid: "feature-team-access" },
-  { icon: Server, title: "Local Company Data", body: "RoofSpan Office runs on your company's Windows system, keeping your operational roofing database with your RoofSpan installation.", testid: "feature-local-data" },
-];
-
-const STEPS = [
-  { n: "1", title: "Download RoofSpan Office", body: "Download RoofSpan for Windows from roofspan.io." },
-  { n: "2", title: "Install it on your RoofSpan Office computer", body: "RoofSpan Office runs on your company's Windows machine and opens through a local browser interface." },
-  { n: "3", title: "Add your team", body: "Create users, assign roles, and manage licensed seats." },
-  { n: "4", title: "Connect RoofSpan Mobile", body: "Field users pair the free Mobile app with your RoofSpan Office installation and securely connect while away from the office." },
-];
-
-const INCLUSIONS = [
-  "Leads, jobs & customer management",
-  "Inspections, photos & properties",
-  "Office and field team access",
-  "User roles, permissions & licensed seats",
-  "Free RoofSpan Mobile companion apps",
-  "Runs on your company's own Windows system",
-];
 
 function Hero() {
   return (
@@ -144,11 +117,11 @@ function Pricing() {
           <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm" data-testid="pricing-card">
             <h3 className="font-heading text-xl font-bold text-slate-900">RoofSpan</h3>
             <div className="mt-4 flex items-end gap-1">
-              <span className="font-heading text-5xl font-extrabold tracking-tight text-slate-900" data-testid="pricing-amount">$49</span>
+              <span className="font-heading text-5xl font-extrabold tracking-tight text-slate-900" data-testid="pricing-amount">${PRICE_PER_SEAT}</span>
               <span className="mb-1 text-sm font-medium text-slate-500">per user / month</span>
             </div>
-            <p className="mt-2 text-sm text-slate-500" data-testid="pricing-minimum">5-user minimum</p>
-            <p className="mt-1 text-sm font-semibold text-slate-900" data-testid="pricing-starting">Starting at $245/month</p>
+            <p className="mt-2 text-sm text-slate-500" data-testid="pricing-minimum">{MIN_SEATS}-user minimum</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900" data-testid="pricing-starting">Starting at ${STARTING_PRICE}/month</p>
             <ul className="mt-6 space-y-2.5">
               {INCLUSIONS.map((i) => (
                 <li key={i} className="flex items-start gap-2.5 text-sm text-slate-600">

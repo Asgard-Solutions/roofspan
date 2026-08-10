@@ -1,10 +1,9 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute, RequireSensitive } from "@/components/ProtectedRoute";
 import { Toaster } from "@/components/ui/sonner";
 import AppShell from "@/components/AppShell";
-import MarketingSite from "@/site/MarketingSite";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import MapView from "@/pages/MapView";
@@ -23,20 +22,13 @@ import BackupStatus from "@/pages/admin/BackupStatus";
 import Subscription from "@/pages/admin/Subscription";
 import Settings from "@/pages/admin/Settings";
 
-// Build-time surface selector. ONE codebase, two surfaces that are NEVER served together:
-//  - "office" (default): the local RoofSpan Office UI bundled inside the Windows installer. Root "/"
-//    is the local application (login -> dashboard). No public marketing/download page is shown.
-//  - "site": the public roofspan.io marketing/download website. Root "/" is the marketing homepage.
-// There is NO centrally hosted RoofSpan operational web application — the Office UI always runs locally.
-const SURFACE = process.env.REACT_APP_SURFACE || "office";
-const isSite = SURFACE === "site";
-
+// RoofSpan Office — the LOCAL browser UI packaged with the Windows installation. This is NOT a hosted
+// SaaS app and NOT the public roofspan.io website (that is a separate app at /app/roofspan-website).
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {isSite && <Route path="/" element={<MarketingSite />} />}
           <Route path="/login" element={<Login />} />
           <Route
             element={
@@ -45,8 +37,7 @@ function App() {
               </ProtectedRoute>
             }
           >
-            {!isSite && <Route path="/" element={<Dashboard />} />}
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/leads" element={<Leads />} />
             <Route path="/leads/:id" element={<LeadDetail />} />
@@ -63,7 +54,6 @@ function App() {
             <Route path="/admin/subscription" element={<RequireSensitive><Subscription /></RequireSensitive>} />
             <Route path="/admin/settings" element={<RequireSensitive><Settings /></RequireSensitive>} />
           </Route>
-          <Route path="*" element={<Navigate to={isSite ? "/" : "/login"} replace />} />
         </Routes>
       </BrowserRouter>
       <Toaster position="top-right" richColors />

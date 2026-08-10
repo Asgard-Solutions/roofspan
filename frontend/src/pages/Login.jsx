@@ -24,7 +24,7 @@ export default function Login() {
     try {
       await login(email.trim(), password);
       toast.success("Welcome back");
-      navigate("/dashboard");
+      navigate("/");
     } catch (err) {
       toast.error(apiError(err));
     } finally {

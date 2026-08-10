@@ -1,4 +1,4 @@
-import { SITE_NAV } from "@/site/SiteHeader";
+import { SITE_NAV } from "../content";
 
 export function SiteFooter() {
   const year = new Date().getFullYear();

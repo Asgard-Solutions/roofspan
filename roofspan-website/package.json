@@ -1,0 +1,29 @@
+{
+  "name": "roofspan-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Public roofspan.io marketing & download website (standalone). NOT part of RoofSpan Office; imports no Office code.",
+  "dependencies": {
+    "lucide-react": "0.516.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-scripts": "5.0.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "10.4.20",
+    "postcss": "8.5.10",
+    "tailwindcss": "3.4.17"
+  },
+  "scripts": {
+    "start": "PORT=3001 react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test"
+  },
+  "eslintConfig": {
+    "extends": ["react-app"]
+  },
+  "browserslist": {
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+  }
+}

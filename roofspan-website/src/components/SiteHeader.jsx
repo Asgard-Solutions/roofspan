@@ -1,13 +1,6 @@
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
-
-export const SITE_NAV = [
-  { href: "#features", label: "Features", testid: "site-nav-features" },
-  { href: "#how-it-works", label: "How It Works", testid: "site-nav-how" },
-  { href: "#pricing", label: "Pricing", testid: "site-nav-pricing" },
-  { href: "#download", label: "Download", testid: "site-nav-download" },
-  { href: "#mobile", label: "Mobile", testid: "site-nav-mobile" },
-];
+import { SITE_NAV } from "../content";
 
 export function SiteHeader() {
   const [open, setOpen] = useState(false);
