@@ -1,0 +1,28 @@
+# Terraform working files — never commit these.
+.terraform/
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Binary/saved plans — do NOT commit (may contain sensitive values).
+*.tfplan
+*.plan
+tfplan
+plan.out
+
+# Real variable values (secrets/real inputs) — only the example is tracked.
+terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# Local CLI/override files.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# NOTE: .terraform.lock.hcl IS intentionally tracked (provider version pinning).

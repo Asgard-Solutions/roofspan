@@ -27,10 +27,10 @@ resource "aws_db_instance" "control_plane" {
   publicly_accessible    = false
   multi_az               = var.rds_multi_az
 
-  backup_retention_period = var.rds_backup_retention_days
-  backup_window           = "05:00-06:00"
-  deletion_protection     = var.environment == "production"
-  skip_final_snapshot     = var.environment != "production"
+  backup_retention_period   = var.rds_backup_retention_days
+  backup_window             = "05:00-06:00"
+  deletion_protection       = var.environment == "production"
+  skip_final_snapshot       = var.environment != "production"
   final_snapshot_identifier = var.environment == "production" ? "${local.name}-cp-final" : null
 
   performance_insights_enabled = true

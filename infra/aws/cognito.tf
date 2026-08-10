@@ -20,14 +20,14 @@ resource "aws_cognito_user_pool" "operators" {
 }
 
 resource "aws_cognito_user_pool_client" "cp_admin" {
-  name                                 = "${local.name}-cp-admin"
-  user_pool_id                         = aws_cognito_user_pool.operators.id
-  generate_secret                      = true
-  explicit_auth_flows                  = ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
-  prevent_user_existence_errors        = "ENABLED"
-  access_token_validity                = 60
-  id_token_validity                    = 60
-  refresh_token_validity               = 1
+  name                          = "${local.name}-cp-admin"
+  user_pool_id                  = aws_cognito_user_pool.operators.id
+  generate_secret               = true
+  explicit_auth_flows           = ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
+  prevent_user_existence_errors = "ENABLED"
+  access_token_validity         = 60
+  id_token_validity             = 60
+  refresh_token_validity        = 1
   token_validity_units {
     access_token  = "minutes"
     id_token      = "minutes"
