@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 
 MANIFEST_VERSION = 1
 
 _REQUIRED_FIELDS = ("manifest_version", "version", "minimum_supported_version", "installer_url", "sha256")
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class ManifestError(ValueError):
@@ -27,7 +29,7 @@ class Manifest:
     installer_url: str
     sha256: str
     required: bool = False
-    release_date: str | None = None
+    published_at: str | None = None
     release_notes: str | None = None
     signature: str | None = None
 
@@ -50,13 +52,17 @@ def parse_manifest(raw: str | bytes | dict) -> Manifest:
             raise ManifestError(f"missing manifest field: {f}")
     if int(obj["manifest_version"]) != MANIFEST_VERSION:
         raise ManifestError(f"unsupported manifest_version {obj['manifest_version']}")
+    for vf in ("version", "minimum_supported_version"):
+        if not _SEMVER_RE.match(str(obj[vf])):
+            raise ManifestError(f"invalid semantic version in {vf}: {obj[vf]!r}")
     if not str(obj["installer_url"]).startswith("https://downloads.roofspan.io/"):
         raise ManifestError("installer_url must be served from downloads.roofspan.io (CloudFront)")
     return Manifest(
         manifest_version=int(obj["manifest_version"]), version=str(obj["version"]),
         minimum_supported_version=str(obj["minimum_supported_version"]),
         installer_url=str(obj["installer_url"]), sha256=str(obj["sha256"]).lower(),
-        required=bool(obj.get("required", False)), release_date=obj.get("release_date"),
+        required=bool(obj.get("required", False)),
+        published_at=obj.get("published_at") or obj.get("release_date"),
         release_notes=obj.get("release_notes"), signature=obj.get("signature"),
     )
 

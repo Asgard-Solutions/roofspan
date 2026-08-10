@@ -37,7 +37,7 @@ def build_manifest(*, version: str, installer_bytes: bytes, minimum_supported_ve
         manifest_version=MANIFEST_VERSION, version=version,
         minimum_supported_version=minimum_supported_version,
         installer_url=versioned_url(version), sha256=sha256_hex(installer_bytes),
-        required=required, release_date=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        required=required, published_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         release_notes=release_notes,
     )
     m.signature = sign_manifest(m, signing_private_pem)

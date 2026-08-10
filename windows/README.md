@@ -89,3 +89,57 @@ Stripe/RevenueCat secrets.
 - Upload artifacts to the approved private S3 behind CloudFront (`/latest/`, `/releases/`, `/update/windows/`).
 - Native-Windows E2E: install, upgrade-preserves-data, service recovery, first-run activation, real
   update apply + rollback.
+
+## Runtime model (audit of what RoofSpan Office actually needs)
+Packaged into the install (customer installs nothing manually):
+- **Local backend** — FastAPI (`server:app`), bound to **127.0.0.1:8001** only. No public exposure, no
+  inbound router/firewall rules; remote Mobile uses the **outbound Relay** only. Ships as a bundled
+  Python runtime (e.g., embeddable CPython or a PyInstaller `roofspan-backend.exe`) — the customer does
+  NOT install Python.
+- **Frontend** — the **production build** of `/app/frontend` (`yarn build` → static assets). Served by the
+  local backend at `http://127.0.0.1:8001/` (add a `StaticFiles` mount in the packaged backend; API stays
+  under `/api`). The public `roofspan-website` is NOT included. No Node/yarn at runtime.
+- **PostgreSQL** — local service (see below). **Relay connector** (outbound tunnel) and **update service**
+  (signed-update checks). Config + installation identity under ProgramData.
+- **Local browser URL** = **`http://127.0.0.1:8001/`** (existing configured port — not reinvented). The
+  Start Menu/Desktop shortcut ensures services are up, then opens the default browser to that URL. The
+  browser is not the app; the local services are.
+
+## Authoritative version (single source)
+`windows/VERSION` = **`0.1.0`** (numeric, MSI-compatible) with channel **`dev`** → display **`0.1.0-dev`**.
+`windows/version.py` reads it and exposes `ROOFSPAN_VERSION` / `CHANNEL` / `DISPLAY_VERSION` +
+`parse_version`/`is_valid_version`/`is_dev`. Consumers: `RoofSpan.wxs` `Version="$(var.Version)"`,
+`build.ps1` defaults `-Version` from `VERSION`, `make_manifest.py` defaults `--version`/`--min-supported`
+from it. The installed backend's `ROOFSPAN_VERSION` env is written from this file at install time (keeps
+app / installer / updater / release artifacts on ONE version). This is a **DEV** version — not a claimed
+1.0.0 production release. Responsibility boundary: **Control Plane `version_policy`** = supported/minimum/
+recommended authority; the **CloudFront manifest** = downloadable-artifact metadata; the updater reconciles both.
+
+## Update state machine (`updater/orchestrator.py`)
+Terminal gates: **NOOP** (already current), **BLOCKED** (bad manifest signature or SHA-256 mismatch —
+never proceeds). Apply path: **DOWNLOADED → VERIFIED → BACKED_UP → INSTALLING → MIGRATING →
+HEALTH_CHECKING → COMPLETE**. Any failure after backup → **ROLLED_BACK** (backup restored) or **FAILED**
+(restore also failed). `UpdateResult.final_state` + ordered `UpdateResult.states` are asserted in tests.
+Success is never exit-code-0 alone: health = backend/api/pg/migrations/licensing/relay/ui.
+
+## Automated tests (in-container, no native Windows) — `tests/test_updater.py` (30)
+version parse/validate + DEV-channel; manifest parse/validate incl. CloudFront-only URL + **semver
+validation** + `published_at` (with `release_date` alias); version compare; required/optional/current
+decision; SHA-256 verify; signature valid/wrong-key/tampered-manifest/tampered-sha256; separate signing
+domain; health all-pass/failures; orchestrator happy/noop/bad-sig-blocked/hash-mismatch-blocked/
+migration-rollback/health-rollback; **explicit state-machine sequence** (COMPLETE order, ROLLED_BACK,
+FAILED-when-restore-fails, BLOCKED, NOOP); release naming/URLs; signed-manifest roundtrip;
+upload-is-HUMAN-REQUIRED.
+
+## Windows-native test checklist (HUMAN REQUIRED — cannot run in this Linux container)
+Clean **Windows 11 x64** (and Windows 10 x64 if practical): install → first-run browser launch →
+PostgreSQL up + RoofSpan DB initialized → service restart → machine reboot (auto-start) → Relay connector
+starts → **upgrade preserves DB + installation identity + license/company binding + Mobile pairing** →
+uninstall preserves business data → reinstall → **tampered update rejected** → successful update →
+**failed update rolls back** (data recoverable).
+
+## Security (verified in logic; enforced by design)
+No AWS/Stripe/RevenueCat/Control-Plane/update private keys, no per-customer license or static credentials
+in the installer or release artifacts. Update-signing key is a distinct hierarchy from entitlement +
+identity + Mobile credentials; installer embeds only the update **public** key. Sanitized logs (never
+passwords, JWTs, installation private key, or Mobile credentials).

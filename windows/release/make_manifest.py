@@ -9,14 +9,15 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import version as ver  # noqa: E402
 from release import publish  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", required=True)
+    ap.add_argument("--version", default=ver.ROOFSPAN_VERSION, help="defaults to windows/VERSION")
     ap.add_argument("--installer", required=True)
-    ap.add_argument("--min-supported", required=True)
+    ap.add_argument("--min-supported", default=ver.ROOFSPAN_VERSION)
     ap.add_argument("--signing-key", required=True, help="Ed25519 UPDATE signing private key PEM (offline)")
     ap.add_argument("--required", action="store_true")
     ap.add_argument("--notes", default=None)

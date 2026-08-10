@@ -13,7 +13,7 @@
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Package Name="RoofSpan Office" Manufacturer="RoofSpan"
-           Version="1.0.0.0" UpgradeCode="6F3A2C10-4B1E-4E7A-9C2D-RS0FSPAN0001"
+           Version="$(var.Version)" UpgradeCode="6F3A2C10-4B1E-4E7A-9C2D-RS0FSPAN0001"
            Scope="perMachine" Compressed="yes">
 
     <!-- Upgrade in place; never install a second conflicting instance; preserve data across upgrades. -->

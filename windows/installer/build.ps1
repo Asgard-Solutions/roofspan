@@ -4,13 +4,14 @@
 #
 #   .\build.ps1 -Version 1.0.0 -StageDir ..\..\_stage [-SignCertThumbprint <thumb>] [-UpdateSigningPrivateKey <path>]
 param(
-  [Parameter(Mandatory=$true)][string]$Version,
+  [string]$Version = "",                             # defaults to windows/VERSION
   [Parameter(Mandatory=$true)][string]$StageDir,     # staged backend/frontend/updater/runtime trees
   [string]$SignCertThumbprint = "",                  # HUMAN REQUIRED for production
   [string]$UpdateSigningPrivateKey = "",             # SEPARATE from entitlement keys; kept OFFLINE
   [string]$OutDir = ".\dist"
 )
 $ErrorActionPreference = "Stop"
+if (-not $Version) { $Version = (Get-Content (Join-Path $PSScriptRoot "..\VERSION") -Raw).Trim() }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Write-Host "==> Building RoofSpan Office $Version"
@@ -37,7 +38,7 @@ if ($UpdateSigningPrivateKey) {
   python ..\release\make_manifest.py `
     --version $Version `
     --installer "$OutDir\RoofSpanSetup-$Version.exe" `
-    --min-supported "1.0.0" `
+    --min-supported $Version `
     --signing-key $UpdateSigningPrivateKey `
     --out "$OutDir\latest.json"
 }

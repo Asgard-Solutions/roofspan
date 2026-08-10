@@ -3,9 +3,10 @@ import json
 
 import pytest
 
+import version as ver
 from updater import manifest as M
 from updater import signing as S
-from updater.orchestrator import UpdateOrchestrator, evaluate_health
+from updater.orchestrator import UpdateOrchestrator, UpdateState, evaluate_health
 from release import publish
 
 
@@ -192,3 +193,85 @@ def test_build_manifest_roundtrip(keys):
 def test_upload_is_human_required():
     with pytest.raises(NotImplementedError):
         publish.upload_to_cloudfront_release()
+
+
+# ---- authoritative version source ----
+
+def test_authoritative_version_is_dev_semver():
+    assert ver.is_valid_version(ver.ROOFSPAN_VERSION)
+    assert ver.is_dev() is True
+    assert ver.DISPLAY_VERSION.startswith(ver.ROOFSPAN_VERSION)
+    assert ver.DISPLAY_VERSION.endswith("-dev")
+
+
+def test_version_parse_and_validate():
+    assert ver.parse_version("1.2.3") == (1, 2, 3)
+    assert ver.is_valid_version("1.2") is False
+    assert ver.is_valid_version("1.2.3.4") is False
+    with pytest.raises(ValueError):
+        ver.parse_version("nope")
+
+
+# ---- manifest schema: published_at + release_date alias + semver validation ----
+
+def test_manifest_published_at_and_release_date_alias(keys):
+    m, _ = _signed(keys)
+    assert m.published_at is not None  # publish.build_manifest sets published_at
+    parsed = M.parse_manifest({"manifest_version": 1, "version": "1.1.0",
+                               "minimum_supported_version": "1.0.0", "sha256": "ab",
+                               "installer_url": "https://downloads.roofspan.io/releases/RoofSpanSetup-1.1.0.exe",
+                               "release_date": "2026-01-01T00:00:00Z"})
+    assert parsed.published_at == "2026-01-01T00:00:00Z"  # legacy alias accepted
+
+
+def test_manifest_rejects_bad_semver():
+    with pytest.raises(M.ManifestError):
+        M.parse_manifest({"manifest_version": 1, "version": "1.0", "minimum_supported_version": "1.0.0",
+                          "installer_url": "https://downloads.roofspan.io/releases/x.exe", "sha256": "ab"})
+
+
+# ---- explicit update state machine (item 18) ----
+
+def test_state_sequence_complete(keys):
+    m, _ = _signed(keys, version="1.1.0")
+    orch, _ = _orch(keys)
+    r = orch.run(m, "1.0.0")
+    assert r.final_state == UpdateState.COMPLETE
+    assert r.states == [UpdateState.DOWNLOADED, UpdateState.VERIFIED, UpdateState.BACKED_UP,
+                        UpdateState.INSTALLING, UpdateState.MIGRATING, UpdateState.HEALTH_CHECKING,
+                        UpdateState.COMPLETE]
+
+
+def test_state_sequence_rollback_on_migration(keys):
+    m, _ = _signed(keys, version="1.1.0")
+
+    def migrate():
+        raise RuntimeError("alembic boom")
+
+    orch, _ = _orch(keys, migrate=migrate, restore=lambda t: True)
+    r = orch.run(m, "1.0.0")
+    assert r.final_state == UpdateState.ROLLED_BACK
+    assert UpdateState.BACKED_UP in r.states and UpdateState.MIGRATING in r.states
+    assert UpdateState.COMPLETE not in r.states
+
+
+def test_state_failed_when_restore_fails(keys):
+    m, _ = _signed(keys, version="1.1.0")
+    orch, _ = _orch(keys, install_package=lambda b: False, restore=lambda t: False)
+    r = orch.run(m, "1.0.0")
+    assert r.final_state == UpdateState.FAILED and r.state == "failed"
+
+
+def test_state_blocked_on_bad_signature(keys):
+    m, _ = _signed(keys)
+    m.signature = "AAAA"
+    orch, _ = _orch(keys)
+    r = orch.run(m, "1.0.0")
+    assert r.final_state == UpdateState.BLOCKED and not r.states
+
+
+def test_state_noop_when_current(keys):
+    m, _ = _signed(keys, version="1.0.0", minimum="1.0.0")
+    orch, _ = _orch(keys)
+    r = orch.run(m, "1.0.0")
+    assert r.final_state == UpdateState.NOOP
