@@ -75,3 +75,31 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_SEAT_LOOKUP_KEY = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat_monthly")
 SEAT_PRICE_USD = float(os.environ.get("ROOFSPAN_SEAT_PRICE_USD", "49"))  # informational; Stripe Price is source of truth
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+
+# ---- Production hosting (AWS) selectors — dev defaults keep in-container behavior unchanged ----
+# CP_ENV: "dev" (default; X-RoofSpan-Admin header ok) | "production" (operator JWT required, KMS signer).
+CP_ENV = os.environ.get("CP_ENV", "dev").strip().lower()
+
+# Entitlement signer: "local" (dev PEM keys) | "kms" (AWS KMS Ed25519, private key never leaves KMS).
+ENTITLEMENT_SIGNER = os.environ.get("ENTITLEMENT_SIGNER", "local" if CP_ENV != "production" else "kms").strip().lower()
+CP_KMS_SIGNING_KEY_ID = os.environ.get("CP_KMS_SIGNING_KEY_ID", "")
+AWS_REGION = os.environ.get("AWS_REGION", "")
+
+# Operator (RoofSpan-internal) auth for admin endpoints in production (Cognito JWT: issuer + audience).
+CP_OPERATOR_ISSUER = os.environ.get("CP_OPERATOR_ISSUER", "")
+CP_OPERATOR_AUDIENCE = os.environ.get("CP_OPERATOR_AUDIENCE", "")
+
+
+def require_production_config() -> None:
+    """Fail CLEARLY at startup in production if required central config is missing (never silent fallback)."""
+    if CP_ENV != "production":
+        return
+    missing = []
+    if BILLING_MODE != "stripe" or not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        missing.append("Stripe (BILLING_MODE=stripe + STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET)")
+    if ENTITLEMENT_SIGNER == "kms" and not CP_KMS_SIGNING_KEY_ID:
+        missing.append("CP_KMS_SIGNING_KEY_ID (KMS entitlement signer)")
+    if not (CP_OPERATOR_ISSUER and CP_OPERATOR_AUDIENCE):
+        missing.append("CP_OPERATOR_ISSUER + CP_OPERATOR_AUDIENCE (operator auth)")
+    if missing:
+        raise RuntimeError("RoofSpan Control Plane production config missing: " + "; ".join(missing))

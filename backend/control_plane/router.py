@@ -25,7 +25,12 @@ def _cp_error(e: service.CPError):
     return HTTPException(status_code=e.status, detail=e.detail)
 
 
-def _require_admin(x_roofspan_admin: str | None = Header(default=None)):
+def _require_admin(authorization: str | None = Header(default=None),
+                   x_roofspan_admin: str | None = Header(default=None)):
+    # Production: RoofSpan-internal operator JWT (Cognito). Dev: isolated X-RoofSpan-Admin header.
+    if config.CP_ENV == "production":
+        from control_plane import operator_auth
+        return operator_auth.verify_operator(authorization)
     if x_roofspan_admin != config.DEV_ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Control Plane admin authentication required")
     return True
@@ -34,6 +39,23 @@ def _require_admin(x_roofspan_admin: str | None = Header(default=None)):
 @router.get("/health")
 async def cp_health():
     return {"status": "ok", "service": "roofspan-control-plane"}
+
+
+@router.get("/ready")
+async def cp_ready(db: AsyncSession = Depends(get_cp_db)):
+    from sqlalchemy import text
+    from control_plane import keys as cp_keys
+    checks = {"db": False, "signing_key": False}
+    try:
+        await db.execute(text("SELECT 1"))
+        checks["db"] = True
+        checks["signing_key"] = bool(await cp_keys.public_keys(db))
+    except Exception:  # noqa: BLE001
+        pass
+    ready = all(checks.values())
+    if not ready:
+        raise HTTPException(status_code=503, detail={"ready": False, "checks": checks})
+    return {"ready": True, "checks": checks}
 
 
 @router.post("/activate", response_model=ActivateOut)

@@ -1,0 +1,16 @@
+# Placeholders only — NEVER commit real values. Copy to terraform.tfvars and fill in.
+# HUMAN REQUIRED values are marked. Region and hosted zone MUST be the real RoofSpan values.
+
+aws_region      = "REQUIRED-e.g-us-east-1"   # HUMAN REQUIRED — no default
+route53_zone_id = "REQUIRED-ZXXXXXXXXXXXXX"  # HUMAN REQUIRED — existing roofspan.io zone
+
+# Build + push images first (see RUNBOOK.md), then reference by DIGEST (preferred) or immutable tag.
+control_plane_image = "ACCOUNT.dkr.ecr.REGION.amazonaws.com/roofspan-control-plane@sha256:REPLACE"
+relay_image         = "ACCOUNT.dkr.ecr.REGION.amazonaws.com/roofspan-relay@sha256:REPLACE"
+
+environment        = "production"
+# cp_hostname     = "cp.roofspan.io"
+# relay_hostname  = "relay.roofspan.io"
+# vpc_cidr        = "10.42.0.0/16"
+# single_nat_gateway = true   # false for HA egress (higher cost)
+# rds_multi_az    = false     # true for RDS HA
