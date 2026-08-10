@@ -156,7 +156,10 @@ class RelayHub:
         fut = loop.create_future()
         self._cross_pending[cid] = fut
         try:
-            await self._transport.publish(R.node_channel(owner), raw)
+            try:
+                await self._transport.publish(R.node_channel(owner), raw)
+            except Exception as e:  # noqa: BLE001 - transport bounce (Valkey failover) -> retryable
+                raise RelayUnavailable(f"cross-node publish failed: {str(e)[:120]}")
             return await asyncio.wait_for(fut, timeout=timeout)
         finally:
             self._cross_pending.pop(cid, None)  # never leak correlation entries

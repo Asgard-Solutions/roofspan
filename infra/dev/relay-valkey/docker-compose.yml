@@ -1,0 +1,60 @@
+# DEVELOPMENT / INTEGRATION ONLY — never a production topology.
+# Launches a real Valkey (Redis-compatible) instance plus TWO real RoofSpan Secure Relay nodes so the
+# multi-node cross-node routing path (ValkeyRegistry + ValkeyTransport + Pub/Sub + Lua ownership + TTL)
+# is exercised against a REAL server (not the in-process fake bus).
+#
+# NO production credentials belong in this file. Only local/test values.
+# This does NOT validate AWS ElastiCache TLS — that remains HUMAN REQUIRED at AWS deploy time.
+#
+# Usage:
+#   docker compose -f infra/dev/relay-valkey/docker-compose.yml up -d --build
+#   RELAY_VALKEY_URL=redis://127.0.0.1:6390 pytest -m integration backend/tests/integration
+#   docker compose -f infra/dev/relay-valkey/docker-compose.yml down -v
+#
+# The pytest integration suite can also run against ANY reachable Valkey/Redis by exporting
+# RELAY_VALKEY_URL — it does not require these relay containers (it launches its own relay processes).
+
+services:
+  valkey:
+    image: valkey/valkey:8.0
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6390:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  relay-a:
+    build:
+      context: ../../..
+      dockerfile: infra/docker/relay/Dockerfile
+    depends_on:
+      valkey:
+        condition: service_healthy
+    environment:
+      RELAY_ENV: "production"          # exercises production fail-fast + readiness
+      RELAY_REGISTRY: "valkey"
+      RELAY_VALKEY_URL: "redis://valkey:6379"
+      RELAY_NODE_ID: "node-a"
+      # Control-plane DB access for tunnel auth (local/test only — set to your dev CP DB URL):
+      DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://roofspan:roofspan_local_pwd@host.docker.internal:5432/roofspan}"
+    ports:
+      - "9101:8001"
+
+  relay-b:
+    build:
+      context: ../../..
+      dockerfile: infra/docker/relay/Dockerfile
+    depends_on:
+      valkey:
+        condition: service_healthy
+    environment:
+      RELAY_ENV: "production"
+      RELAY_REGISTRY: "valkey"
+      RELAY_VALKEY_URL: "redis://valkey:6379"
+      RELAY_NODE_ID: "node-b"
+      DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://roofspan:roofspan_local_pwd@host.docker.internal:5432/roofspan}"
+    ports:
+      - "9102:8001"

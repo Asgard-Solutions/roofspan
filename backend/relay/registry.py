@@ -79,9 +79,12 @@ class AsyncMemoryRegistry:
         self._reg[installation_id] = (self.node_id, self._now() + self._ttl)
 
     async def heartbeat(self, installation_id: str) -> bool:
+        # Self-healing + newest-wins-safe: renew if we own it, RE-CLAIM if the key is absent
+        # (Valkey restart / TTL lapse while our local tunnel is still live), but never clobber a
+        # newer owner. Only the node holding the live local tunnel iterates heartbeat for it.
         cur = self._reg.get(installation_id)
-        if not cur or cur[0] != self.node_id or cur[1] < self._now():
-            return False
+        if cur is not None and cur[0] != self.node_id and cur[1] >= self._now():
+            return False  # a newer node owns it
         self._reg[installation_id] = (self.node_id, self._now() + self._ttl)
         return True
 
@@ -104,7 +107,14 @@ class AsyncMemoryRegistry:
 
 # Atomic ownership-sensitive Valkey ops (avoid GET-then-DELETE / GET-then-EXPIRE races).
 _LUA_COMPARE_DEL = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-_LUA_COMPARE_PEXPIRE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
+# Heartbeat: RE-CLAIM if the key is absent (Valkey restart / TTL lapse while our tunnel is live) OR we
+# already own it; never clobber a newer owner. Self-healing after Valkey data loss + newest-wins-safe.
+_LUA_HEARTBEAT_CLAIM = (
+    "local v = redis.call('get', KEYS[1]) "
+    "if v == false or v == ARGV[1] then "
+    "redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2]) return 1 "
+    "else return 0 end"
+)
 
 
 class ValkeyRegistry:
@@ -114,7 +124,8 @@ class ValkeyRegistry:
     def __init__(self, url: str, node_id: str, ttl: int = REGISTRY_TTL_SECONDS):
         import redis.asyncio as redis  # lazy
 
-        self._r = redis.from_url(url, decode_responses=True)
+        self._r = redis.from_url(url, decode_responses=True, health_check_interval=2,
+                                 socket_keepalive=True)
         self.node_id = node_id
         self._ttl = ttl
 
@@ -124,7 +135,7 @@ class ValkeyRegistry:
 
     async def heartbeat(self, installation_id: str) -> bool:
         renewed = await self._r.eval(
-            _LUA_COMPARE_PEXPIRE, 1, _route_key(installation_id), self.node_id, str(self._ttl * 1000)
+            _LUA_HEARTBEAT_CLAIM, 1, _route_key(installation_id), self.node_id, str(self._ttl * 1000)
         )
         return bool(renewed)
 

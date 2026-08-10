@@ -55,7 +55,12 @@ class ValkeyTransport:
     def __init__(self, url: str, node_id: str):
         import redis.asyncio as redis  # lazy
 
-        self._r = redis.from_url(url, decode_responses=True)
+        self._redis = redis
+        self._url = url
+        # health_check_interval lets redis.asyncio detect a dead socket instead of hanging forever
+        # on a half-open connection (otherwise a reader can silently stall = routing silently dead).
+        self._r = redis.from_url(url, decode_responses=True, health_check_interval=2,
+                                 socket_keepalive=True)
         self._node_id = node_id
         self._pubsub = None
         self._reader: asyncio.Task | None = None
@@ -76,7 +81,7 @@ class ValkeyTransport:
                 pass
         if self._pubsub is not None:
             try:
-                await self._pubsub.close()
+                await self._pubsub.aclose()
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -98,6 +103,23 @@ class ValkeyTransport:
     async def publish(self, channel: str, message: str) -> None:  # pragma: no cover - live Valkey
         await self._r.publish(channel, message)
 
+    async def _reconnect(self) -> None:  # pragma: no cover - live Valkey
+        # Rebuild the client + pubsub from scratch — redis.asyncio can otherwise keep handing out a
+        # dead pooled connection after the server bounces (Valkey failover/restart), never recovering.
+        try:
+            if self._pubsub is not None:
+                await self._pubsub.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await self._r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        self._r = self._redis.from_url(self._url, decode_responses=True, health_check_interval=2,
+                                       socket_keepalive=True)
+        self._pubsub = self._r.pubsub()
+        await self._pubsub.subscribe(self._channel)
+
     async def _read_loop(self) -> None:  # pragma: no cover - live Valkey
         backoff = 1.0
         while not self._stopped:
@@ -114,12 +136,12 @@ class ValkeyTransport:
             except Exception as e:  # noqa: BLE001
                 if self._stopped:
                     break
-                log.warning("relay transport read loop error: %s (retry in %ss)", str(e)[:160], backoff)
+                log.warning("relay transport read loop error: %s (reconnect in %ss)", str(e)[:160], backoff)
                 await asyncio.sleep(backoff)
-                backoff = min(30.0, backoff * 2)
+                backoff = min(10.0, backoff * 2)
                 try:
-                    self._pubsub = self._r.pubsub()
-                    await self._pubsub.subscribe(self._channel)
+                    await self._reconnect()
+                    backoff = 1.0
                 except Exception:  # noqa: BLE001
                     pass
 
