@@ -52,13 +52,8 @@ class EntitlementError(Exception):
     """Raised when an entitlement cannot be verified (bad signature, expired, unknown key)."""
 
 
-def sign_entitlement(*, private_key, kid: str, claims: dict) -> str:
-    """Sign an entitlement (Control-Plane side; dev signer in Phase C0).
-
-    `claims` must include installation_id, company_id, subscription_state, seats_licensed,
-    product, issued_at, refresh_at, grace_until (datetimes). `exp` is set to `grace_until` so a
-    stale cached entitlement fails verification once the offline grace window has fully elapsed.
-    """
+def _build_payload(claims: dict) -> dict:
+    """Build the canonical entitlement JWT payload from claims (shared by local + signer paths)."""
     issued_at: datetime = claims["issued_at"]
     refresh_at: datetime = claims["refresh_at"]
     grace_until: datetime = claims["grace_until"]
@@ -77,9 +72,10 @@ def sign_entitlement(*, private_key, kid: str, claims: dict) -> str:
         "exp": int(grace_until.timestamp()),
         "nonce": claims.get("nonce") or uuid.uuid4().hex,
     }
-    # Optional billing metadata (only included when provided).
+
     def _ts(dt):
         return int(dt.timestamp()) if dt else None
+
     if claims.get("cancel_at_period_end"):
         payload["cancel_at_period_end"] = True
     if claims.get("current_period_end"):
@@ -90,7 +86,42 @@ def sign_entitlement(*, private_key, kid: str, claims: dict) -> str:
         payload["scheduled_seats_at"] = _ts(claims["scheduled_seats_at"])
     if claims.get("grace_started_at"):
         payload["grace_started_at"] = _ts(claims["grace_started_at"])
+    return payload
+
+
+def sign_entitlement(*, private_key, kid: str, claims: dict) -> str:
+    """Sign an entitlement with a LOCAL Ed25519 private key (dev/in-container path via PyJWT).
+
+    `claims` must include installation_id, company_id, subscription_state, seats_licensed,
+    product, issued_at, refresh_at, grace_until (datetimes). `exp` is set to `grace_until` so a
+    stale cached entitlement fails verification once the offline grace window has fully elapsed.
+    """
+    payload = _build_payload(claims)
     return jwt.encode(payload, private_key, algorithm=ALG, headers={"kid": kid})
+
+
+def sign_entitlement_via_signer(*, signer, kid: str, claims: dict) -> str:
+    """Produce an EdDSA JWS whose signature comes from the SIGNER abstraction (local Ed25519 in dev,
+    AWS KMS Ed25519 in production). Signs the CANONICAL JWS signing input (base64url(header).base64url
+    (payload)) directly — no local prehash — so KMS ED25519_SHA_512 + MessageType=RAW yields a standard
+    Ed25519 signature that RoofSpan Office verifies exactly like a locally-signed token.
+    """
+    import base64
+    import json
+
+    payload = _build_payload(claims)
+    header = {"alg": ALG, "typ": "JWT", "kid": kid}
+
+    def _b64(raw: bytes) -> bytes:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+    signing_input = (
+        _b64(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+        + b"."
+        + _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    )
+    signature = signer.sign(signing_input)
+    return (signing_input + b"." + _b64(signature)).decode("ascii")
 
 
 def verify_entitlement(token: str, trusted_keys: dict) -> Entitlement:

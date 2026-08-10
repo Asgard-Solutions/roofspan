@@ -23,11 +23,16 @@ class LocalEd25519Signer:
 
 
 class KmsEd25519Signer:
-    """Production signer backed by AWS KMS (KeySpec ECC_NIST_EDWARDS25519, KeyUsage SIGN_VERIFY).
+    """Production signer backed by AWS KMS.
 
-    boto3 is imported lazily so dev/in-container never needs it. NOTE (HUMAN REQUIRED to confirm on AWS):
-    the exact SigningAlgorithm/MessageType for Ed25519 must match the current KMS API for this KeySpec.
+    KeySpec ECC_NIST_EDWARDS25519, KeyUsage SIGN_VERIFY, SigningAlgorithm ED25519_SHA_512, MessageType
+    RAW — i.e. standard RFC 8032 PureEdDSA over the raw message (the "SHA_512" is Ed25519's internal
+    hash, NOT a caller prehash). We therefore pass the canonical JWS signing input as-is and never
+    locally prehash. The private key NEVER leaves KMS; RoofSpan Office verifies with the exported
+    public key. boto3 is imported lazily so dev/in-container never needs it.
     """
+
+    SIGNING_ALGORITHM = "ED25519_SHA_512"
 
     def __init__(self, key_id: str, region: str, kid: str):
         import boto3  # lazy
@@ -38,8 +43,24 @@ class KmsEd25519Signer:
 
     def sign(self, message: bytes) -> bytes:
         resp = self._kms.sign(KeyId=self.key_id, Message=message,
-                              MessageType="RAW", SigningAlgorithm="EDDSA")
-        return resp["Signature"]
+                              MessageType="RAW", SigningAlgorithm=self.SIGNING_ALGORITHM)
+        sig = resp.get("Signature")
+        if not sig:
+            raise RuntimeError("KMS Sign returned no Signature")
+        return sig  # raw 64-byte Ed25519 signature (EdDSA is not DER-encoded)
+
+    def public_key_pem(self) -> str:
+        """Export the KMS public key as PEM SubjectPublicKeyInfo (the representation RoofSpan Office
+        already uses to verify). KMS GetPublicKey returns DER SPKI; verification needs NO KMS call."""
+        from cryptography.hazmat.primitives import serialization
+        resp = self._kms.get_public_key(KeyId=self.key_id)
+        der = resp.get("PublicKey")
+        if not der:
+            raise RuntimeError("KMS GetPublicKey returned no PublicKey")
+        pub = serialization.load_der_public_key(der)
+        return pub.public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode("ascii")
 
 
 def _load(private_pem: str) -> Ed25519PrivateKey:
