@@ -44,6 +44,12 @@ resource "aws_ecs_task_definition" "cp" {
   memory                   = var.cp_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.cp_task.arn
+  # Production container architecture is explicit (Fargate default is X86_64, but pin it so an
+  # ARM/Apple-Silicon build machine can never push an incompatible image). Build with --platform linux/amd64.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
   container_definitions = jsonencode([{
     name         = "control-plane"
     image        = var.control_plane_image
@@ -77,6 +83,11 @@ resource "aws_ecs_task_definition" "relay" {
   memory                   = var.relay_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.relay_task.arn
+  # Explicit production architecture (see CP task def note). Build with --platform linux/amd64.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
   container_definitions = jsonencode([{
     name         = "relay"
     image        = var.relay_image

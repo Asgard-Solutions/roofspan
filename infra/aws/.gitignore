@@ -10,7 +10,9 @@ crash.*.log
 *.tfplan
 *.plan
 tfplan
+tfplan.txt
 plan.out
+plan.txt
 
 # Real variable values (secrets/real inputs) — only the example is tracked.
 terraform.tfvars
