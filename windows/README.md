@@ -143,3 +143,40 @@ No AWS/Stripe/RevenueCat/Control-Plane/update private keys, no per-customer lice
 in the installer or release artifacts. Update-signing key is a distinct hierarchy from entitlement +
 identity + Mobile credentials; installer embeds only the update **public** key. Sanitized logs (never
 passwords, JWTs, installation private key, or Mobile credentials).
+
+## Installer build path (now complete in committed code; native execution HUMAN REQUIRED)
+Producing the installer on Windows is `stage.ps1` → `build.ps1`:
+```
+installer\stage.ps1 -StageDir ..\..\_stage -UpdatePublicKey <update_public_key.pem>
+installer\build.ps1 -StageDir ..\..\_stage -PostgresInstaller <edb-postgresql-x64.exe> `
+                    [-SignCertThumbprint <t>] [-UpdateSigningPrivateKey <priv.pem>]
+```
+- **`constants.wxi`** — PERMANENT product-family GUIDs (`RoofSpanUpgradeCode`, `BundleUpgradeCode`), shared
+  by MSI + bundle. Never regenerate. Validated by `tests/test_installer_static.py`.
+- **`RoofSpan.wxs`** (MSI) — valid `$(var.RoofSpanUpgradeCode)`; payload **harvested** via WiX v4 `<Files>`
+  from the staged `frontend\ / runtime\ / config-templates\` trees; three restricted services keyed on the
+  staged `services\*.exe`; ProgramData data dirs Permanent/NeverOverwrite; first-run opens
+  `http://127.0.0.1:8001/`.
+- **`bundle.wxs`** (Burn → `RoofSpanSetup.exe`) — bundle identity + `$(var.BundleUpgradeCode)`; chain =
+  **EDB PostgreSQL silent prereq** (installed only when not already present via `PgPresent` registry
+  detect; `Permanent` so uninstall never removes the customer DB) → **RoofSpan MSI**. No committed secrets
+  (`PostgresInstaller`/`PgSuperPassword` are overridable install-time variables).
+- **`winbuild\`** — PyInstaller specs + entry scripts producing `roofspan-backend.exe` /
+  `roofspan-relay-connector.exe` / `roofspan-update-service.exe` (names come from `winbuild/targets.py`,
+  cross-checked against the WiX authoring by the static tests). Backend exe serves the packaged Office
+  frontend build via `ROOFSPAN_STATIC_DIR` (backend `static_serve.mount_frontend`, guarded — no-op in dev).
+- **PostgreSQL**: EDB silent Burn prerequisite; detect-existing (no reinstall); RoofSpan first-run creates
+  its own least-privilege role + DB with generated creds; data preserved on upgrade AND uninstall.
+- **Update cadence**: 12h (`updater/service.CHECK_INTERVAL_SECONDS`) + a `plan_update()` foundation for a
+  future in-Office "Check for Updates".
+- **Fail-fast**: `build.ps1` throws if WiX/staged exes/frontend build/runtime/config/EDB installer are
+  missing — no silent partial builds. `build_exes.ps1`/`stage.ps1` fail if PyInstaller/frontend build fail.
+- **Version stays `0.1.0-dev`** — no stable 1.0.0 and the website download stays disabled until native
+  build/install/upgrade/uninstall/update/rollback pass + Authenticode signing + verified CloudFront upload.
+
+## Tests (in-container): `tests/` = **42** (`test_updater.py` 30 + `test_installer_static.py` 12)
+Static suite asserts: bundle/installer files exist; WiX GUIDs valid + no `RS0FSPAN` placeholder; permanent
+UpgradeCode + `$(var.Version)`; payload harvested (not empty scaffold); WiX service exes == build outputs
+(+ entry script + spec per exe); bundle chains PostgreSQL prereq + MSI; build.ps1 fail-fast + builds
+bundle; release filenames consistent; VERSION valid semver + display `0.1.0-dev`; CloudFront URLs correct;
+12h cadence; public-website download disabled.

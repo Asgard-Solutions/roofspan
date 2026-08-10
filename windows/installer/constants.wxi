@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RoofSpan Office — PERMANENT product-family identity. Shared by the MSI (RoofSpan.wxs) and the Burn
+  bundle (bundle.wxs). Do NOT regenerate these GUIDs on a release: the same UpgradeCode must identify
+  the RoofSpan Office product family across all future major upgrades. Validated by
+  windows/tests/test_installer_static.py.
+-->
+<Include>
+  <?define RoofSpanUpgradeCode = "2B4DB236-63E2-4924-BC45-26B2EDE6D96F" ?>
+  <?define BundleUpgradeCode   = "3AF41ADC-FAB9-4D59-956A-690C62AE5D91" ?>
+  <?define Manufacturer        = "RoofSpan" ?>
+  <?define ProductName         = "RoofSpan Office" ?>
+</Include>

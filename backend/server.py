@@ -113,3 +113,9 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     await engine.dispose()
+
+
+# Packaged Windows build only: serve the production Office UI from ROOFSPAN_STATIC_DIR (no-op in dev).
+from static_serve import mount_frontend  # noqa: E402
+
+mount_frontend(app)

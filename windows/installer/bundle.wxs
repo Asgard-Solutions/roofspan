@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RoofSpan Office — WiX v4 Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
+
+  Chain (in order):
+    1) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
+       PostgreSQL is not already present (detected via registry). Marked Permanent so it is NOT removed
+       on RoofSpan uninstall (the customer's database service + data are preserved).
+    2) RoofSpanOffice-{VERSION}.msi — the RoofSpan Office application.
+
+  Contains NO secrets and is NOT customer-specific. Building/signing is HUMAN REQUIRED on Windows.
+  The EDB installer binary itself is NOT committed; supply its path via -d PostgresInstaller=... (build.ps1
+  validates it exists and fails fast otherwise).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?include constants.wxi ?>
+
+  <Bundle Name="$(var.ProductName)" Manufacturer="$(var.Manufacturer)"
+          Version="$(var.Version)" UpgradeCode="$(var.BundleUpgradeCode)">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                              SuppressOptionsUI="yes"
+                                              LicenseUrl="https://roofspan.io/eula" />
+    </BootstrapperApplication>
+
+    <!-- Detect an existing (RoofSpan-managed or compatible) PostgreSQL install so we do NOT reinstall. -->
+    <util:RegistrySearch Id="PgPresentSearch" Root="HKLM"
+                         Key="SOFTWARE\PostgreSQL\Installations"
+                         Result="exists" Variable="PgPresent" />
+
+    <!-- Overridable at build/runtime; no default binary is committed. -->
+    <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
+    <!-- EDB superpassword supplied at install time (Burn variable) — NEVER committed. RoofSpan first-run
+         creates its own least-privilege 'roofspan' role + database with generated credentials. -->
+    <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
+
+    <Chain>
+      <!-- 1) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
+              uninstalled by RoofSpan (protects the customer's database service + data). -->
+      <ExePackage Id="PostgreSQLPrereq"
+                  DisplayName="PostgreSQL (RoofSpan prerequisite)"
+                  SourceFile="[PostgresInstaller]"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallCondition="NOT PgPresent"
+                  DetectCondition="PgPresent"
+                  InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL"
+                  Compressed="no" />
+
+      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). -->
+      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

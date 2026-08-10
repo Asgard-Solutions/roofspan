@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  RoofSpan Office — WiX v4 installer definition (SCAFFOLD).
-  Target: Windows 10/11 x64. Builds RoofSpanSetup MSI (wrapped by a Burn bundle -> RoofSpanSetup.exe).
+  RoofSpan Office — WiX v4 MSI definition.
+  Target: Windows 10/11 x64. Produces RoofSpanOffice-{VERSION}.msi (wrapped by bundle.wxs -> RoofSpanSetup.exe).
 
-  This authors a per-machine install with three Windows services, a preserved local data directory,
-  clean major-upgrade behavior, and data-preserving uninstall. It intentionally contains NO secrets
-  (no AWS/Stripe/RevenueCat/entitlement private keys, no per-customer license). Activation happens at
-  first run via the existing licensing flow. Building/signing this is HUMAN REQUIRED on Windows.
+  Per-machine install with three restricted Windows services, a preserved local data directory under
+  ProgramData, clean data-preserving major-upgrade, and data-preserving uninstall. Contains NO secrets
+  (no AWS/Stripe/RevenueCat/entitlement/update private keys, no per-customer license). Activation happens
+  at first run via the existing licensing flow. The application payload is harvested at build time from
+  the staged tree ($(var.StageDir), assembled by installer\stage.ps1). Building/signing is HUMAN REQUIRED
+  on Windows (WiX v4 tooling + Authenticode cert).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <Package Name="RoofSpan Office" Manufacturer="RoofSpan"
-           Version="$(var.Version)" UpgradeCode="6F3A2C10-4B1E-4E7A-9C2D-RS0FSPAN0001"
+  <?include constants.wxi ?>
+
+  <Package Name="$(var.ProductName)" Manufacturer="$(var.Manufacturer)"
+           Version="$(var.Version)" UpgradeCode="$(var.RoofSpanUpgradeCode)"
            Scope="perMachine" Compressed="yes">
 
     <!-- Upgrade in place; never install a second conflicting instance; preserve data across upgrades. -->
@@ -24,10 +28,10 @@
     <!-- Directory layout: binaries under Program Files; MUTABLE customer data under ProgramData. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RoofSpan Office">
-        <Directory Id="BackendDir" Name="backend" />
+        <Directory Id="ServicesDir" Name="services" />
         <Directory Id="FrontendDir" Name="frontend" />
-        <Directory Id="UpdaterDir" Name="updater" />
         <Directory Id="RuntimeDir" Name="runtime" />
+        <Directory Id="ConfigTemplatesDir" Name="config-templates" />
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="CommonAppDataFolder">
@@ -39,25 +43,33 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- Application payload (file harvesting via `wix build -bindpath` / heat in CI). -->
-    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
-      <!-- Populated at build time from the packaged backend/frontend/updater/runtime trees. -->
+    <!-- Application payload harvested at build time from the staged trees (WiX v4 Files element). -->
+    <ComponentGroup Id="FrontendFiles" Directory="FrontendDir">
+      <Files Include="$(var.StageDir)\frontend\**" />
+    </ComponentGroup>
+    <ComponentGroup Id="RuntimeFiles" Directory="RuntimeDir">
+      <Files Include="$(var.StageDir)\runtime\**" />
+    </ComponentGroup>
+    <ComponentGroup Id="ConfigTemplateFiles" Directory="ConfigTemplatesDir">
+      <Files Include="$(var.StageDir)\config-templates\**" />
     </ComponentGroup>
 
-    <!-- Windows services (minimal set, auto-start, restart-on-failure, restricted identity). -->
-    <ComponentGroup Id="Services" Directory="BackendDir">
+    <!-- Windows services (minimal set, auto-start, restart-on-failure, restricted identity).
+         KeyPath exes are the PyInstaller outputs produced by packaging\build_exes.ps1 into services\. -->
+    <ComponentGroup Id="Services" Directory="ServicesDir">
       <Component Id="Svc_Backend" Guid="*">
-        <File Id="BackendExe" Source="$(var.StageDir)\backend\roofspan-backend.exe" KeyPath="yes" />
+        <File Id="BackendExe" Source="$(var.StageDir)\services\roofspan-backend.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanBackend" Name="RoofSpanBackend" DisplayName="RoofSpan Backend"
-                        Description="RoofSpan local API (binds 127.0.0.1 only)." Type="ownProcess"
-                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanBackend" Vital="yes">
+                        Description="RoofSpan local API + local browser UI (binds 127.0.0.1 only)."
+                        Type="ownProcess" Start="auto" ErrorControl="normal"
+                        Account="NT SERVICE\RoofSpanBackend" Vital="yes">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="10" />
         </ServiceInstall>
         <ServiceControl Id="CtlBackend" Name="RoofSpanBackend" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
-      <Component Id="Svc_Relay" Guid="*" Directory="UpdaterDir">
-        <File Id="RelayExe" Source="$(var.StageDir)\updater\roofspan-relay-connector.exe" KeyPath="yes" />
+      <Component Id="Svc_Relay" Guid="*">
+        <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanRelay" Name="RoofSpanRelayConnector" DisplayName="RoofSpan Relay Connector"
                         Description="Outbound-only Secure Relay tunnel (no inbound ports)." Type="ownProcess"
                         Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelay">
@@ -66,16 +78,16 @@
         </ServiceInstall>
         <ServiceControl Id="CtlRelay" Name="RoofSpanRelayConnector" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
-      <Component Id="Svc_Updater" Guid="*" Directory="UpdaterDir">
-        <File Id="UpdaterExe" Source="$(var.StageDir)\updater\roofspan-update-service.exe" KeyPath="yes" />
+      <Component Id="Svc_Updater" Guid="*">
+        <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
-                        Description="Checks downloads.roofspan.io for signed updates; verifies + applies safely."
+                        Description="Checks downloads.roofspan.io for signed updates every 12h; verifies + applies safely."
                         Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdate" />
         <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </ComponentGroup>
 
-    <!-- Persisted data marker components: created if absent, NEVER removed on uninstall/upgrade. -->
+    <!-- Persisted data marker: created if absent, NEVER removed on uninstall/upgrade. -->
     <Component Id="DataDirs" Directory="DataRoot" Guid="*" Permanent="yes" NeverOverwrite="yes">
       <CreateFolder />
       <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="DataRoot"
@@ -83,7 +95,9 @@
     </Component>
 
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
-      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="FrontendFiles" />
+      <ComponentGroupRef Id="RuntimeFiles" />
+      <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="Services" />
       <ComponentRef Id="DataDirs" />
     </Feature>
@@ -97,6 +111,6 @@
     </InstallExecuteSequence>
 
     <!-- Uninstall: business data (pgdata, identity) is retained by default. A destructive
-         "remove all RoofSpan data" is a separate, explicitly-confirmed Burn bundle option. -->
+         "remove all RoofSpan data" is a separate, explicitly-confirmed option (not default). -->
   </Package>
 </Wix>
