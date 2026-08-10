@@ -1,0 +1,29 @@
+{
+  "summary": "Backend-only verification of the KMS signer abstraction refactor for RoofSpan Control Plane. Ran existing pytest suites (test_control_plane.py, test_licensing_api.py, test_kms_signer.py, test_kms_issuance.py) => 37/37 passed. Additionally authored an INDEPENDENT live-URL suite (test_signer_refactor_live.py) that hits the public REACT_APP_BACKEND_URL and asserts: (1) /api/control-plane/ready => {ready:true, db:true, signing_key:true, signer:'local'}, (2) POST /activate issues an EdDSA JWS that verifies with the published signing_public_keys and whose 'kid' is present in the key set, (3) POST /entitlement/refresh with Ed25519 request signing (reqsig headers X-RoofSpan-Installation/Timestamp/Nonce/Signature, canonical id\\nts\\nnonce\\nsha256_hex(body)) returns a fresh JWS that verifies, (4) POST /signing-keys/rotate with X-RoofSpan-Admin produces a new active kid; old kid remains present in /signing-keys/public so previously-issued JWS still verifies, and a new activation is signed with the new active kid. All 4 live tests passed. Total: 41 tests, 41 passed. The refactor of _issue_entitlement to go through control_plane/signer.build_signer + licensing/entitlement.sign_entitlement_via_signer did not break live issuance; entitlements remain cryptographically verifiable with published Ed25519 public keys; rotation coexistence works correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_signer_refactor_live.py",
+    "/app/backend/tests/test_control_plane.py",
+    "/app/backend/tests/test_licensing_api.py",
+    "/app/backend/tests/test_kms_signer.py",
+    "/app/backend/tests/test_kms_issuance.py",
+    "/app/test_reports/pytest/iter10_cp.xml",
+    "/app/test_reports/pytest/iter10_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "control_plane/router.py::/signing-keys/public returns {\"keys\": {kid: pem}} while the review request text refers to 'signing_public_keys'. Not a bug, just a naming mismatch to be aware of when documenting the contract.",
+    "control_plane/service.py::_issue_entitlement correctly routes through cp_signer.build_signer(...) + ent.sign_entitlement_via_signer(...); good separation. In production the ENTITLEMENT_SIGNER=kms path is only unit-tested with mocked boto3 — recommend a staging smoke-test with a real KMS alias before first release."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_signer_refactor_live.py (new)"
+  ],
+  "success_rate": {"backend": "100% (41/41)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "CP_DEV_BOOTSTRAP_SECRET=dev-bootstrap-roofspan, X-RoofSpan-Admin=dev-admin-roofspan (env defaults)",
+  "seed_data_creation": "Each activation test creates an ephemeral company (prefix TEST_co_) + installation with a freshly generated Ed25519 keypair; no cleanup required (unique UUID per run).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live activation endpoint field name is 'installation_public_key' (NOT 'installation_public_key_pem'). /signing-keys/public returns {'keys': {kid: pem}}. Request signing headers are X-RoofSpan-Installation/Timestamp/Nonce/Signature; canonical message = installation_id\\ntimestamp\\nnonce\\nsha256_hex(body); signature is standard base64 (not urlsafe). Signer mode surfaced at /api/control-plane/ready under 'signer' key; expect 'local' in this env, 'kms' in production. KMS path is validated via mocked-boto3 unit tests only in this container.",
+  "rca of the issue": "N/A - no issues found; refactor verified working end-to-end via live HTTP against public URL."
+}

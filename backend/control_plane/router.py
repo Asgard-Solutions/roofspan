@@ -49,13 +49,21 @@ async def cp_ready(db: AsyncSession = Depends(get_cp_db)):
     try:
         await db.execute(text("SELECT 1"))
         checks["db"] = True
-        checks["signing_key"] = bool(await cp_keys.public_keys(db))
+        keys = await cp_keys.public_keys(db)
+        # KMS mode: readiness requires a configured key id + an ACTIVE published public key. We do NOT
+        # perform a paid KMS Sign on every readiness probe (startup validate_active_key does the
+        # GetPublicKey reconcile). Local mode: an ACTIVE public key must exist.
+        if config.ENTITLEMENT_SIGNER == "kms":
+            checks["signing_key"] = bool(keys) and bool(config.CP_KMS_SIGNING_KEY_ID)
+        else:
+            checks["signing_key"] = bool(keys)
     except Exception:  # noqa: BLE001
         pass
     ready = all(checks.values())
     if not ready:
-        raise HTTPException(status_code=503, detail={"ready": False, "checks": checks})
-    return {"ready": True, "checks": checks}
+        raise HTTPException(status_code=503, detail={"ready": False, "checks": checks,
+                                                     "signer": config.ENTITLEMENT_SIGNER})
+    return {"ready": True, "checks": checks, "signer": config.ENTITLEMENT_SIGNER}
 
 
 @router.post("/activate", response_model=ActivateOut)

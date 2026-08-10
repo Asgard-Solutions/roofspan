@@ -12,7 +12,7 @@ from psycopg import sql
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control_plane import config, keys as cp_keys
+from control_plane import config, keys as cp_keys, signer as cp_signer
 from control_plane.db import engine, CPBase, SessionLocal
 from control_plane.models import (
     Company, Installation, License, Subscription, EntitlementIssuance, VersionPolicy,
@@ -58,6 +58,7 @@ async def init_control_plane() -> None:
     await asyncio.to_thread(run_cp_migrations)
     async with SessionLocal() as db:
         await cp_keys.ensure_active_key(db)
+        await cp_keys.validate_active_key(db)  # KMS mode: fail clearly if ACTIVE key != configured KMS key
         vp = (await db.execute(select(VersionPolicy).where(VersionPolicy.key == "default"))).scalar_one_or_none()
         if vp is None:
             db.add(VersionPolicy(key="default", office_min_supported=config.MIN_SUPPORTED_VERSION,
@@ -122,7 +123,8 @@ async def _issue_entitlement(db: AsyncSession, *, installation: Installation, li
         "scheduled_seats_at": subscription.pending_seats_effective_at,
         "grace_started_at": subscription.grace_started_at,
     }
-    token = ent.sign_entitlement(private_key=cp_keys.load_private(signing), kid=signing.kid, claims=claims)
+    token = ent.sign_entitlement_via_signer(
+        signer=cp_signer.build_signer(signing.private_pem, signing.kid), kid=signing.kid, claims=claims)
     db.add(EntitlementIssuance(
         installation_id=installation.id, license_id=license_row.id, kid=signing.kid,
         subscription_state=subscription.state, seats=subscription.seats, reason=reason,

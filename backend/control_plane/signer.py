@@ -68,12 +68,24 @@ def _load(private_pem: str) -> Ed25519PrivateKey:
     return serialization.load_pem_private_key(private_pem.encode("utf-8"), password=None)
 
 
+_signer_cache: dict = {}
+
+
 def build_signer(active_private_pem: str | None, kid: str):
-    """Return the configured signer. Production=kms fails clearly if key id absent (no silent fallback)."""
+    """Return the configured signer. Production=kms fails clearly if key id absent (no silent fallback).
+
+    The KMS signer (boto3 client) is cached per (key_id, kid) so issuance does not create a new client
+    on every call. Local signers are cheap and built fresh (the ACTIVE PEM can change on rotation).
+    """
     if config.ENTITLEMENT_SIGNER == "kms":
         if not config.CP_KMS_SIGNING_KEY_ID:
             raise RuntimeError("ENTITLEMENT_SIGNER=kms but CP_KMS_SIGNING_KEY_ID is not set")
-        return KmsEd25519Signer(config.CP_KMS_SIGNING_KEY_ID, config.AWS_REGION, kid)
+        cache_key = (config.CP_KMS_SIGNING_KEY_ID, config.AWS_REGION, kid)
+        signer = _signer_cache.get(cache_key)
+        if signer is None:
+            signer = KmsEd25519Signer(config.CP_KMS_SIGNING_KEY_ID, config.AWS_REGION, kid)
+            _signer_cache[cache_key] = signer
+        return signer
     if config.CP_ENV == "production":
         raise RuntimeError("Production must not use the local entitlement signer; set ENTITLEMENT_SIGNER=kms")
     if not active_private_pem:
