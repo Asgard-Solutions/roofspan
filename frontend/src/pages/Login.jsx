@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HardHat, Eye, EyeOff, Loader2 } from "lucide-react";
+import { WindowsDownload } from "@/components/WindowsDownload";
 
 const BG_IMAGE = "/brand/roofspan-login-bg.png";
 
@@ -87,6 +88,7 @@ export default function Login() {
           </Button>
         </form>
         </div>
+        <WindowsDownload variant="public" />
       </div>
     </div>
   );
