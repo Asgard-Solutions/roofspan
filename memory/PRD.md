@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements (Living Doc)
 
+## ARCHITECTURE INVARIANT (2026-06, LOCKED)
+RoofSpan Office is a **locally installed Windows application with a browser-based local UI** (the "RoofSpan
+Office UI" / local browser UI). **There is NO centrally hosted RoofSpan operational web application.**
+Three distinct surfaces:
+1. **roofspan.io** — public marketing/download website (this repo's frontend built with `REACT_APP_SURFACE=site`). No customer business data.
+2. **RoofSpan Office** — installed on the company's Windows machine: local FastAPI + local PostgreSQL + local services + licensing client + Relay connector + updater + local browser UI (this repo's frontend, default `REACT_APP_SURFACE=office`). Authoritative for users, auth, roles, permissions, and ALL roofing business data. Subscription/seat/billing administration happens **here** (browser may redirect to Stripe-hosted pages).
+3. **RoofSpan Mobile** — iOS/Android free companion apps → RoofSpan Secure Relay → the customer's local RoofSpan Office installation.
+Central services (Control Plane / Relay / billing sync / entitlements / pairing / version policy / installer distribution via CloudFront→S3) hold **commercial metadata only** — never the roofing-business database. "Web app" in older notes = this local browser UI, not a hosted SaaS app.
+
+
 ## Original Problem Statement
 RoofSpan is a **local roofing-company operating application** for ONE roofing company. Not SaaS, not multi-company. Architecture: **Office Browser → FastAPI Backend → PostgreSQL** (authoritative source of truth). A separate native Mobile field app comes LATER. Governing principle: **K.I.S.S.** Build order: Office Phases 1→5, then Mobile.
 
@@ -259,3 +269,14 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Installer scaffold** (`windows/installer/`): `RoofSpan.wxs` (WiX v4: perMachine, MajorUpgrade preserving data, 3 restricted auto-start services RoofSpanBackend/RelayConnector/UpdateService, ProgramData data dirs Permanent/NeverOverwrite, first-run opens 127.0.0.1 activation UI, data-preserving uninstall), `build.ps1` (MSI+Burn bundle + signtool hook + manifest gen). `windows/README.md` documents PostgreSQL/services/first-run/update/backup/rollback/upgrade/uninstall/signing strategy.
 - **Verified**: `windows/tests/test_updater.py` **21/21** (manifest parse+cloudfront guard, version compare, update decision, sha256 verify, signature valid/wrong-key/tampered-manifest/tampered-sha256 rejection, separate signing domain, health all-pass/failures, orchestrator happy-path/noop/bad-sig-blocked/hash-mismatch-blocked/migration-failure-rollback/health-failure-rollback, filename+URL gen, signed-manifest roundtrip, upload-is-HUMAN-REQUIRED). CLI smoke: signed latest.json parses+verifies, decision from below-min = required.
 - **HUMAN REQUIRED**: Windows WiX build/run + native E2E; production update-signing keypair (offline); Authenticode cert + SmartScreen; upload artifacts to CloudFront/S3. **DECISION REQUIRED**: PostgreSQL bundling (EDB silent prereq — proposed) vs embedded; update-check cadence.
+
+## Implemented (2026-06) — Architecture Correction + Public roofspan.io Marketing Website
+- **Architecture invariant LOCKED** (added to top of `PRD.md` + `COMMERCIAL_ARCHITECTURE.md`): RoofSpan Office is a **locally installed Windows app with a browser-based local UI**; there is **NO centrally hosted RoofSpan operational web app**. Three surfaces: (1) `roofspan.io` public marketing/download; (2) RoofSpan Office (local FastAPI + local PostgreSQL, authoritative for all users/auth/roles/business data, incl. subscription/seat/billing admin); (3) RoofSpan Mobile → Secure Relay → customer's local Office install. Central services = commercial metadata only, never the business DB.
+- **Surface selector** (`frontend/src/App.js`): build-time `REACT_APP_SURFACE` — `office` (default; local install: `/` = Office login→dashboard, no marketing/download) vs `site` (public: `/` = marketing homepage). ONE codebase, two never-merged deployments. Preview currently set to `site`. Office dashboard moved `/`→`/dashboard`; catch-all redirects per surface. Local Office UI unchanged when `office`.
+- **Public website** (`frontend/src/site/`): `SiteHeader.jsx` (sticky logo + Features/How It Works/Pricing/Download/Mobile anchor nav + Coming-Soon pill + responsive hamburger — NO "Sign In to Web App"), `MarketingSite.jsx` (Hero "Roofing operations, connected from office to field." + Coming Soon; Features x6; How It Works x4 local-install messaging; Architecture strip "Your RoofSpan system. Your company's operation."; Pricing; Windows Download; Mobile), `SiteFooter.jsx`. On-brand slate/orange, Manrope/IBM Plex, reuses existing brand assets.
+- **Pricing** (public): $49 per user/month, 5-user minimum, Starting at $245/month, single product, high-level inclusions (no invented tiers/trials/annual).
+- **Windows download** (public): `RoofSpan Office for Windows`; uses centralized `frontend/src/lib/config.js` — direct CloudFront `https://downloads.roofspan.io/latest/RoofSpanSetup.exe` when `REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true`, else **Coming Soon** (currently false). Never proxied through any backend.
+- **Local Office UI corrections**: removed the public marketing Windows-download block from `Login.jsx` and the "RoofSpan Desktop" download card from `admin/Subscription.jsx`. Deleted now-unused `components/WindowsDownload.jsx`. Subscription/licensing/billing untouched.
+- **SEO**: `index.html` title `RoofSpan | Roofing Operations Software` + description meta.
+- **Verified**: production `yarn build` clean (pre-existing maplibre warning only); `config.test.js` 5/5; screenshots — public site desktop + mobile responsive + local Office login (clean) + owner login → `/dashboard` (Office sidebar + pages intact). No AWS/S3/CloudFront/DNS changed; no installer/updater/Control Plane/Relay/Mobile-runtime changes.
+- **HUMAN REQUIRED**: deploy `roofspan.io` from this frontend built with `REACT_APP_SURFACE=site`; set `REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true` once the installer is published. **DECISION REQUIRED**: none for the website.

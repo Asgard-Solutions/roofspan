@@ -15,7 +15,7 @@ const APPICON = "/brand/roofspan-appicon.png";
 const WORDMARK_LIGHT = "/brand/roofspan-wordmark-light.webp";
 
 const MAIN_NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
   { to: "/leads", label: "Leads", icon: Contact, testid: "nav-leads" },
   { to: "/map", label: "Map", icon: Map, testid: "nav-map" },
   { to: "/customers", label: "Customers", icon: Users2, testid: "nav-customers" },

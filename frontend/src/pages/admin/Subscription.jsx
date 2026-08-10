@@ -4,7 +4,6 @@ import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { RefreshCw, CreditCard, UserPlus, ShieldCheck, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
-import { WindowsDownload } from "@/components/WindowsDownload";
 
 const STATE_STYLES = {
   ACTIVE: { cls: "bg-emerald-50 text-emerald-700", Icon: CheckCircle2, color: "text-emerald-600" },
@@ -196,10 +195,6 @@ export default function Subscription() {
         <p className="mt-4 max-w-3xl text-xs text-slate-400" data-testid="seat-bounds-note">
           Licensed seats range from {sub?.min_seats ?? 5} to {sub?.max_seats ?? 50}. The Owner counts as a licensed seat; deactivated users do not consume a seat.
         </p>
-
-        <div className="mt-8 max-w-3xl">
-          <WindowsDownload variant="card" />
-        </div>
       </div>
     </div>
   );

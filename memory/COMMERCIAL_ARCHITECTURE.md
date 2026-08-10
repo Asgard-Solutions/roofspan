@@ -1,5 +1,17 @@
 # RoofSpan Commercial Distribution, Licensing, Updates & Secure Connectivity — Implementation Proposal (v1, ARCHITECTURE ONLY)
 
+> **ARCHITECTURE INVARIANT (2026-06, LOCKED).** RoofSpan Office is a **locally installed Windows
+> application with a browser-based local UI**. There is **NO centrally hosted RoofSpan operational
+> web application** — customers never log into a central website to run their roofing business.
+> `roofspan.io` is the **public marketing/download website only**. `downloads.roofspan.io` (CloudFront →
+> private S3) distributes the installer/updates. RoofSpan **Mobile** clients connect through the RoofSpan
+> **Secure Relay** to the customer's **local RoofSpan Office installation** (local FastAPI → local
+> PostgreSQL, which stays authoritative for all users, auth, roles, and business data). Central services
+> (Control Plane / Relay / Billing sync / entitlements / pairing / version policy / distribution) hold
+> commercial metadata only and are **never** the roofing-business database. When docs say "web app" they
+> mean this **local browser UI** ("RoofSpan Office UI"), not a hosted SaaS app.
+
+
 Status: **PROPOSAL — awaiting review/approval. No implementation started.**
 Date: 2026-06
 Governing principle: **K.I.S.S.** — local-first business data is unchanged; central services are a thin commercial layer.
