@@ -29,6 +29,10 @@ locals {
     { name = "RELAY_ENV", value = "production" },
     { name = "RELAY_REGISTRY", value = "valkey" },
     { name = "RELAY_VALKEY_URL", value = "rediss://${aws_elasticache_replication_group.valkey.primary_endpoint_address}:6379" },
+    # RELAY_NODE_ID is intentionally NOT a static env var (it would be identical across all tasks).
+    # Each relay task derives a UNIQUE node id at runtime from the ECS Task Metadata endpoint
+    # (ECS_CONTAINER_METADATA_URI_V4 -> TaskARN, injected automatically on Fargate platform >= 1.4.0);
+    # see backend/relay/config.py::_resolve_node_id. Startup fails fast if a unique id can't be established.
   ]
 }
 

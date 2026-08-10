@@ -8,6 +8,8 @@ import os
 
 from fastapi import FastAPI
 
+from relay import config as relay_config
+
 app = FastAPI(title="RoofSpan Secure Relay", version="1")
 
 # Wire the existing relay WebSocket route(s) if the server module exposes a router/app.
@@ -16,6 +18,20 @@ try:  # pragma: no cover - depends on relay.server shape
     app.include_router(relay_router)
 except Exception:  # noqa: BLE001
     pass
+
+
+@app.on_event("startup")
+async def on_startup():
+    # Production must NOT silently run memory mode / lack a unique node id — fail clearly.
+    relay_config.require_production_config()
+    from relay.hub import hub
+    await hub.startup()
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    from relay.hub import hub
+    await hub.shutdown()
 
 
 @app.get("/api/relay/health")

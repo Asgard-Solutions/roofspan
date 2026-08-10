@@ -21,16 +21,17 @@ from control_plane import service as cp_service
 from control_plane.db import SessionLocal
 from control_plane.models import Installation, Subscription, MobileDevice
 from licensing import reqsig
+from relay import config as RC
 from relay import protocol as P
-from relay.hub import hub, InstallationConn, RelayUnavailable
+from relay.hub import hub, InstallationConn, RelayUnavailable, RelayPayloadTooLarge
 
 log = logging.getLogger("roofspan.relay")
 
 router = APIRouter(prefix="/api/relay", tags=["relay"])
 
-REQUEST_TIMEOUT = float(os.environ.get("RELAY_REQUEST_TIMEOUT", "30"))
-MAX_JSON_BYTES = int(os.environ.get("RELAY_MAX_JSON_BYTES", str(2 * 1024 * 1024)))       # 2 MB JSON
-MAX_UPLOAD_BYTES = int(os.environ.get("RELAY_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))  # 20 MB file
+REQUEST_TIMEOUT = RC.REQUEST_TIMEOUT
+MAX_JSON_BYTES = RC.MAX_JSON_BYTES       # JSON body ceiling
+MAX_UPLOAD_BYTES = RC.MAX_UPLOAD_BYTES   # file ceiling
 
 
 def _b64_len(s: str) -> int:
@@ -115,7 +116,7 @@ async def installation_ws(ws: WebSocket):
                 return
 
         conn = InstallationConn(installation_id, ws)
-        hub.register(conn)
+        await hub.register(conn)
         await _send(ws, {"type": P.T_READY, "protocol": P.PROTOCOL_VERSION})
 
         while True:
@@ -133,7 +134,7 @@ async def installation_ws(ws: WebSocket):
         log.warning("relay installation ws error: %s", str(e)[:200])
     finally:
         if conn is not None:
-            hub.unregister(installation_id, conn)
+            await hub.unregister(installation_id, conn)
 
 
 @router.websocket("/mobile")
@@ -216,6 +217,8 @@ async def mobile_ws(ws: WebSocket):
                                  "headers": resp.get("headers", {}), "body": resp.get("body", "")})
             except RelayUnavailable:
                 await _send(ws, {"type": P.T_ERROR, "request_id": rid, "code": "tunnel_unavailable"})
+            except RelayPayloadTooLarge:
+                await _send(ws, {"type": P.T_ERROR, "request_id": rid, "code": "payload_too_large"})
             except TimeoutError:
                 await _send(ws, {"type": P.T_ERROR, "request_id": rid, "code": "request_timeout"})
             # Sanitized operational log — no bodies, no auth tokens, id-free route category.

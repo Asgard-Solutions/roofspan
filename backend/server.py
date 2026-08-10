@@ -107,11 +107,15 @@ async def on_startup():
         await init_control_plane()
     except Exception as e:
         logger.warning("Control Plane init skipped/failed (non-fatal for the local installation): %s", e)
+    from relay.hub import hub as relay_hub
+    await relay_hub.startup()
     logger.info("RoofSpan Office backend ready")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    from relay.hub import hub as relay_hub
+    await relay_hub.shutdown()
     await engine.dispose()
 
 
