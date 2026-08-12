@@ -128,6 +128,10 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > iteration_12 100% (Reports + finance RBAC + setup gate + phase-artifact removal). Awaiting review
 > before P1.
 
+> **P1 STATUS (2026-06):** in progress (report+pause after each item). **P1-1 COMPLETE & VERIFIED** —
+> Office Mobile Devices admin page (generate QR + numeric code + expiry countdown, paired-device list,
+> revoke; sensitive-role only). Testing agent iteration_13 = 100%; `yarn build` clean.
+
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →
    wizard; init → login; setup endpoints refuse after init).

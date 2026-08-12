@@ -494,3 +494,20 @@ initialized install; no Phase 4 copy). `yarn build` clean.
 recovery DESIGN, packaging config, restore model, full Office regression suite) and P2. No AWS/Terraform/
 Mobile-expansion/website/installer-publish work performed.
 
+
+## RoofSpan Office — P1-1: Office Mobile Pairing Administration UI (2026-06)
+- **Page** `frontend/src/pages/admin/MobileDevices.jsx` (route `/admin/devices`, `RequireSensitive`; nav
+  `nav-admin-devices` in AppShell ADMIN_NAV, sensitive-roles only). Uses the EXISTING Office pairing
+  proxy endpoints — no new backend: `POST /api/admin/mobile/pair` (QR payload + 6-digit numeric code +
+  expiry), `GET /api/admin/mobile/devices` (handles list OR `{devices:[]}`), `POST /api/admin/mobile/
+  devices/{id}/revoke`.
+- **Features:** Generate pairing code → QR (`qrcode.react` `QRCodeSVG` of the no-secrets qr_payload) +
+  formatted numeric code + live expiry countdown; paired-device table (label/status/paired/last-seen) +
+  Refresh; Revoke with confirm dialog (status → REVOKED). Graceful "pairing service unavailable" state
+  (local Office unaffected). Copy states pairing is NOT sign-in (field users still log in with their own
+  account). Dep added: `qrcode.react@4.2.0` (yarn, `--ignore-engines`).
+- **Verified:** backend curl (pair → resolve → device listed → revoke); frontend testing agent
+  iteration_13 = 100% (owner generate/QR/countdown/refresh/revoke; **Sales RBAC** — nav hidden + direct
+  `/admin/devices` shows Access restricted, page not rendered); `yarn build` clean. No new persistent
+  credentials. Not started: P1-2..P1-6. No AWS/Mobile-field/website work.
+

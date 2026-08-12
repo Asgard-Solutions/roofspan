@@ -25,6 +25,7 @@ import Roles from "@/pages/admin/Roles";
 import AuditLog from "@/pages/admin/AuditLog";
 import BackupStatus from "@/pages/admin/BackupStatus";
 import Subscription from "@/pages/admin/Subscription";
+import MobileDevices from "@/pages/admin/MobileDevices";
 import Settings from "@/pages/admin/Settings";
 
 // RoofSpan Office — the LOCAL browser UI packaged with the Windows installation. This is NOT a hosted
@@ -93,6 +94,7 @@ function App() {
               <Route path="/admin/audit" element={<RequireSensitive><AuditLog /></RequireSensitive>} />
               <Route path="/admin/backups" element={<RequireSensitive><BackupStatus /></RequireSensitive>} />
               <Route path="/admin/subscription" element={<RequireSensitive><Subscription /></RequireSensitive>} />
+              <Route path="/admin/devices" element={<RequireSensitive><MobileDevices /></RequireSensitive>} />
               <Route path="/admin/settings" element={<RequireSensitive><Settings /></RequireSensitive>} />
             </Route>
           </Routes>
