@@ -98,10 +98,15 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
   (sensitive-gated, proxy to CP). **No Office UI page** to generate a pairing code/QR, list devices, or
   revoke. P1.
 
-### Office-side Secure Relay client — PARTIAL
+### Office-side Secure Relay client — SEPARATE CONNECTOR SERVICE (correct architecture)
 - `relay/tunnel_client.py::InstallationTunnel` (outbound, reconnect, challenge-response) exists and is
-  tested, but **is never started by the Office backend** (`server.py` starts only the relay *hub/server*).
-  A packaged local Office must launch the outbound tunnel so Mobile can reach it. P1.
+  tested. **Correction (2026-06):** it is intentionally NOT started inside the Office FastAPI backend.
+  The desired architecture is a SEPARATE **RoofSpan Relay Connector** Windows service/process with a
+  dedicated entrypoint `windows/winbuild/relay_entry.py` (loads the C1 installation identity, opens the
+  outbound WSS tunnel, forwards to the local backend at 127.0.0.1:8001, reconnects) + a PyInstaller spec.
+  P1 = AUDIT the Windows service/installer wiring: if the connector service is correctly installed and
+  auto-started (WiX service `RelayConnector`), preserve it; if incomplete, finish the separate-service
+  integration. Do NOT merge the tunnel into FastAPI just to satisfy wording.
 
 ### Packaging / runtime readiness — PARTIAL
 - Static serve present; but: prod must not run the dev owner seed, must not depend on preview URLs, must use
@@ -116,6 +121,12 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 - Preview URL in `backend/.env` (`APP_BASE_URL`) + `frontend/.env` (`REACT_APP_BACKEND_URL`) — dev-only.
 
 ## Completion backlog (ordered)
+
+> **P0 STATUS (2026-06): COMPLETE & VERIFIED.** Items 1–8 implemented and tested — fresh-install E2E
+> pytest `tests/test_onboarding.py` PASS (bootstrap, restricted pre-payment session, restart-safety,
+> mock 5-seat activation, Owner+4 users / 6th blocked / +1 seat → 6th ok) + frontend testing agent
+> iteration_12 100% (Reports + finance RBAC + setup gate + phase-artifact removal). Awaiting review
+> before P1.
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →
@@ -133,9 +144,11 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 
 ### P1 — required for initial production release
 9. Office Mobile-pairing UI (generate code/QR, device list, revoke) over existing endpoints.
-10. Start the outbound Relay tunnel client from Office backend (safe when cloud unavailable; reconnect).
-11. Forgotten-Owner secure recovery path for a local install (designed, not an insecure reset) — or a
-    documented recovery decision.
+10. Audit/finish the SEPARATE **RoofSpan Relay Connector Windows service** (`windows/winbuild/relay_entry.py`
+    + WiX `RelayConnector` service auto-start; outbound-only, reconnect, safe when cloud unavailable). Do
+    NOT merge the tunnel into the FastAPI backend.
+11. Forgotten-Owner secure recovery path for a local install — **DESIGN REQUIRED: STOP and present secure
+    options** (no invented insecure email reset).
 12. Production packaging config: no dev seed, no preview URLs, local Postgres + persistent paths, config
     template, auto-start services readiness.
 13. Backups: confirm a usable in-Office or clearly-documented restore path (native validation HUMAN REQUIRED).

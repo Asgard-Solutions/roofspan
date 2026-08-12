@@ -19,6 +19,8 @@ from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
+from routers import setup as setup_router, reports as reports_router
+import onboarding
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -55,6 +57,8 @@ app.include_router(purchasing.router)
 app.include_router(cron.router)
 app.include_router(admin_ops.router)
 app.include_router(mobile.router)
+app.include_router(setup_router.router)
+app.include_router(reports_router.router)
 app.include_router(licensing_router.router)
 if licensing_config.LICENSING_MODE == "dev":
     from routers import licensing_dev
@@ -76,7 +80,20 @@ app.add_middleware(
 )
 
 
+def _owner_seed_enabled() -> bool:
+    """Production packaged Office must NOT auto-create/replace the Owner from env on every startup.
+    The env seed is a dev/test/recovery mechanism only. Default: enabled in dev licensing mode,
+    disabled otherwise; explicit ROOFSPAN_OWNER_SEED overrides."""
+    val = os.environ.get("ROOFSPAN_OWNER_SEED")
+    if val is not None:
+        return val.strip().lower() in ("1", "true", "enabled", "yes")
+    return licensing_config.LICENSING_MODE == "dev"
+
+
 async def seed_owner():
+    if not _owner_seed_enabled():
+        logger.info("Owner env seed disabled (production onboarding uses the first-run setup wizard)")
+        return
     email = os.environ.get("ADMIN_EMAIL", "").lower().strip()
     password = os.environ.get("ADMIN_PASSWORD", "")
     name = os.environ.get("ADMIN_NAME", "Owner")
@@ -101,6 +118,8 @@ async def on_startup():
     # no manual SQL). Fresh DB builds from full history; existing DB migrates forward non-destructively.
     await asyncio.to_thread(run_migrations)
     await seed_owner()
+    async with SessionLocal() as db:
+        await onboarding.ensure_backfill(db)
     async with SessionLocal() as db:
         await licensing_service.bootstrap(db)
     try:

@@ -123,6 +123,5 @@ async def dashboard_summary(user: User = Depends(get_current_user), db: AsyncSes
         "users": {"total": total_users, "active": active_users},
         "audit_total": audit_total,
         "recent_activity": recent,
-        "phase": "Office Phase 1 — Foundation",
         "current_user": {"email": user.email, "role": user.role, "full_name": user.full_name},
     }

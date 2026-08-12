@@ -437,3 +437,60 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Tests: added `mobile/src/tests/architecture.node.test.js` (11 assertions) enforcing: no `WEB_APP_URL`, `EXPO_PUBLIC_WEB_APP_URL` not required for billing (regression), no "Manage Subscription on the Web" button, SubscriptionLock points to RoofSpan Office + Windows computer + administrator with "Try Again", copy has no "on the web"/"web app", More billing card role-gated + informational, no external billing link, no IAP/billing SDK. Existing `pairing.node.test.js` (11) still green; all changed files babel-parse clean.
 - **Not changed (per scope):** roofspan.io marketing/features/pricing/Windows-download behavior; `downloads.roofspan.io` installer infrastructure; RoofSpan Office Subscription/Billing UI (`frontend/src/pages/admin/Subscription.jsx`) + Stripe checkout/portal entry; licensing logic; Stripe pricing; AWS/Terraform/download infrastructure. No Apple/Google billing added.
 - **HUMAN REQUIRED:** native Mobile device verification (Expo Go / device build) of the SubscriptionLock "Try Again" screen, the owner/admin informational Billing & account card, and field-user behavior. No native billing SDK to add.
+
+## RoofSpan Office — P0 Completion: First-Run Onboarding + Reports + Artifact Cleanup (2026-06)
+Authoritative backlog = `memory/OFFICE_COMPLETION_AUDIT.md`. RoofSpan Office is the sole active
+workstream until CODE-COMPLETE. This entry records P0 (items 1–8), implemented & verified.
+
+**Decisions (locked by product owner):** Option B restricted Owner login before payment; mock billing
+for dev/test with a REAL 5-seat entitlement (not the 1000-seat dev default); build a real Reports page.
+
+**First-run onboarding (state machine, durable/restart-safe):**
+- `backend/onboarding.py`: states UNINITIALIZED → OWNER_CREATED → PAYMENT_PENDING → ACTIVE, stored in
+  `app_config` key `onboarding`. `ensure_backfill()` marks any install that already has users as ACTIVE
+  (legacy DB + dev owner seed never re-enter setup); an empty install is UNINITIALIZED. 5s in-process
+  snapshot for the guard.
+- `backend/routers/setup.py` (`/api/setup`, allowlisted): `GET /status` (unauth, non-sensitive labels
+  setup_required/owner_created/payment_required/initialized); `POST /bootstrap` (advisory-lock race-safe,
+  creates company_profile + first Owner=seat#1, refuses once initialized → 409, returns Bearer token);
+  `POST /checkout` (mandatory initial 5-seat/$245 via provider abstraction `checkout_url`, idempotent);
+  `GET /payment-status` (on paid → dev 5-seat entitlement via `set_dev_subscription` + `service.refresh`
+  → ACTIVE); `POST /dev/pay` (mock-only simulate paid).
+- **Restricted pre-payment session enforced SERVER-SIDE**: `SubscriptionGuardMiddleware` now has an
+  onboarding gate that blocks ALL business `/api/*` (403 `setup_required`) until state==ACTIVE; only the
+  setup/auth/subscription/license/billing/dev/control-plane/relay allowlist is reachable. The lifecycle
+  subscription guard (ACTIVE/GRACE/SUSPENDED/CANCELLED) is unchanged and runs after the onboarding gate.
+- **Frontend**: `pages/Setup.jsx` wizard (Company+Owner → mandatory 5-seat checkout → payment-pending
+  with Open Checkout / Check Status / dev-simulate; sign-in-to-resume when returning during PAYMENT_PENDING).
+  `App.js` `SetupGate` routes uninitialized → `/setup`, initialized away from `/setup`. `$49/seat/mo`,
+  5-seat min shown; no card data handled by RoofSpan.
+
+**Production Owner-seed safety:** `seed_owner()` gated by `ROOFSPAN_OWNER_SEED` (default enabled only in
+`LICENSING_MODE=dev`; production template sets it disabled). Prod first-run uses the wizard; env seed is
+dev/test/recovery only and never silently creates/replaces a customer Owner every startup.
+
+**Reports (P0-E):** `backend/routers/reports.py` `GET /api/reports/summary` — Sales Pipeline (leads by
+status/active/converted), Jobs by status, Inventory low-stock (threshold-based), and **Finance
+(invoice revenue: invoiced/paid/outstanding) only for MANAGE_ROLES (owner/administrator/office); Sales
+excluded**. `pages/Reports.jsx` replaces the dead `/reports` Placeholder (still in nav).
+
+**Dev/phase artifact cleanup (P0-F):** removed `"phase": "Office Phase 1 — Foundation"` from
+dashboard_summary + Dashboard.jsx; removed "…arrive in Phase 4" from Jobs.jsx. Placeholder.jsx now unused.
+
+**Relay audit correction:** the outbound Relay tunnel is a SEPARATE Windows connector service
+(`windows/winbuild/relay_entry.py` + PyInstaller/WiX `RelayConnector`), NOT started inside FastAPI. P1
+audits/finishes that service wiring. (Audit doc updated.)
+
+**Verified:** `backend/tests/test_onboarding.py` fresh-install E2E PASS (isolated throwaway DB: uninit →
+bootstrap → restricted session blocked → 5-seat checkout → restart-safe → mock pay → ACTIVE 5 seats,
+Owner=1/available=4 → users 2–5 ok / 6th 422 / +1 seat → 6th ok). 65 licensing/seat/guard/etc tests pass
+(1 unrelated failure = network timeout to the external preview URL). Frontend testing agent iteration_12
+= 100% (login+dashboard no phase text; Reports sections + finance RBAC for owner vs sales; /setup gate on
+initialized install; no Phase 4 copy). `yarn build` clean.
+
+**Run the fresh-install E2E:** `cd /app/backend && python -m pytest tests/test_onboarding.py -o addopts=""`
+
+**Not done (awaiting review):** P1 (Mobile-pairing UI, Relay connector service audit, forgotten-Owner
+recovery DESIGN, packaging config, restore model, full Office regression suite) and P2. No AWS/Terraform/
+Mobile-expansion/website/installer-publish work performed.
+
