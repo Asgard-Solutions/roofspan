@@ -25,42 +25,60 @@
       <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
                                               SuppressOptionsUI="yes"
                                               LicenseUrl="https://roofspan.io/eula" />
+      <!-- Minimal BAFunctions native hook (windows\bafunctions\). Keeps the stock WixStdBA UI; its ONLY job
+           is to run BEFORE the chain (OnDetectComplete): if a NEW RoofSpan-managed PostgreSQL will be
+           installed (NOT RoofSpanPgPresent) AND no enterprise override was supplied, it CSPRNG-generates
+           the superuser/bootstrap password into the Hidden PgSuperPassword variable so the SAME value can
+           be handed to BOTH the EDB installer (--superpassword) and the RoofSpan MSI (PG_SUPERPASSWORD).
+           This is the smallest officially-supported WiX v4 mechanism to seed a random hidden Burn variable
+           before package execution (WixStandardBootstrapperApplication has no built-in RNG). HUMAN REQUIRED
+           to compile on Windows (see windows\bafunctions\README.md). -->
+      <Payload Id="RoofSpanBaFunctions" SourceFile="$(var.BaFunctionsDll)" bal:IsBAFunctions="yes" />
     </BootstrapperApplication>
 
-    <!-- Detect an existing (RoofSpan-managed or compatible) PostgreSQL install so we do NOT reinstall. -->
-    <util:RegistrySearch Id="PgPresentSearch" Root="HKLM"
-                         Key="SOFTWARE\PostgreSQL\Installations"
-                         Result="exists" Variable="PgPresent" />
+    <!-- Detect ONLY the DEDICATED RoofSpan-managed PostgreSQL service. An unrelated PostgreSQL install must
+         NOT suppress installing RoofSpan's own instance (we never silently attach to a foreign database).
+         The service registry key exists iff a prior RoofSpan install created the RoofSpanPostgreSQL service. -->
+    <util:RegistrySearch Id="RoofSpanPgServiceSearch" Root="HKLM"
+                         Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
+                         Result="exists" Variable="RoofSpanPgPresent" />
 
     <!-- Overridable at build/runtime; no default binary is committed. -->
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
-    <!-- EDB superpassword for enterprise/external PostgreSQL, supplied at install time (Burn variable) —
-         NEVER committed. Hidden so Burn does not log it; passed through to the MSI as the Hidden+Secure
-         PG_SUPERPASSWORD property (see the MsiPackage below). EMPTY by default: a normal RoofSpan-managed
-         fresh install needs NO DBA input — RoofSpanBootstrap.exe generates its own temporary bootstrap
-         credential locally. A non-empty value is the enterprise override for an existing PostgreSQL. In
-         all cases RoofSpan first-run creates its own least-privilege 'roofspan' role + database with a
-         SEPARATE generated application password. -->
+    <!-- Compiled BAFunctions DLL (supplied by build.ps1 -d BaFunctionsDll=...). -->
+    <!-- Dedicated RoofSpan-owned localhost PostgreSQL port (avoids colliding with an unrelated PostgreSQL
+         that may already own 5432). Handed to the EDB install (--serverport) AND the MSI (PG_PORT) so the
+         deployed DATABASE_URL and the bootstrap connection all agree. -->
+    <Variable Name="PgPort" Type="string" Value="5442" bal:Overridable="yes" />
+    <!-- PostgreSQL superuser/bootstrap credential. Hidden (Burn REDACTS it in logs, including on the EDB
+         command line) and NOT persisted by Burn. Overridable so the BAFunctions hook can seed it. It is
+         ESTABLISHED BEFORE PostgreSQL is installed: for a RoofSpan-managed fresh install the BAFunctions
+         hook CSPRNG-generates it in OnDetectComplete (before the chain); for an existing external/enterprise
+         PostgreSQL a DBA supplies it via override. NEVER committed. RoofSpan first-run then creates its own
+         least-privilege 'roofspan' role + database with a SEPARATE generated application password. -->
     <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
-      <!-- 1) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
-              uninstalled by RoofSpan (protects the customer's database service + data). -->
+      <!-- 1) RoofSpan-managed PostgreSQL prerequisite (silent, unattended, dedicated service + port).
+              Installed ONLY when RoofSpan's own instance is absent; an unrelated PostgreSQL never
+              suppresses it. Permanent = never uninstalled by RoofSpan (protects the DB service + data).
+              PgSuperPassword is Hidden so Burn REDACTS it in the log even here on the command line. -->
       <ExePackage Id="PostgreSQLPrereq"
-                  DisplayName="PostgreSQL (RoofSpan prerequisite)"
+                  DisplayName="PostgreSQL (RoofSpan-managed prerequisite)"
                   SourceFile="[PostgresInstaller]"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT PgPresent"
-                  DetectCondition="PgPresent"
-                  InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL"
+                  InstallCondition="NOT RoofSpanPgPresent"
+                  DetectCondition="RoofSpanPgPresent"
+                  InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL --serverport [PgPort]"
                   Compressed="no" />
 
-      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). The (optional) enterprise superuser credential
-              is handed off to the MSI's Hidden+Secure PG_SUPERPASSWORD property; empty on a normal
-              RoofSpan-managed fresh install (bootstrap self-generates a temporary credential). -->
+      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). The superuser credential (Burn-generated for a
+              RoofSpan-managed install, or the enterprise override) is handed off to the MSI's Hidden+Secure
+              PG_SUPERPASSWORD property; the dedicated port is handed off via PG_PORT. -->
       <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes">
         <MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />
+        <MsiProperty Name="PG_PORT" Value="[PgPort]" />
       </MsiPackage>
     </Chain>
   </Bundle>

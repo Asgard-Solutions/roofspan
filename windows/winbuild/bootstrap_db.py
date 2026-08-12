@@ -1,26 +1,32 @@
-"""First-install local PostgreSQL + deployed-config bootstrap for RoofSpan Office.
+"""First-install local PostgreSQL provisioning + deployed-config bootstrap for RoofSpan Office.
 
 Runs ONCE during installation (WiX deferred custom action `RoofSpanBootstrap`, sequenced BEFORE
-StartServices), so RoofSpanBackend never starts before its database credentials exist. It:
+StartServices), so RoofSpanBackend never starts before its database credentials exist.
 
-  1. resolves the PostgreSQL *superuser* (bootstrap) credential used only to provision:
-       - Enterprise / external PostgreSQL  -> a hidden/secure `PgSuperPassword` MUST be supplied
-         (Burn -> MSI PG_SUPERPASSWORD -> deferred CA argv). Empty here => FAIL CLOSED.
-       - RoofSpan-managed local PostgreSQL  -> no DBA input required: a cryptographically random
-         *temporary* bootstrap password is generated locally. It is used only for provisioning and
-         is neither persisted to RoofSpan config nor logged nor reused as the application password.
-  2. generates a SEPARATE, unique, random local DB *application* password (never committed/logged),
-  3. creates/configures the least-privilege `roofspan` role + `roofspan` database,
-  4. renders the shipped roofspan.env TEMPLATE into the DEPLOYED
+CREDENTIAL FLOW (corrected — the superuser credential must exist BEFORE PostgreSQL is installed):
+  * The RoofSpan Burn bootstrapper (BAFunctions hook, `windows/bafunctions/`) generates a cryptographically
+    random PostgreSQL *superuser/bootstrap* password into the Hidden Burn variable `PgSuperPassword`
+    BEFORE the EDB PostgreSQL ExePackage runs, for a NEW RoofSpan-managed install; an enterprise/external
+    PostgreSQL supplies its own explicit `PgSuperPassword`. The SAME hidden value is handed to (a) the EDB
+    installer via `--superpassword` and (b) this MSI via `PG_SUPERPASSWORD` -> deferred-CA argv.
+  * This bootstrap therefore RECEIVES an already-established superuser credential and uses it ONLY to
+    authenticate and provision. It NEVER invents a brand-new postgres credential after PostgreSQL is
+    installed (that circular superuser-reset path has been removed), and if the credential is
+    unexpectedly missing it FAILS CLOSED.
+
+It then:
+  1. generates a SEPARATE, unique, random local DB *application* password (never committed/logged),
+  2. creates the least-privilege `roofspan` role + `roofspan` database (authenticating as postgres),
+  3. renders the shipped roofspan.env TEMPLATE into the DEPLOYED
      C:\\ProgramData\\RoofSpan\\config\\roofspan.env with the real local DATABASE_URL — ONLY after
      provisioning succeeds.
 
-Fail-closed: any provisioning error (or a missing required credential) returns a non-zero exit code so
-the MSI custom action fails and the install rolls back; the deployed config is never written on failure.
-Idempotent / upgrade-safe: if a deployed config already exists it is PRESERVED (neither credential is
-regenerated). The temporary bootstrap password is not retained after provisioning (only PostgreSQL itself
-may retain the postgres account password). Native psql/role/db execution is HUMAN REQUIRED; the pure
-decision/render logic below is unit-tested in-container.
+Fail-closed: a missing required credential or any provisioning error returns a non-zero exit code so the
+MSI custom action fails and the install rolls back; the deployed config is never written on failure. The
+bootstrap/superuser password is NEVER persisted to RoofSpan config or logged (only PostgreSQL itself may
+retain the postgres account password). Idempotent / upgrade-safe: if a deployed config already exists it
+is PRESERVED (neither credential is regenerated). Native psql/role/db execution is HUMAN REQUIRED; the
+pure decision/render logic below is unit-tested in-container.
 """
 from __future__ import annotations
 
@@ -38,10 +44,11 @@ DEFAULT_TEMPLATE = r"C:\Program Files\RoofSpan Office\config-templates\roofspan.
 DEFAULT_DEPLOYED = r"C:\ProgramData\RoofSpan\config\roofspan.env"
 DB_NAME = "roofspan"
 DB_ROLE = "roofspan"
-# RoofSpan installs its own dedicated PostgreSQL service (bundle.wxs --servicename). We only ever
-# provision a PostgreSQL instance we recognise as RoofSpan-managed; an unrelated existing PostgreSQL is
-# NEVER silently adopted (an explicit superuser credential is required for that).
-ROOFSPAN_PG_SERVICE = "RoofSpanPostgreSQL"
+DB_HOST = "127.0.0.1"
+# Dedicated RoofSpan-owned localhost PostgreSQL port. RoofSpan installs its OWN PostgreSQL service even
+# when an unrelated PostgreSQL is present, so it must NOT assume 5432 is free. Kept consistent with the
+# EDB `--serverport` (bundle.wxs PgPort) and the deployed DATABASE_URL (roofspan.env.template).
+DEFAULT_PG_PORT = 5442
 
 
 class BootstrapError(RuntimeError):
@@ -52,34 +59,27 @@ class BootstrapError(RuntimeError):
 # Credential logic (pure, unit-tested)
 # --------------------------------------------------------------------------------------------------
 def generate_db_password(nbytes: int = 32) -> str:
-    """Random, unique-per-installation local DB *application* password (URL-safe, no shell-hostile chars)."""
+    """Random, unique-per-installation local DB *application* password (URL-safe, no shell-hostile chars).
+
+    Separate from the superuser/bootstrap credential; this is the ONLY password persisted (in the
+    deployed DATABASE_URL for the least-privilege `roofspan` role)."""
     return secrets.token_urlsafe(nbytes)
 
 
-def generate_bootstrap_password(nbytes: int = 32) -> str:
-    """Random *temporary* PostgreSQL superuser/bootstrap password for a fresh RoofSpan-managed instance.
+def require_bootstrap_password(supplied_super_pw: str) -> str:
+    """Return the PostgreSQL superuser/bootstrap credential handed off by the installer.
 
-    Distinct from the application password, used only for provisioning, never persisted to RoofSpan
-    config and never logged."""
-    return secrets.token_urlsafe(nbytes)
-
-
-def resolve_bootstrap_password(supplied_super_pw: str, roofspan_managed: bool) -> tuple[str, bool]:
-    """Return (bootstrap_superuser_password, generated_flag) under the hybrid model.
-
-    - A supplied (enterprise/override) credential always wins, regardless of managed/unmanaged.
-    - RoofSpan-managed fresh install with NO supplied credential -> generate a temporary one.
-    - External/enterprise PostgreSQL with NO supplied credential -> FAIL CLOSED (BootstrapError).
-    """
-    supplied = (supplied_super_pw or "").strip()
-    if supplied:
-        return supplied, False
-    if roofspan_managed:
-        return generate_bootstrap_password(), True
-    raise BootstrapError(
-        "no PostgreSQL superuser credential supplied and no RoofSpan-managed PostgreSQL instance "
-        "detected; supply PgSuperPassword for the existing PostgreSQL instance"
-    )
+    It is REQUIRED: Burn generates+supplies it for a RoofSpan-managed install (before EDB runs) and an
+    external PostgreSQL supplies an explicit DBA credential. If it is missing/empty we FAIL CLOSED rather
+    than attempt to invent a new superuser credential after PostgreSQL is already installed."""
+    pw = (supplied_super_pw or "").strip()
+    if not pw:
+        raise BootstrapError(
+            "no PostgreSQL superuser credential was handed off by the installer; refusing to provision. "
+            "The Burn bootstrapper generates and passes PgSuperPassword before PostgreSQL is installed "
+            "(RoofSpan-managed), or an explicit DBA credential is required (external PostgreSQL)."
+        )
+    return pw
 
 
 # --------------------------------------------------------------------------------------------------
@@ -137,10 +137,15 @@ def _psql_from_registry() -> str | None:  # pragma: no cover (native winreg)
                     try:
                         with winreg.OpenKey(k, sub, 0, winreg.KEY_READ | view) as sk:
                             base, _ = winreg.QueryValueEx(sk, "Base Directory")
+                            svc = ""
+                            try:
+                                svc, _ = winreg.QueryValueEx(sk, "Service ID")
+                            except OSError:
+                                pass
                             psql = psql_path_from_base_dir(base)
                             if os.path.isfile(psql):
-                                # RoofSpan-branded install dirs sort first.
-                                (candidates.insert(0, psql) if "roofspan" in base.lower()
+                                # The RoofSpan-managed instance (service RoofSpanPostgreSQL) sorts first.
+                                (candidates.insert(0, psql) if "roofspan" in (svc + base).lower()
                                  else candidates.append(psql))
                     except OSError:
                         continue
@@ -160,71 +165,59 @@ def discover_psql() -> str:  # pragma: no cover (native)
 
 
 # --------------------------------------------------------------------------------------------------
-# RoofSpan-managed instance detection (native)
+# Provisioning (native; HUMAN REQUIRED). No superuser password reset — EDB already established the
+# superuser password during installation; we merely authenticate with it.
 # --------------------------------------------------------------------------------------------------
-def detect_roofspan_managed_pg() -> bool:  # pragma: no cover (native SCM query)
-    """True only if the dedicated RoofSpan-managed PostgreSQL service exists. An unrelated pre-existing
-    PostgreSQL is NOT treated as RoofSpan-managed (so it is never silently adopted)."""
-    try:
-        r = subprocess.run(["sc", "query", ROOFSPAN_PG_SERVICE], capture_output=True, text=True)
-        return r.returncode == 0
-    except OSError:
-        return False
-
-
-# --------------------------------------------------------------------------------------------------
-# Provisioning (native; HUMAN REQUIRED)
-# --------------------------------------------------------------------------------------------------
-def _psql(psql_path: str, super_password: str, sql: str, dbname: str = "postgres") -> None:  # pragma: no cover
+def _psql(psql_path: str, host: str, port: int, super_password: str, sql: str,
+          dbname: str = "postgres") -> None:  # pragma: no cover (native)
     env = {**os.environ, "PGPASSWORD": super_password}
-    subprocess.run([psql_path, "-h", "127.0.0.1", "-U", "postgres", "-d", dbname,
+    subprocess.run([psql_path, "-h", host, "-p", str(port), "-U", "postgres", "-d", dbname,
                     "-v", "ON_ERROR_STOP=1", "-c", sql], check=True, env=env)
 
 
-def provision_database(*, psql_path: str, super_password: str, db_password: str,
-                       set_superuser: bool = False) -> None:  # pragma: no cover (native)
-    """Create the least-privilege role + database if absent. For a freshly RoofSpan-provisioned instance
-    (set_superuser) the generated temporary superuser password is applied first. HUMAN REQUIRED on Windows."""
-    if set_superuser:
-        _psql(psql_path, super_password, f"ALTER USER postgres WITH PASSWORD '{super_password}';")
-    _psql(psql_path, super_password,
+def provision_database(*, psql_path: str, host: str, port: int, super_password: str,
+                       db_password: str) -> None:  # pragma: no cover (native)
+    """Create the least-privilege `roofspan` role + database if absent, authenticating as the existing
+    postgres superuser. HUMAN REQUIRED on Windows."""
+    _psql(psql_path, host, port, super_password,
           f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='{DB_ROLE}') "
           f"THEN CREATE ROLE {DB_ROLE} LOGIN PASSWORD '{db_password}'; END IF; END $$;")
-    _psql(psql_path, super_password, f"ALTER ROLE {DB_ROLE} WITH PASSWORD '{db_password}';")
-    exists = subprocess.run([psql_path, "-h", "127.0.0.1", "-U", "postgres", "-tAc",
+    _psql(psql_path, host, port, super_password, f"ALTER ROLE {DB_ROLE} WITH PASSWORD '{db_password}';")
+    exists = subprocess.run([psql_path, "-h", host, "-p", str(port), "-U", "postgres", "-tAc",
                              f"SELECT 1 FROM pg_database WHERE datname='{DB_NAME}'"],
                             env={**os.environ, "PGPASSWORD": super_password}, capture_output=True, text=True)
     if exists.stdout.strip() != "1":
-        _psql(psql_path, super_password, f"CREATE DATABASE {DB_NAME} OWNER {DB_ROLE};")
+        _psql(psql_path, host, port, super_password, f"CREATE DATABASE {DB_NAME} OWNER {DB_ROLE};")
 
 
 # --------------------------------------------------------------------------------------------------
 # Orchestration (testable via injected provision_fn)
 # --------------------------------------------------------------------------------------------------
-def run_bootstrap(*, supplied_super_pw: str, deployed_path: str, template_path: str,
-                  roofspan_managed: bool, psql_path: str, provision_fn=provision_database) -> int:
+def run_bootstrap(*, supplied_super_pw: str, deployed_path: str, template_path: str, psql_path: str,
+                  port: int = DEFAULT_PG_PORT, host: str = DB_HOST,
+                  provision_fn=provision_database) -> int:
     """Provision the DB then render the deployed config. FAIL CLOSED: config is written ONLY after
-    successful provisioning. Upgrade/repair (deployed config present) preserves both credentials."""
+    successful provisioning. Upgrade/repair (deployed config present) preserves both credentials and
+    regenerates nothing."""
     if os.path.isfile(deployed_path):
         return 0  # upgrade/repair: preserve creds + config; regenerate nothing
 
-    super_pw, generated = resolve_bootstrap_password(supplied_super_pw, roofspan_managed)
+    super_pw = require_bootstrap_password(supplied_super_pw)  # fail-closed if missing
     db_pw = generate_db_password()
     if db_pw == super_pw:  # defensive: the two credentials must never coincide
         raise BootstrapError("bootstrap and application passwords must be distinct")
 
     # Provision FIRST. Only render the deployed DATABASE_URL if provisioning succeeded.
-    provision_fn(psql_path=psql_path, super_password=super_pw, db_password=db_pw,
-                 set_superuser=generated)
+    provision_fn(psql_path=psql_path, host=host, port=port, super_password=super_pw, db_password=db_pw)
     write_deployed_config(template_path, deployed_path, db_pw)
     return 0
 
 
 def parse_args(argv) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="RoofSpanBootstrap", add_help=False)
-    # Empty default is VALID for a RoofSpan-managed fresh install (bootstrap self-generates); it is
-    # invalid for an external PostgreSQL (resolve_bootstrap_password fails closed).
+    # Handed off from Burn -> MSI PG_SUPERPASSWORD -> here. REQUIRED at provisioning time (empty fails closed).
     ap.add_argument("--pg-superpassword", dest="pg_superpassword", default="")
+    ap.add_argument("--pg-port", dest="pg_port", type=int, default=DEFAULT_PG_PORT)
     ap.add_argument("--template", default=os.environ.get("ROOFSPAN_CONFIG_TEMPLATE", DEFAULT_TEMPLATE))
     ap.add_argument("--deployed", default=os.environ.get("ROOFSPAN_DEPLOYED_CONFIG", DEFAULT_DEPLOYED))
     return ap.parse_args(argv)
@@ -233,12 +226,11 @@ def parse_args(argv) -> argparse.Namespace:
 def main(argv=None) -> int:  # pragma: no cover (native install-time orchestration)
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if os.path.isfile(args.deployed):
-        return 0  # upgrade/repair short-circuit (no detection / psql discovery needed)
+        return 0  # upgrade/repair short-circuit (no psql discovery needed)
     try:
-        managed = detect_roofspan_managed_pg()
         psql_path = discover_psql()
         return run_bootstrap(supplied_super_pw=args.pg_superpassword, deployed_path=args.deployed,
-                             template_path=args.template, roofspan_managed=managed, psql_path=psql_path)
+                             template_path=args.template, psql_path=psql_path, port=args.pg_port)
     except BootstrapError as e:
         log.error("RoofSpan DB bootstrap failed (fail-closed): %s", e)  # never log secret values
         return 2

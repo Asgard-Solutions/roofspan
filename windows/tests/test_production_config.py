@@ -21,7 +21,7 @@ def test_template_uses_production_modes():
 def test_template_local_runtime_targets():
     t = _read(TEMPLATE)
     assert "ROOFSPAN_LOCAL_API_URL=http://127.0.0.1:8001" in t
-    assert "127.0.0.1:5432/roofspan" in t      # local PostgreSQL only
+    assert "127.0.0.1:5442/roofspan" in t      # dedicated RoofSpan-managed local PostgreSQL port
     assert "__GENERATED_AT_FIRST_RUN__" in t   # DB password not shipped
 
 

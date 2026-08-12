@@ -10,6 +10,7 @@ param(
   [string]$Version = "",                                       # defaults to windows/VERSION
   [Parameter(Mandatory=$true)][string]$StageDir,               # from stage.ps1
   [Parameter(Mandatory=$true)][string]$PostgresInstaller,      # EDB PostgreSQL silent installer (.exe)
+  [Parameter(Mandatory=$true)][string]$BaFunctionsDll,         # compiled RoofSpan BAFunctions DLL (bafunctions\)
   [string]$SignCertThumbprint = "",                            # HUMAN REQUIRED for production
   [string]$UpdateSigningPrivateKey = "",                       # SEPARATE from entitlement keys; OFFLINE
   [string]$OutDir = ".\dist"
@@ -35,6 +36,9 @@ foreach ($p in $required) {
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."
 }
+if (-not (Test-Path $BaFunctionsDll)) {
+  throw "BAFunctions DLL not found at '$BaFunctionsDll'. Build it first (see windows\bafunctions\README.md); it CSPRNG-generates PgSuperPassword before the PostgreSQL prerequisite runs."
+}
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $msi = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
 $setup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
@@ -48,7 +52,7 @@ if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains PostgreSQL prereq + MSI).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
-  -d "PostgresInstaller=$PostgresInstaller" `
+  -d "PostgresInstaller=$PostgresInstaller" -d "BaFunctionsDll=$BaFunctionsDll" `
   -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -o $setup
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 

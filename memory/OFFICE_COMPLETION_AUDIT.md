@@ -175,6 +175,19 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > `RoofSpanPostgreSQL`) so an unrelated PG is never silently adopted; (f) upgrades regenerate neither credential.
 > `local_secrets.py` docstring corrected (fail-closed, not in-memory fallback). windows 100/100 pass. Native
 > psql/EDB-init/MSI/ACL HUMAN REQUIRED. **P1-4b NOT started — pending GitHub review + approval.**
+>
+> **P1-4a (revised #3, pre-EDB credential + collision-safe managed PG) COMPLETE:** fixes the two GitHub
+> blockers. (1) The superuser password is now generated BEFORE the EDB package by a minimal WiX v4
+> **BAFunctions** native hook (`windows/bafunctions/`) on the stock WixStdBA (keeps standard UI): in
+> `OnDetectComplete` it CSPRNG-generates (`BCryptGenRandom`) the Hidden `PgSuperPassword` for a fresh
+> RoofSpan-managed install only, and the SAME hidden value is handed to BOTH the EDB `--superpassword`
+> and the MSI `PG_SUPERPASSWORD` (Hidden ⇒ redacted in Burn logs). The circular post-install superuser
+> reset in bootstrap_db.py is REMOVED; the bootstrap now REQUIRES the handed-off credential (fail-closed)
+> and only authenticates+provisions the least-privilege `roofspan` role/db with a SEPARATE app password.
+> (2) Burn detects the DEDICATED `RoofSpanPostgreSQL` service (not any PostgreSQL) so an unrelated PG no
+> longer suppresses RoofSpan's own install / is never adopted. RoofSpan-managed PG uses a dedicated port
+> **5442** (EDB `--serverport`, MSI `PG_PORT`, deployed DATABASE_URL). windows **103/103** pass. Native
+> BAFunctions compile + MSI/Burn/EDB/ACL remain HUMAN REQUIRED. **P1-4b NOT started — pending review.**
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

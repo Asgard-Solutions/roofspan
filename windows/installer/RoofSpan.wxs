@@ -167,22 +167,28 @@
       <ComponentGroupRef Id="DataAcls" />
     </Feature>
 
-    <!-- Optional enterprise/external PostgreSQL superuser credential, handed off securely from the Burn
-         bundle (bundle.wxs PgSuperPassword -> this MSI property). Hidden + Secure so Windows Installer
-         never writes it to the log or the property table dump. Empty on a normal RoofSpan-managed fresh
-         install (RoofSpanBootstrap.exe then generates its own temporary bootstrap credential). -->
+    <!-- PostgreSQL superuser credential, handed off securely from the Burn bundle (bundle.wxs
+         PgSuperPassword -> this MSI property). Hidden + Secure so Windows Installer never writes it to the
+         log or the property table dump. Non-empty at first install (Burn-generated for a RoofSpan-managed
+         instance, or an enterprise override); the deferred bootstrap uses it only to authenticate and fails
+         closed if it is missing. -->
     <Property Id="PG_SUPERPASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- Dedicated RoofSpan-managed PostgreSQL port (handed off from Burn PG_PORT). Not secret. -->
+    <Property Id="PG_PORT" Value="5442" Secure="yes" />
 
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
     <!-- First-install DB + deployed-config bootstrap. Runs BEFORE StartServices so RoofSpanBackend never
          starts without its generated local DATABASE_URL. Upgrade/repair preserves existing creds. Native
-         psql/role/db execution is HUMAN REQUIRED.
+         psql/role/db execution is HUMAN REQUIRED. The superuser credential is ESTABLISHED BEFORE PostgreSQL
+         is installed (Burn BAFunctions for a RoofSpan-managed install, or an enterprise override) and only
+         handed here to authenticate + provision — the bootstrap never invents a new postgres credential.
          Secure secret handoff: an immediate SetProperty (Id == the deferred CA Id) builds the command line
          as this deferred action's CustomActionData; the superuser credential is passed as an argv value.
          WixSilentExec (not WixQuietExec) suppresses command-line logging and HideTarget="yes" prevents the
          CustomActionData from being written to the MSI log, so PG_SUPERPASSWORD never leaks. -->
     <SetProperty Id="RoofSpanBootstrap"
-                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot; --pg-superpassword &quot;[PG_SUPERPASSWORD]&quot;"
+                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot; --pg-superpassword &quot;[PG_SUPERPASSWORD]&quot; --pg-port &quot;[PG_PORT]&quot;"
                  Before="RoofSpanBootstrap" Sequence="execute" />
     <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixSilentExec"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />

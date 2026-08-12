@@ -72,7 +72,8 @@ def test_bundle_chains_postgres_prereq_and_msi():
     assert 'UpgradeCode="$(var.BundleUpgradeCode)"' in b
     assert "<MsiPackage" in b and "$(var.MsiPath)" in b
     assert "<ExePackage" in b and "PostgreSQL" in b
-    assert 'DetectCondition="PgPresent"' in b and 'InstallCondition="NOT PgPresent"' in b
+    # Detection is keyed to the DEDICATED RoofSpan-managed service (not any PostgreSQL install).
+    assert 'DetectCondition="RoofSpanPgPresent"' in b and 'InstallCondition="NOT RoofSpanPgPresent"' in b
     assert "PostgresInstaller" in b
     # no committed secrets
     assert "superpassword " not in b.lower() or "PgSuperPassword" in b

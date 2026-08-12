@@ -1,7 +1,7 @@
-"""P1-4a fix: hybrid local PostgreSQL + deployed-config bootstrap.
+"""P1-4a fix: local PostgreSQL provisioning + deployed-config bootstrap.
 
-Pure decision/render logic is unit-tested in-container; native psql/role/db execution + the WiX/Burn
-secret handoff are HUMAN REQUIRED on Windows.
+Pure decision/render logic is unit-tested in-container; native psql/role/db execution, the WiX/Burn secret
+handoff, and the BAFunctions credential generation are HUMAN REQUIRED on Windows and asserted statically.
 """
 import os
 
@@ -11,9 +11,12 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINBUILD = os.path.join(HERE, "winbuild")
 WXS = os.path.join(HERE, "installer", "RoofSpan.wxs")
 BUNDLE = os.path.join(HERE, "installer", "bundle.wxs")
+BAFUNC = os.path.join(HERE, "bafunctions", "RoofSpanBaFunctions.cpp")
 
 from winbuild import bootstrap_db as bs  # noqa: E402
 from winbuild.targets import TOOL_TARGETS  # noqa: E402
+
+TMPL = ("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5442/roofspan\n")
 
 
 def _read(p):
@@ -29,44 +32,39 @@ def test_password_random_unique_and_long():
         assert a != weak
 
 
-def test_bootstrap_and_app_passwords_are_separate_random_values():
-    assert bs.generate_bootstrap_password() != bs.generate_bootstrap_password()
-    assert bs.generate_bootstrap_password() != bs.generate_db_password()
-    assert len(bs.generate_bootstrap_password()) >= 24
+# --- superuser credential is REQUIRED (handed off by the installer), never self-invented -----------
+def test_bootstrap_no_longer_generates_a_superuser_credential():
+    # The old circular concept (bootstrap inventing a new postgres password after PG install) is gone.
+    assert not hasattr(bs, "generate_bootstrap_password")
+    assert not hasattr(bs, "resolve_bootstrap_password")
 
 
-# --- hybrid credential resolution ----------------------------------------------------------------
-def test_resolve_supplied_credential_is_used_and_not_generated():
-    pw, generated = bs.resolve_bootstrap_password("ENTERPRISE-SUPER", roofspan_managed=False)
-    assert pw == "ENTERPRISE-SUPER" and generated is False
-    # supplied wins even on a RoofSpan-managed instance
-    pw2, gen2 = bs.resolve_bootstrap_password("ENTERPRISE-SUPER", roofspan_managed=True)
-    assert pw2 == "ENTERPRISE-SUPER" and gen2 is False
+def test_require_bootstrap_password_uses_supplied_value():
+    assert bs.require_bootstrap_password("HANDED-OFF-SUPER") == "HANDED-OFF-SUPER"
+    assert bs.require_bootstrap_password("  spaced  ") == "spaced"
 
 
-def test_resolve_managed_fresh_install_generates_temporary_credential():
-    pw, generated = bs.resolve_bootstrap_password("", roofspan_managed=True)
-    assert generated is True and len(pw) >= 24
-    assert pw not in ("", "postgres", "roofspan")
+def test_require_bootstrap_password_missing_fails_closed():
+    for empty in ("", "   ", None):
+        with pytest.raises(bs.BootstrapError):
+            bs.require_bootstrap_password(empty)
 
 
-def test_resolve_external_pg_without_credential_fails_closed():
-    with pytest.raises(bs.BootstrapError):
-        bs.resolve_bootstrap_password("", roofspan_managed=False)
-    with pytest.raises(bs.BootstrapError):
-        bs.resolve_bootstrap_password("   ", roofspan_managed=False)  # whitespace-only is empty
+def test_no_alter_user_postgres_circular_dependency_in_source():
+    src = _read(os.path.join(WINBUILD, "bootstrap_db.py"))
+    assert "ALTER USER postgres" not in src           # no post-install superuser (re)establishment
+    assert "set_superuser" not in src                 # the circular flag/param is removed
 
 
 # --- deployed config rendering -------------------------------------------------------------------
 def test_render_substitutes_placeholder():
-    tmpl = "DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n"
-    out = bs.render_deployed_env(tmpl, "SUPERSECRET")
+    out = bs.render_deployed_env(TMPL, "SUPERSECRET")
     assert "__GENERATED_AT_FIRST_RUN__" not in out and "SUPERSECRET" in out
 
 
 def test_write_deployed_fresh_then_preserve_on_upgrade(tmp_path):
     tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    tmpl.write_text(TMPL)
     dep = tmp_path / "deployed" / "roofspan.env"
     pw = bs.generate_db_password()
     bs.write_deployed_config(str(tmpl), str(dep), pw)
@@ -85,103 +83,90 @@ def test_psql_path_from_base_dir():
     assert "RoofSpanPostgreSQL" in p
 
 
-# --- orchestration: fresh RoofSpan-managed install -----------------------------------------------
-def test_run_bootstrap_fresh_managed_provisions_then_writes_config(tmp_path):
+# --- orchestration: fresh install (credential handed off by Burn) --------------------------------
+def test_run_bootstrap_provisions_then_writes_config(tmp_path):
     tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    tmpl.write_text(TMPL)
     dep = tmp_path / "config" / "roofspan.env"
     seen = {}
 
-    def fake_provision(*, psql_path, super_password, db_password, set_superuser):
-        # config must NOT exist yet — provisioning happens strictly before the config write
-        seen["config_exists_at_provision"] = os.path.isfile(str(dep))
-        seen.update(super_password=super_password, db_password=db_password, set_superuser=set_superuser)
+    def fake_provision(*, psql_path, host, port, super_password, db_password):
+        seen["config_exists_at_provision"] = os.path.isfile(str(dep))  # must be False (provision first)
+        seen.update(super_password=super_password, db_password=db_password, port=port, host=host)
 
-    rc = bs.run_bootstrap(supplied_super_pw="", deployed_path=str(dep), template_path=str(tmpl),
-                          roofspan_managed=True, psql_path="psql.exe", provision_fn=fake_provision)
-    assert rc == 0
-    assert seen["config_exists_at_provision"] is False          # config written only AFTER provisioning
-    assert seen["set_superuser"] is True                        # generated temp superuser applied
-    assert seen["super_password"] != seen["db_password"]        # separate random values
-    body = dep.read_text()
-    assert seen["db_password"] in body                          # only the app password is persisted
-    assert seen["super_password"] not in body                   # bootstrap credential never persisted
-
-
-# --- orchestration: enterprise/external PostgreSQL -----------------------------------------------
-def test_run_bootstrap_enterprise_uses_supplied_credential(tmp_path):
-    tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
-    dep = tmp_path / "config" / "roofspan.env"
-    seen = {}
-
-    def fake_provision(*, psql_path, super_password, db_password, set_superuser):
-        seen.update(super_password=super_password, set_superuser=set_superuser, db_password=db_password)
-
-    rc = bs.run_bootstrap(supplied_super_pw="ENTERPRISE-SUPER", deployed_path=str(dep),
-                          template_path=str(tmpl), roofspan_managed=False, psql_path="psql.exe",
+    rc = bs.run_bootstrap(supplied_super_pw="HANDED-OFF-SUPER", deployed_path=str(dep),
+                          template_path=str(tmpl), psql_path="psql.exe", port=5442,
                           provision_fn=fake_provision)
     assert rc == 0
-    assert seen["super_password"] == "ENTERPRISE-SUPER"         # supplied credential used as-is
-    assert seen["set_superuser"] is False                       # no generated bootstrap credential
-    assert seen["super_password"] not in dep.read_text()        # supplied superuser pw never persisted
+    assert seen["config_exists_at_provision"] is False          # config written only AFTER provisioning
+    assert seen["super_password"] == "HANDED-OFF-SUPER"         # supplied credential used to authenticate
+    assert seen["super_password"] != seen["db_password"]        # separate random values
+    assert seen["port"] == 5442 and seen["host"] == "127.0.0.1"
+    body = dep.read_text()
+    assert seen["db_password"] in body                          # only the app password is persisted
+    assert seen["super_password"] not in body                   # superuser credential never persisted
 
 
-def test_run_bootstrap_external_without_credential_fails_closed_no_config(tmp_path):
+def test_run_bootstrap_missing_credential_fails_closed_no_config(tmp_path):
     tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    tmpl.write_text(TMPL)
     dep = tmp_path / "config" / "roofspan.env"
 
     def fake_provision(**_):
-        raise AssertionError("provisioning must not run when the required credential is missing")
+        raise AssertionError("provisioning must not run when the handed-off credential is missing")
 
     with pytest.raises(bs.BootstrapError):
         bs.run_bootstrap(supplied_super_pw="", deployed_path=str(dep), template_path=str(tmpl),
-                         roofspan_managed=False, psql_path="psql.exe", provision_fn=fake_provision)
+                         psql_path="psql.exe", provision_fn=fake_provision)
     assert not os.path.isfile(str(dep))                          # fail closed: no deployed config
 
 
 def test_run_bootstrap_provision_failure_writes_no_config(tmp_path):
     tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    tmpl.write_text(TMPL)
     dep = tmp_path / "config" / "roofspan.env"
 
     def fake_provision(**_):
         raise RuntimeError("psql failed")
 
     with pytest.raises(RuntimeError):
-        bs.run_bootstrap(supplied_super_pw="", deployed_path=str(dep), template_path=str(tmpl),
-                         roofspan_managed=True, psql_path="psql.exe", provision_fn=fake_provision)
+        bs.run_bootstrap(supplied_super_pw="HANDED-OFF-SUPER", deployed_path=str(dep),
+                         template_path=str(tmpl), psql_path="psql.exe", provision_fn=fake_provision)
     assert not os.path.isfile(str(dep))                          # config never written on failure
 
 
 def test_run_bootstrap_upgrade_preserves_and_regenerates_nothing(tmp_path):
     tmpl = tmp_path / "t.env"
-    tmpl.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    tmpl.write_text(TMPL)
     dep = tmp_path / "config" / "roofspan.env"
     dep.parent.mkdir(parents=True)
-    dep.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:EXISTING@127.0.0.1:5432/roofspan\n")
+    dep.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:EXISTING@127.0.0.1:5442/roofspan\n")
 
     def fake_provision(**_):
-        raise AssertionError("upgrade must not re-provision")
+        raise AssertionError("upgrade must not re-provision or regenerate credentials")
 
     rc = bs.run_bootstrap(supplied_super_pw="", deployed_path=str(dep), template_path=str(tmpl),
-                          roofspan_managed=True, psql_path="psql.exe", provision_fn=fake_provision)
+                          psql_path="psql.exe", provision_fn=fake_provision)
     assert rc == 0 and "EXISTING" in dep.read_text()             # preserved untouched
 
 
 # --- argv parsing ---------------------------------------------------------------------------------
-def test_parse_args_superpassword_defaults_empty():
+def test_parse_args_defaults_and_port():
     a = bs.parse_args([])
-    assert a.pg_superpassword == ""
-    b = bs.parse_args(["--pg-superpassword", "S3CRET"])
-    assert b.pg_superpassword == "S3CRET"
+    assert a.pg_superpassword == "" and a.pg_port == bs.DEFAULT_PG_PORT
+    b = bs.parse_args(["--pg-superpassword", "S3CRET", "--pg-port", "5442"])
+    assert b.pg_superpassword == "S3CRET" and b.pg_port == 5442
+
+
+def test_dedicated_port_is_not_5432():
+    assert bs.DEFAULT_PG_PORT == 5442  # RoofSpan-owned; not the common default 5432
 
 
 # --- packaging + WiX authoring cross-checks -------------------------------------------------------
-def test_template_ships_placeholder_not_real_password():
+def test_template_ships_placeholder_and_dedicated_port():
     t = _read(os.path.join(WINBUILD, "config", "roofspan.env.template"))
     assert "__GENERATED_AT_FIRST_RUN__" in t
+    assert "127.0.0.1:5442/roofspan" in t and "127.0.0.1:5432/roofspan" not in t
 
 
 def test_bootstrap_registered_and_packaged():
@@ -194,22 +179,55 @@ def test_bootstrap_registered_and_packaged():
 
 def test_wxs_secret_handoff_is_hidden_and_not_logged():
     wxs = _read(WXS)
-    # Hidden + Secure source property receives the credential from Burn.
     assert 'Id="PG_SUPERPASSWORD"' in wxs
     assert 'Secure="yes"' in wxs and 'Hidden="yes"' in wxs
-    # SetProperty (Id == deferred CA Id) builds the CustomActionData command line with the argv.
     assert '--pg-superpassword' in wxs and '[PG_SUPERPASSWORD]' in wxs
-    # WixSilentExec (not WixQuietExec) + HideTarget so the command line / CustomActionData are not logged.
+    assert '--pg-port' in wxs and '[PG_PORT]' in wxs
     assert 'DllEntry="WixSilentExec"' in wxs
     assert 'HideTarget="yes"' in wxs
     assert 'DllEntry="WixQuietExec"' not in wxs
     assert 'BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"' in wxs
 
 
-def test_bundle_hands_off_superpassword_to_msi():
+def test_bundle_generates_credential_before_postgres_and_hands_off_same_value():
     b = _read(BUNDLE)
+    # BAFunctions hook generates PgSuperPassword before the chain (keeps standard UI).
+    assert 'bal:IsBAFunctions="yes"' in b
+    assert 'SourceFile="$(var.BaFunctionsDll)"' in b
+    # SAME hidden variable handed to BOTH the EDB installer and the MSI.
+    assert '--superpassword [PgSuperPassword]' in b
     assert '<MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />' in b
+    # Hidden so Burn redacts it in logs everywhere it is formatted onto a command line.
     assert 'Name="PgSuperPassword"' in b and 'Hidden="yes"' in b
+
+
+def test_bundle_detects_roofspan_managed_pg_not_generic():
+    b = _read(BUNDLE)
+    # Detection keyed to the DEDICATED RoofSpan service, not any PostgreSQL install.
+    assert r"CurrentControlSet\Services\RoofSpanPostgreSQL" in b
+    assert 'Variable="RoofSpanPgPresent"' in b
+    assert 'InstallCondition="NOT RoofSpanPgPresent"' in b
+    assert 'DetectCondition="RoofSpanPgPresent"' in b
+    # The old generic "any PostgreSQL" detection must be gone.
+    assert 'Variable="PgPresent"' not in b
+    assert r"SOFTWARE\PostgreSQL\Installations" not in b
+
+
+def test_bundle_uses_dedicated_port_for_collision_safety():
+    b = _read(BUNDLE)
+    assert 'Name="PgPort"' in b and 'Value="5442"' in b
+    assert "--serverport [PgPort]" in b
+    assert "--servicename RoofSpanPostgreSQL" in b
+    assert '<MsiProperty Name="PG_PORT" Value="[PgPort]" />' in b
+
+
+def test_bafunctions_source_generates_hidden_credential():
+    c = _read(BAFUNC)
+    assert "BCryptGenRandom" in c                       # CSPRNG source
+    assert "PgSuperPassword" in c and "SetVariableString" in c
+    assert "OnDetectComplete" in c                      # before Plan / chain execution
+    assert "RoofSpanPgPresent" in c                     # skip when managed PG already present
+    assert "BAFunctionsCreate" in c                     # exported entry point
 
 
 def test_secrets_dir_is_backend_only_writable():
