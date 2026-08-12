@@ -3,7 +3,7 @@
 // (Mobile -> Relay -> installation tunnel -> local FastAPI); DirectHttpTransport is dev/local only.
 import axios from "axios";
 import * as FileSystem from "expo-file-system";
-import { API, API_BASE } from "./config";
+import { API, relayWsUrl } from "./config";
 import { RELAY_PROTOCOL_VERSION } from "./pairing";
 import { buildRequestFrame, parseResponseFrame } from "./transportCore";
 
@@ -40,7 +40,7 @@ class RelayTransport {
     this.pending = new Map();
     this._connecting = null;
   }
-  _url() { return API_BASE.replace(/^http/, "ws") + "/api/relay/mobile"; }
+  _url() { return relayWsUrl(); }
   close() { try { this.ws && this.ws.close(); } catch (e) {} this.ws = null; this._rejectAll(_netErr("relay_closed")); }
   _rejectAll(err) { for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(err); } this.pending.clear(); }
   _onMessage(ev) {

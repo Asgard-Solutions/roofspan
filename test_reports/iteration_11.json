@@ -1,0 +1,16 @@
+{
+  "summary": "Frontend-only verification of Windows installer download card on Admin -> Subscription page. Owner login successful, Subscription page renders with ACTIVE badge and seat stats (Licensed 1000, Active Users 109, Available Seats 891). windows-download-card present, windows-download-button href exactly matches https://downloads.roofspan.io/latest/RoofSpanSetup.exe (no /api/, localhost, s3, amazonaws, backend host). coming-soon element correctly hidden since REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true. No console errors on the page.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Windows installer download card confirmed working on /admin/subscription with correct CloudFront href. Regression stats/badge still render.",
+  "rca of the issue": "N/A - no issues found"
+}

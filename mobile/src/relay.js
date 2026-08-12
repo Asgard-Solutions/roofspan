@@ -1,14 +1,11 @@
 // Mobile relay client: resolve pairing, probe connection state, and sign in THROUGH the relay.
 // The relay is transient transport; the LOCAL FastAPI remains the auth/RBAC authority.
 import axios from "axios";
-import { API, API_BASE } from "./config";
+import { API, relayWsUrl } from "./config";
 import { RELAY_PROTOCOL_VERSION } from "./pairing";
 
-// In dev the relay endpoints are served by the same backend at /api/relay/mobile. The advertised
-// production relay host (pairing.relay_endpoint) is used once a dedicated relay is deployed.
-function relayWsUrl() {
-  return API_BASE.replace(/^http/, "ws") + "/api/relay/mobile";
-}
+// Relay WS endpoint is resolved centrally in config.js (production relay host is NOT derived from
+// the Control Plane URL; see infra/config/production.endpoints.env.example).
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 function b64encode(str) {

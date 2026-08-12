@@ -1,6 +1,6 @@
-// Public website configuration (CRA REACT_APP_*). PUBLIC values only — never secrets.
-// The Windows installer/update URLs are PUBLIC CloudFront delivery endpoints. This is the single
-// authoritative source for the public download link on roofspan.io. Never proxied through any backend.
+// RoofSpan Office UI — public config (CRA REACT_APP_*). PUBLIC values only, never secrets.
+// The Windows installer URLs are PUBLIC CloudFront delivery endpoints (downloads.roofspan.io).
+// Direct browser download only — never fetched into JS memory, never proxied through any backend/S3.
 
 const CLOUDFRONT_INSTALLER = "https://downloads.roofspan.io/latest/RoofSpanSetup.exe";
 const CLOUDFRONT_RELEASES_BASE = "https://downloads.roofspan.io/releases";
@@ -14,17 +14,13 @@ export function resolveInstaller(env = process.env) {
   return { url, available, releasesBaseUrl, updateManifestUrl };
 }
 
-// Versioned installer URL: https://downloads.roofspan.io/releases/RoofSpanSetup-{VERSION}.exe
 export function versionedInstallerUrl(version, env = process.env) {
   const { releasesBaseUrl } = resolveInstaller(env);
   return `${releasesBaseUrl}/RoofSpanSetup-${version}.exe`;
 }
 
 const _installer = resolveInstaller();
-
-// Public CloudFront installer URL (direct browser download — never proxied through any backend).
 export const WINDOWS_INSTALLER_URL = _installer.url;
-// Availability flag: the WiX/MSI binary may not be published yet, so show a graceful "coming soon".
 export const WINDOWS_INSTALLER_AVAILABLE = _installer.available;
 export const WINDOWS_RELEASES_BASE_URL = _installer.releasesBaseUrl;
 export const WINDOWS_UPDATE_MANIFEST_URL = _installer.updateManifestUrl;

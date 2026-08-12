@@ -1,4 +1,4 @@
-import { resolveInstaller } from "../config";
+import { resolveInstaller, versionedInstallerUrl } from "../config";
 
 describe("Windows installer config (public website)", () => {
   test("default production URL is the CloudFront installer", () => {
@@ -26,4 +26,15 @@ describe("Windows installer config (public website)", () => {
   test("update manifest url defaults to the CloudFront manifest", () => {
     expect(resolveInstaller({}).updateManifestUrl).toBe("https://downloads.roofspan.io/update/windows/latest.json");
   });
+
+  test("versioned installer URL uses the releases path on CloudFront", () => {
+    expect(versionedInstallerUrl("1.4.2", {})).toBe("https://downloads.roofspan.io/releases/RoofSpanSetup-1.4.2.exe");
+  });
+
+  test("versioned installer URL honors a releases-base override and stays on CloudFront", () => {
+    const u = versionedInstallerUrl("2.0.0", { REACT_APP_WINDOWS_RELEASES_BASE_URL: "https://downloads.roofspan.io/releases/" });
+    expect(u).toBe("https://downloads.roofspan.io/releases/RoofSpanSetup-2.0.0.exe");
+    expect(u).not.toMatch(/s3|amazonaws|\/api\/|localhost|backend/i);
+  });
 });
+
