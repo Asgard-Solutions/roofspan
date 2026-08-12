@@ -145,6 +145,14 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > LocalSystem to patch Program Files. Keep it restricted (download/verify/plan); when a verified update
 > must modify Program Files, invoke a SMALL separate ELEVATED update-apply helper. Do not build that
 > helper yet.
+>
+> **P1-4a COMPLETE & VERIFIED** — production config/security readiness: Owner seed DOUBLE-gated
+> (LICENSING_MODE=dev AND ROOFSPAN_OWNER_SEED=enabled; impossible in production `http` mode); per-install
+> generated+persisted JWT_SECRET + SECRETS_ENCRYPTION_KEY (ProgramData `secrets.env`, env wins, survives
+> restart, never logged/committed); template finalized (LICENSING_MODE=http, BILLING_MODE=stripe, CP/Relay/
+> update URLs, local 127.0.0.1 + local Postgres, no secrets); frontend API base falls back to same-origin
+> for the packaged build. windows 81/81, backend affected 9/9, frontend build clean. **P1-4b (production
+> Stripe onboarding completion) NOT started — pending approval.**
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

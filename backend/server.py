@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+import local_secrets
+local_secrets.ensure_local_secrets()  # generate/load per-installation JWT + encryption secrets before use
+
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -81,13 +84,12 @@ app.add_middleware(
 
 
 def _owner_seed_enabled() -> bool:
-    """Production packaged Office must NOT auto-create/replace the Owner from env on every startup.
-    The env seed is a dev/test/recovery mechanism only. Default: enabled in dev licensing mode,
-    disabled otherwise; explicit ROOFSPAN_OWNER_SEED overrides."""
-    val = os.environ.get("ROOFSPAN_OWNER_SEED")
-    if val is not None:
-        return val.strip().lower() in ("1", "true", "enabled", "yes")
-    return licensing_config.LICENSING_MODE == "dev"
+    """Env Owner seed is a DEV/TEST/recovery mechanism only. Double-gated: it is IMPOSSIBLE in production
+    licensing mode, and even in dev mode it requires an explicit ROOFSPAN_OWNER_SEED opt-in. Production
+    first-run uses the setup wizard; Owner recovery uses RoofSpanOwnerRecovery.exe."""
+    if licensing_config.LICENSING_MODE != "dev":
+        return False
+    return os.environ.get("ROOFSPAN_OWNER_SEED", "").strip().lower() in ("1", "true", "enabled", "yes")
 
 
 async def seed_owner():

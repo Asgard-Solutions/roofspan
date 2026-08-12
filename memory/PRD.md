@@ -634,3 +634,38 @@ public-endpoint/security-question/master-password/backdoor/remote reset.
   RoofSpanUpdateService + a small separate ELEVATED apply helper (NOT LocalSystem). Not built yet.
   No AWS/Mobile-field/website work.
 
+
+## RoofSpan Office — P1-4a: Production Config & Security Readiness (2026-06)
+Local runtime LOCKED (browser → 127.0.0.1:8001 → local FastAPI → local PostgreSQL; only licensing/billing/
+pairing/relay/update go outbound). This is code/config readiness — no AWS deploy, no real Stripe charge.
+- **Owner env seed DOUBLE-gated** (`server._owner_seed_enabled`): returns True only if
+  `LICENSING_MODE=="dev"` AND `ROOFSPAN_OWNER_SEED` opt-in — **impossible in production `http` mode** even if
+  the var is set. Dev keeps seeding (added `ROOFSPAN_OWNER_SEED=enabled` to backend/.env). No production
+  Owner-reset backdoor; prod first-run = wizard, recovery = RoofSpanOwnerRecovery.exe.
+- **Per-installation secrets** `backend/local_secrets.py::ensure_local_secrets()` (called at server startup
+  before use): generates `JWT_SECRET` (`token_urlsafe(48)`) + `SECRETS_ENCRYPTION_KEY`
+  (urlsafe-b64 of 32 random bytes → AES-256) with a CSPRNG, persists to
+  `C:\ProgramData\RoofSpan\config\secrets.env` (chmod 600; Windows ProgramData ACLs from P1-2), reuses on
+  later starts. **Environment wins** (dev/.env or service env) so nothing is generated/written when already
+  set. Unique per install, survives restart/upgrade (lives with data), never logged/committed. No cloud dep.
+- **Finalized `roofspan.env.template` contract:** production `LICENSING_MODE=http` (real CP client, no dev
+  1000-seat auto-issue) + `BILLING_MODE=stripe`; installer-generated local values (local Postgres URL w/
+  `__GENERATED_AT_FIRST_RUN__` password, paths, identity, logs, static); central-service URLs
+  (`cp.roofspan.io`, `wss://relay.roofspan.io`, `downloads.roofspan.io/update/windows/latest.json`); secrets
+  NOT shipped (generated). Only the PUBLIC update-verification key ships (no private signing key).
+- **Frontend packaging:** `lib/api.js` `BACKEND_URL = process.env.REACT_APP_BACKEND_URL || ""` → API base is
+  same-origin relative `/api` when unset (packaged Office served by the local backend). Dev preview keeps
+  its env var.
+- **Preview/dev scan (classified):** packaged config template + WiX = NO preview host (test-asserted).
+  `frontend/.env` REACT_APP_BACKEND_URL and `backend/.env` (APP_BASE_URL/local DB/dev secrets) are DEV-ONLY
+  and not shipped (production uses ProgramData `roofspan.env` + generated `secrets.env`). No test creds in
+  packaged config/templates.
+- **Tests:** backend `tests/test_local_secrets.py` (4: generate+persist, reuse-across-restart, env-wins-no-
+  write, owner-seed double-gate incl. prod-impossible). windows `tests/test_production_config.py` (6: prod
+  modes, local 127.0.0.1 + local Postgres, CP/Relay/update URLs, no secrets in template, no preview host,
+  frontend same-origin fallback). Full windows **81 passed**; backend affected (local_secrets + onboarding +
+  token_recovery) **9 passed**; frontend `yarn build` clean; running app login/me OK after changes.
+- **HUMAN REQUIRED (native):** installer generation; fresh install generating local secrets; packaged local
+  Postgres connection; real CP/Relay endpoints; native services. **P1-4b** (production Stripe onboarding
+  completion + mocked-Stripe test replacing `/api/setup/dev/pay`) is the next checkpoint — NOT started.
+
