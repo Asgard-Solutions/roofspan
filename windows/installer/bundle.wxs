@@ -34,8 +34,13 @@
 
     <!-- Overridable at build/runtime; no default binary is committed. -->
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
-    <!-- EDB superpassword supplied at install time (Burn variable) — NEVER committed. RoofSpan first-run
-         creates its own least-privilege 'roofspan' role + database with generated credentials. -->
+    <!-- EDB superpassword for enterprise/external PostgreSQL, supplied at install time (Burn variable) —
+         NEVER committed. Hidden so Burn does not log it; passed through to the MSI as the Hidden+Secure
+         PG_SUPERPASSWORD property (see the MsiPackage below). EMPTY by default: a normal RoofSpan-managed
+         fresh install needs NO DBA input — RoofSpanBootstrap.exe generates its own temporary bootstrap
+         credential locally. A non-empty value is the enterprise override for an existing PostgreSQL. In
+         all cases RoofSpan first-run creates its own least-privilege 'roofspan' role + database with a
+         SEPARATE generated application password. -->
     <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
@@ -51,8 +56,12 @@
                   InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL"
                   Compressed="no" />
 
-      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). -->
-      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
+      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). The (optional) enterprise superuser credential
+              is handed off to the MSI's Hidden+Secure PG_SUPERPASSWORD property; empty on a normal
+              RoofSpan-managed fresh install (bootstrap self-generates a temporary credential). -->
+      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes">
+        <MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>

@@ -161,6 +161,20 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > provisions least-privilege `roofspan` role+db, and renders template → DEPLOYED `ProgramData\config\
 > roofspan.env` before Backend starts; upgrade preserves existing creds. windows 87/87, backend 5/5 (+
 > onboarding/token regression 5/5); app healthy. Native psql/MSI/ACL HUMAN REQUIRED.
+>
+> **P1-4a (revised #2, hybrid PG bootstrap) COMPLETE & VERIFIED:** secure Burn→MSI→deferred-CA credential
+> handoff finalized. bundle.wxs hands off `PgSuperPassword` via `<MsiProperty PG_SUPERPASSWORD>`; RoofSpan.wxs
+> receives it as a Hidden+Secure property, builds the deferred-CA CustomActionData via SetProperty, and runs
+> `Wix4SilentExec` with `HideTarget="yes"` (no command-line/CAData logging). `bootstrap_db.py` now: (a) HYBRID
+> credential model — fresh RoofSpan-managed install self-generates a temporary bootstrap superpassword (no DBA
+> input); enterprise/external PG requires supplied `PgSuperPassword` else FAILS CLOSED; (b) bootstrap and app
+> DB passwords are always SEPARATE random values, only the least-privilege app password is persisted to the
+> deployed DATABASE_URL, neither is logged; (c) config written ONLY after successful provisioning; provisioning
+> failure / missing credential → non-zero exit → MSI rollback; (d) registry-based deterministic psql.exe
+> discovery (HKLM\SOFTWARE\PostgreSQL\Installations); (e) RoofSpan-managed instance detection (service
+> `RoofSpanPostgreSQL`) so an unrelated PG is never silently adopted; (f) upgrades regenerate neither credential.
+> `local_secrets.py` docstring corrected (fail-closed, not in-memory fallback). windows 100/100 pass. Native
+> psql/EDB-init/MSI/ACL HUMAN REQUIRED. **P1-4b NOT started — pending GitHub review + approval.**
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

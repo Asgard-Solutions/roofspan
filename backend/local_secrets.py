@@ -7,8 +7,10 @@ later start. Unique per installation, survives restart/upgrade (lives with custo
 installer), never logged, never committed. No cloud dependency.
 
 Dev/test fallback: if the env already defines a secret (e.g. backend/.env), it is used as-is and nothing
-is generated or written. If the persist location is unwritable, the process still runs with an in-memory
-value and logs a warning (value never logged).
+is generated or written. If a secret must be generated but the protected persist location is unwritable,
+the process FAILS CLOSED (raises) rather than continuing with a non-durable in-memory key — an ephemeral
+key would invalidate all sessions and make locally-encrypted integration credentials undecryptable after
+the next restart. Secret values are never logged.
 """
 from __future__ import annotations
 

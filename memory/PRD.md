@@ -696,3 +696,14 @@ Fixes two review blockers on P1-4a.
 - **HUMAN REQUIRED (native):** MSI custom-action execution + PG role/db provisioning + secrets/config ACL
   resolution on a real Windows box; verify Backend starts only after bootstrap. **P1-4b NOT started.**
 
+
+
+## RoofSpan Office — P1-4a (revised #2): hybrid PG bootstrap + secure Burn→MSI→CA credential handoff (2026-06)
+Finalizes the last P1-4a blocker: secure PostgreSQL superuser credential handoff and self-contained fresh-install DB provisioning (Option C — Hybrid, user-approved).
+- **bundle.wxs**: `PgSuperPassword` Burn variable (Hidden; empty default = RoofSpan-managed self-generation, non-empty = enterprise override) handed to the MSI via `<MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />`.
+- **RoofSpan.wxs**: `PG_SUPERPASSWORD` property `Hidden="yes" Secure="yes"`; immediate `SetProperty` (Id == deferred CA) builds the CustomActionData argv; deferred CA `Wix4UtilCA_$(sys.BUILDARCHSHORT)`/`WixSilentExec` with `HideTarget="yes"` (no command-line or CAData logging). Removed dead `SetBootstrapEnv` CA and the env-var dependency.
+- **bootstrap_db.py** (hybrid, fail-closed): fresh RoofSpan-managed install generates a temporary bootstrap superpassword (no DBA input); external/enterprise PG requires supplied credential else fails closed. Bootstrap vs application DB passwords are always SEPARATE random values; only the least-privilege app password is persisted to the deployed DATABASE_URL; neither is logged. Config rendered ONLY after successful provisioning; provisioning error / missing credential → non-zero exit → MSI rollback. Registry-based deterministic `psql.exe` discovery (`HKLM\SOFTWARE\PostgreSQL\Installations`). RoofSpan-managed detection via service `RoofSpanPostgreSQL` (unrelated PG never adopted). Upgrades regenerate neither credential.
+- **local_secrets.py**: docstring corrected to describe fail-closed behavior (no in-memory fallback).
+- **Tests**: `windows/tests/test_db_bootstrap.py` extended (both branches, separate-password guarantee, config-only-after-provision, fail-closed rollback, argv parsing, WiX/bundle handoff assertions). **windows 100/100 pass.**
+- **HUMAN REQUIRED (native):** MSI/Burn execution, EDB PostgreSQL init + superuser finalization for the generated temp credential, psql/role/db provisioning, ACL resolution on a real Windows box. **P1-4b NOT started — pending GitHub review + approval.**
+- **Pre-existing (out of scope, flagged):** some backend integration tests (photo upload, onboarding, token_recovery) currently fail in the forked container despite PG running — unrelated to Windows bootstrap; needs separate investigation.

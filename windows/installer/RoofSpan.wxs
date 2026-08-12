@@ -167,17 +167,25 @@
       <ComponentGroupRef Id="DataAcls" />
     </Feature>
 
+    <!-- Optional enterprise/external PostgreSQL superuser credential, handed off securely from the Burn
+         bundle (bundle.wxs PgSuperPassword -> this MSI property). Hidden + Secure so Windows Installer
+         never writes it to the log or the property table dump. Empty on a normal RoofSpan-managed fresh
+         install (RoofSpanBootstrap.exe then generates its own temporary bootstrap credential). -->
+    <Property Id="PG_SUPERPASSWORD" Secure="yes" Hidden="yes" />
+
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
     <!-- First-install DB + deployed-config bootstrap. Runs BEFORE StartServices so RoofSpanBackend never
          starts without its generated local DATABASE_URL. Upgrade/repair preserves existing creds. Native
-         psql/role/db execution is HUMAN REQUIRED. PgSuperPassword is passed by the bundle (bundle.wxs). -->
+         psql/role/db execution is HUMAN REQUIRED.
+         Secure secret handoff: an immediate SetProperty (Id == the deferred CA Id) builds the command line
+         as this deferred action's CustomActionData; the superuser credential is passed as an argv value.
+         WixSilentExec (not WixQuietExec) suppresses command-line logging and HideTarget="yes" prevents the
+         CustomActionData from being written to the MSI log, so PG_SUPERPASSWORD never leaks. -->
     <SetProperty Id="RoofSpanBootstrap"
-                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot;"
+                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot; --pg-superpassword &quot;[PG_SUPERPASSWORD]&quot;"
                  Before="RoofSpanBootstrap" Sequence="execute" />
-    <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_X86" DllEntry="WixQuietExec"
-                  Execute="deferred" Impersonate="no" Return="check" />
-    <CustomAction Id="SetBootstrapEnv" Property="RoofSpanBootstrap"
-                  Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot;" />
+    <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixSilentExec"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
 
     <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
                   ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;http://127.0.0.1:8001/&quot;"
