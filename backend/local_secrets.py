@@ -19,7 +19,7 @@ import secrets as _secrets
 
 log = logging.getLogger("roofspan.secrets")
 
-DEFAULT_SECRETS_DIR = r"C:\ProgramData\RoofSpan\config"
+DEFAULT_SECRETS_DIR = r"C:\ProgramData\RoofSpan\secrets"
 SECRETS_FILENAME = "secrets.env"
 
 # name -> generator
@@ -79,9 +79,15 @@ def ensure_local_secrets() -> None:
             generated.append(k)
 
     if generated:
+        # FAIL CLOSED: newly generated installation secrets MUST persist durably. Continuing with an
+        # ephemeral key would invalidate all sessions and make locally-encrypted integration credentials
+        # undecryptable on the next restart. Never log the secret values.
         try:
             _persist(path, to_write)
-            log.info("Generated %d local installation secret(s); persisted to protected config.",
-                     len(generated))  # names/values intentionally not logged
         except OSError as e:
-            log.warning("Could not persist local secrets (%s); using in-memory values for this run.", e)
+            raise RuntimeError(
+                f"RoofSpan could not persist installation secrets to {path} ({e}). Refusing to start with "
+                "non-durable keys. Ensure the RoofSpanBackend service account can write the secrets "
+                "directory."
+            ) from None
+        log.info("Generated %d local installation secret(s); persisted to protected storage.", len(generated))

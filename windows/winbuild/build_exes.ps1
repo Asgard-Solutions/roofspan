@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 
 # service specs -> staged under services\ ; the recovery tool -> staged under tools\ (NOT a service).
 $serviceSpecs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
-$toolSpecs = @("roofspan-owner-recovery.spec")
+$toolSpecs = @("roofspan-owner-recovery.spec", "roofspan-bootstrap.spec")
 foreach ($spec in ($serviceSpecs + $toolSpecs)) {
   $specPath = Join-Path $PSScriptRoot $spec
   if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }

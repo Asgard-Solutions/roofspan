@@ -669,3 +669,30 @@ pairing/relay/update go outbound). This is code/config readiness — no AWS depl
   Postgres connection; real CP/Relay endpoints; native services. **P1-4b** (production Stripe onboarding
   completion + mocked-Stripe test replacing `/api/setup/dev/pay`) is the next checkpoint — NOT started.
 
+
+## RoofSpan Office — P1-4a (revised): fail-closed secrets + first-install DB/config bootstrap (2026-06)
+Fixes two review blockers on P1-4a.
+- **Secrets storage moved** to Backend-only `C:\ProgramData\RoofSpan\secrets\secrets.env`
+  (`local_secrets.DEFAULT_SECRETS_DIR`). WiX `SecretsDir` + `AclSecrets` grants **only** `NT SERVICE\
+  RoofSpanBackend` read/write; Relay/Updater get none. **FAIL-CLOSED:** if a generated secret cannot be
+  durably persisted, `ensure_local_secrets()` raises RuntimeError (startup fails) instead of continuing
+  with an ephemeral key — prevents session/credential loss on restart. Env-provided secrets (dev/.env)
+  still win and skip generation. Secret values never logged. WiX ACL is authoritative on Windows (chmod is
+  POSIX-only best effort); native ACL HUMAN REQUIRED.
+- **DB + deployed-config bootstrap** `windows/winbuild/bootstrap_db.py` → `RoofSpanBootstrap.exe`
+  (TOOL_TARGETS + spec + build_exes tool list). WiX custom action `RoofSpanBootstrap` sequenced **Before
+  StartServices** (NOT Installed): generates a unique random local DB password (never `postgres`/`roofspan`/
+  universal/committed/logged), provisions least-privilege `roofspan` role + `roofspan` database via the
+  bundled PG superpassword, and renders the shipped template → DEPLOYED `C:\ProgramData\RoofSpan\config\
+  roofspan.env` with the real `DATABASE_URL` — so Backend never starts with the `__GENERATED_AT_FIRST_RUN__`
+  placeholder. Upgrade/repair PRESERVES the existing deployed config/creds (idempotent). Template stays
+  secret-free with the placeholder; clearly distinguishes TEMPLATE (Program Files) vs DEPLOYED (ProgramData).
+- **Tests:** windows `test_db_bootstrap.py` (7: password random/unique/strong, placeholder substitution,
+  fresh-write real URL + upgrade-preserve, packaged+custom-action-before-StartServices, Backend-only secrets
+  ACL) + `test_production_config.py`/`test_local_secrets.py` additions (fail-closed persist). windows
+  **87 passed**; backend `test_local_secrets` **5 passed** + onboarding/token_recovery regression **5 passed**;
+  running app health/login/me OK. Preserved all prior P1-4a work (seed double-gate, http/stripe modes,
+  same-origin frontend, CP/Relay/update URLs, no preview/secrets in package).
+- **HUMAN REQUIRED (native):** MSI custom-action execution + PG role/db provisioning + secrets/config ACL
+  resolution on a real Windows box; verify Backend starts only after bootstrap. **P1-4b NOT started.**
+

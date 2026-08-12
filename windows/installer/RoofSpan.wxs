@@ -41,6 +41,7 @@
         <Directory Id="IdentityDir" Name="identity" />   <!-- installation identity keys (PRESERVED) -->
         <Directory Id="LogsDir" Name="logs" />
         <Directory Id="ConfigDir" Name="config" />
+        <Directory Id="SecretsDir" Name="secrets" />
       </Directory>
     </StandardDirectory>
 
@@ -103,6 +104,9 @@
                   Description="Reset the RoofSpan Owner password. Requires 'Run as administrator'."
                   Advertise="yes" />
       </Component>
+      <Component Id="Tool_Bootstrap" Guid="*">
+        <File Id="BootstrapExe" Source="$(var.StageDir)\tools\RoofSpanBootstrap.exe" KeyPath="yes" />
+      </Component>
       <Component Id="StartMenuCleanup" Directory="StartMenuMaint" Guid="*">
         <RemoveFolder Id="RmStartMenuMaint" Directory="StartMenuMaint" On="uninstall" />
         <RemoveFolder Id="RmStartMenuRoofSpan" Directory="StartMenuRoofSpan" On="uninstall" />
@@ -144,6 +148,13 @@
           <util:PermissionEx User="RoofSpanUpdate" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
         </CreateFolder>
       </Component>
+      <!-- Installation secrets (JWT + encryption key) live here, writable ONLY by the Backend account.
+           Relay/Updater get NO access. Persisted across upgrade/uninstall with customer data. -->
+      <Component Id="AclSecrets" Directory="SecretsDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
     </ComponentGroup>
 
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
@@ -157,10 +168,22 @@
     </Feature>
 
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
+    <!-- First-install DB + deployed-config bootstrap. Runs BEFORE StartServices so RoofSpanBackend never
+         starts without its generated local DATABASE_URL. Upgrade/repair preserves existing creds. Native
+         psql/role/db execution is HUMAN REQUIRED. PgSuperPassword is passed by the bundle (bundle.wxs). -->
+    <SetProperty Id="RoofSpanBootstrap"
+                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot;"
+                 Before="RoofSpanBootstrap" Sequence="execute" />
+    <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_X86" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="SetBootstrapEnv" Property="RoofSpanBootstrap"
+                  Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot;" />
+
     <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
                   ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;http://127.0.0.1:8001/&quot;"
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
+      <Custom Action="RoofSpanBootstrap" Before="StartServices" Condition="NOT Installed" />
       <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed" />
     </InstallExecuteSequence>
 

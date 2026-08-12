@@ -46,6 +46,13 @@ def test_environment_wins_and_is_not_persisted(secret_env):
     assert not (secret_env / "secrets.env").exists()
 
 
+def test_fail_closed_when_persist_fails(secret_env):
+    # point secrets dir at an unwritable location -> generation must FAIL CLOSED (never ephemeral)
+    os.environ["ROOFSPAN_SECRETS_DIR"] = "/proc/roofspan-cannot-write"
+    with pytest.raises(RuntimeError):
+        local_secrets.ensure_local_secrets()
+
+
 def test_owner_seed_double_gated(monkeypatch):
     import server
     from licensing import config as lc

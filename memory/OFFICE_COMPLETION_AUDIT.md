@@ -153,6 +153,14 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > update URLs, local 127.0.0.1 + local Postgres, no secrets); frontend API base falls back to same-origin
 > for the packaged build. windows 81/81, backend affected 9/9, frontend build clean. **P1-4b (production
 > Stripe onboarding completion) NOT started — pending approval.**
+>
+> **P1-4a (revised, blockers fixed) COMPLETE & VERIFIED:** (1) secrets now in a Backend-only ProgramData
+> `secrets\` dir (WiX ACL: RoofSpanBackend read/write; Relay/Updater none) and bootstrap is **FAIL-CLOSED**
+> — startup raises if generated secrets can't be durably persisted (no ephemeral keys). (2) New
+> `RoofSpanBootstrap.exe` (WiX custom action BEFORE StartServices) generates a unique local DB password,
+> provisions least-privilege `roofspan` role+db, and renders template → DEPLOYED `ProgramData\config\
+> roofspan.env` before Backend starts; upgrade preserves existing creds. windows 87/87, backend 5/5 (+
+> onboarding/token regression 5/5); app healthy. Native psql/MSI/ACL HUMAN REQUIRED.
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

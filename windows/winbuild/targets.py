@@ -18,6 +18,7 @@ SERVICE_EXES = [f"{name}.exe" for name in SERVICE_TARGETS]
 # Non-service operator tools (packaged with Office; NOT registered as services / not auto-started).
 TOOL_TARGETS = {
     "RoofSpanOwnerRecovery": "owner_recovery.py",
+    "RoofSpanBootstrap": "bootstrap_db.py",
 }
 TOOL_EXES = [f"{name}.exe" for name in TOOL_TARGETS]
 
