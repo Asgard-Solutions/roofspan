@@ -23,10 +23,12 @@ EXPECTED_ACCOUNT_ID="${EXPECTED_ACCOUNT_ID:-391722048303}"
 # --- Extract key tfvars values for the confirmation banner (read-only) ---
 getvar() { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" | head -n1 | cut -d'=' -f2- | tr -d ' "'; }
 tf_region="$(getvar aws_region)"
+tf_dns="$(getvar dns_provider)"
 tf_zone="$(getvar route53_zone_id)"
 tf_env="$(getvar environment)"
 tf_cp_img="$(getvar control_plane_image)"
 tf_relay_img="$(getvar relay_image)"
+tf_dns="${tf_dns:-external}"
 
 echo "======================================================================"
 echo " RoofSpan Terraform PLAN — review BEFORE continuing (no apply)"
@@ -34,7 +36,8 @@ echo "======================================================================"
 echo "  AWS account (live)   : $account_id"
 echo "  AWS region (shell)   : $region"
 echo "  tfvars aws_region    : ${tf_region:-<unset>}"
-echo "  tfvars route53_zone  : ${tf_zone:-<unset>}"
+echo "  tfvars dns_provider  : ${tf_dns}"
+echo "  tfvars route53_zone  : ${tf_zone:-<empty — external DNS>}"
 echo "  tfvars environment   : ${tf_env:-<unset>}"
 echo "  control_plane_image  : ${tf_cp_img:-<unset>}"
 echo "  relay_image          : ${tf_relay_img:-<unset>}"
@@ -46,13 +49,17 @@ if [ "$tf_region" != "$region" ]; then
   echo "ERROR: shell AWS_REGION ($region) != tfvars aws_region ($tf_region). Reconcile before planning." >&2
   exit 1
 fi
-case "${tf_zone:-}" in
-  ""|REQUIRED*|Z_PENDING*|CHANGE*)
-    echo "ERROR: route53_zone_id is not set to a real value." >&2
-    echo "       DNS is a DECISION REQUIRED item (roofspan.io is on GoDaddy, not Route53)." >&2
-    echo "       See scripts/README.md 'DNS DECISION REQUIRED' before planning." >&2
-    exit 1 ;;
-esac
+if [ "$tf_dns" = "route53" ]; then
+  case "${tf_zone:-}" in
+    ""|REQUIRED*|Z_PENDING*|CHANGE*)
+      echo "ERROR: dns_provider=route53 but route53_zone_id is not a real hosted-zone id." >&2
+      exit 1 ;;
+  esac
+else
+  echo "  DNS mode = external (GoDaddy): route53_zone_id not required; Terraform creates NO DNS records."
+  echo "            After apply, add the records from: terraform output acm_validation_records"
+  echo "            and: terraform output external_dns_endpoint_records"
+fi
 case "${tf_cp_img:-}${tf_relay_img:-}" in
   *REPLACE*|*"@sha256:REPLACE"*|"")
     echo "ERROR: image references still contain placeholders. Run build-push-images.sh and paste digests." >&2

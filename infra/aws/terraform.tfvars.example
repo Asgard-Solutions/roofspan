@@ -1,16 +1,27 @@
 # Placeholders only — NEVER commit real values. Copy to terraform.tfvars and fill in.
-# HUMAN REQUIRED values are marked. Region and hosted zone MUST be the real RoofSpan values.
+# Non-secret infrastructure values only. Secrets go into Secrets Manager out-of-band (see RUNBOOK.md §4).
 
-aws_region      = "REQUIRED-e.g-us-east-1"   # HUMAN REQUIRED — no default
-route53_zone_id = "REQUIRED-ZXXXXXXXXXXXXX"  # HUMAN REQUIRED — existing roofspan.io zone
+# ---- Region (LOCKED for the RoofSpan app stack) ----
+# us-east-2. Do NOT infer us-east-1 from CloudFront (the downloads.roofspan.io cert is separate).
+aws_region = "us-east-2"
 
-# Build + push images first (see RUNBOOK.md), then reference by DIGEST (preferred) or immutable tag.
-control_plane_image = "ACCOUNT.dkr.ecr.REGION.amazonaws.com/roofspan-control-plane@sha256:REPLACE"
-relay_image         = "ACCOUNT.dkr.ecr.REGION.amazonaws.com/roofspan-relay@sha256:REPLACE"
+# ---- DNS ----
+# "external" (DEFAULT) = roofspan.io DNS stays at GoDaddy. Terraform creates NO Route53 records and
+# route53_zone_id is NOT required. After apply, read the outputs and add the records at GoDaddy:
+#   terraform output acm_validation_records        # ACM validation CNAME(s) -> issues the cert
+#   terraform output external_dns_endpoint_records # cp/relay CNAMEs -> the ALB
+dns_provider = "external"
+# route53_zone_id = ""   # leave empty for external DNS; set ONLY if dns_provider = "route53"
 
+# ---- Images ----
+# Build + push first (see scripts/README.md + RUNBOOK.md), then reference by DIGEST (preferred).
+control_plane_image = "391722048303.dkr.ecr.us-east-2.amazonaws.com/roofspan-control-plane@sha256:REPLACE"
+relay_image         = "391722048303.dkr.ecr.us-east-2.amazonaws.com/roofspan-relay@sha256:REPLACE"
+
+# ---- Locked initial production settings ----
 environment        = "production"
+single_nat_gateway = true  # false for HA egress (higher cost)
+rds_multi_az       = false # true for RDS HA
 # cp_hostname     = "cp.roofspan.io"
 # relay_hostname  = "relay.roofspan.io"
 # vpc_cidr        = "10.42.0.0/16"
-# single_nat_gateway = true   # false for HA egress (higher cost)
-# rds_multi_az    = false     # true for RDS HA

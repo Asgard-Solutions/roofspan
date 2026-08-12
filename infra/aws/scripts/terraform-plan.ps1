@@ -20,6 +20,7 @@ function Get-Tfvar($name) {
   ($line.Line -split "=", 2)[1].Trim().Trim('"')
 }
 $TfRegion = Get-Tfvar "aws_region"
+$TfDns    = Get-Tfvar "dns_provider"; if (-not $TfDns) { $TfDns = "external" }
 $TfZone   = Get-Tfvar "route53_zone_id"
 $TfEnv    = Get-Tfvar "environment"
 $TfCp     = Get-Tfvar "control_plane_image"
@@ -28,6 +29,7 @@ $TfRelay  = Get-Tfvar "relay_image"
 Write-Host "AWS account (live)  : $AccountId"
 Write-Host "AWS region (shell)  : $Region"
 Write-Host "tfvars aws_region   : $TfRegion"
+Write-Host "tfvars dns_provider : $TfDns"
 Write-Host "tfvars route53_zone : $TfZone"
 Write-Host "tfvars environment  : $TfEnv"
 Write-Host "control_plane_image : $TfCp"
@@ -35,8 +37,13 @@ Write-Host "relay_image         : $TfRelay"
 
 if (-not $TfRegion) { throw "aws_region not set in $Tfvars." }
 if ($TfRegion -ne $Region) { throw "shell AWS_REGION ($Region) != tfvars aws_region ($TfRegion)." }
-if (-not $TfZone -or $TfZone -match "^(REQUIRED|Z_PENDING|CHANGE)") {
-  throw "route53_zone_id not real. DNS is DECISION REQUIRED (roofspan.io on GoDaddy). See scripts/README.md."
+if ($TfDns -eq "route53") {
+  if (-not $TfZone -or $TfZone -match "^(REQUIRED|Z_PENDING|CHANGE)") {
+    throw "dns_provider=route53 but route53_zone_id is not a real hosted-zone id."
+  }
+} else {
+  Write-Host "DNS mode = external (GoDaddy): route53_zone_id not required; Terraform creates NO DNS records."
+  Write-Host "After apply: terraform output acm_validation_records; terraform output external_dns_endpoint_records"
 }
 if (("$TfCp$TfRelay" -match "REPLACE") -or (-not $TfCp) -or (-not $TfRelay)) {
   throw "image references still placeholders. Run build-push-images first."

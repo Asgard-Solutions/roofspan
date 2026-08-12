@@ -59,8 +59,9 @@ Fill these into a local, git-ignored `infra/aws/terraform.tfvars` (copy `terrafo
 
 | tfvars key            | Value / source                                                        |
 |-----------------------|------------------------------------------------------------------------|
-| `aws_region`          | **Explicit** intended app region (see "Region")                        |
-| `route53_zone_id`     | **BLOCKED — DNS DECISION REQUIRED** (roofspan.io is on GoDaddy)         |
+| `aws_region`          | **`us-east-2`** (LOCKED — app stack)                                    |
+| `dns_provider`        | **`external`** (GoDaddy; Route53 optional)                             |
+| `route53_zone_id`     | **Not required** in external mode (leave empty)                        |
 | `control_plane_image` | `@sha256:` digest from `build-push-images.sh`                          |
 | `relay_image`         | `@sha256:` digest from `build-push-images.sh`                          |
 | `environment`         | `production` (locked)                                                   |
@@ -73,44 +74,44 @@ out-of-band (see `RUNBOOK.md` §4).
 
 ---
 
-## Region — reported for explicit approval
-The Terraform source **does not assume any region**. `variables.tf` declares:
-
-```hcl
-variable "aws_region" {
-  description = "Production AWS region ... HUMAN REQUIRED — do NOT default. ACM certs for the ALB are created in THIS region."
-  # NO default; validation fails if empty.
-}
-```
-and `versions.tf` sets `provider "aws" { region = var.aws_region }`.
-
-**Consequence:** the ALB's ACM certificate is created in `aws_region`, so the app stack's region **is**
-`aws_region` — pick it deliberately. The downloads bucket lives in **us-east-2**, but that is a *separate*
-decision and **must not** be inferred as the app region. **ACTION: confirm the intended RoofSpan app
-region and set `aws_region` accordingly.**
+## Region — LOCKED: us-east-2
+The RoofSpan app stack region is **`us-east-2`** (`terraform.tfvars.example` sets `aws_region = "us-east-2"`).
+The ALB's regional ACM cert is created in this region. **Do NOT infer us-east-1 from CloudFront** — the
+`downloads.roofspan.io` certificate is in us-east-1 only because CloudFront requires it there; that is a
+separate, untouched piece of infra. Set your shell `export AWS_REGION=us-east-2` to match.
 
 ---
 
-## ⛔ DNS DECISION REQUIRED (current blocker for a full plan)
-`roofspan.io` is managed at **GoDaddy**, but the current IaC (`dns_acm.tf`) **hard-requires a Route53
-hosted zone**: `route53_zone_id` is a required variable **and** the stack creates Route53 records for
-(a) ACM DNS validation and (b) `cp.roofspan.io` / `relay.roofspan.io` A-aliases to the ALB.
+## DNS — DECIDED: External (GoDaddy), Route53 optional
+`roofspan.io` DNS stays at **GoDaddy**. The IaC now supports `dns_provider`:
 
-You therefore **cannot** fill `route53_zone_id` or `apply` DNS as-is. This is a material decision — **no
-code has been changed for it.** Options (pick one; do not migrate DNS without approval):
+- **`dns_provider = "external"` (DEFAULT)** — Terraform creates **no Route53 records** and **does not
+  require** `route53_zone_id`. It still requests the regional ACM cert and **outputs** the exact records
+  you add at GoDaddy.
+- `dns_provider = "route53"` — legacy behavior; Terraform manages validation + A-alias records (requires
+  `route53_zone_id`).
 
-- **Option A — Migrate roofspan.io DNS to Route53.** Create a public hosted zone for `roofspan.io`,
-  repoint GoDaddy nameservers to Route53. IaC then works unchanged. *Largest blast radius* — every
-  roofspan.io record (including the `downloads.roofspan.io` alias) must be recreated in Route53 first.
-- **Option B — Delegate a subdomain to Route53.** Create a Route53 zone and delegate `cp`/`relay` via NS
-  records at GoDaddy. Awkward (per-host delegation + ACM validation records live in the delegated zone).
-- **Option C — Keep DNS at GoDaddy (no Route53).** Refactor the IaC to make Route53 optional: use ACM
-  DNS validation via CNAMEs added manually at GoDaddy, and output the ALB DNS name so `cp`/`relay` CNAMEs
-  are added at GoDaddy. *Least AWS-invasive*, but requires a Terraform change (gate `dns_acm.tf` behind a
-  flag + add outputs). **Recommended if you want to keep GoDaddy as the DNS authority.**
+### External DNS = two-stage apply (because ACM must be ISSUED before the HTTPS listener)
+The ALB HTTPS listener depends on an **issued** cert, and issuance needs the validation CNAME added at
+GoDaddy. So for external DNS:
 
-Until a DNS option is approved, `terraform-plan.sh` intentionally refuses to run with a placeholder
-`route53_zone_id`.
+1. **Stage 1 — create the cert only:**
+   ```bash
+   terraform apply -target=aws_acm_certificate.main
+   terraform output acm_validation_records          # add these CNAME(s) at GoDaddy
+   ```
+   Add the CNAME(s) at GoDaddy → wait until ACM reports the cert **ISSUED**.
+2. **Stage 2 — full apply:** `terraform apply` (the validation resource confirms ISSUED quickly, then the
+   ALB + services come up).
+3. **Endpoint records:** after the ALB exists,
+   ```bash
+   terraform output external_dns_endpoint_records   # add cp/relay CNAMEs -> ALB at GoDaddy
+   ```
+   Add `cp.roofspan.io` and `relay.roofspan.io` as **CNAME → the ALB DNS name** at GoDaddy.
+
+> All of the above are **HUMAN REQUIRED** DNS actions surfaced by Terraform outputs. Terraform never
+> writes to GoDaddy. `terraform-plan.sh` does **not** require `route53_zone_id` in external mode.
+> `downloads.roofspan.io` / `roofspan-downloads-prod` are **not** part of this stack and are never touched.
 
 ---
 
@@ -138,11 +139,25 @@ safe against ARM/Apple-Silicon build machines). Build scripts therefore build **
 
 ---
 
-## Terraform remote state
-Bootstrapped **separately** — see `../REMOTE_STATE.md`. Do **not** reuse the downloads bucket. Recommended
-dedicated bucket `roofspan-tfstate-<account>-<region>` (versioning + SSE-KMS + Block Public Access) with
-Terraform **S3-native locking** (`use_lockfile=true`, Terraform ≥ 1.10) — no DynamoDB table required. Export
-`TF_STATE_BUCKET` (and optionally `TF_STATE_KEY`) before Stage A / the plan runner.
+## Terraform remote state — proposed (NOT created yet)
+Bootstrapped **separately** — see `../REMOTE_STATE.md`. Nothing is created until you explicitly approve.
+
+**Locking mechanism (verified):** Terraform in use is **v1.10.5**, which supports **S3-native state
+locking** (`use_lockfile = true`) — **no DynamoDB table required**. (DynamoDB locking is only needed on
+Terraform < 1.10.)
+
+**Proposed names for account `391722048303` / region `us-east-2` (approve before creating):**
+- S3 state bucket: **`roofspan-tfstate-391722048303-us-east-2`** (versioning ON, SSE-KMS, Block Public
+  Access ON)
+- State key: **`control-plane-relay/terraform.tfstate`**
+- Lock: **S3 native lockfile** (`use_lockfile=true`) — no DynamoDB
+- KMS: a dedicated CMK for state encryption (or SSE-S3 if you prefer) — your call at bootstrap
+
+Do **not** reuse the downloads bucket. Export before Stage A / the plan runner:
+```bash
+export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2
+# export TF_STATE_KEY=control-plane-relay/terraform.tfstate   # optional; this is the default
+```
 
 ---
 

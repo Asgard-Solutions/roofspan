@@ -5,12 +5,15 @@ AWS credentials. Do not run `apply` until the plan is reviewed and approved. Nev
 `downloads.roofspan.io`.
 
 ## 0. Prerequisites / inputs (HUMAN REQUIRED — do not invent)
-- AWS account ID + operator access; **`aws_region`** (explicit — no default).
-- **`route53_zone_id`** for the existing `roofspan.io` hosted zone.
-- Terraform ≥ 1.6 (1.10+ for S3 native lock), Docker, AWS CLI.
+- AWS account ID **391722048303** + operator access; **`aws_region = us-east-2`** (LOCKED).
+- **DNS = external (GoDaddy)** by default (`dns_provider = "external"`) — **no Route53 zone required**.
+  Only set `route53_zone_id` if you switch to `dns_provider = "route53"`.
+- Terraform ≥ 1.10 (S3 native lock; verified v1.10.5), Docker, AWS CLI v2.
 
-## 1. Confirm region + hosted zone
-`aws configure` region == intended prod region; confirm the zone id resolves to `roofspan.io`.
+## 1. Confirm region + DNS mode
+`aws_region` == `us-east-2`. Confirm `dns_provider` (`external` for GoDaddy). For external DNS you will
+add records at GoDaddy from the Terraform outputs (`acm_validation_records`, `external_dns_endpoint_records`)
+— see §5b. Do NOT touch `downloads.roofspan.io`.
 
 ## 2. Terraform remote-state bootstrap
 Follow `REMOTE_STATE.md` (create state bucket, `terraform init -backend-config=...`). HUMAN REQUIRED.
@@ -38,6 +41,13 @@ Set `control_plane_image` / `relay_image` in `terraform.tfvars` to the **@sha256
 
 ## 6. Init / plan / review / apply
 `terraform fmt -check && terraform validate && terraform plan` → review → `terraform apply`.
+**External DNS (GoDaddy) = two-stage apply** (ACM must be ISSUED before the HTTPS listener):
+### 5b. External DNS — HUMAN REQUIRED records at GoDaddy
+1. Stage 1 — create the cert only: `terraform apply -target=aws_acm_certificate.main`, then
+   `terraform output acm_validation_records` → add the CNAME(s) at GoDaddy → wait until ACM = ISSUED.
+2. Stage 2 — full apply. After the ALB exists, `terraform output external_dns_endpoint_records` →
+   add `cp.roofspan.io` and `relay.roofspan.io` as **CNAME → ALB DNS name** at GoDaddy.
+Terraform never writes to GoDaddy; it only reports the required records.
 
 ## 7. Migrations
 The CP container entrypoint runs `alembic upgrade head` under a **Postgres advisory lock** (single runner;
@@ -70,7 +80,8 @@ Set RoofSpan Office + Mobile production endpoints (see `infra/config/production.
 independent — not derived from the CP URL). Clients must fail clearly if absent.
 
 ## HUMAN REQUIRED checklist
-AWS account ID · region · Route53 zone id · state bucket/KMS decision · VPC CIDR approval · CP/Relay ECS
+AWS account 391722048303 · region us-east-2 · DNS mode (external/GoDaddy default) · GoDaddy validation +
+cp/relay CNAME records (from TF outputs) · state bucket/KMS decision · VPC CIDR approval · CP/Relay ECS
 sizing approval · Stripe prod secret + webhook secret · RevenueCat prod creds (if used) · Cognito operator
 users · KMS key permissions/confirmation · Docker build+push execution · Terraform credentials · final
 `plan` review · explicit approval to `apply`.

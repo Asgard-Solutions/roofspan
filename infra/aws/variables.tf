@@ -8,13 +8,28 @@ variable "aws_region" {
   }
 }
 
-variable "route53_zone_id" {
-  description = "EXISTING roofspan.io Route53 hosted zone ID. HUMAN REQUIRED. Do NOT create a second zone."
+variable "dns_provider" {
+  description = <<-EOT
+    Where roofspan.io DNS is authoritative.
+      "external" (DEFAULT) = DNS is hosted OUTSIDE Route53 (e.g. GoDaddy). Terraform does NOT create any
+                 Route53 records and does NOT require a hosted zone. It still requests the ACM cert and
+                 OUTPUTS the exact validation CNAMEs + endpoint CNAMEs the operator must add at the
+                 external DNS provider (HUMAN REQUIRED). See scripts/README.md "External DNS".
+      "route53"  = roofspan.io hosted zone lives in Route53; Terraform manages validation + A-alias records
+                 automatically (requires route53_zone_id).
+  EOT
   type        = string
+  default     = "external"
   validation {
-    condition     = length(var.route53_zone_id) > 0
-    error_message = "route53_zone_id (existing roofspan.io hosted zone) is required."
+    condition     = contains(["external", "route53"], var.dns_provider)
+    error_message = "dns_provider must be \"external\" (GoDaddy/other) or \"route53\"."
   }
+}
+
+variable "route53_zone_id" {
+  description = "EXISTING roofspan.io Route53 hosted zone ID. Required ONLY when dns_provider = \"route53\". Leave empty for external DNS. Do NOT create a second zone."
+  type        = string
+  default     = ""
 }
 
 variable "control_plane_image" {
