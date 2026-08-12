@@ -12,8 +12,11 @@ a = Analysis(
     pathex=[BACKEND, WINDOWS],
     binaries=[],
     datas=[
+        # migrations_runner.py loads alembic.ini + the alembic/ tree from its own directory (== the
+        # PyInstaller _MEIPASS root at runtime), so mirror that layout: alembic.ini at the root and the
+        # real backend/alembic package (env.py, script.py.mako, versions/*.py) under "alembic".
         (os.path.join(BACKEND, "alembic.ini"), "."),
-        (os.path.join(BACKEND, "migrations"), "migrations"),
+        (os.path.join(BACKEND, "alembic"), "alembic"),
     ],
     hiddenimports=[
         "server", "uvicorn", "uvicorn.logging", "uvicorn.protocols",
