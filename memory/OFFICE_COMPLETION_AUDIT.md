@@ -129,8 +129,10 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > before P1.
 
 > **P1 STATUS (2026-06):** in progress (report+pause after each item). **P1-1 COMPLETE & VERIFIED** —
-> Office Mobile Devices admin page (generate QR + numeric code + expiry countdown, paired-device list,
-> revoke; sensitive-role only). Testing agent iteration_13 = 100%; `yarn build` clean.
+> Office Mobile Devices admin page (iteration_13 = 100%). **P1-2 COMPLETE & VERIFIED** — Windows Relay
+> Connector service audit + connector runtime bootstrap completion (config-file load, rotating logs,
+> graceful missing-config); separate-process architecture preserved; 52/53 windows tests pass (1
+> pre-existing website-scope failure unrelated to P1-2).
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

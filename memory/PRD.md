@@ -511,3 +511,30 @@ Mobile-expansion/website/installer-publish work performed.
   `/admin/devices` shows Access restricted, page not rendered); `yarn build` clean. No new persistent
   credentials. Not started: P1-2..P1-6. No AWS/Mobile-field/website work.
 
+
+## RoofSpan Office — P1-2: Windows Secure Relay Connector Service Audit/Completion (2026-06)
+Architecture PRESERVED: two separate Windows services — **RoofSpanBackend** (local API + UI, 127.0.0.1)
+and **RoofSpanRelayConnector** (outbound-only tunnel). InstallationTunnel NOT merged into FastAPI.
+- **Audit result — already correct (preserved, not rewritten):** WiX `RoofSpanRelayConnector`
+  `Type=ownProcess Start=auto`, restricted `NT SERVICE\RoofSpanRelay` account, restart-on-failure (3×,
+  15s), install/stop/remove control, exe from staged `services\`; ProgramData `pgdata`/`identity`
+  PRESERVED on upgrade/uninstall; `targets.py` maps `roofspan-relay-connector`→`relay_entry.py`;
+  PyInstaller spec produces the exe (cross-checked by `test_installer_static`); `tunnel_client` is
+  outbound WSS with bounded reconnect backoff + `stop()`, no inbound socket → no firewall port.
+- **Gaps fixed in `windows/winbuild/relay_entry.py`** (a Windows service does NOT auto-load a .env):
+  now loads `C:\ProgramData\RoofSpan\config\roofspan.env` (KEY=VALUE, no external dep) with **service/
+  machine env taking precedence over the file**; defaults `INSTALLATION_KEYS_DIR`; configures **rotating
+  file logging** → `C:\ProgramData\RoofSpan\logs\relay-connector.log` (+console); resolves relay/local
+  URLs; if `ROOFSPAN_RELAY_WS_URL` missing → logs a clear message and `sys.exit(2)` (no bare-KeyError
+  tight-loop under the restart policy). Refactored into pure testable helpers (`load_env_file`,
+  `apply_env`, `resolve_config`, `setup_logging`). Outbound tunnel architecture unchanged.
+- **Env template** `windows/winbuild/config/roofspan.env.template`: documents that the connector loads
+  this file (env vars win) + adds `ROOFSPAN_LOG_DIR`. No secrets.
+- **Tests:** new `windows/tests/test_relay_connector.py` (8 tests: env parse/precedence, config resolve,
+  graceful missing-config exit(2), separate-process (no uvicorn/server import), WiX autostart/restart/
+  restricted-account/no-firewall, outbound+bounded-reconnect tunnel). Full windows suite: **52 passed**;
+  1 PRE-EXISTING failure `test_public_website_download_remains_disabled` (website `.env` set AVAILABLE=
+  true during earlier P2 — WEBSITE scope, NOT P1-2; not modified here — flagged for decision).
+- **HUMAN REQUIRED:** native Windows service execution/registration + live relay reconnect on a real box.
+- **Not started:** P1-3..P1-6. No AWS/Terraform/Relay-infra, Mobile-field, or website work performed.
+
