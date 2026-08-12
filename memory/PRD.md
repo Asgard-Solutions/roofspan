@@ -538,3 +538,35 @@ and **RoofSpanRelayConnector** (outbound-only tunnel). InstallationTunnel NOT me
 - **HUMAN REQUIRED:** native Windows service execution/registration + live relay reconnect on a real box.
 - **Not started:** P1-3..P1-6. No AWS/Terraform/Relay-infra, Mobile-field, or website work performed.
 
+
+## RoofSpan Office — P1-2 (revised): Windows Relay Connector SCM Service Runtime (2026-06)
+**Root cause found on review:** there was NO SCM wrapper anywhere — `backend_entry.py`, `relay_entry.py`,
+`update_service_entry.py` were all plain console `main()` loops, yet WiX registered them via
+`ServiceInstall Type=ownProcess`. A console exe never calls `StartServiceCtrlDispatcher`, so SCM start
+would fail (error 1053). **Scope: Relay + Backend + Updater all share this.** Per instruction, fixed ONLY
+the Relay connector in P1-2; Backend + Updater reported for approval (do not modify without sign-off).
+- **New reusable SCM host** `windows/winbuild/winservice.py`: `AsyncServiceRunner` (pure, OS-independent —
+  runs one long-lived coroutine on a dedicated loop, thread-safe `stop()` cancels the task + invokes an
+  `on_stop` callback; unit-tested on Linux) + `build_service_class()` (pywin32 `ServiceFramework` with
+  `SvcDoRun`/`SvcStop`, reports RUNNING/STOP_PENDING; pywin32 imported LAZILY so the module imports on
+  Linux) + `dispatch()` (SCM `StartServiceCtrlDispatcher` when SCM-launched, else `HandleCommandLine`).
+- **`relay_entry.py`**: when `sys.frozen` → builds the `RoofSpanRelayConnector` service class (`_svc_name_`
+  matches the WiX Name) and dispatches to SCM; else runs foreground (dev). Tunnel logic (InstallationTunnel)
+  NOT duplicated; `SvcStop` → `tunnel.stop()` + task cancel. Retains config-file load + rotating logs +
+  graceful missing-URL exit(2). Separate-process architecture preserved (no FastAPI merge).
+- **Build**: spec adds pywin32 + `winbuild.winservice` hiddenimports; new `windows/winbuild/
+  requirements-windows.txt` (`pywin32`, `pyinstaller`); `build_exes.ps1` verifies pywin32 present.
+- **Service-account ACLs (WiX)**: new `DataAcls` component group grants `NT SERVICE\RoofSpanRelay` (and
+  Backend/Updater) least-privilege access — read `config`, read/write `identity`, write `logs` under
+  ProgramData (dirs preserved on upgrade/uninstall). HUMAN REQUIRED: verify `NT SERVICE\<name>` resolves
+  at MSI ACL time on a real box; fallback = a post-StartServices custom action if ordering is an issue.
+- **Tests** `windows/tests/test_relay_connector.py` (15): SCM host structure (`StartServiceCtrlDispatcher`,
+  `ServiceFramework`, `SvcDoRun/SvcStop`, `_svc_name_` binding), **async runner start/stop + on_stop
+  invoked**, separate-process, spec hiddenimports, WiX autostart/restart/restricted-account/no-firewall,
+  ACL grants, env template, outbound+bounded-reconnect tunnel, config/logging/missing-URL. Updated stale
+  `test_public_website_download_remains_disabled` → `_reflects_approved_availability` (=true, per approved
+  decision; test-only, no website change). Full `windows/tests`: **57 passed**.
+- **HUMAN REQUIRED**: native Windows — register/start `RoofSpanRelayConnector`, observe RUNNING/STOP + live
+  tunnel reconnect + ACL resolution. **DECISION REQUIRED**: apply the same SCM host to Backend + Updater
+  (recommended; awaiting approval). No backend/frontend runtime changed; no AWS/Mobile-field/website work.
+

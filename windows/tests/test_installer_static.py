@@ -109,6 +109,9 @@ def test_update_cadence_is_12h():
     assert CHECK_INTERVAL_SECONDS == 12 * 60 * 60
 
 
-def test_public_website_download_remains_disabled():
+def test_public_website_download_reflects_approved_availability():
+    # Product decision (approved): the public RoofSpan Office download is ENABLED. This static test
+    # tracks that approved state so it can't silently regress the website behavior.
     env = _read(os.path.join(os.path.dirname(HERE), "roofspan-website", ".env"))
-    assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=false" in env
+    assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true" in env
+    assert "downloads.roofspan.io/latest/RoofSpanSetup.exe" in env

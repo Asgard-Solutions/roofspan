@@ -11,7 +11,10 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=["relay.tunnel_client", "relay.protocol", "licensing.identity",
-                   "licensing.reqsig", "httpx", "websockets"],
+                   "licensing.reqsig", "httpx", "websockets",
+                   # Windows service host (pywin32 SCM integration) + reusable runner.
+                   "winbuild.winservice", "winservice",
+                   "win32serviceutil", "win32service", "win32event", "servicemanager", "win32timezone"],
     excludes=[],
 )
 pyz = PYZ(a.pure)

@@ -130,9 +130,10 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 
 > **P1 STATUS (2026-06):** in progress (report+pause after each item). **P1-1 COMPLETE & VERIFIED** —
 > Office Mobile Devices admin page (iteration_13 = 100%). **P1-2 COMPLETE & VERIFIED** — Windows Relay
-> Connector service audit + connector runtime bootstrap completion (config-file load, rotating logs,
-> graceful missing-config); separate-process architecture preserved; 52/53 windows tests pass (1
-> pre-existing website-scope failure unrelated to P1-2).
+> Connector service: found NO existing SCM wrapper (all 3 services were plain console exes → would fail
+> SCM start/1053). Added a reusable pywin32 SCM host + wired ONLY the Relay connector; added ProgramData
+> service-account ACLs. Backend + Updater have the SAME issue (reported, pending approval). 57/57 windows
+> tests pass. Native SCM execution HUMAN REQUIRED.
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

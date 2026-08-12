@@ -1,5 +1,7 @@
 # Builds the three RoofSpan Office service executables with PyInstaller.
-# HUMAN REQUIRED: run on Windows with `pip install pyinstaller` and the backend requirements installed.
+# HUMAN REQUIRED: run on Windows with the backend requirements + Windows build deps installed:
+#   pip install -r ..\..\backend\requirements.txt
+#   pip install -r requirements-windows.txt   # pywin32 (SCM service host) + pyinstaller
 #   .\build_exes.ps1 -OutDir ..\..\_stage\services
 param(
   [Parameter(Mandatory=$true)][string]$OutDir
@@ -7,7 +9,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
-  throw "pyinstaller not found. Run: pip install pyinstaller (and install backend requirements)."
+  throw "pyinstaller not found. Run: pip install -r requirements-windows.txt (and backend requirements)."
+}
+python -c "import win32serviceutil" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  throw "pywin32 not found. Run: pip install -r requirements-windows.txt (required for the Windows service host)."
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 

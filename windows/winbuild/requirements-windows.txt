@@ -1,0 +1,5 @@
+# Windows-ONLY build/runtime dependencies for the RoofSpan Office service executables.
+# Installed on the Windows build machine IN ADDITION to backend/requirements.txt + pyinstaller.
+# NOT installed on Linux/CI backend envs (pywin32 is Windows-only). See winbuild/build_exes.ps1.
+pywin32==306
+pyinstaller>=6.0

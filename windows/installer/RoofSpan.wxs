@@ -94,12 +94,42 @@
                      Type="string" Value="[DataRoot]" KeyPath="yes" />
     </Component>
 
+    <!-- Least-privilege ACLs so the per-service virtual accounts (NT SERVICE\*) can read config,
+         read/create the installation identity, and write logs WITHOUT elevated rights. The folders are
+         created here and preserved across upgrade/uninstall.
+         HUMAN REQUIRED: validate on a real box that NT SERVICE\<name> resolves at ACL time (it is created
+         by ServiceInstall); if ordering is a problem, move these grants to a post-StartServices custom
+         action. -->
+    <ComponentGroup Id="DataAcls">
+      <Component Id="AclConfig" Directory="ConfigDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanUpdate" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+      <Component Id="AclIdentity" Directory="IdentityDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+      <Component Id="AclLogs" Directory="LogsDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanUpdate" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+    </ComponentGroup>
+
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
       <ComponentGroupRef Id="FrontendFiles" />
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="Services" />
       <ComponentRef Id="DataDirs" />
+      <ComponentGroupRef Id="DataAcls" />
     </Feature>
 
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
