@@ -7,7 +7,7 @@ $Region = if ($env:AWS_REGION) { $env:AWS_REGION } else { "us-east-2" }
 $Bucket = if ($env:TF_STATE_BUCKET) { $env:TF_STATE_BUCKET } else { "roofspan-tfstate-$ExpectedAccount-$Region" }
 $StateKmsKeyId = $env:STATE_KMS_KEY_ID
 
-Write-Host "Bucket=$Bucket Region=$Region Locking=S3-native(no DynamoDB)"
+Write-Host "Bucket=$Bucket Region=$Region Locking=S3-native(no DynamoDB) Encrypt=$(if ($StateKmsKeyId) {'SSE-KMS'} else {'SSE-S3(AES256)'})"
 
 $AccountId = (aws sts get-caller-identity --query Account --output text).Trim()
 if ($AccountId -ne $ExpectedAccount) { throw "account $AccountId != expected $ExpectedAccount." }
@@ -27,10 +27,14 @@ if ($LASTEXITCODE -ne 0) {
 
 aws s3api put-bucket-versioning --bucket $Bucket --versioning-configuration Status=Enabled
 
+# Ownership: Bucket Owner Enforced (ACLs disabled)
+aws s3api put-bucket-ownership-controls --bucket $Bucket --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]'
+
+# Encryption: SSE-S3 (AES256) by default; SSE-KMS only if STATE_KMS_KEY_ID is set (optional future)
 if ($StateKmsKeyId) {
   $enc = "{`"Rules`":[{`"ApplyServerSideEncryptionByDefault`":{`"SSEAlgorithm`":`"aws:kms`",`"KMSMasterKeyID`":`"$StateKmsKeyId`"},`"BucketKeyEnabled`":true}]}"
 } else {
-  $enc = '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms"},"BucketKeyEnabled":true}]}'
+  $enc = '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
 }
 aws s3api put-bucket-encryption --bucket $Bucket --server-side-encryption-configuration $enc
 

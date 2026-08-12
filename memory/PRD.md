@@ -399,3 +399,7 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Package inventory**: Dockerfiles (`infra/docker/control-plane`+`relay`), 18 `.tf` files (validated), `scripts/` (6 bash + 6 ps1 + README), `terraform.tfvars.example` (us-east-2 + dns_provider=external + 391722048303 image refs), `RUNBOOK.md`, `REMOTE_STATE.md`. Terraform installed in-env is v1.10.5 (arm64).
 - **Operator sequence** = prereqs → resolve-context → bootstrap-remote-state → bootstrap-ecr (Stage A) → build-push-images → fill tfvars digests → terraform-plan → (external DNS two-stage) Stage 1 cert apply + add ACM CNAMEs at GoDaddy → Stage 2 full apply + add cp/relay CNAMEs at GoDaddy.
 
+
+## State-bucket encryption decision (2026-06): SSE-S3 default
+- Terraform state bucket now uses **SSE-S3 (AES256)** by default — no customer-managed KMS key created or required for initial deploy. `bootstrap-remote-state.sh`/`.ps1` set AES256 unless `STATE_KMS_KEY_ID` is provided (optional future SSE-KMS switch). Added **Bucket Owner Enforced** (ACLs disabled) alongside versioning ON + Block Public Access (all 4 flags). REMOTE_STATE.md documents least-privilege IAM (s3 List/Get/Put/Delete on the bucket+prefix; no kms:* while SSE-S3). fmt CLEAN.
+

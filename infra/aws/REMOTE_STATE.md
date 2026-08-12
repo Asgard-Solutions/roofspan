@@ -12,11 +12,26 @@ This stack stores its state in S3. The state bucket itself is created **once, ou
 | region       | `us-east-2`                                                  |
 | locking      | **S3-native `use_lockfile=true`** (NO DynamoDB table)        |
 | versioning   | ON                                                           |
-| encryption   | SSE-KMS (aws/s3 managed key default; `STATE_KMS_KEY_ID` opt) |
-| public access| fully blocked                                                |
+| encryption   | **SSE-S3 (AES256)** by default; SSE-KMS optional (future)    |
+| ownership    | **Bucket Owner Enforced** (ACLs disabled)                    |
+| public access| fully blocked (all four BPA flags true)                      |
+
+**Encryption:** SSE-S3 (AES256) is the default and is **not** required to use KMS. A customer-managed CMK
+is an **optional future enhancement** — set `STATE_KMS_KEY_ID` before running the bootstrap to switch to
+SSE-KMS. No dedicated KMS key is created for state.
 
 **Locking mechanism confirmed:** Terraform ≥ 1.10 supports S3-native state locking (`use_lockfile=true`),
 so **no DynamoDB lock table is required**. (Only use DynamoDB on Terraform < 1.10.)
+
+## IAM (least privilege for the state backend)
+The operator/CI principal running Terraform needs, at minimum, on the state bucket:
+- `s3:ListBucket` on `arn:aws:s3:::roofspan-tfstate-391722048303-us-east-2`
+- `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on
+  `arn:aws:s3:::roofspan-tfstate-391722048303-us-east-2/control-plane-relay/*`
+  (DeleteObject + the `.tflock` object handling are what S3-native locking uses)
+No `kms:*` is needed while encryption is SSE-S3. Grant the wider RoofSpan-stack permissions (ECS, ECR,
+RDS, ElastiCache, ALB, ACM, KMS for the entitlement key, Secrets Manager, Cognito, VPC) separately — keep
+state access scoped to just this bucket/prefix.
 
 ## One-time bootstrap (human, AWS-authenticated)
 ```bash

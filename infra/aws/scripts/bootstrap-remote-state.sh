@@ -10,7 +10,8 @@
 #   region       = us-east-2
 #   locking      = S3-native use_lockfile=true              (NO DynamoDB table)
 #   versioning   = ON
-#   encryption   = SSE-KMS (aws/s3 managed key by default; override with STATE_KMS_KEY_ID)
+#   encryption   = SSE-S3 (AES256) by DEFAULT; SSE-KMS only if STATE_KMS_KEY_ID is set (optional future)
+#   ownership    = Bucket Owner Enforced (ACLs disabled)
 #   public access= fully blocked
 #
 # Idempotent: safe to re-run; skips creation if the bucket already exists in this account.
@@ -19,14 +20,15 @@ set -euo pipefail
 EXPECTED_ACCOUNT_ID="${EXPECTED_ACCOUNT_ID:-391722048303}"
 REGION="${AWS_REGION:-us-east-2}"
 BUCKET="${TF_STATE_BUCKET:-roofspan-tfstate-${EXPECTED_ACCOUNT_ID}-${REGION}}"
-# Optional customer-managed KMS key for state encryption. Empty = SSE-KMS with the aws/s3 managed key.
+# OPTIONAL future enhancement: set STATE_KMS_KEY_ID to use a customer-managed CMK instead of SSE-S3.
+# Not required for the initial RoofSpan deployment — leave empty for SSE-S3 (AES256).
 STATE_KMS_KEY_ID="${STATE_KMS_KEY_ID:-}"
 
 echo "== RoofSpan remote-state bootstrap =="
 echo "  Bucket : $BUCKET"
 echo "  Region : $REGION"
 echo "  Locking: S3-native (use_lockfile=true) — no DynamoDB"
-echo "  Encrypt: $([ -n "$STATE_KMS_KEY_ID" ] && echo "SSE-KMS ($STATE_KMS_KEY_ID)" || echo "SSE-KMS (aws/s3 managed)")"
+echo "  Encrypt: $([ -n "$STATE_KMS_KEY_ID" ] && echo "SSE-KMS ($STATE_KMS_KEY_ID)" || echo "SSE-S3 (AES256, default)")"
 
 # --- Identity guard ---
 account_id="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" \
@@ -57,15 +59,21 @@ aws s3api put-bucket-versioning --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
 echo "  Versioning: Enabled"
 
-# --- Encryption (SSE-KMS) ---
+# --- Ownership: Bucket Owner Enforced (ACLs disabled) ---
+aws s3api put-bucket-ownership-controls --bucket "$BUCKET" \
+  --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]'
+echo "  Ownership: BucketOwnerEnforced (ACLs disabled)"
+
+# --- Encryption: SSE-S3 (AES256) by default; SSE-KMS only if STATE_KMS_KEY_ID is set ---
 if [ -n "$STATE_KMS_KEY_ID" ]; then
   aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration "{
     \"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"$STATE_KMS_KEY_ID\"},\"BucketKeyEnabled\":true}]}"
+  echo "  Encryption: SSE-KMS (customer-managed)"
 else
   aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration \
-    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms"},"BucketKeyEnabled":true}]}'
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
+  echo "  Encryption: SSE-S3 (AES256)"
 fi
-echo "  Encryption: SSE-KMS"
 
 # --- Block all public access ---
 aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-configuration \

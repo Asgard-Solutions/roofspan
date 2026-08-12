@@ -152,11 +152,12 @@ locking** (`use_lockfile = true`) — **no DynamoDB table required**. (DynamoDB 
 Terraform < 1.10.)
 
 **Proposed names for account `391722048303` / region `us-east-2` (approve before creating):**
-- S3 state bucket: **`roofspan-tfstate-391722048303-us-east-2`** (versioning ON, SSE-KMS, Block Public
-  Access ON)
+- S3 state bucket: **`roofspan-tfstate-391722048303-us-east-2`** — versioning ON, **SSE-S3 (AES256)**,
+  **Bucket Owner Enforced** (ACLs disabled), Block Public Access ON
 - State key: **`control-plane-relay/terraform.tfstate`**
 - Lock: **S3 native lockfile** (`use_lockfile=true`) — no DynamoDB
-- KMS: a dedicated CMK for state encryption (or SSE-S3 if you prefer) — your call at bootstrap
+- Encryption: **SSE-S3 by default** (no KMS key required). SSE-KMS is an optional future enhancement via
+  `STATE_KMS_KEY_ID`.
 
 Do **not** reuse the downloads bucket. Export before Stage A / the plan runner:
 ```bash

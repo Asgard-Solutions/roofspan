@@ -17,8 +17,9 @@ add records at GoDaddy from the Terraform outputs (`acm_validation_records`, `ex
 
 ## 2. Terraform remote-state bootstrap (ONE-TIME)
 `scripts/bootstrap-remote-state.sh` creates `roofspan-tfstate-391722048303-us-east-2` (versioning +
-SSE-KMS + BPA, S3-native lock — no DynamoDB). Then `export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2`.
-See `REMOTE_STATE.md`. HUMAN REQUIRED approval to create the bucket.
+SSE-S3 (AES256) + Bucket Owner Enforced + Block Public Access, S3-native lock — no DynamoDB). Then
+`export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2`. See `REMOTE_STATE.md`. HUMAN REQUIRED
+approval to create the bucket. (SSE-KMS via `STATE_KMS_KEY_ID` is an optional future enhancement.)
 
 ## 3. Create/verify the KMS entitlement-signing key
 `terraform apply` creates it, OR pre-create. Confirm KeySpec `ECC_NIST_EDWARDS25519`, KeyUsage
