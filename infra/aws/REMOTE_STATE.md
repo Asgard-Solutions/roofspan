@@ -1,25 +1,41 @@
-# Terraform Remote State — HUMAN REQUIRED bootstrap (not auto-created)
+# Terraform Remote State — ONE-TIME bootstrap (approved design)
 
-This stack does **not** create its own state backend automatically. Bootstrap it once, separately, before
-`terraform init` of the main stack. Do **not** reuse the `downloads.roofspan.io` bucket for state.
+This stack stores its state in S3. The state bucket itself is created **once, outside** the main stack
+(Terraform can't keep its own state bucket in its own state) via `scripts/bootstrap-remote-state.sh`
+(AWS CLI only — no Terraform). Do **not** reuse the `downloads.roofspan.io` bucket.
 
-## Recommended
-- Dedicated **S3 bucket** `roofspan-tfstate-<account>-<region>` (versioning ON, SSE-KMS, Block Public
-  Access ON).
-- **State locking**: Terraform's native **S3 lockfile** (`use_lockfile = true`, Terraform ≥ 1.10) — no
-  DynamoDB table required. (If on older Terraform, use a DynamoDB lock table instead.)
+## Approved (locked) design
+| Setting      | Value                                                        |
+|--------------|--------------------------------------------------------------|
+| bucket       | `roofspan-tfstate-391722048303-us-east-2`                    |
+| key          | `control-plane-relay/terraform.tfstate`                      |
+| region       | `us-east-2`                                                  |
+| locking      | **S3-native `use_lockfile=true`** (NO DynamoDB table)        |
+| versioning   | ON                                                           |
+| encryption   | SSE-KMS (aws/s3 managed key default; `STATE_KMS_KEY_ID` opt) |
+| public access| fully blocked                                                |
 
-## One-time bootstrap (human, with real credentials)
-1. Create the bucket (versioning + SSE-KMS + BPA) in the production account/region.
-2. Configure the backend:
-   ```
-   terraform init -backend-config="bucket=roofspan-tfstate-<acct>-<region>" \
-                  -backend-config="key=control-plane-relay/terraform.tfstate" \
-                  -backend-config="region=<region>" \
-                  -backend-config="use_lockfile=true" \
-                  -backend-config="encrypt=true"
-   ```
-3. Uncomment the `backend "s3" {}` block in `versions.tf`.
+**Locking mechanism confirmed:** Terraform ≥ 1.10 supports S3-native state locking (`use_lockfile=true`),
+so **no DynamoDB lock table is required**. (Only use DynamoDB on Terraform < 1.10.)
 
-**HUMAN REQUIRED**: bucket name/region, KMS key for state encryption, and explicit approval before
-creating the state bucket.
+## One-time bootstrap (human, AWS-authenticated)
+```bash
+export AWS_REGION=us-east-2
+export AWS_PROFILE=<your-sso-profile>
+infra/aws/scripts/bootstrap-remote-state.sh          # creates the bucket (idempotent, typed-confirm)
+export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2
+```
+
+`versions.tf` already contains a partial `backend "s3" {}` block. The bucket/key/region/lock are supplied
+at init time (the ECR-bootstrap and plan scripts do this):
+```
+terraform init -reconfigure \
+  -backend-config="bucket=roofspan-tfstate-391722048303-us-east-2" \
+  -backend-config="key=control-plane-relay/terraform.tfstate" \
+  -backend-config="region=us-east-2" \
+  -backend-config="use_lockfile=true" \
+  -backend-config="encrypt=true"
+```
+
+**HUMAN REQUIRED**: explicit approval to create the state bucket; optional customer-managed KMS key for
+state encryption (`STATE_KMS_KEY_ID`).

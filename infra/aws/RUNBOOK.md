@@ -15,8 +15,10 @@ AWS credentials. Do not run `apply` until the plan is reviewed and approved. Nev
 add records at GoDaddy from the Terraform outputs (`acm_validation_records`, `external_dns_endpoint_records`)
 — see §5b. Do NOT touch `downloads.roofspan.io`.
 
-## 2. Terraform remote-state bootstrap
-Follow `REMOTE_STATE.md` (create state bucket, `terraform init -backend-config=...`). HUMAN REQUIRED.
+## 2. Terraform remote-state bootstrap (ONE-TIME)
+`scripts/bootstrap-remote-state.sh` creates `roofspan-tfstate-391722048303-us-east-2` (versioning +
+SSE-KMS + BPA, S3-native lock — no DynamoDB). Then `export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2`.
+See `REMOTE_STATE.md`. HUMAN REQUIRED approval to create the bucket.
 
 ## 3. Create/verify the KMS entitlement-signing key
 `terraform apply` creates it, OR pre-create. Confirm KeySpec `ECC_NIST_EDWARDS25519`, KeyUsage

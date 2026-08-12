@@ -32,21 +32,26 @@ export AWS_REGION=<intended-app-region> # explicit — see "Region" below
 # 1. Verify tooling
 infra/aws/scripts/check-prereqs.sh
 
-# 2. Verify WHO + WHERE (identity must match account 391722048303; region must be explicit)
+# 2. Verify WHO + WHERE (identity must match account 391722048303; region us-east-2)
+export AWS_PROFILE=roofspan-prod
+export AWS_REGION=us-east-2
 infra/aws/scripts/resolve-aws-context.sh
 
-# --- Resolve the DNS DECISION (see below) and remote state (REMOTE_STATE.md) before continuing ---
+# 3. ONE-TIME remote-state bootstrap (creates the S3 state bucket; AWS CLI only, no Terraform)
+infra/aws/scripts/bootstrap-remote-state.sh
+export TF_STATE_BUCKET=roofspan-tfstate-391722048303-us-east-2
 
-# 3. (Stage A) Create the ECR repos so images can be pushed  [this one can apply — ECR+KMS only]
-export TF_STATE_BUCKET=<your-tfstate-bucket>
+# 4. (Stage A) Create the ECR repos so images can be pushed  [applies ECR + KMS only]
 infra/aws/scripts/bootstrap-ecr.sh
 
-# 4. Build + push images (linux/amd64); prints immutable @sha256 digests
+# 5. Build + push images (linux/amd64); prints immutable @sha256 digests
 infra/aws/scripts/build-push-images.sh
 
-# 5. Fill terraform.tfvars (copy from terraform.tfvars.example) with region, zone, digests
+# 6. Fill terraform.tfvars (copy from terraform.tfvars.example) with the @sha256 digests,
 #    then run the safe PLAN (fmt -> init -> validate -> plan; NO apply)
 infra/aws/scripts/terraform-plan.sh
+
+# 7. External DNS (GoDaddy) is a two-stage apply — see "DNS" below. A human runs the applies.
 ```
 
 Outputs: `infra/aws/tfplan` (binary) + `infra/aws/tfplan.txt` (readable). Both are git-ignored.

@@ -390,3 +390,12 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Account guard** unchanged (391722048303). **downloads.roofspan.io / roofspan-downloads-prod / us-east-1 CloudFront cert = NOT imported/modified/destroyed** by this stack.
 - **Verified**: `terraform fmt -check -recursive` CLEAN; `terraform validate` = Success (provider v6.58.0, TF v1.10.5); all bash scripts `bash -n` OK. **terraform plan/apply NOT run** (no AWS creds in env). NO Docker build/push. NO AWS resources changed.
 
+
+## AWS Deployment Package Finalized (2026-06) — artifacts only; operator runs AWS
+- **No AWS creds requested/used; no apply; no AWS resources created.** Emergent produces artifacts only; the human operator runs everything AWS-authenticated on a separate us-east-2 machine.
+- **Remote-state bootstrap SCRIPTS added** (the missing package piece): `scripts/bootstrap-remote-state.sh` + `.ps1` create `roofspan-tfstate-391722048303-us-east-2` via AWS CLI (versioning + SSE-KMS + full BPA, S3-native `use_lockfile=true`, NO DynamoDB), idempotent + typed-confirm + account guard. `REMOTE_STATE.md` rewritten with the locked design + init command.
+- **S3 backend wired**: `versions.tf` now has a partial `backend "s3" {}` block (bucket/key/region/lock supplied at `terraform init -backend-config=...` by the scripts). `terraform validate` still Success; `fmt -check` CLEAN.
+- **PowerShell parity** completed for the full flow: check-prereqs, resolve-aws-context, bootstrap-remote-state, bootstrap-ecr, build-push-images, terraform-plan (`.ps1` for each; bash primary).
+- **Package inventory**: Dockerfiles (`infra/docker/control-plane`+`relay`), 18 `.tf` files (validated), `scripts/` (6 bash + 6 ps1 + README), `terraform.tfvars.example` (us-east-2 + dns_provider=external + 391722048303 image refs), `RUNBOOK.md`, `REMOTE_STATE.md`. Terraform installed in-env is v1.10.5 (arm64).
+- **Operator sequence** = prereqs → resolve-context → bootstrap-remote-state → bootstrap-ecr (Stage A) → build-push-images → fill tfvars digests → terraform-plan → (external DNS two-stage) Stage 1 cert apply + add ACM CNAMEs at GoDaddy → Stage 2 full apply + add cp/relay CNAMEs at GoDaddy.
+

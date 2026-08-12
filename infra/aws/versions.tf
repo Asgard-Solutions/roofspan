@@ -8,8 +8,10 @@ terraform {
       version = "~> 6.21"
     }
   }
-  # Remote state is HUMAN REQUIRED bootstrap — see REMOTE_STATE.md. Do NOT auto-create the backend.
-  # backend "s3" { ... }  # configured via `terraform init -backend-config=...` after bootstrap.
+  # Remote state is HUMAN REQUIRED bootstrap — see REMOTE_STATE.md and scripts/bootstrap-remote-state.sh.
+  # Partial config: the bucket/key/region/lock are supplied at `terraform init -backend-config=...`
+  # (the plan/bootstrap scripts do this). S3-native locking (use_lockfile=true) — no DynamoDB table.
+  backend "s3" {}
 }
 
 provider "aws" {
