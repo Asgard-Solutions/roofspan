@@ -12,6 +12,11 @@ WINBUILD = os.path.join(HERE, "winbuild")
 WXS = os.path.join(HERE, "installer", "RoofSpan.wxs")
 BUNDLE = os.path.join(HERE, "installer", "bundle.wxs")
 BAFUNC = os.path.join(HERE, "bafunctions", "RoofSpanBaFunctions.cpp")
+BAFUNC_DLLMAIN = os.path.join(HERE, "bafunctions", "dllmain.cpp")
+BAFUNC_VCXPROJ = os.path.join(HERE, "bafunctions", "RoofSpanBaFunctions.vcxproj")
+BAFUNC_DEF = os.path.join(HERE, "bafunctions", "RoofSpanBaFunctions.def")
+BAFUNC_BUILD = os.path.join(HERE, "bafunctions", "build_bafunctions.ps1")
+BUILD_PS1 = os.path.join(HERE, "installer", "build.ps1")
 
 from winbuild import bootstrap_db as bs  # noqa: E402
 from winbuild.targets import TOOL_TARGETS  # noqa: E402
@@ -224,10 +229,47 @@ def test_bundle_uses_dedicated_port_for_collision_safety():
 def test_bafunctions_source_generates_hidden_credential():
     c = _read(BAFUNC)
     assert "BCryptGenRandom" in c                       # CSPRNG source
-    assert "PgSuperPassword" in c and "SetVariableString" in c
-    assert "OnDetectComplete" in c                      # before Plan / chain execution
+    assert "PgSuperPassword" in c and "BalSetStringVariable" in c
+    assert "OnPlanBegin" in c                           # after Detect, before the chain executes
     assert "RoofSpanPgPresent" in c                     # skip when managed PG already present
-    assert "BAFunctionsCreate" in c                     # exported entry point
+    assert "CBalBaseBAFunctions" in c                   # supplements WixStdBA (keeps standard UI)
+    assert "CreateBAFunctions" in c
+    # fail-closed on RNG/set failure (never proceed with an empty superpassword).
+    assert "*pfCancel = TRUE" in c
+
+
+def test_bafunctions_exports_and_entrypoints_present():
+    dm = _read(BAFUNC_DLLMAIN)
+    assert "BAFunctionsCreate" in dm and "BAFunctionsDestroy" in dm and "DllMain" in dm
+    d = _read(BAFUNC_DEF)
+    assert "BAFunctionsCreate" in d and "BAFunctionsDestroy" in d
+
+
+def test_bafunctions_source_has_no_placeholder_pseudocode():
+    # This gate requires REAL, build-valid source — no provisional / reconcile-later markers.
+    blob = _read(BAFUNC) + _read(BAFUNC_DLLMAIN) + _read(os.path.join(HERE, "bafunctions", "pch.h"))
+    lowered = blob.lower()
+    for bad in ("reconcile", "in practice", "pseudocode", "your code goes here",
+                "reconcile against the pinned", "expected later", "placeholder"):
+        assert bad not in lowered, f"placeholder/pseudocode marker present: {bad!r}"
+
+
+def test_bafunctions_build_project_pins_wix_v5_sdk():
+    vcx = _read(BAFUNC_VCXPROJ)
+    assert 'Include="WixToolset.BootstrapperApplicationApi" Version="5.0.2"' in vcx
+    assert 'Include="WixToolset.WixStandardBootstrapperApplicationFunctionApi" Version="5.0.2"' in vcx
+    assert "DynamicLibrary" in vcx                       # produces a DLL
+    assert "RoofSpanBaFunctions.def" in vcx              # exports via the module-definition file
+    assert "bcrypt.lib" in vcx                           # CSPRNG link dep
+    assert os.path.isfile(BAFUNC_BUILD)                  # reproducible build script exists
+
+
+def test_installer_build_autobuilds_bafunctions():
+    ps = _read(BUILD_PS1)
+    assert "build_bafunctions.ps1" in ps                 # build.ps1 produces its own BAFunctions DLL
+    assert '$BaFunctionsDll = ""' in ps or "$BaFunctionsDll = " in ps  # optional override, not mandatory
+    assert "BaFunctionsDll=$BaFunctionsDll" in ps        # handed to the bundle build
+    assert "wix --version 5" in ps or "wix --version 5.*" in ps  # standardized on WiX v5
 
 
 def test_secrets_dir_is_backend_only_writable():

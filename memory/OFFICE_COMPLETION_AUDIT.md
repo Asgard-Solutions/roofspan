@@ -176,6 +176,19 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > `local_secrets.py` docstring corrected (fail-closed, not in-memory fallback). windows 100/100 pass. Native
 > psql/EDB-init/MSI/ACL HUMAN REQUIRED. **P1-4b NOT started — pending GitHub review + approval.**
 >
+> **P1-4a (revised #4, build-valid BAFunctions) COMPLETE:** the BAFunctions hook is now real, compilable
+> WiX v5 source (not pseudocode), modeled on the verified PowerToys BAFunctions build. `windows/bafunctions/`:
+> `pch.h`, `RoofSpanBaFunctions.cpp` (`CRoofSpanBAFunctions : CBalBaseBAFunctions`, `OnPlanBegin` →
+> `BCryptGenRandom` 32B→64hex → `BalSetStringVariable(PgSuperPassword,…,FALSE)`, fail-closed `*pfCancel=TRUE`
+> on RNG/set failure; skips on override or `RoofSpanPgPresent`), `dllmain.cpp` (`DllMain` +
+> `BAFunctionsCreate`/`BAFunctionsDestroy`), `.def`, and a reproducible `RoofSpanBaFunctions.vcxproj` pinning
+> `WixToolset.BootstrapperApplicationApi` + `WixToolset.WixStandardBootstrapperApplicationFunctionApi`
+> **5.0.2** (the FunctionApi line starts at 5.0.0 → installer standardized on **WiX v5**). `build_bafunctions.ps1`
+> restores+builds; `installer/build.ps1` auto-builds it before the bundle (`-BaFunctionsDll` now optional
+> override) and requires `wix --version 5.*`. All API calls verified against the WiX v5 balutil headers.
+> windows **107/107** pass. Actual MSVC compile + MSI/bundle `wix build` are HUMAN REQUIRED (Windows only;
+> cannot run in the Linux container). **P1-4b NOT started — pending review.**
+>
 > **P1-4a (revised #3, pre-EDB credential + collision-safe managed PG) COMPLETE:** fixes the two GitHub
 > blockers. (1) The superuser password is now generated BEFORE the EDB package by a minimal WiX v4
 > **BAFunctions** native hook (`windows/bafunctions/`) on the stock WixStdBA (keeps standard UI): in
