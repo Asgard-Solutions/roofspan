@@ -1,120 +1,131 @@
-<analysis>Here is the handover summary for the next agent:
+<analysis>### Handoff Summary
 
 **original_problem_statement**: 
-RoofSpan is a local roofing-company operating application. The architecture strictly requires an **Office Browser (React) → FastAPI → PostgreSQL** stack, plus a **Mobile Field Application (Expo/React Native)**. It is a local-first system, NOT a SaaS or multi-tenant platform. K.I.S.S. (Keep It Simple, Stupid) is the governing principle.
-Current Goal: Implement Mobile Phase 2 — **Field Photo Capture** (native camera workflow, offline queue, backend object storage) and **My Assignments** (Sales field users only see assigned leads/jobs). 
+The user is building RoofSpan, a commercially distributed roofing business application that runs locally on Windows (RoofSpan Office) with a companion Mobile app (React Native) that connects back to the local Office installation via a cloud Secure Relay. 
+**PRODUCT REQUIREMENTS (Current Phase)**:
+The focus has shifted entirely to **Application Integration and Feature Development**. The AWS Infrastructure phase is fully completed and **FROZEN**. The primary goal now is to build out the core product workflows (authentication, organization management, job/project workflows, field workflows, photos/measurements) across the web and mobile applications using the completed backend services and APIs. 
 
-**User's preferred language**: English (INSTRUCT next agent to respond in English only)
+**User's preferred language**: English (INSTRUCT next agent to respond in the user's preferred language only)
 
-**what currently exists?**: 
-The Office Web App, FastAPI Backend, and Mobile App foundation are fully built. Mobile Phase 2 (My Assignments & Field Photo Capture) has been successfully implemented across the backend, office web app, and mobile app codebase. Backend tests are updated, the database schema is migrated, and frontend web flows are validated. Native mobile device verification remains pending.
+**what currently exists?** 
+The repository consists of:  (Local Office UI),  (Marketing website),  (React Native app), and  (Control Plane & Relay). The Terraform IaC and deployment scripts under  are fully prepared but are now considered out of scope. The web and mobile apps have been successfully wired to the production download URLs () and configuration variables. The mobile app's paywall correctly routes owners/admins to the web for billing management. 
 
 **Last working item**:
-- Last item agent was working: Finalizing Mobile Phase 2 implementation. This included applying the backend Alembic migration for , building strict sales visibility endpoints, adding the Office App UI assignment dropdowns, and implementing the mobile-side offline photo capture (, ) and assignment filtering endpoints.
-- Status: USER VERIFICATION PENDING
-- Agent Testing Done: Y
-- Which testing method agent to use? NA (Testing agent was already used, backend tests pass. Native physical device verification is strictly required for the mobile app, which the agent cannot execute).
-- User Testing Done: N
+    - Last item agent was working: Transitioning to **Priority 3: Continue actual RoofSpan workflows**. The agent just finished polishing the mobile paywall (P1) and marketing download UI (P2), and started P3 by adding a Manage billing on the web entry to the mobile  screen.
+    - Status: IN PROGRESS
+    - Agent Testing Done: Y
+    - Which testing method agent to use? testing agent (for multi-component frontend/mobile flows), screenshot tool (for single component visual checks), curl (for backend).
+    - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-None. Active development for Phase 2 is complete. 
+  *No active bug issues are currently blocking development.*
 
 **In progress Task List**:
-None.
+  Task 1: Build Core RoofSpan Workflows (Priority 3)
+     - Where to resume: Resume building out the core application logic defined in the product specs for both web () and mobile (). Focus on organization workflows, job/project management, and field workflows (photos/measurements).
+     - What will be achieved with this? Deliver the primary business value of the application to the end users.
+     - Status: IN PROGRESS
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on something: None
 
-**Upcoming and Future Tasks**:
-- Native App verification (Expo Go / Physical Device) for Photo Capture, SQLite persistence, SecureStore, and True Offline/Online Transitions. (P0 - HUMAN REQUIRED)
-- RentCast API Integration / Real Key insertion to replace mocks (P1)
-- EAS / App Store / Play Store publishing (HUMAN REQUIRED/DEFERRED)
-- Low-Stock dashboard tile, Jobs This Week board, territory analytics, route optimization, background GPS, AI damage detection (DEFERRED TO BACKLOG)
+**Upcoming and Future Tasks**
+  - P0: Implement Job/Project Workflows (Web and Mobile).
+  - P0: Implement Field Workflows - Photos, measurements, inspections (Mobile).
+  - P1: Implement Organization/Account Management, user roles, and seat provisioning (Web).
+  - Future (DO NOT DO YET): Version-aware download UI ( parsing) and in-app desktop update banners.
+  - Future (DO NOT DO YET): Native Windows validation of the MSI/Burn bundle.
 
-**Completed work in this session**:
-- Created and applied Alembic migration for  to leads and jobs tables (DONE)
-- Implemented strict Sales visibility logic for Leads and Jobs in the backend API (DONE)
-- Added Assigned To dropdowns with audit logging in the Office Web App (, ) (DONE)
-- Built  and updated  to fix expectations based on strict sales visibility rules (DONE)
-- Updated Mobile React Native code: added , created , modified queue and sync logic for photo multipart uploads, and switched list endpoints to fetch only assigned records (DONE)
-- Ran full backend pytest regression (106/106 passed) and executed Testing Agent for end-to-end web verification (DONE)
+**Completed work in this session**
+- Finalized AWS local-run deployment scripts and remote state bootstrap () - strictly without applying them. (DONE)
+- Centralized configuration for production endpoints across mobile, marketing site, and Office web. (DONE)
+- Integrated existing AWS download infrastructure () into the marketing site and Office UI via . (DONE)
+- Rebuilt mobile  paywall to enforce web-based billing management. (DONE)
+- Polished marketing site download CTAs to be availability-driven based on config. (DONE)
 
-**Earlier issues found/mentioned but not fixed**:
-None
+**Earlier issues found/mentioned but not fixed**
+  - None
 
-**Known issue recurrence from previous fork**:
-- Issue recurrence in previous fork: N/A
-- Recurrence count: 0
-- Status: NOT STARTED
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: None observed in this session.
+  - Recurrence count: 0
+  - Status: RESOLVED
 
-**Code Architecture**:
-- : FastAPI backend. Contains  (auth, users, leads, jobs, mobile, etc.), , , , and .
-- : React web frontend for Office administration.
-- : Expo / React Native mobile app (, , , , , ).
-- Database: PostgreSQL (Managed by Supervisor, fully integrated with SQLAlchemy/Alembic). SQLite (Mobile device cache).
+**Code Architecture**
+- : FastApi endpoints for Control Plane, Relay, and Local Office.
+- : React browser UI for the Local RoofSpan Office.
+- : Public marketing website.
+- : React Native Expo app.
+- : Python updater logic, WiX/MSI files, PyInstaller.
+- : AWS Terraform IaC, deployment scripts (CURRENTLY FROZEN/OUT OF SCOPE).
 
-**Key Technical Concepts**:
-React Native (Expo), FastAPI, PostgreSQL, SQLite (local device cache), Offline-first Queue, MapLibre GL, JWT RBAC, Emergent Object Storage.
+**Key Technical Concepts**
+- React, React Native (Expo), FastAPI
+- WebSocket Secure Relay with Valkey (Redis) Pub/Sub
+- Centralized Environment Configuration (, )
 
-**key DB schema**:
-- , : Now explicitly relate to User via  (FK, SET NULL on delete).
-- : id, record_type, record_id, url/content_path, uploader, category.
-- , , , , , .
-- : Includes roles (owner, admin, office, sales).
+**key DB schema**
+  - Control Plane: , , , , .
+  - Valkey Registry:  mapping.  Pub/Sub channels.
 
-**changes in tech stack**:
-- Added  and  to .
+**changes in tech stack**
+  - None
 
-**All files of reference**:
--  (New migration schema applied)
-- , , ,  (Contain strictly filtered assignment endpoints)
-- ,  (Office UI components updated)
-- ,  (Mobile data capture and sync integration)
--  (New test suite for validation)
+**All files of reference**
+  -  (Updated mobile paywall logic)
+  -  (Updated with billing links)
+  -  (New download card component)
+  -  &  (Centralized env config)
+  -  (Living documentation of requirements and lock-ins)
 
 **Areas that need refactoring**:
-None. Ensure the K.I.S.S approach continues for all subsequent work.
+  - NONE. 
 
-**key api endpoints**:
-- 
-- 
-- , 
-- 
+**key api endpoints**
+  - 
+  - 
+  -  (Windows Installer)
 
-**Critical Info for New Agent**:
-1. **NO DIRECT DB/PROVIDER ACCESS FROM MOBILE**: Mobile must communicate ONLY with the RoofSpan FastAPI backend.
-2. **Object Storage**: The backend uses Emergent Object Storage for off-site backups and photo attachments. Mobile uploads files via the FastAPI backend proxy.
-3. **Expo Native Verification**: Native behavior (Camera, SQLite, SecureStore, App kills) cannot be fully E2E tested via web bots. Code for Mobile Increment 2 is written, but Native physical device testing is strictly deferred to human verification. 
-4. **Idempotency**: Mobile offline sync relies on stable client-generated IDs and idempotency keys. NEVER delete local pending records until the server explicitly returns a 200 OK.
-5. **Role-Based Visibility**: Sales users strictly CANNOT see unassigned leads. Test flows should account for this.
+**Critical Info for New Agent**
+  - **AWS INFRASTRUCTURE IS COMPLETELY FROZEN.** Do not create, modify, or plan AWS infrastructure. Do not modify Terraform or request AWS credentials.
+  - **Focus strictly on Application Integration:** UI/UX, API integration, configuration, and testing for the Web and Mobile surfaces.
+  - **Missing Configuration:** If the app needs a value that is not currently known, add/configure an environment variable and report the exact missing value under . Do not invent production hostnames.
+  - **Billing Constraints:** Do NOT implement Apple or Google subscription purchasing in the mobile app. All billing management is pushed to the RoofSpan web application.
 
-**documents and test reports created in this job**:
--  (Updated with Phase 2 implementation specs)
--  (Added  for strict-visibility testing)
--  (Phase 2 completion success report)
+**documents and test reports created in this job**
+  -  (Passed frontend download card verification)
+  -  
+  -  &  (Prepared for human operator)
 
-**Last 10 User Messages and any pending HUMAN messages**:
-- The user instructed the agent to follow standard defaults for Mobile Phase 2: strict visibility for sales, simple static preset photo categories, backend-based assignment via Office UI, and no-cascade deletion.
-- The agent implemented the changes comprehensively across the database, backend routes, office UI, and mobile logic.
-- The agent successfully executed all corresponding tests locally (backend Pytest passing 106/106) and passed the Testing Agent integration checks successfully. 
-- *Pending Human Action*: The user needs to physically verify the Mobile Field Application natively via Expo Go / Physical Device and provide steering for the next backlog/publish phase.
+**Last 10 User Messages and any pending HUMAN messages** 
+ - *User*: Approved Terraform external DNS and  configuration.
+ - *User*: Requested finalized Terraform remote-state bootstrap scripts (without applying).
+ - *User*: Dictated SSE-S3 encryption for the state bucket.
+ - *User*: **PIVOT: Application Integration Only.** Instructed agent to stop all infra work, integrate existing download endpoints into the apps, and build application features.
+ - *User*: Defined P1 (Mobile paywall UX), P2 (Customer-facing download UX), and P3 (Continue actual RoofSpan workflows). Explicitly instructed to avoid version-aware updates or AWS infra changes for now. (Agent completed P1, P2, and started P3).
 
-**Project Health Check**:
-- Broken: None.
-- Mocked: RentCast import API (Pending real key from user).
+**Project Health Check:**
+  - Broken: None
+  - Mocked: None
 
-**3rd Party Integrations**:
-- MapLibre GL / OpenStreetMap (No keys required).
-- RentCast API (Mocked until user UI input).
-- **Emergent Object Storage**: Uses **Emergent LLM Key** (via  and  in backend env).
+**3rd Party Integrations**
+  - Stripe (Payments) — requires User API Key.
+  - RevenueCat — requires User API Key.
+  - AWS (Infrastructure) — Handled externally by human operator; strictly out of scope for agent.
 
-**Testing status**:
-- Testing agent used after significant changes: YES (After Mobile Increment 2 completion)
-- Troubleshoot agent used after agent stuck in loop: NO
-- Test files created: 
-- Known regressions: None (Regression test yielded 106/106 passes).
+**Testing status**
+  - Testing agent used after significant changes: YES ()
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: 
+  - Known regressions: None
 
-**Credentials to test flow**:
-Check . 
-Owner account: 
-Sales account: 
+**Credentials to test flow:**
+  - Refer to 
 
-**What agent forgot to execute**:
-Nothing. All tasks were comprehensively completed and strictly align with the user's requirements for Phase 2.</analysis>
+**What agent forgot to execute**
+  - Nothing.
+
+**Debugging checklist for current issue**
+    Issue: Implement Core Job/Project and Field Workflows (Priority 3)
+    - Review PRD.md to understand the specific data structures and user flows required for jobs, projects, inspections, and photos.
+    - Create backend FastAPI routes (if missing) and link them to the frontend React components and React Native mobile screens.
+    - Test the multi-component flows using the .</analysis>

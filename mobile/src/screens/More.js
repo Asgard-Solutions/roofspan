@@ -1,10 +1,10 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Linking } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
 import { pendingSummary, runSync } from "../sync";
-import { API_BASE, WEB_APP_URL } from "../config";
+import { API_BASE } from "../config";
 import { C, badge } from "../theme";
 
 export default function More() {
@@ -33,7 +33,6 @@ export default function More() {
 
   const labelFor = (m) => m.label || (m.kind ? m.kind.replace(/_/g, " ") : "Field update");
   const isAdmin = user?.role === "owner" || user?.role === "administrator";
-  const openBillingWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
 
   return (
     <View style={s.wrap}>
@@ -47,10 +46,7 @@ export default function More() {
         <>
           <Text style={s.h}>Billing &amp; account</Text>
           <View style={s.card} testID="more-billing">
-            <Text style={s.billingNote}>Subscription, seats, and billing are managed in RoofSpan on the web — there are no in-app purchases.</Text>
-            <TouchableOpacity style={s.syncBtn} onPress={openBillingWeb} testID="more-billing-web">
-              <Text style={s.syncBtnText}>Manage on RoofSpan Web</Text>
-            </TouchableOpacity>
+            <Text style={s.billingNote}>Subscription, seats, and billing are managed in RoofSpan Office on your company's Windows computer. There are no in-app purchases.</Text>
           </View>
         </>
       )}
