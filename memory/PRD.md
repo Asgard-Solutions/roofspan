@@ -570,3 +570,37 @@ the Relay connector in P1-2; Backend + Updater reported for approval (do not mod
   tunnel reconnect + ACL resolution. **DECISION REQUIRED**: apply the same SCM host to Backend + Updater
   (recommended; awaiting approval). No backend/frontend runtime changed; no AWS/Mobile-field/website work.
 
+
+## RoofSpan Office — P1-2b: Backend + Updater SCM Services (one common host) (2026-06)
+Both remaining console-exe services converted to real Windows SCM services, reusing the P1-2
+`winservice.py` host (no new framework; no WinSW/NSSM).
+- **`winservice.AsyncServiceRunner`** gained `graceful_stop` (small reusable enhancement): when True,
+  `stop()` relies on `on_stop` to end the coroutine (no task.cancel) — used by the backend for a clean
+  uvicorn shutdown. Also added shared config helpers `load_env_file`/`apply_env`/`load_programdata_env`.
+- **`backend_entry.py`** (`RoofSpanBackend`): frozen → pywin32 SCM host; foreground/dev preserved. Runs
+  `uvicorn.Server.serve()` inside the runner bound to **127.0.0.1:8001 only** (no 0.0.0.0). STOP →
+  `on_stop` sets `server.should_exit=True` → **graceful uvicorn shutdown** (FastAPI shutdown lifecycle →
+  PostgreSQL engine + relay-hub cleanup run as designed). Loads ProgramData config, sets `ROOFSPAN_STATIC_DIR`
+  (packaged frontend) + `INSTALLATION_KEYS_DIR`, rotating `backend.log`. (Full prod-config cleanup deferred
+  to P1-4.)
+- **`update_service_entry.py`** (`RoofSpanUpdateService`): frozen → SCM host; foreground/dev preserved.
+  Loop `check_once()` (fetch manifest + verify sig/SHA + plan) via `asyncio.to_thread`, then
+  `asyncio.sleep(CHECK_INTERVAL_SECONDS=12h)`; **cancel-based stop interrupts the sleep immediately** (no
+  waiting the interval). Update behavior/cadence unchanged; apply remains HUMAN REQUIRED.
+- **Specs**: backend + updater specs add pywin32 + `winbuild.winservice` hiddenimports (shared
+  `requirements-windows.txt` stays authoritative — no duplicate dep declarations).
+- **ACLs (reviewed, least-privilege — from P1-2 `DataAcls`, correct for all three):** config=read (all
+  three); identity=read/write (Backend + Relay); logs=read/write (all three). No broad Full Control on
+  ProgramData/Program Files. Updater's current fetch/verify/plan needs only config-read + logs-write.
+- **Tests** `windows/tests/test_service_host.py` (11): graceful runner stop; Backend name/SCM/graceful/
+  127.0.0.1-only/dev-path; Updater name/SCM/prompt-stop/behavior-preserved; all-three-common-host;
+  all-specs-bundle-pywin32; no-WinSW/NSSM; WiX names match entry `SVC_NAME` constants. Full `windows/tests`:
+  **68 passed**.
+- **HUMAN REQUIRED (native Windows):** MSI install + SCM registration; all three services reach RUNNING;
+  clean STOP (backend graceful shutdown, updater prompt exit); restart policy; ACL resolution; backend
+  reachable on 127.0.0.1:8001; updater/relay native behavior.
+- **DECISION REQUIRED (future, NOT now):** when native update *apply* is implemented, replacing Program
+  Files binaries needs elevation — `NT SERVICE\RoofSpanUpdate` is not admin. Choose a privilege model
+  (e.g. run updater as LocalSystem, or a separate elevated apply helper) rather than over-permissioning.
+  No AWS/Mobile-field/website work.
+

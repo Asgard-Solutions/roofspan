@@ -133,7 +133,10 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > Connector service: found NO existing SCM wrapper (all 3 services were plain console exes → would fail
 > SCM start/1053). Added a reusable pywin32 SCM host + wired ONLY the Relay connector; added ProgramData
 > service-account ACLs. Backend + Updater have the SAME issue (reported, pending approval). 57/57 windows
-> tests pass. Native SCM execution HUMAN REQUIRED.
+> tests pass. Native SCM execution HUMAN REQUIRED. **P1-2b COMPLETE & VERIFIED** — Backend + Updater
+> converted to the SAME pywin32 SCM host (graceful uvicorn shutdown for Backend; prompt cancel-based stop
+> for Updater); one common service-host for all three; ACLs least-privilege (verified). 68/68 windows
+> tests pass. Native SCM HUMAN REQUIRED; Program-Files-patch privilege model = DECISION REQUIRED (future).
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

@@ -27,9 +27,10 @@ log = logging.getLogger("roofspan.winservice")
 class AsyncServiceRunner:
     """Runs a single long-lived coroutine on a dedicated event loop; thread-safe stop for SvcStop."""
 
-    def __init__(self, coro_factory, on_stop=None):
+    def __init__(self, coro_factory, on_stop=None, graceful_stop=False):
         self._coro_factory = coro_factory   # () -> coroutine (the long-lived connector loop)
-        self._on_stop = on_stop             # optional sync callback (e.g. tunnel.stop())
+        self._on_stop = on_stop             # optional sync callback (e.g. tunnel.stop / server.should_exit)
+        self._graceful = graceful_stop      # if True, rely on on_stop to end the coroutine (no task.cancel)
         self._loop = None
         self._task = None
 
@@ -47,12 +48,15 @@ class AsyncServiceRunner:
             self._loop.close()
 
     def stop(self) -> None:
-        """Thread-safe: signal the connector to stop and cancel the running task."""
+        """Thread-safe: signal the connector to stop. Graceful runners end via on_stop (e.g. uvicorn
+        should_exit); others additionally get their task cancelled to interrupt sleeps/waits promptly."""
         if self._on_stop:
             try:
                 self._on_stop()
             except Exception:  # noqa: BLE001 — stop must never raise
                 log.exception("on_stop callback failed")
+        if self._graceful:
+            return
         loop, task = self._loop, self._task
         if loop is not None and task is not None:
             loop.call_soon_threadsafe(task.cancel)
@@ -126,3 +130,41 @@ def dispatch(service_class) -> None:
         servicemanager.StartServiceCtrlDispatcher()
     else:
         win32serviceutil.HandleCommandLine(service_class)
+
+
+# ---- shared runtime config helpers (used by all service entrypoints) ----
+
+def load_env_file(path: str) -> dict:
+    """Parse a simple KEY=VALUE env file (comments with '#', blank lines ignored). No external dep."""
+    import os
+
+    values: dict = {}
+    if not path or not os.path.isfile(path):
+        return values
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            values[k.strip()] = v.strip().strip('"').strip("'")
+    return values
+
+
+def apply_env(values: dict, *, override: bool = False) -> None:
+    """Apply values to os.environ. Existing (service/machine) env wins unless override=True."""
+    import os
+
+    for k, v in values.items():
+        if override or k not in os.environ:
+            os.environ[k] = v
+
+
+def load_programdata_env(env_filename: str = "roofspan.env",
+                         default_config_dir: str = r"C:\ProgramData\RoofSpan\config") -> None:
+    """Load the ProgramData config file into the environment (service env wins). A Windows service does
+    NOT auto-load a .env, so every service entrypoint calls this on startup."""
+    import os
+
+    config_dir = os.environ.get("ROOFSPAN_CONFIG_DIR", default_config_dir)
+    apply_env(load_env_file(os.path.join(config_dir, env_filename)), override=False)

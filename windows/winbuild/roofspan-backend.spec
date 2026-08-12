@@ -20,6 +20,9 @@ a = Analysis(
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
         "static_serve", "httpx", "websockets",
+        # Windows service host (pywin32 SCM integration) + reusable runner.
+        "winbuild.winservice", "winservice",
+        "win32serviceutil", "win32service", "win32event", "servicemanager", "win32timezone",
     ],
     excludes=[],
 )
