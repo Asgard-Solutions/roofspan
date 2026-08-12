@@ -14,9 +14,15 @@ function Hero() {
       <div className="absolute inset-0 bg-cover bg-center opacity-40" style={{ backgroundImage: `url(${HERO_BG})` }} />
       <div className="absolute inset-0 bg-gradient-to-b from-slate-950/80 via-slate-950/70 to-slate-950" />
       <div className="relative mx-auto max-w-6xl px-5 py-24 sm:py-32">
-        <span className="inline-flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3.5 py-1 text-xs font-bold uppercase tracking-widest text-orange-400" data-testid="hero-coming-soon">
-          <Clock className="h-3.5 w-3.5" /> Coming Soon
-        </span>
+        {WINDOWS_INSTALLER_AVAILABLE ? (
+          <span className="inline-flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3.5 py-1 text-xs font-bold uppercase tracking-widest text-orange-400" data-testid="hero-available">
+            <Check className="h-3.5 w-3.5" /> Now available for Windows
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3.5 py-1 text-xs font-bold uppercase tracking-widest text-orange-400" data-testid="hero-coming-soon">
+            <Clock className="h-3.5 w-3.5" /> Coming Soon
+          </span>
+        )}
         <h1 className="mt-6 max-w-3xl font-heading text-4xl font-extrabold leading-[1.05] tracking-tight text-white sm:text-5xl lg:text-6xl">
           Roofing operations,<br className="hidden sm:block" /> connected from office to field.
         </h1>
@@ -26,9 +32,15 @@ function Hero() {
           own RoofSpan system.
         </p>
         <div className="mt-9 flex flex-wrap items-center gap-4">
-          <a href="#features" className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-700" data-testid="hero-see-features">
-            See Features <ArrowRight className="h-4 w-4" />
-          </a>
+          {WINDOWS_INSTALLER_AVAILABLE ? (
+            <a href={WINDOWS_INSTALLER_URL} rel="noopener" className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-700" data-testid="hero-download">
+              <Download className="h-4 w-4" /> Download for Windows
+            </a>
+          ) : (
+            <a href="#features" className="inline-flex items-center gap-2 rounded-md bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-700" data-testid="hero-see-features">
+              See Features <ArrowRight className="h-4 w-4" />
+            </a>
+          )}
           <a href="#how-it-works" className="inline-flex items-center gap-2 rounded-md border border-white/25 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10" data-testid="hero-how-it-works">
             How RoofSpan Works
           </a>
@@ -130,9 +142,15 @@ function Pricing() {
               ))}
             </ul>
             <div className="mt-8">
-              <span className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-6 py-3 text-sm font-semibold text-white" data-testid="pricing-cta">
-                <Clock className="h-4 w-4" /> Coming Soon
-              </span>
+              {WINDOWS_INSTALLER_AVAILABLE ? (
+                <a href="#download" className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-700" data-testid="pricing-cta">
+                  <Download className="h-4 w-4" /> Get RoofSpan for Windows
+                </a>
+              ) : (
+                <span className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-6 py-3 text-sm font-semibold text-white" data-testid="pricing-cta">
+                  <Clock className="h-4 w-4" /> Coming Soon
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -155,6 +173,9 @@ function DownloadSection() {
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-slate-500">
                 Install RoofSpan Office on your company's Windows computer to run your RoofSpan system
                 locally and connect your office and field teams.
+              </p>
+              <p className="mt-2 text-xs text-slate-400" data-testid="download-mobile-note">
+                Includes the free <a href="#mobile" className="font-semibold text-orange-600 hover:underline">RoofSpan Mobile</a> companion apps for iPhone and Android.
               </p>
             </div>
           </div>

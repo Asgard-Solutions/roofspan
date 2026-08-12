@@ -24,3 +24,9 @@ export function relayWsUrl() {
   const origin = RELAY_WSS_BASE || API_BASE.replace(/^http/, "ws");
   return origin.replace(/\/+$/, "") + "/api/relay/mobile";
 }
+
+// RoofSpan web application (billing / account management lives on the web, never in-app purchasing).
+// The subscription-lock screen sends owners/admins here. Configurable per build.
+export const WEB_APP_URL =
+  process.env.EXPO_PUBLIC_WEB_APP_URL || extra.webAppUrl || "https://roofspan.io";
+

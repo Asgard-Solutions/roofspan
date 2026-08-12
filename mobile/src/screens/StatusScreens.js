@@ -3,8 +3,9 @@ import { View, Text, TouchableOpacity, StyleSheet, Linking, Platform } from "rea
 import { C } from "../theme";
 import { usePairing } from "../pairingContext";
 import { COPY, STATES } from "../connectionState";
+import { WEB_APP_URL } from "../config";
 
-function Screen({ title, message, actionLabel, onAction, tone = C.brand, testID }) {
+function Screen({ title, message, actionLabel, onAction, secondaryLabel, onSecondary, helper, tone = C.brand, testID, secondaryTestID }) {
   return (
     <View style={s.wrap}>
       <Text style={s.h}>{title}</Text>
@@ -14,6 +15,12 @@ function Screen({ title, message, actionLabel, onAction, tone = C.brand, testID 
           <Text style={s.btnText}>{actionLabel}</Text>
         </TouchableOpacity>
       ) : null}
+      {secondaryLabel ? (
+        <TouchableOpacity style={s.btnSecondary} onPress={onSecondary} testID={secondaryTestID}>
+          <Text style={s.btnSecondaryText}>{secondaryLabel}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {helper ? <Text style={s.helper}>{helper}</Text> : null}
     </View>
   );
 }
@@ -21,7 +28,20 @@ function Screen({ title, message, actionLabel, onAction, tone = C.brand, testID 
 export function SubscriptionLock() {
   const { retry } = usePairing();
   const c = COPY[STATES.SUBSCRIPTION_INACTIVE];
-  return <Screen title={c.title} message={c.message} actionLabel="Try Again" onAction={retry} testID="subscription-lock-retry" />;
+  const openWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
+  return (
+    <Screen
+      title={c.title}
+      message={c.message}
+      actionLabel="Manage Subscription on the Web"
+      onAction={openWeb}
+      secondaryLabel="Try Again"
+      onSecondary={retry}
+      helper="Billing is managed in RoofSpan on the web — not in the app. If you're not an owner or administrator, please contact your RoofSpan administrator."
+      testID="subscription-lock-manage-web"
+      secondaryTestID="subscription-lock-retry"
+    />
+  );
 }
 
 export function DeviceRevoked() {
@@ -68,6 +88,9 @@ const s = StyleSheet.create({
   msg: { color: "#94A3B8", fontSize: 16, lineHeight: 24, marginTop: 14, marginBottom: 30 },
   btn: { borderRadius: 12, padding: 18, alignItems: "center" },
   btnText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  btnSecondary: { borderRadius: 12, padding: 16, alignItems: "center", marginTop: 12, borderWidth: 1, borderColor: "#334155" },
+  btnSecondaryText: { color: "#E2E8F0", fontSize: 16, fontWeight: "700" },
+  helper: { color: "#64748B", fontSize: 13, lineHeight: 20, marginTop: 18, textAlign: "center" },
   banner: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#1E293B", paddingHorizontal: 16, paddingVertical: 10 },
   bannerText: { color: "#fff", fontWeight: "700" },
   bannerAction: { color: C.brand, fontWeight: "700", marginLeft: 18 },
