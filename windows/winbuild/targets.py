@@ -15,5 +15,11 @@ SERVICE_TARGETS = {
 # Produced executables (Windows).
 SERVICE_EXES = [f"{name}.exe" for name in SERVICE_TARGETS]
 
+# Non-service operator tools (packaged with Office; NOT registered as services / not auto-started).
+TOOL_TARGETS = {
+    "RoofSpanOwnerRecovery": "owner_recovery.py",
+}
+TOOL_EXES = [f"{name}.exe" for name in TOOL_TARGETS]
+
 # Windows service names authored in RoofSpan.wxs (for cross-checks / docs).
 WINDOWS_SERVICES = ["RoofSpanBackend", "RoofSpanRelayConnector", "RoofSpanUpdateService"]

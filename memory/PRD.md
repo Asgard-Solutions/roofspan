@@ -604,3 +604,33 @@ Both remaining console-exe services converted to real Windows SCM services, reus
   (e.g. run updater as LocalSystem, or a separate elevated apply helper) rather than over-permissioning.
   No AWS/Mobile-field/website work.
 
+
+## RoofSpan Office — P1-3: Local Windows-Admin Owner Recovery + JWT token_version invalidation (2026-06)
+Trust model (LOCKED): local machine + Windows Administrator elevation + direct local DB. No email/
+public-endpoint/security-question/master-password/backdoor/remote reset.
+- **Token invalidation:** `users.token_version` INTEGER NOT NULL DEFAULT 1 (Alembic `9f2a7c4b1d33`, head).
+  JWT carries `tv`; `get_current_user` rejects when `tv != user.token_version` (401 → re-login). Bumped on
+  **self change-password, admin reset, and Owner recovery** — invalidates that user's prior tokens
+  immediately. `create_access_token(..., token_version)`; `login`/setup `bootstrap` embed it.
+  Self change-password returns a fresh token (`{ok, access_token}`) so the caller stays signed in;
+  `ChangePasswordDialog.jsx` stores it. One-time re-login for pre-upgrade tokens (they lack `tv`).
+- **Recovery tool** `windows/winbuild/owner_recovery.py` → `RoofSpanOwnerRecovery.exe` (own PyInstaller
+  spec; `TOOL_TARGETS` in targets.py; staged to `tools\`, NOT `services\`; NOT a service/auto-start).
+  Requires elevation (`IsUserAnAdmin`; mockable via `ROOFSPAN_RECOVERY_ASSUME_ADMIN` for tests) — refuses
+  and instructs if not elevated. Local-only: no network/port/AWS/Relay/CP/Stripe/Internet (static-asserted).
+  Loads packaged ProgramData config for `DATABASE_URL` (no hardcoded dev URL). Finds Owner(s) (auto if 1,
+  explicit select if >1), **refuses non-Owner** accounts, reuses `core.hash_password`, `getpass` (never
+  echoes), bumps `token_version`, writes `owner.recovery` audit (no secrets in detail), single
+  transaction — no service stop needed. WiX: Start Menu shortcut "RoofSpan Owner Recovery (Administrator)"
+  under RoofSpan Office → Maintenance (Advertise; RemoveFolder on uninstall).
+- **Tests:** backend `tests/test_token_recovery.py` (4) — elevation gate, password rules, change-password
+  invalidation end-to-end (old token 401, new token 200), recovery bumps version + rehash + audit +
+  non-Owner refused + recovered login works + pre-recovery token dead. `windows/tests/test_owner_recovery.py`
+  (7) — packaging/local-only/hash-reuse/token-bump/audit/admin-check/Start-Menu/tools-staging. Full windows
+  suite **75 passed**; `tests/test_onboarding.py` still green; main app login/me/leads OK post-migration.
+- **HUMAN REQUIRED (native Windows):** exe build; Start Menu launch; UAC elevation; admin detection;
+  connect to packaged PostgreSQL; real Owner reset; old browser/token rejected; new-password login.
+- **DECISION REQUIRED (recorded, future):** updater Program-Files-patch privilege — restricted
+  RoofSpanUpdateService + a small separate ELEVATED apply helper (NOT LocalSystem). Not built yet.
+  No AWS/Mobile-field/website work.
+

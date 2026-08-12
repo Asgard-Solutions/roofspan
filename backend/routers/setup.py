@@ -111,7 +111,7 @@ async def bootstrap(payload: BootstrapIn, request: Request, db: AsyncSession = D
 
     await db.flush()
     oid, oemail, oname, orole = str(owner.id), owner.email, owner.full_name, owner.role
-    token = create_access_token(oid, oemail, orole)
+    token = create_access_token(oid, oemail, orole, owner.token_version)
     # log_action commits the whole transaction (owner + company + onboarding + audit) and releases the lock.
     await log_action(db, user=owner, action="setup.bootstrap", entity_type="user", entity_id=oid, request=request)
     onboarding.invalidate_snapshot()

@@ -102,6 +102,7 @@ async def reset_password(user_id: str, payload: PasswordResetRequest, request: R
     if target.role == "owner" and user.role != "owner":
         raise HTTPException(status_code=403, detail="Only an Owner can reset an Owner's password")
     target.password_hash = hash_password(payload.new_password)
+    target.token_version += 1  # invalidate the target user's existing sessions
     await db.commit()
     await log_action(db, user=user, action="user.reset_password", entity_type="user", entity_id=target.id, request=request)
     return {"ok": True}

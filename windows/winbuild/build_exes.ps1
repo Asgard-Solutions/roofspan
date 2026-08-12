@@ -16,17 +16,21 @@ if ($LASTEXITCODE -ne 0) {
   throw "pywin32 not found. Run: pip install -r requirements-windows.txt (required for the Windows service host)."
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$ToolsDir = Join-Path (Split-Path $OutDir -Parent) "tools"
+New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 
-$specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
-foreach ($spec in $specs) {
+# service specs -> staged under services\ ; the recovery tool -> staged under tools\ (NOT a service).
+$serviceSpecs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
+$toolSpecs = @("roofspan-owner-recovery.spec")
+foreach ($spec in ($serviceSpecs + $toolSpecs)) {
   $specPath = Join-Path $PSScriptRoot $spec
   if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
   Write-Host "==> PyInstaller $spec"
   pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
-  $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
-  $exe = Join-Path $PSScriptRoot "dist\$name.exe"
-  if (-not (Test-Path $exe)) { throw "PyInstaller did not produce $exe" }
-  Copy-Item $exe (Join-Path $OutDir "$name.exe") -Force
+  $dest = if ($toolSpecs -contains $spec) { $ToolsDir } else { $OutDir }
+  $produced = Get-ChildItem -Path (Join-Path $PSScriptRoot "dist") -Filter "*.exe"
+  if (-not $produced) { throw "PyInstaller did not produce an exe for $spec" }
+  foreach ($p in $produced) { Copy-Item $p.FullName (Join-Path $dest $p.Name) -Force }
 }
-Write-Host "==> Service executables staged in $OutDir"
+Write-Host "==> Services staged in $OutDir ; tools staged in $ToolsDir"

@@ -137,6 +137,14 @@ Admin (RequireSensitive): Users, Roles, Audit, Backups, Subscription, Settings. 
 > converted to the SAME pywin32 SCM host (graceful uvicorn shutdown for Backend; prompt cancel-based stop
 > for Updater); one common service-host for all three; ACLs least-privilege (verified). 68/68 windows
 > tests pass. Native SCM HUMAN REQUIRED; Program-Files-patch privilege model = DECISION REQUIRED (future).
+> **P1-3 COMPLETE & VERIFIED** — Local Windows-Admin Owner recovery tool (`RoofSpanOwnerRecovery.exe`) +
+> per-user `token_version` JWT invalidation (login/change-pw/admin-reset/recovery). Backend
+> test_token_recovery.py 4/4 + onboarding still green; windows 75/75. Native UAC/DB HUMAN REQUIRED.
+>
+> **RECORDED DECISION (updater privilege, for P1-4/native updater):** Do NOT run RoofSpanUpdateService as
+> LocalSystem to patch Program Files. Keep it restricted (download/verify/plan); when a verified update
+> must modify Program Files, invoke a SMALL separate ELEVATED update-apply helper. Do not build that
+> helper yet.
 
 ### P0 — prevents a new customer from using RoofSpan
 1. First-run detection + server-side "initialized" state (durable, race-safe) + `/setup` routing (uninit →

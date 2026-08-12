@@ -29,6 +29,7 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RoofSpan Office">
         <Directory Id="ServicesDir" Name="services" />
+        <Directory Id="ToolsDir" Name="tools" />
         <Directory Id="FrontendDir" Name="frontend" />
         <Directory Id="RuntimeDir" Name="runtime" />
         <Directory Id="ConfigTemplatesDir" Name="config-templates" />
@@ -87,6 +88,28 @@
       </Component>
     </ComponentGroup>
 
+    <!-- Operator recovery tool (NOT a service, NOT auto-started). Admin-only local Owner password reset.
+         Exposed via a Start Menu shortcut under a RoofSpan Maintenance folder, not in the Office UI. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuRoofSpan" Name="RoofSpan Office">
+        <Directory Id="StartMenuMaint" Name="Maintenance" />
+      </Directory>
+    </StandardDirectory>
+    <ComponentGroup Id="Tools" Directory="ToolsDir">
+      <Component Id="Tool_OwnerRecovery" Guid="*">
+        <File Id="OwnerRecoveryExe" Source="$(var.StageDir)\tools\RoofSpanOwnerRecovery.exe" KeyPath="yes" />
+        <Shortcut Id="ScOwnerRecovery" Directory="StartMenuMaint"
+                  Name="RoofSpan Owner Recovery (Administrator)"
+                  Description="Reset the RoofSpan Owner password. Requires 'Run as administrator'."
+                  Advertise="yes" />
+      </Component>
+      <Component Id="StartMenuCleanup" Directory="StartMenuMaint" Guid="*">
+        <RemoveFolder Id="RmStartMenuMaint" Directory="StartMenuMaint" On="uninstall" />
+        <RemoveFolder Id="RmStartMenuRoofSpan" Directory="StartMenuRoofSpan" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\RoofSpan\Office" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <!-- Persisted data marker: created if absent, NEVER removed on uninstall/upgrade. -->
     <Component Id="DataDirs" Directory="DataRoot" Guid="*" Permanent="yes" NeverOverwrite="yes">
       <CreateFolder />
@@ -128,6 +151,7 @@
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="Services" />
+      <ComponentGroupRef Id="Tools" />
       <ComponentRef Id="DataDirs" />
       <ComponentGroupRef Id="DataAcls" />
     </Feature>

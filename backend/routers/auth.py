@@ -54,7 +54,7 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
         raise HTTPException(status_code=403, detail="This account is disabled")
 
     _attempts.pop(key, None)
-    token = create_access_token(user.id, user.email, user.role)
+    token = create_access_token(user.id, user.email, user.role, user.token_version)
     await log_action(db, user=user, action="auth.login", entity_type="user", entity_id=user.id, request=request)
     return TokenResponse(access_token=token, user=_to_user_out(user))
 
@@ -75,6 +75,9 @@ async def change_password(payload: ChangePasswordIn, request: Request, user: Use
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.password_hash = hash_password(payload.new_password)
+    user.token_version += 1  # invalidate all prior tokens for this user
     await db.commit()
     await log_action(db, user=user, action="auth.change_password", entity_type="user", entity_id=user.id, request=request)
-    return {"ok": True}
+    # Return a fresh token carrying the new version so the caller's current session stays valid.
+    token = create_access_token(user.id, user.email, user.role, user.token_version)
+    return {"ok": True, "access_token": token}
