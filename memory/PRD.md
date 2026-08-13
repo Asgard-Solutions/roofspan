@@ -766,3 +766,9 @@ Fixed the MSI build failure where directory-keypath components used `Guid="*"`.
   - AclSecrets = `6F879EC8-339B-4941-9D08-AE6717D02DB3`
 - **No other WIX0230 offenders:** `DataDirs` has a `CreateFolder` but an explicit `RegistryValue KeyPath="yes"`, so its `Guid="*"` is valid (unchanged). `Svc_*`/`Tool_*` use File keypaths and `StartMenuCleanup` a RegistryValue keypath — all valid with `Guid="*"`.
 - **Test (`windows/tests/test_installer_static.py`):** `test_no_directory_keypath_component_uses_wildcard_guid` (fails if any CreateFolder-only component uses `Guid="*"`) + `test_acl_components_have_stable_unique_guids`. windows **114/114** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — WiX WIX0104 fix (invalid XML comments) (2026-06)
+Fixed the bundle XML parse failure caused by "--" inside XML comments.
+- **Root cause:** two comments in `windows/installer/bundle.wxs` contained literal CLI switches — `(--superpassword)` (line 32) and `(--serverport)` (line 50). XML comments cannot contain `--`, so WiX v5 raised WIX0104.
+- **Fix:** comment text only — `(--superpassword)` → `(the superpassword argument)`, `(--serverport)` → `(the serverport argument)`. No runtime markup changed: `InstallArguments="… --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL --serverport [PgPort]"` and all package order / PG detection / PgSuperPassword / PgPort / BAFunctions / MSI / signing behavior are untouched. All three installer files (`bundle.wxs`, `RoofSpan.wxs`, `constants.wxi`) now parse as well-formed XML.
+- **Test (`windows/tests/test_installer_static.py`):** `test_wix_sources_are_well_formed_xml` + `test_no_xml_comment_contains_double_hyphen` (scans every .wxs/.wxi). windows **116/116** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).

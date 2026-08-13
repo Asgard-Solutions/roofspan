@@ -40,6 +40,36 @@ def test_wix_guids_are_valid_and_not_placeholder():
         assert "RS0FSPAN" not in _read(os.path.join(INSTALLER, f))
 
 
+# WIX0104: XML comments must not contain "--". Parse every WiX source as XML AND explicitly reject any
+# comment body containing "--" (the runtime command-line flags live in attributes, not comments).
+_XML_COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
+
+
+def _wix_sources():
+    import glob
+    return sorted(glob.glob(os.path.join(INSTALLER, "*.wxs")) + glob.glob(os.path.join(INSTALLER, "*.wxi")))
+
+
+def test_wix_sources_are_well_formed_xml():
+    import xml.etree.ElementTree as ET
+    for path in _wix_sources():
+        try:
+            ET.parse(path)
+        except ET.ParseError as e:
+            raise AssertionError(f"{os.path.basename(path)} is not well-formed XML: {e}")
+
+
+def test_no_xml_comment_contains_double_hyphen():
+    offenders = []
+    for path in _wix_sources():
+        text = _read(path)
+        for m in _XML_COMMENT_RE.finditer(text):
+            if "--" in m.group(1):
+                line = text[: m.start()].count("\n") + 1
+                offenders.append(f"{os.path.basename(path)}:{line}")
+    assert not offenders, f"XML comment(s) containing '--' (WIX0104): {offenders}"
+
+
 # WIX0230: a component whose effective KeyPath is a directory (CreateFolder, no other explicit KeyPath)
 # CANNOT use Guid="*". Guard so directory-keypath ACL components never regress to an auto GUID.
 _COMPONENT_RE = re.compile(r"<Component\b(?P<attrs>[^>]*)>(?P<body>.*?)</Component>", re.S)

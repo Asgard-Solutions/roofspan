@@ -29,7 +29,7 @@
            is to run BEFORE the chain (OnDetectComplete): if a NEW RoofSpan-managed PostgreSQL will be
            installed (NOT RoofSpanPgPresent) AND no enterprise override was supplied, it CSPRNG-generates
            the superuser/bootstrap password into the Hidden PgSuperPassword variable so the SAME value can
-           be handed to BOTH the EDB installer (--superpassword) and the RoofSpan MSI (PG_SUPERPASSWORD).
+           be handed to BOTH the EDB installer (the superpassword argument) and the RoofSpan MSI (PG_SUPERPASSWORD).
            This is the smallest officially-supported WiX v4 mechanism to seed a random hidden Burn variable
            before package execution (WixStandardBootstrapperApplication has no built-in RNG). HUMAN REQUIRED
            to compile on Windows (see windows\bafunctions\README.md). -->
@@ -47,7 +47,7 @@
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
     <!-- Compiled BAFunctions DLL (supplied by build.ps1 -d BaFunctionsDll=...). -->
     <!-- Dedicated RoofSpan-owned localhost PostgreSQL port (avoids colliding with an unrelated PostgreSQL
-         that may already own 5432). Handed to the EDB install (--serverport) AND the MSI (PG_PORT) so the
+         that may already own 5432). Handed to the EDB install (the serverport argument) AND the MSI (PG_PORT) so the
          deployed DATABASE_URL and the bootstrap connection all agree. -->
     <Variable Name="PgPort" Type="string" Value="5442" bal:Overridable="yes" />
     <!-- PostgreSQL superuser/bootstrap credential. Hidden (Burn REDACTS it in logs, including on the EDB
