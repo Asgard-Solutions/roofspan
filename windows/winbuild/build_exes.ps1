@@ -1,20 +1,18 @@
-# Builds the three RoofSpan Office service executables with PyInstaller.
-# HUMAN REQUIRED: run on Windows with the backend requirements + Windows build deps installed:
-#   pip install -r ..\..\backend\requirements.txt
-#   pip install -r requirements-windows.txt   # pywin32 (SCM service host) + pyinstaller
+# Builds the RoofSpan Office service/tool executables with PyInstaller.
+# HUMAN REQUIRED: run on Windows. NO manual venv activation needed - this script resolves (and, if missing
+# or incomplete, creates/repairs) the canonical <repo-root>\.venv and installs backend + Windows build
+# requirements automatically. See winbuild\python_env.ps1.
 #   .\build_exes.ps1 -OutDir ..\..\_stage\services
 param(
   [Parameter(Mandatory=$true)][string]$OutDir
 )
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
-  throw "pyinstaller not found. Run: pip install -r requirements-windows.txt (and backend requirements)."
-}
-python -c "import win32serviceutil" 2>$null
-if ($LASTEXITCODE -ne 0) {
-  throw "pywin32 not found. Run: pip install -r requirements-windows.txt (required for the Windows service host)."
-}
+# Resolve (creating/repairing if necessary) the canonical <repo-root>\.venv interpreter. All PyInstaller
+# invocations below go through THIS interpreter - never a PATH-resolved / globally-installed PyInstaller.
+. (Join-Path $PSScriptRoot "python_env.ps1")
+$VenvPython = Get-RoofSpanBuildPython
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $ToolsDir = Join-Path (Split-Path $OutDir -Parent) "tools"
 New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
@@ -32,8 +30,9 @@ foreach ($spec in ($serviceSpecs + $toolSpecs)) {
   # leftover exe from a previous spec/build). --clean also drops PyInstaller's analysis cache.
   if (Test-Path $distRoot) { Remove-Item $distRoot -Recurse -Force }
   Write-Host "==> PyInstaller $spec"
-  pyinstaller --clean --noconfirm --distpath $distRoot `
+  & $VenvPython -m PyInstaller --clean --noconfirm --distpath $distRoot `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $spec (exit code $LASTEXITCODE)." }
   $dest = if ($toolSpecs -contains $spec) { $ToolsDir } else { $OutDir }
   $produced = Get-ChildItem -Path $distRoot -Filter "*.exe"
   if (-not $produced) { throw "PyInstaller did not produce an exe for $spec" }

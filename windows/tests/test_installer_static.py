@@ -260,6 +260,62 @@ def test_build_script_is_fail_fast_and_builds_bundle():
     assert "RoofSpanSetup.exe" in ps and "RoofSpanOffice-$Version.msi" in ps
 
 
+def test_python_env_helper_resolves_repo_venv():
+    # A single reusable helper resolves the canonical <repo-root>\.venv from $PSScriptRoot (not CWD/PATH).
+    helper = os.path.join(PACKAGING, "python_env.ps1")
+    assert os.path.isfile(helper)
+    env = _read(helper)
+    assert 'Join-Path $PSScriptRoot "..\\.."' in env          # repo root relative to the script
+    assert 'Join-Path $repo ".venv"' in env
+    assert 'Scripts\\python.exe' in env
+    assert "Get-RoofSpanBuildPython" in env
+
+
+def test_build_uses_venv_python_not_path_pyinstaller():
+    px = _read(os.path.join(PACKAGING, "build_exes.ps1"))
+    # PyInstaller must run through the canonical venv interpreter, NOT a bare PATH command / global install.
+    assert "python_env.ps1" in px and "$VenvPython = Get-RoofSpanBuildPython" in px
+    assert "& $VenvPython -m PyInstaller" in px
+    assert "pyinstaller --clean" not in px                    # no bare PATH pyinstaller invocation
+    assert "Get-Command pyinstaller" not in px                # no PATH-based existence gate
+
+
+def test_bootstrap_installs_backend_and_windows_requirements():
+    env = _read(os.path.join(PACKAGING, "python_env.ps1"))
+    assert '-m", "venv"' in env or '"-m", "venv"' in env      # creates the venv when missing
+    assert "backend\\requirements.txt" in env
+    assert "requirements-windows.txt" in env
+    assert "& $VenvPython -m pip install -r $backendReq" in env
+    assert "& $VenvPython -m pip install -r $winReq" in env
+
+
+def test_pywin32_and_pyinstaller_validated_via_venv():
+    env = _read(os.path.join(PACKAGING, "python_env.ps1"))
+    assert '& $VenvPython -c "import PyInstaller"' in env
+    assert '& $VenvPython -c "import win32serviceutil"' in env
+
+
+def test_incomplete_venv_is_repaired_not_failed():
+    env = _read(os.path.join(PACKAGING, "python_env.ps1"))
+    # An existing-but-incomplete venv is repaired by (re)installing requirements, not by throwing.
+    assert "Repairing RoofSpan Windows build virtual environment" in env
+    assert "Test-RoofSpanBuildDeps" in env and "Install-RoofSpanBuildDeps" in env
+
+
+def test_no_manual_venv_activation_required():
+    for name in ("python_env.ps1", "build_exes.ps1"):
+        txt = _read(os.path.join(PACKAGING, name))
+        assert "Activate.ps1" not in txt and "\\activate" not in txt.lower()
+
+
+def test_stale_exe_protection_preserved_in_build_exes():
+    # The pre-existing stale/leftover-exe protection must remain: distpath is cleaned before each spec build.
+    px = _read(os.path.join(PACKAGING, "build_exes.ps1"))
+    assert "Remove-Item $distRoot -Recurse -Force" in px
+    assert "--clean --noconfirm" in px
+    assert 'Expected exactly one exe for $spec' in px
+
+
 def test_desktop_and_start_menu_shortcuts_launch_office():
     wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
     # A Desktop directory must exist for the desktop icon.
@@ -467,6 +523,7 @@ def test_powershell_build_scripts_are_ascii_only():
         os.path.join(INSTALLER, "stage.ps1"),
         os.path.join(INSTALLER, "build.ps1"),
         os.path.join(PACKAGING, "build_exes.ps1"),
+        os.path.join(PACKAGING, "python_env.ps1"),
         os.path.join(HERE, "bafunctions", "build_bafunctions.ps1"),
         os.path.join(HERE, "desktop", "build_shell.ps1"),
     ]
