@@ -6,16 +6,18 @@ A tiny **BAFunctions** native DLL that supplements the stock WiX v5 `WixStandard
 ## What it does
 `OnPlanBegin` (after Detect, before the chain executes):
 - If `PgSuperPassword` is already non-empty → **do nothing** (enterprise/external override supplied).
-- Else if `RoofSpanPgPresent == 1` → **do nothing** (RoofSpan-managed PostgreSQL already installed; upgrade
-  preserves existing credentials).
-- Else (fresh RoofSpan-managed install) → generate **32 CSPRNG bytes (`BCryptGenRandom`) → 64 hex chars**
-  and store via `BalSetStringVariable`. If RNG/set fails, it **cancels** planning (`*pfCancel = TRUE`) and
-  returns the failure HRESULT — **fail closed**, never proceeding into EDB with an empty `--superpassword`.
+- Else try to **recover** a previously persisted credential from machine-protected (DPAPI, LOCAL_MACHINE)
+  storage at `%ProgramData%\RoofSpan\bootstrap\pgsuper.bin` → if found, set `PgSuperPassword` and stop.
+  This makes a failed/rolled-back first install recoverable by simply rerunning `RoofSpanSetup.exe`.
+- Else if `RoofSpanPgPresent == 1` (PostgreSQL installed but no recoverable secret) → **fail closed**
+  (`*pfCancel = TRUE`); a new password can't authenticate to the existing instance and we never touch the
+  customer's PostgreSQL/data.
+- Else (genuinely fresh install) → generate **32 CSPRNG bytes → 64 hex chars** (`BCryptGenRandom`),
+  **persist** them (DPAPI) *before* the chain, then `BalSetStringVariable`.
 
-`PgSuperPassword` is `Hidden="yes"` in `bundle.wxs`, so Burn **redacts** it in logs, including the EDB
-`--superpassword` command line and the MSI `PG_SUPERPASSWORD`. It is not persisted by Burn. The RoofSpan
-**application** DB password is a *separate* random value (see `winbuild/bootstrap_db.py`) and is the only
-password written to the deployed `DATABASE_URL`.
+`RoofSpanBootstrap.exe` securely deletes the persisted secret once the `roofspan` role/db + deployed
+`DATABASE_URL` are provisioned (it is no longer needed; the app uses the separate least-privilege password).
+`PgSuperPassword` is `Hidden`, so Burn redacts it in all logs; nothing is committed to source.
 
 ## Files
 | File | Purpose |

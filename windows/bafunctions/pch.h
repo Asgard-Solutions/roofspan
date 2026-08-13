@@ -12,6 +12,7 @@
 #pragma warning(pop)
 
 #include <bcrypt.h>       // BCryptGenRandom (CSPRNG for the PostgreSQL superuser password)
+#include <wincrypt.h>     // DPAPI CryptProtectData/CryptUnprotectData (machine-protected secret persistence)
 #include <msiquery.h>
 #include <objbase.h>
 #include <shlobj.h>

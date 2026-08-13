@@ -310,3 +310,106 @@ def test_secrets_dir_is_backend_only_writable():
     block = m.group(0)
     assert 'User="RoofSpanBackend"' in block and 'GenericWrite="yes"' in block
     assert "RoofSpanRelay" not in block and "RoofSpanUpdate" not in block  # not exposed to other services
+
+
+# --- retry-safe DPAPI bootstrap credential recovery ----------------------------------------------
+def test_require_bootstrap_password_error_has_exit_code_2():
+    try:
+        bs.require_bootstrap_password("")
+        assert False, "expected BootstrapError"
+    except bs.BootstrapError as e:
+        assert e.code == 2 and "rerun" in str(e).lower()  # actionable, non-secret message
+
+
+def test_purge_bootstrap_secret_removes_file_and_is_safe_when_absent(tmp_path):
+    secret = tmp_path / "pgsuper.bin"
+    secret.write_bytes(b"protected-blob")
+    bs.purge_bootstrap_secret(str(secret))
+    assert not secret.exists()
+    bs.purge_bootstrap_secret(str(secret))          # absent -> no error
+    bs.purge_bootstrap_secret("")                    # empty path -> no error
+
+
+def _tmpl(tmp_path):
+    t = tmp_path / "t.env"
+    t.write_text(TMPL)
+    return t
+
+
+def test_run_bootstrap_purges_secret_only_after_success(tmp_path):
+    tmpl = _tmpl(tmp_path)
+    dep = tmp_path / "config" / "roofspan.env"
+    secret = tmp_path / "pgsuper.bin"
+    secret.write_bytes(b"protected-blob")
+
+    def ok_provision(**_):
+        pass
+
+    rc = bs.run_bootstrap(supplied_super_pw="RECOVERED-SUPER", deployed_path=str(dep),
+                          template_path=str(tmpl), psql_path="psql.exe", port=5442,
+                          bootstrap_secret_path=str(secret), provision_fn=ok_provision)
+    assert rc == 0 and dep.is_file()
+    assert not secret.exists()  # secret securely removed only after role/db + config succeeded
+
+
+def test_run_bootstrap_keeps_secret_when_provision_fails(tmp_path):
+    tmpl = _tmpl(tmp_path)
+    dep = tmp_path / "config" / "roofspan.env"
+    secret = tmp_path / "pgsuper.bin"
+    secret.write_bytes(b"protected-blob")
+
+    def bad_provision(**_):
+        raise RuntimeError("psql failed")
+
+    with pytest.raises(RuntimeError):
+        bs.run_bootstrap(supplied_super_pw="RECOVERED-SUPER", deployed_path=str(dep),
+                         template_path=str(tmpl), psql_path="psql.exe",
+                         bootstrap_secret_path=str(secret), provision_fn=bad_provision)
+    assert secret.exists()       # NOT purged -> next RoofSpanSetup.exe run can still recover it
+    assert not dep.exists()
+
+
+def test_run_bootstrap_recovered_credential_completes_the_retry_sequence(tmp_path):
+    # Rerun after PostgreSQL installed + MSI rolled back: Burn/BAFunctions recovered the DPAPI secret and
+    # passes it here; deployed config is absent, so bootstrap provisions and then purges the secret.
+    tmpl = _tmpl(tmp_path)
+    dep = tmp_path / "config" / "roofspan.env"
+    secret = tmp_path / "pgsuper.bin"
+    secret.write_bytes(b"protected-blob")
+    seen = {}
+
+    def provision(*, psql_path, host, port, super_password, db_password):
+        seen.update(super_password=super_password, db_password=db_password)
+
+    rc = bs.run_bootstrap(supplied_super_pw="RECOVERED-SUPER", deployed_path=str(dep),
+                          template_path=str(tmpl), psql_path="psql.exe",
+                          bootstrap_secret_path=str(secret), provision_fn=provision)
+    assert rc == 0
+    assert seen["super_password"] == "RECOVERED-SUPER"     # recovered credential used to authenticate
+    assert seen["super_password"] != seen["db_password"]   # separate random app password
+    assert not secret.exists()
+    assert seen["db_password"] in dep.read_text() and seen["super_password"] not in dep.read_text()
+
+
+def test_run_bootstrap_missing_template_reports_code_5(tmp_path):
+    dep = tmp_path / "config" / "roofspan.env"
+    try:
+        bs.run_bootstrap(supplied_super_pw="X", deployed_path=str(dep),
+                         template_path=str(tmp_path / "missing.env"), psql_path="psql.exe",
+                         provision_fn=lambda **_: None)
+        assert False, "expected BootstrapError"
+    except bs.BootstrapError as e:
+        assert e.code == 5 and "template" in str(e).lower()
+
+
+def test_bafunctions_persists_and_recovers_via_dpapi():
+    c = _read(BAFUNC)
+    # machine-protected DPAPI persistence + recovery, in the correct override -> recover -> generate order.
+    assert "CryptProtectData" in c and "CryptUnprotectData" in c
+    assert "CRYPTPROTECT_LOCAL_MACHINE" in c
+    assert "PersistSecret" in c and "RecoverSecret" in c
+    assert c.index("RecoverSecret(wzPassword") < c.index("GenerateHexPassword(ROOFSPAN_PG_PW_BYTES, wzPassword")
+    # fresh install persists BEFORE handing the value to the chain (so a rollback is recoverable)
+    assert c.index("PersistSecret(wzPassword)") < c.rindex("BalSetStringVariable(ROOFSPAN_PG_SUPERPASSWORD, wzPassword")
+    vcx = _read(BAFUNC_VCXPROJ)
+    assert "crypt32.lib" in vcx  # DPAPI link dependency

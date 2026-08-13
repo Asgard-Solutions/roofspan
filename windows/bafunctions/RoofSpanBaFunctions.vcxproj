@@ -91,7 +91,7 @@
       <!-- thmutil (pulled transitively by BootstrapperApplicationBase.h) references GDI+/common-controls,
            so mirror the official WiX v5 BAFunctions link set; bcrypt.lib is the CSPRNG dependency.
            The WiX DUtil/BAL/balutil static libs are auto-linked by the pinned NuGet packages' targets. -->
-      <AdditionalDependencies>comctl32.lib;gdiplus.lib;msimg32.lib;shlwapi.lib;wininet.lib;version.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>comctl32.lib;gdiplus.lib;msimg32.lib;shlwapi.lib;wininet.lib;version.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>RoofSpanBaFunctions.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>

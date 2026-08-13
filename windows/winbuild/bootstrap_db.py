@@ -42,6 +42,10 @@ log = logging.getLogger("roofspan.bootstrap")
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
 DEFAULT_TEMPLATE = r"C:\Program Files\RoofSpan Office\config-templates\roofspan.env"
 DEFAULT_DEPLOYED = r"C:\ProgramData\RoofSpan\config\roofspan.env"
+# Machine-protected (DPAPI, LOCAL_MACHINE) store where the Burn BAFunctions hook persists the generated
+# PostgreSQL bootstrap superpassword so a failed/rolled-back first install is recoverable on rerun. This
+# script deletes it after the roofspan role/db + deployed config are provisioned (it is no longer needed).
+DEFAULT_BOOTSTRAP_SECRET = r"C:\ProgramData\RoofSpan\bootstrap\pgsuper.bin"
 DB_NAME = "roofspan"
 DB_ROLE = "roofspan"
 DB_HOST = "127.0.0.1"
@@ -52,7 +56,14 @@ DEFAULT_PG_PORT = 5442
 
 
 class BootstrapError(RuntimeError):
-    """Raised for fail-closed conditions (missing required credential, provisioning failure)."""
+    """Raised for fail-closed conditions (missing required credential, provisioning failure).
+
+    `code` is the process exit code the deferred CA returns so install-time logs identify the NON-SECRET
+    cause without ever printing the password."""
+
+    def __init__(self, message, code=2):
+        super().__init__(message)
+        self.code = code
 
 
 # --------------------------------------------------------------------------------------------------
@@ -75,11 +86,31 @@ def require_bootstrap_password(supplied_super_pw: str) -> str:
     pw = (supplied_super_pw or "").strip()
     if not pw:
         raise BootstrapError(
-            "no PostgreSQL superuser credential was handed off by the installer; refusing to provision. "
-            "The Burn bootstrapper generates and passes PgSuperPassword before PostgreSQL is installed "
-            "(RoofSpan-managed), or an explicit DBA credential is required (external PostgreSQL)."
+            "PostgreSQL bootstrap credential unavailable: none was handed off by the installer. On a "
+            "fresh install the Burn bootstrapper generates + persists it (DPAPI) before PostgreSQL; if an "
+            "earlier attempt was interrupted, simply rerun RoofSpanSetup.exe to recover it. For an external "
+            "PostgreSQL, supply PgSuperPassword.",
+            code=2,
         )
     return pw
+
+
+def purge_bootstrap_secret(path: str) -> None:
+    """Best-effort secure removal of the DPAPI bootstrap-secret file once provisioning has succeeded (the
+    superuser credential is no longer needed; the app uses the least-privilege roofspan password). Never
+    raises — a leftover machine-protected blob must not fail an otherwise-successful install."""
+    try:
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "r+b") as f:
+                    f.write(b"\x00" * os.path.getsize(path))
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError:
+                pass
+            os.remove(path)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------------------------------
@@ -158,8 +189,9 @@ def discover_psql() -> str:  # pragma: no cover (native)
     psql = _psql_from_registry()
     if not psql:
         raise BootstrapError(
-            "could not locate psql.exe from HKLM\\SOFTWARE\\PostgreSQL\\Installations; no usable "
-            "PostgreSQL installation was found"
+            "psql.exe not found: no PostgreSQL installation registered under "
+            "HKLM\\SOFTWARE\\PostgreSQL\\Installations.",
+            code=4,
         )
     return psql
 
@@ -195,21 +227,27 @@ def provision_database(*, psql_path: str, host: str, port: int, super_password: 
 # --------------------------------------------------------------------------------------------------
 def run_bootstrap(*, supplied_super_pw: str, deployed_path: str, template_path: str, psql_path: str,
                   port: int = DEFAULT_PG_PORT, host: str = DB_HOST,
+                  bootstrap_secret_path: str = DEFAULT_BOOTSTRAP_SECRET,
                   provision_fn=provision_database) -> int:
     """Provision the DB then render the deployed config. FAIL CLOSED: config is written ONLY after
     successful provisioning. Upgrade/repair (deployed config present) preserves both credentials and
-    regenerates nothing."""
+    regenerates nothing. On success the recoverable DPAPI bootstrap secret is securely purged."""
     if os.path.isfile(deployed_path):
         return 0  # upgrade/repair: preserve creds + config; regenerate nothing
 
-    super_pw = require_bootstrap_password(supplied_super_pw)  # fail-closed if missing
+    if not os.path.isfile(template_path):
+        raise BootstrapError(f"config template missing: {template_path}", code=5)
+
+    super_pw = require_bootstrap_password(supplied_super_pw)  # fail-closed if missing (recover by rerun)
     db_pw = generate_db_password()
     if db_pw == super_pw:  # defensive: the two credentials must never coincide
-        raise BootstrapError("bootstrap and application passwords must be distinct")
+        raise BootstrapError("bootstrap and application passwords must be distinct", code=3)
 
     # Provision FIRST. Only render the deployed DATABASE_URL if provisioning succeeded.
     provision_fn(psql_path=psql_path, host=host, port=port, super_password=super_pw, db_password=db_pw)
     write_deployed_config(template_path, deployed_path, db_pw)
+    # Provisioning + config both succeeded -> the recoverable superuser secret is no longer needed.
+    purge_bootstrap_secret(bootstrap_secret_path)
     return 0
 
 
@@ -220,6 +258,8 @@ def parse_args(argv) -> argparse.Namespace:
     ap.add_argument("--pg-port", dest="pg_port", type=int, default=DEFAULT_PG_PORT)
     ap.add_argument("--template", default=os.environ.get("ROOFSPAN_CONFIG_TEMPLATE", DEFAULT_TEMPLATE))
     ap.add_argument("--deployed", default=os.environ.get("ROOFSPAN_DEPLOYED_CONFIG", DEFAULT_DEPLOYED))
+    ap.add_argument("--bootstrap-secret-path",
+                    default=os.environ.get("ROOFSPAN_BOOTSTRAP_SECRET", DEFAULT_BOOTSTRAP_SECRET))
     return ap.parse_args(argv)
 
 
@@ -230,10 +270,12 @@ def main(argv=None) -> int:  # pragma: no cover (native install-time orchestrati
     try:
         psql_path = discover_psql()
         return run_bootstrap(supplied_super_pw=args.pg_superpassword, deployed_path=args.deployed,
-                             template_path=args.template, psql_path=psql_path, port=args.pg_port)
+                             template_path=args.template, psql_path=psql_path, port=args.pg_port,
+                             bootstrap_secret_path=args.bootstrap_secret_path)
     except BootstrapError as e:
-        log.error("RoofSpan DB bootstrap failed (fail-closed): %s", e)  # never log secret values
-        return 2
+        # Non-secret cause is logged with a distinct exit code (2=credential, 4=psql, 5=template, 3=other).
+        log.error("RoofSpan DB bootstrap failed (exit %d, fail-closed): %s", e.code, e)
+        return e.code
     except Exception as e:  # provisioning / IO error -> fail closed, MSI rolls back
         log.error("RoofSpan DB bootstrap error (fail-closed): %s", type(e).__name__)
         return 3
