@@ -1,0 +1,18 @@
+{
+  "summary": "Static/source verification of Windows PowerShell/PyInstaller build environment refactor. Ran `python -m pytest /app/windows/tests` -> 157 passed / 0 failed in 0.56s. Verified windows/winbuild/python_env.ps1 exists with Get-RoofSpanBuildPython, Find-BasePython, New-RoofSpanVenv, Install-RoofSpanBuildDeps, Test-RoofSpanBuildDeps. Repo root resolved via `Join-Path $PSScriptRoot '..\\..'` (line 16), canonical venv `Join-Path $repo '.venv'` with `Scripts\\python.exe` (lines 73-74), venv self-bootstrapped via `-m venv` (line 41), both backend\\requirements.txt AND windows\\winbuild\\requirements-windows.txt installed via `& $VenvPython -m pip install -r` (lines 55, 57), deps validated via `& $VenvPython -c 'import PyInstaller'` and `import win32serviceutil` (lines 64, 66), incomplete venv repaired rather than thrown (lines 81-85). build_exes.ps1 dot-sources python_env.ps1 (line 13), sets `$VenvPython = Get-RoofSpanBuildPython` (line 14), invokes `& $VenvPython -m PyInstaller --clean --noconfirm ...` (lines 33-34). No bare `pyinstaller` PATH command, no `Get-Command pyinstaller` gate, no `Activate.ps1`/`activate` reference. Stale-exe protection preserved: distpath cleaned before each build (line 31 `Remove-Item $distRoot -Recurse -Force`), `--clean --noconfirm` present, and 'Expected exactly one exe' guard on line 39.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_installer_static.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "python_env.ps1 is clean, deterministic, well-commented, and correctly isolates base-python lookup from build-python usage.",
+    "build_exes.ps1 correctly routes every PyInstaller invocation through the resolved venv interpreter; no PATH dependency remains."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Windows static test suite is at 157 tests, all passing. Any future Windows build changes should preserve the canonical `<repo>\\.venv` + `& $VenvPython -m PyInstaller` pattern in build_exes.ps1 and keep python_env.ps1 as the single source for build interpreter resolution.",
+  "rca of the issue": "Original bug: stage.ps1 failed with 'pyinstaller not found' from a fresh PowerShell because build_exes.ps1 relied on the human pre-activating <repo>\\.venv so `pyinstaller` resolved on PATH. Fix (verified): centralized python_env.ps1 resolves <repo>\\.venv via $PSScriptRoot, creates/repairs it, installs both requirements files, and returns the interpreter path; build_exes.ps1 dot-sources it and invokes `& $VenvPython -m PyInstaller`, eliminating PATH dependence and the need for manual activation."
+}
