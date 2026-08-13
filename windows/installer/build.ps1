@@ -37,6 +37,28 @@ $required = @(
 foreach ($p in $required) {
   if (-not (Test-Path $p)) { throw "Staging incomplete — missing '$p'. Run installer\stage.ps1 first." }
 }
+# The deferred DB bootstrap tool MUST be staged (WiX packages tools\RoofSpanBootstrap.exe).
+$bootstrapExe = Join-Path $StageDir "tools\RoofSpanBootstrap.exe"
+if (-not (Test-Path $bootstrapExe)) {
+  throw "Staging incomplete — missing '$bootstrapExe'. Run installer\stage.ps1 first."
+}
+
+# ---- STALENESS GUARD: a rebuild of the MSI must NOT silently package PyInstaller exes that are older than
+# their Python sources (e.g. re-running build.ps1 after editing bootstrap_db.py without re-staging). Fail
+# fast and tell the operator to re-run stage.ps1.
+$pySources = @()
+$pySources += Get-ChildItem (Join-Path $PSScriptRoot "..\winbuild") -Filter *.py -File -Recurse
+$pySources += Get-ChildItem (Join-Path $PSScriptRoot "..\..\backend") -Filter *.py -File -Recurse
+$newestSrc = ($pySources | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+$stagedExes = @()
+$stagedExes += Get-ChildItem (Join-Path $StageDir "services") -Filter *.exe -File -ErrorAction SilentlyContinue
+$stagedExes += Get-ChildItem (Join-Path $StageDir "tools") -Filter *.exe -File -ErrorAction SilentlyContinue
+$stale = $stagedExes | Where-Object { $_.LastWriteTimeUtc -lt $newestSrc }
+if ($stale) {
+  throw ("Stale staged executable(s) older than current Python sources: " +
+         ($stale.Name -join ', ') +
+         ". Re-run installer\stage.ps1 (rebuilds PyInstaller exes) before build.ps1.")
+}
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."
 }

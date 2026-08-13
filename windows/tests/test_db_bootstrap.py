@@ -3,6 +3,7 @@
 Pure decision/render logic is unit-tested in-container; native psql/role/db execution, the WiX/Burn secret
 handoff, and the BAFunctions credential generation are HUMAN REQUIRED on Windows and asserted statically.
 """
+import glob
 import os
 
 import pytest
@@ -402,7 +403,34 @@ def test_run_bootstrap_missing_template_reports_code_5(tmp_path):
         assert e.code == 5 and "template" in str(e).lower()
 
 
-def test_bafunctions_persists_and_recovers_via_dpapi():
+def test_default_template_matches_wix_installed_config_template():
+    # The bootstrap DEFAULT_TEMPLATE must equal the file the MSI actually installs (ERROR_PATH_NOT_FOUND
+    # / 0x80070003 otherwise). One canonical filename across staging, WiX, and bootstrap.
+    staged = glob.glob(os.path.join(WINBUILD, "config", "roofspan.env*"))
+    names = {os.path.basename(p) for p in staged}
+    assert "roofspan.env.template" in names                      # the staged/source template filename
+    assert bs.DEFAULT_TEMPLATE.split("\\")[-1] == "roofspan.env.template"
+    assert bs.DEFAULT_TEMPLATE == r"C:\Program Files\RoofSpan Office\config-templates\roofspan.env.template"
+    # deployed runtime file stays roofspan.env (NOT the template)
+    assert bs.DEFAULT_DEPLOYED.split("\\")[-1] == "roofspan.env"
+    wxs = _read(WXS)
+    assert '<Directory Id="INSTALLFOLDER" Name="RoofSpan Office">' in wxs
+    assert '<Directory Id="ConfigTemplatesDir" Name="config-templates" />' in wxs
+
+
+def test_build_exes_rebuilds_fresh_per_spec_no_stale_artifacts():
+    ps = _read(os.path.join(WINBUILD, "build_exes.ps1"))
+    # dist is cleaned before each spec so only THIS spec's freshly-built exe is staged (no leftovers).
+    assert "Remove-Item $distRoot -Recurse -Force" in ps
+    assert "if (Test-Path $distRoot)" in ps
+    assert "Expected exactly one exe for" in ps                  # guards against cross/stale exe staging
+
+
+def test_build_script_has_stale_artifact_guard():
+    ps = _read(os.path.join(HERE, "installer", "build.ps1"))
+    assert "Stale staged executable" in ps                       # fails if staged exes older than sources
+    assert "LastWriteTimeUtc" in ps
+    assert r"tools\RoofSpanBootstrap.exe" in ps                   # bootstrap tool existence enforced
     c = _read(BAFUNC)
     # machine-protected DPAPI persistence + recovery, in the correct override -> recover -> generate order.
     assert "CryptProtectData" in c and "CryptUnprotectData" in c

@@ -22,15 +22,20 @@ New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 # service specs -> staged under services\ ; the recovery tool -> staged under tools\ (NOT a service).
 $serviceSpecs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
 $toolSpecs = @("roofspan-owner-recovery.spec", "roofspan-bootstrap.spec")
+$distRoot = Join-Path $PSScriptRoot "dist"
 foreach ($spec in ($serviceSpecs + $toolSpecs)) {
   $specPath = Join-Path $PSScriptRoot $spec
   if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
+  # Clean distpath BEFORE each build so we only ever stage THIS spec's freshly-produced exe (never a
+  # leftover exe from a previous spec/build). --clean also drops PyInstaller's analysis cache.
+  if (Test-Path $distRoot) { Remove-Item $distRoot -Recurse -Force }
   Write-Host "==> PyInstaller $spec"
-  pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
+  pyinstaller --clean --noconfirm --distpath $distRoot `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
   $dest = if ($toolSpecs -contains $spec) { $ToolsDir } else { $OutDir }
-  $produced = Get-ChildItem -Path (Join-Path $PSScriptRoot "dist") -Filter "*.exe"
+  $produced = Get-ChildItem -Path $distRoot -Filter "*.exe"
   if (-not $produced) { throw "PyInstaller did not produce an exe for $spec" }
+  if ($produced.Count -ne 1) { throw "Expected exactly one exe for $spec; got: $($produced.Name -join ', ')" }
   foreach ($p in $produced) { Copy-Item $p.FullName (Join-Path $dest $p.Name) -Force }
 }
 Write-Host "==> Services staged in $OutDir ; tools staged in $ToolsDir"

@@ -40,7 +40,7 @@ import sys
 log = logging.getLogger("roofspan.bootstrap")
 
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
-DEFAULT_TEMPLATE = r"C:\Program Files\RoofSpan Office\config-templates\roofspan.env"
+DEFAULT_TEMPLATE = r"C:\Program Files\RoofSpan Office\config-templates\roofspan.env.template"
 DEFAULT_DEPLOYED = r"C:\ProgramData\RoofSpan\config\roofspan.env"
 # Machine-protected (DPAPI, LOCAL_MACHINE) store where the Burn BAFunctions hook persists the generated
 # PostgreSQL bootstrap superpassword so a failed/rolled-back first install is recoverable on rerun. This
