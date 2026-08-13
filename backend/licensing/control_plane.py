@@ -73,6 +73,14 @@ class DevControlPlaneClient:
         kid, priv = keys.get_dev_signing_key()
         return ent.sign_entitlement(private_key=priv, kid=kid, claims=claims)
 
+    async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
+                                      installation_id: str | None = None, seats: int | None = None) -> dict:
+        """DEV: return a mock hosted-checkout URL (no external account, no Stripe secret)."""
+        from control_plane import billing as cp_billing
+        n = int(seats or config.MIN_SEATS)
+        url = cp_billing.get_provider().checkout_url(company_id)
+        return {"checkout_url": url, "company_id": company_id, "seats": n, "monthly_price_usd": n * 49}
+
 
 class HttpControlPlaneClient:
     mode = "http"
@@ -151,6 +159,39 @@ class HttpControlPlaneClient:
         data = resp.json()
         lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
         return data["entitlement_jws"]
+
+    async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
+                                      installation_id: str | None = None, seats: int | None = None) -> dict:
+        """PRODUCTION: ask the central Control Plane to create the hosted checkout, authenticated with
+        this installation's identity (reqsig). Stripe secrets stay central; only the hosted URL comes back."""
+        import time
+        import uuid as _uuid
+        import httpx
+        from licensing import identity, reqsig
+
+        if not installation_id:
+            raise ControlPlaneUnavailable("Installation not activated (no installation identity)")
+        priv = identity.load_private_key()
+        if priv is None:
+            raise ControlPlaneUnavailable("Installation not activated (no installation identity)")
+        timestamp = str(int(time.time()))
+        nonce = _uuid.uuid4().hex
+        body = b""
+        signature = reqsig.sign_request(priv, installation_id=installation_id, timestamp=timestamp, nonce=nonce, body=body)
+        headers = {
+            reqsig.H_INSTALLATION: installation_id,
+            reqsig.H_TIMESTAMP: timestamp,
+            reqsig.H_NONCE: nonce,
+            reqsig.H_SIGNATURE: signature,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(f"{self._base()}/billing/stripe/initial-checkout", content=body, headers=headers)
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Checkout request failed: {e}") from e
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Checkout rejected ({resp.status_code}): {resp.text[:200]}")
+        return resp.json()
 
 
 def get_client():

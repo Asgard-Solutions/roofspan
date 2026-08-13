@@ -12,6 +12,7 @@ genuinely exercised.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +25,9 @@ from models import User, AppConfig
 from core import hash_password, create_access_token, require_roles, log_action
 import onboarding
 from licensing import config as lic_config, service as lic_service, control_plane as lic_cp
+from licensing.control_plane import ControlPlaneUnavailable
+
+logger = logging.getLogger("roofspan.setup")
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -122,21 +126,59 @@ async def bootstrap(payload: BootstrapIn, request: Request, db: AsyncSession = D
     }
 
 
+async def _ensure_installation_identity(db: AsyncSession, client) -> tuple[str, str]:
+    """PRODUCTION (http mode): return (installation_id, company_id) from the local installation record,
+    activating with the central Control Plane first if this installation has not yet been activated.
+    This is the smallest secure bootstrap: activation uses the installation's own key pair + the
+    (short-lived, non-master) activation bootstrap credential - never a shared master key."""
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
+    val = row.value if (row and isinstance(row.value, dict)) else {}
+    installation_id = val.get("installation_id")
+    company_id = val.get("company_id")
+    if not installation_id or not company_id:
+        data = await client.activate(db)  # registers this installation's public key; stores CP-assigned ids
+        installation_id, company_id = data["installation_id"], data["company_id"]
+    return installation_id, company_id
+
+
 @router.post("/checkout")
 async def setup_checkout(user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
-    """Start the mandatory initial 5-seat ($245/mo) subscription checkout. Idempotent — returns the
-    existing pending checkout if one is already open."""
+    """Start the mandatory initial 5-seat ($245/mo) subscription checkout. The hosted checkout is
+    created by the CENTRAL Control Plane (which owns the Stripe secret); this local backend only relays
+    the request over an installation-authenticated HTTPS call and stores the returned hosted URL.
+    Idempotent - returns the existing pending checkout if one is already open."""
     if await onboarding.get_state(db) == onboarding.ACTIVE:
         raise HTTPException(status_code=409, detail="RoofSpan Office is already activated.")
 
     rec = await onboarding.get_record(db)
     company_id = rec.get("company_id") or str(uuid.uuid4())
 
-    from control_plane import billing as cp_billing
+    # Idempotency: a repeated click / retry reuses the already-open pending checkout (never creates a
+    # second subscription for the same company).
+    if rec.get("state") == onboarding.PAYMENT_PENDING and rec.get("checkout_url"):
+        return {
+            "state": "payment_required",
+            "checkout_url": rec["checkout_url"],
+            "seats": INITIAL_SEATS,
+            "monthly_price_usd": INITIAL_SEATS * SEAT_PRICE_USD,
+        }
+
+    client = lic_cp.get_client()
     try:
-        url = cp_billing.get_provider().checkout_url(company_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not start checkout: {str(e)[:200]}")
+        if lic_config.LICENSING_MODE == "http":
+            installation_id, company_id = await _ensure_installation_identity(db, client)
+            data = await client.create_initial_checkout(
+                db, company_id=company_id, installation_id=installation_id, seats=INITIAL_SEATS)
+        else:
+            # dev/mock: no external account, no Stripe secret.
+            data = await client.create_initial_checkout(db, company_id=company_id, seats=INITIAL_SEATS)
+        url = data["checkout_url"]
+        if not url:
+            raise ControlPlaneUnavailable("No checkout URL returned")
+    except Exception:  # noqa: BLE001 - never leak provider/secret/exception text to the customer
+        logger.exception("Initial subscription checkout failed (company_id=%s)", company_id)
+        raise HTTPException(status_code=502,
+                            detail="Unable to start subscription checkout. Please try again in a moment.")
 
     checkout_id = rec.get("checkout_id") or f"co_{uuid.uuid4().hex}"
     await onboarding.set_record(db, {
@@ -157,23 +199,32 @@ async def setup_checkout(user: User = Depends(require_roles("owner")), db: Async
 
 @router.get("/payment-status")
 async def setup_payment_status(user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
-    """Poll payment/activation. When paid, finalize: issue a 5-seat entitlement and mark the
-    installation initialized so normal Office access unlocks."""
+    """Poll payment/activation. Payment proof is AUTHORITATIVE from the central subscription state (via
+    the signed entitlement refreshed from the Control Plane) - never inferred from a browser redirect.
+    Onboarding flips to ACTIVE only when the effective licensing state is ACTIVE (or allowed GRACE)."""
     if await onboarding.get_state(db) == onboarding.ACTIVE:
         return {"state": "initialized"}
 
     rec = await onboarding.get_record(db)
-    if not rec.get("paid"):
-        return {
-            "state": "payment_required",
-            "checkout_url": rec.get("checkout_url"),
-            "can_simulate": lic_config.LICENSING_MODE == "dev",
-        }
 
-    # Payment confirmed -> finalize activation.
     if lic_config.LICENSING_MODE == "dev":
+        # DEV/MOCK: a confirmed simulated payment (via /dev/pay) finalizes with a real 5-seat entitlement.
+        if not rec.get("paid"):
+            return {"state": "payment_required", "checkout_url": rec.get("checkout_url"), "can_simulate": True}
         await lic_cp.set_dev_subscription(db, state="ACTIVE", seats=INITIAL_SEATS, license_id=rec.get("company_id"))
-    await lic_service.refresh(db, force=True)
+        await lic_service.refresh(db, force=True)
+    else:
+        # PRODUCTION: refresh the signed entitlement from the central Control Plane, which reflects the
+        # Stripe-webhook-driven subscription state. A transient outage or not-yet-paid subscription simply
+        # keeps us in payment_required.
+        try:
+            await lic_service.refresh(db, force=True)
+        except ControlPlaneUnavailable:
+            return {"state": "payment_required", "checkout_url": rec.get("checkout_url"), "can_simulate": False}
+        except Exception:  # noqa: BLE001
+            logger.exception("Entitlement refresh during payment-status failed")
+            return {"state": "payment_required", "checkout_url": rec.get("checkout_url"), "can_simulate": False}
+
     eff = await lic_service.get_effective(db)
     if eff.effective_state in ("ACTIVE", "GRACE"):
         await onboarding.set_record(db, {**rec, "state": onboarding.ACTIVE})

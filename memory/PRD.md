@@ -868,4 +868,31 @@ Audit before the user's re-run of native Windows P1-4a validation with the pywin
 
 **Build/installer**: `windows/desktop/build_shell.ps1` runs `dotnet publish` (needs .NET 10 SDK) and stages `tools\RoofSpanOffice.exe`, invoked automatically by `stage.ps1` (fail-closed on non-zero exit / stale exe). The old PyInstaller `office_launcher.py` + `roofspan-office-launcher.spec` were DELETED and removed from `targets.py`/`build_exes.ps1`. `bundle.wxs` now detects the Edge WebView2 Evergreen Runtime (EdgeUpdate client GUID `{F3017226-...}`) and installs Microsoft's official bootstrapper if absent (embedded, `-d WebView2Bootstrapper=`; +~2 MB to setup, online-at-install unless the Evergreen standalone is supplied). `build.ps1` gains a mandatory `-WebView2Bootstrapper` param (validated) and still fail-fasts if `tools\RoofSpanOffice.exe` isn't staged. WiX `App_Launcher` shortcuts unchanged.
 - **Tests**: `windows/tests/test_installer_static.py` — **148/148 pass** (added shell project/host/readiness/external-nav/per-user-data/hardening/single-instance/pipeline/runtime tests; browser-launcher removal verified). C# + build_shell.ps1 verified ASCII-clean.
+
+## Implemented (2026-06) — P1-4b: Production initial-onboarding Stripe trust boundary
+**Trust boundary (authoritative):**
+```
+Customer RoofSpan Office (Windows)         Central RoofSpan Control Plane
+  - NEVER stores Stripe/RevenueCat/AWS       - owns STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+    secrets or CP DB/KMS credentials           STRIPE_SEAT_LOOKUP_KEY, BILLING_MODE=stripe
+  - asks CP for hosted checkout (reqsig)     - creates Stripe Checkout Sessions (company_id in metadata)
+  - opens checkout in the system browser     - processes Stripe webhooks (signature-verified)
+  - polls /api/setup/payment-status          - maintains normalized subscription state (ACTIVE/GRACE/
+  - refreshes the signed entitlement           SUSPENDED/CANCELLED) + signs entitlements (private key central)
+```
+The local Windows backend NO LONGER instantiates the Stripe provider and does NOT require STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET. It is no longer the production billing authority.
+
+**Changes:**
+- `backend/routers/setup.py`: `/checkout` now relays through the licensing Control Plane client (`create_initial_checkout`) instead of `control_plane.billing.get_provider().checkout_url()`. Idempotent (reuses an open PAYMENT_PENDING checkout). Customer-safe error ("Unable to start subscription checkout. Please try again in a moment.") with detail logged locally — no secret/exception leakage. `/payment-status` in production refreshes the signed entitlement from the CP (`lic_service.refresh(force=True)`) and flips onboarding ACTIVE only when effective state is ACTIVE/GRACE (never trusts a browser redirect). Dev mode preserved (`paid` + `set_dev_subscription`); `/dev/pay` stays DEV-only (403 in http mode).
+- `backend/licensing/control_plane.py`: `create_initial_checkout(company_id, installation_id, seats)` added to both clients. Http client POSTs to `{CONTROL_PLANE_URL}/billing/stripe/initial-checkout` with installation reqsig auth; dev client returns a mock URL (no secret).
+- `backend/control_plane/router.py`: new INSTALLATION-authenticated `POST /billing/stripe/initial-checkout` (reuses `_authed_installation` reqsig), resolves company from the installation, seats default to MIN_SEATS (5), calls central `service.stripe_create_checkout`, returns `{checkout_url, company_id, seats, monthly_price_usd}`. Existing admin checkout + central Stripe webhook + subscription reconciliation + entitlement signing all UNCHANGED and reused.
+- `windows/winbuild/config/roofspan.env.template`: removed `BILLING_MODE=stripe` (CENTRAL-only); added public `LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane` (safe client config, not localhost).
+
+**Config ownership:** STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / STRIPE_SEAT_LOOKUP_KEY / BILLING_MODE / REVENUECAT_SECRET_API_KEY / REVENUECAT_WEBHOOK_AUTH = **CENTRAL CONTROL PLANE ONLY**. Safe client config = LICENSING_MODE, LICENSING_CONTROL_PLANE_URL, CONTROL_PLANE_BASE_URL, RELAY/UPDATE public URLs, company/installation IDs, update PUBLIC key.
+
+**Pricing:** $49/seat/mo, min 5 seats, $245 initial. Stripe Price via lookup key `roofspan_seat_monthly` (central). No Price ID/pricing secret in the client.
+
+**Tests:** `backend/tests/test_setup_billing_boundary.py` (2 tests): production /checkout goes through the CP client with no local Stripe provider and no STRIPE_SECRET_KEY, idempotent, /dev/pay 403 in prod, customer-safe error with no secret text, and setup.py has no static Stripe import. Billing/licensing/CP suites (63) + onboarding (dev flow) still green; windows suite 157 green.
+
+**HUMAN REQUIRED (central infra, not the Windows installer):** set on the Control Plane deployment — `BILLING_MODE=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SEAT_LOOKUP_KEY=roofspan_seat_monthly`, `APP_BASE_URL=https://app.roofspan.io` (Stripe success/cancel return page); create the Stripe Price under lookup key `roofspan_seat_monthly`; configure the Stripe webhook to the central `POST {CP}/api/control-plane/billing/stripe/webhook`; ensure the CP public base URL matches the client's `LICENSING_CONTROL_PLANE_URL`. No secret values committed.
 - **HUMAN REQUIRED (cannot run in Linux container)**: native Windows build (`dotnet publish` via stage.ps1) + clean-PC install to verify the WebView2 window opens (no Edge/Chrome/console), backend-readiness wait, login/setup/Create-account, navigation/Map/modules, file upload/download, Stripe/external links open in the real browser, single-instance foregrounding, and clean uninstall. Rebuild: `stage.ps1 -StageDir ..\..\_stage -UpdatePublicKey <pub.pem>` then `build.ps1 -StageDir ..\..\_stage -PostgresInstaller <pg.exe> -WebView2Bootstrapper <MicrosoftEdgeWebview2Setup.exe>`.

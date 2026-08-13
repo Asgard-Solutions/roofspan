@@ -256,6 +256,30 @@ async def stripe_reconcile(company_id: str, _: bool = Depends(_require_admin), d
         raise _cp_error(e)
 
 
+@router.post("/billing/stripe/initial-checkout")
+async def stripe_initial_checkout(request: Request, db: AsyncSession = Depends(get_cp_db)):
+    """INSTALLATION-authenticated initial 5-seat onboarding checkout. The customer's local Office
+    backend calls this with its installation identity (reqsig) - no admin/master credential and no
+    Stripe secret ever leaves the central Control Plane. Company is resolved from the authenticated
+    installation; seats default to the product minimum (MIN_SEATS). Returns only the hosted checkout
+    URL + non-sensitive metadata."""
+    inst = await _authed_installation(request, db)
+    company_id = getattr(inst, "company_id", None)
+    if not company_id:
+        raise HTTPException(status_code=409, detail="Installation has no associated company")
+    try:
+        result = await service.stripe_create_checkout(db, company_id=str(company_id), seats=None, origin_url=None)
+    except service.CPError as e:
+        raise _cp_error(e)
+    seats = int(result.get("seats") or config.MIN_SEATS)
+    return {
+        "checkout_url": result.get("url"),
+        "company_id": str(company_id),
+        "seats": seats,
+        "monthly_price_usd": seats * int(config.SEAT_PRICE_USD),
+    }
+
+
 # ---------------- pairing + version (Phase C3) ----------------
 
 async def _authed_installation(request: Request, db: AsyncSession):

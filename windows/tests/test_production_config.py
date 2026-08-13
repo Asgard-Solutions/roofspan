@@ -15,7 +15,13 @@ def _read(p):
 def test_template_uses_production_modes():
     t = _read(TEMPLATE)
     assert "LICENSING_MODE=http" in t          # real CP client, NOT dev / no 1000-seat auto-issue
-    assert "BILLING_MODE=stripe" in t          # Stripe authoritative
+    # Billing is CENTRAL ONLY: the customer PC must NOT be a Stripe billing authority.
+    assert "BILLING_MODE=stripe" not in t
+    assert "STRIPE_SECRET_KEY" not in t and "STRIPE_WEBHOOK_SECRET" not in t
+    # Licensing/billing Control Plane API base (public URL, includes API prefix, not localhost).
+    assert "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane" in t
+    assert "LICENSING_CONTROL_PLANE_URL=http://127.0.0.1" not in t
+    assert "LICENSING_CONTROL_PLANE_URL=http://localhost" not in t
 
 
 def test_template_local_runtime_targets():
