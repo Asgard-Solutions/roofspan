@@ -254,6 +254,31 @@ def test_bafunctions_source_has_no_placeholder_pseudocode():
         assert bad not in lowered, f"placeholder/pseudocode marker present: {bad!r}"
 
 
+def test_bafunctions_pch_defines_dutil_types_before_bal_headers():
+    pch = _read(os.path.join(HERE, "bafunctions", "pch.h"))
+    # WiX v5 BAL/BAFunctions headers require these DUtil types; dictutil.h defines STRINGDICT_HANDLE used
+    # by balinfo.h (pulled via BootstrapperApplicationBase.h).
+    required_dutil = ["dutil.h", "dictutil.h", "fileutil.h", "pathutil.h", "strutil.h", "regutil.h"]
+    for h in required_dutil:
+        assert f'#include "{h}"' in pch, f"pch.h missing required DUtil header {h}"
+
+    def pos(marker):
+        i = pch.find(marker)
+        assert i != -1, f"pch.h missing {marker}"
+        return i
+
+    bal_start = pos('#include "BootstrapperApplicationBase.h"')
+    # Every DUtil header must be included BEFORE the BAL/BAFunctions headers.
+    for h in required_dutil:
+        assert pos(f'#include "{h}"') < bal_start, f"{h} must precede BootstrapperApplicationBase.h"
+    for bal in ('#include "BAFunctions.h"', '#include "IBAFunctions.h"'):
+        assert pos('#include "dictutil.h"') < pos(bal)
+    # thmutil (via the BAL base) needs GDI+/common-controls system headers present first.
+    assert "#include <gdiplus.h>" in pch and "#include <CommCtrl.h>" in pch
+    # CSPRNG dependency preserved.
+    assert "#include <bcrypt.h>" in pch
+
+
 def test_bafunctions_build_project_pins_wix_v5_sdk():
     vcx = _read(BAFUNC_VCXPROJ)
     assert 'Include="WixToolset.BootstrapperApplicationApi" Version="5.0.2"' in vcx
@@ -261,6 +286,9 @@ def test_bafunctions_build_project_pins_wix_v5_sdk():
     assert "DynamicLibrary" in vcx                       # produces a DLL
     assert "RoofSpanBaFunctions.def" in vcx              # exports via the module-definition file
     assert "bcrypt.lib" in vcx                           # CSPRNG link dep
+    # thmutil (transitive via the BAL base) link deps, mirroring the official WiX v5 BAFunctions build.
+    for lib in ("gdiplus.lib", "comctl32.lib", "msimg32.lib"):
+        assert lib in vcx, f"vcxproj missing link dependency {lib}"
     assert os.path.isfile(BAFUNC_BUILD)                  # reproducible build script exists
 
 
