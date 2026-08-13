@@ -789,3 +789,13 @@ Fixed the bundle build failure where the PostgreSQL ExePackage used Burn runtime
 - **Runtime `[Variable]` usage verified correct:** `[PgSuperPassword]`/`[PgPort]` remain only in `InstallArguments` + `MsiProperty` (genuine Burn runtime). No other build-time/runtime misuse found.
 - **Unchanged:** PostgreSQL InstallArguments, PgSuperPassword handling, PgPort, DetectCondition/InstallCondition, Permanent/Vital, package order, MSI property forwarding, BAFunctions behavior.
 - **Test (`test_installer_static.py`):** asserts the PG ExePackage SourceFile uses `$(var.PostgresInstaller)` (not `[PostgresInstaller]`) and that no SourceFile uses Burn `[Variable]` syntax. windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — Embed PostgreSQL prerequisite in RoofSpanSetup.exe (2026-06)
+Fixed the real Windows failure "postgresql-16.14-2-windows-x64.exe File not found" — RoofSpanSetup.exe was requiring the EDB installer as an external file next to it.
+- **Root cause:** the PostgreSQL `ExePackage` had `Compressed="no"`, making the EDB installer an EXTERNAL Burn payload (customer had to place it alongside RoofSpanSetup.exe).
+- **Fix (`windows/installer/bundle.wxs`):** `Compressed="no"` → `Compressed="yes"` (correct WiX v5 Burn authoring to EMBED a payload inside the bundle exe). Header comment updated to state the EDB installer is embedded at build time.
+- **Result:** customers download and run ONLY `RoofSpanSetup.exe`; it carries/extracts the PostgreSQL prerequisite itself.
+- **Preserved:** `SourceFile="$(var.PostgresInstaller)"`, InstallCondition/DetectCondition, Permanent/Vital, PgSuperPassword, PgPort 5442, `RoofSpanPostgreSQL` service name, silent InstallArguments, package order, BAFunctions.
+- **build.ps1:** no change needed — already emits `RoofSpanSetup-<Version>.exe` + `RoofSpanSetup.exe`.
+- **Size impact:** RoofSpanSetup.exe grows by ~the compressed EDB PostgreSQL 16 x64 installer (~300–370 MB source; Burn compresses it) — the bundle becomes a single large self-contained installer.
+- **Test (`test_installer_static.py`):** asserts the PG ExePackage is `Compressed="yes"` and that no payload is `Compressed="no"`. windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).

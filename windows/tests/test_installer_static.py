@@ -145,6 +145,10 @@ def test_bundle_chains_postgres_prereq_and_msi():
     assert 'SourceFile="$(var.PostgresInstaller)"' in b
     assert 'SourceFile="[PostgresInstaller]"' not in b
     assert not re.search(r'SourceFile="\[[^"]*\]"', b), "SourceFile must not use Burn runtime [Variable] syntax"
+    # PostgreSQL prerequisite must be EMBEDDED (Compressed="yes") so RoofSpanSetup.exe is self-contained;
+    # Compressed="no" would make it an external payload the customer must place next to the setup exe.
+    assert re.search(r'<ExePackage\b[^>]*Compressed="yes"', b, re.S), "PostgreSQL ExePackage must be embedded (Compressed=\"yes\")"
+    assert 'Compressed="no"' not in b, "no bundle payload may be external (Compressed=\"no\")"
     # no committed secrets
     assert "superpassword " not in b.lower() or "PgSuperPassword" in b
 

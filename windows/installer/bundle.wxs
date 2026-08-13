@@ -10,7 +10,8 @@
 
   Contains NO secrets and is NOT customer-specific. Building/signing is HUMAN REQUIRED on Windows.
   The EDB installer binary itself is NOT committed; supply its path via -d PostgresInstaller=... (build.ps1
-  validates it exists and fails fast otherwise).
+  validates it exists and fails fast otherwise). It is EMBEDDED (compressed) into RoofSpanSetup.exe at
+  build time, so the customer downloads and runs ONLY RoofSpanSetup.exe — no external prerequisite file.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
@@ -62,7 +63,9 @@
       <!-- 1) RoofSpan-managed PostgreSQL prerequisite (silent, unattended, dedicated service + port).
               Installed ONLY when RoofSpan's own instance is absent; an unrelated PostgreSQL never
               suppresses it. Permanent = never uninstalled by RoofSpan (protects the DB service + data).
-              PgSuperPassword is Hidden so Burn REDACTS it in the log even here on the command line. -->
+              PgSuperPassword is Hidden so Burn REDACTS it in the log even here on the command line.
+              Compressed="yes" EMBEDS the EDB installer inside RoofSpanSetup.exe so customers download and
+              run ONLY RoofSpanSetup.exe (no external prerequisite file next to it). -->
       <ExePackage Id="PostgreSQLPrereq"
                   DisplayName="PostgreSQL (RoofSpan-managed prerequisite)"
                   SourceFile="$(var.PostgresInstaller)"
@@ -71,7 +74,7 @@
                   InstallCondition="NOT RoofSpanPgPresent"
                   DetectCondition="RoofSpanPgPresent"
                   InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL --serverport [PgPort]"
-                  Compressed="no" />
+                  Compressed="yes" />
 
       <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). The superuser credential (Burn-generated for a
               RoofSpan-managed install, or the enterprise override) is handed off to the MSI's Hidden+Secure
