@@ -148,7 +148,7 @@ def test_wix_connector_service_autostart_and_restart():
     block = m.group(0)
     assert 'Start="auto"' in block
     assert 'Type="ownProcess"' in block
-    assert 'Account="NT SERVICE\\RoofSpanRelay"' in block
+    assert 'Account="NT SERVICE\\RoofSpanRelayConnector"' in block  # virtual account matches service Name
     assert 'FirstFailureActionType="restart"' in block
     assert 'Name="RoofSpanRelayConnector" Start="install" Stop="both" Remove="uninstall"' in wxs
     assert "FirewallException" not in wxs and "fire:" not in wxs  # no inbound firewall rule

@@ -799,3 +799,14 @@ Fixed the real Windows failure "postgresql-16.14-2-windows-x64.exe File not foun
 - **build.ps1:** no change needed — already emits `RoofSpanSetup-<Version>.exe` + `RoofSpanSetup.exe`.
 - **Size impact:** RoofSpanSetup.exe grows by ~the compressed EDB PostgreSQL 16 x64 installer (~300–370 MB source; Burn compresses it) — the bundle becomes a single large self-contained installer.
 - **Test (`test_installer_static.py`):** asserts the PG ExePackage is `Compressed="yes"` and that no payload is `Compressed="no"`. windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — Windows service virtual-account naming fix (2026-06)
+Fixed clean-install failure "Service 'RoofSpan Relay Connector' could not be installed" caused by NT SERVICE virtual accounts not matching their service names.
+- **Root cause:** a Windows virtual service account `NT SERVICE\<X>` must exactly equal the ServiceInstall `Name`. Relay/Updater used shortened account names, so SCM couldn't create the virtual accounts.
+- **Fix (`windows/installer/RoofSpan.wxs`):**
+  - Relay: Name `RoofSpanRelayConnector` — Account `NT SERVICE\RoofSpanRelay` → `NT SERVICE\RoofSpanRelayConnector`.
+  - Updater: Name `RoofSpanUpdateService` — Account `NT SERVICE\RoofSpanUpdate` → `NT SERVICE\RoofSpanUpdateService`.
+  - Backend already matched (`RoofSpanBackend`) — unchanged.
+- **ACL identities corrected** (`util:PermissionEx`, so the corrected services keep folder access): `RoofSpanRelay` → `RoofSpanRelayConnector` (ConfigDir, LogsDir, DataRoot); `RoofSpanUpdate` → `RoofSpanUpdateService` (ConfigDir, DataRoot). SecretsDir remains backend-only.
+- **No other mismatches found.** Unchanged: service exe paths, DisplayNames, service Names, startup type, restart-on-failure, PostgreSQL config, bundle, service architecture (ServiceInstall element Ids left as-is; they are internal, not the service Name).
+- **Tests:** `test_service_virtual_accounts_match_service_names` + `test_acl_identities_use_canonical_service_names` in `test_installer_static.py`; updated a stale account assertion in `test_relay_connector.py`. windows **121/121** pass.

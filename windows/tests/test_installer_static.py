@@ -40,6 +40,43 @@ def test_wix_guids_are_valid_and_not_placeholder():
         assert "RS0FSPAN" not in _read(os.path.join(INSTALLER, f))
 
 
+_SERVICEINSTALL_RE = re.compile(r"<ServiceInstall\b([^>]*)>", re.S)
+_PERMEX_RE = re.compile(r'<util:PermissionEx\s+User="([^"]+)"\s+Domain="NT SERVICE"')
+
+
+def _services(wxs):
+    """Return {service_name: nt_service_account_name} for each ServiceInstall."""
+    out = {}
+    for attrs in _SERVICEINSTALL_RE.findall(wxs):
+        name = re.search(r'Name="([^"]+)"', attrs)
+        acct = re.search(r'Account="NT SERVICE\\([^"]+)"', attrs)
+        if name:
+            out[name.group(1)] = acct.group(1) if acct else None
+    return out
+
+
+def test_service_virtual_accounts_match_service_names():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    svcs = _services(wxs)
+    assert svcs, "no ServiceInstall elements found"
+    mismatches = {n: a for n, a in svcs.items() if a is not None and a != n}
+    assert not mismatches, f"NT SERVICE virtual account must equal the service Name; mismatches: {mismatches}"
+    # the three known RoofSpan services must all be present and self-consistent
+    for expected in ("RoofSpanBackend", "RoofSpanRelayConnector", "RoofSpanUpdateService"):
+        assert svcs.get(expected) == expected, f"{expected} account/name mismatch: {svcs.get(expected)!r}"
+
+
+def test_acl_identities_use_canonical_service_names():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    canonical = set(_services(wxs))  # canonical service names
+    users = set(_PERMEX_RE.findall(wxs))
+    unknown = users - canonical
+    assert not unknown, f"ACL PermissionEx identities not matching a service Name: {unknown}"
+    # legacy identities must be gone (exact-match check, not substring of the corrected names)
+    for legacy in ("RoofSpanRelay", "RoofSpanUpdate"):
+        assert legacy not in users, f"legacy ACL identity still present: NT SERVICE\\{legacy}"
+
+
 # WIX0104: XML comments must not contain "--". Parse every WiX source as XML AND explicitly reject any
 # comment body containing "--" (the runtime command-line flags live in attributes, not comments).
 _XML_COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
