@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  RoofSpan Office — WiX v4 Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
+  RoofSpan Office — WiX v5 Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
 
   Chain (in order):
     1) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
@@ -30,10 +30,10 @@
            installed (NOT RoofSpanPgPresent) AND no enterprise override was supplied, it CSPRNG-generates
            the superuser/bootstrap password into the Hidden PgSuperPassword variable so the SAME value can
            be handed to BOTH the EDB installer (the superpassword argument) and the RoofSpan MSI (PG_SUPERPASSWORD).
-           This is the smallest officially-supported WiX v4 mechanism to seed a random hidden Burn variable
+           This is the smallest officially-supported WiX v5 mechanism to seed a random hidden Burn variable
            before package execution (WixStandardBootstrapperApplication has no built-in RNG). HUMAN REQUIRED
            to compile on Windows (see windows\bafunctions\README.md). -->
-      <Payload Id="RoofSpanBaFunctions" SourceFile="$(var.BaFunctionsDll)" bal:IsBAFunctions="yes" />
+      <Payload Id="RoofSpanBaFunctions" SourceFile="$(var.BaFunctionsDll)" bal:BAFunctions="yes" />
     </BootstrapperApplication>
 
     <!-- Detect ONLY the DEDICATED RoofSpan-managed PostgreSQL service. An unrelated PostgreSQL install must
@@ -50,13 +50,12 @@
          that may already own 5432). Handed to the EDB install (the serverport argument) AND the MSI (PG_PORT) so the
          deployed DATABASE_URL and the bootstrap connection all agree. -->
     <Variable Name="PgPort" Type="string" Value="5442" bal:Overridable="yes" />
-    <!-- PostgreSQL superuser/bootstrap credential. Hidden (Burn REDACTS it in logs, including on the EDB
-         command line) and NOT persisted by Burn. Overridable so the BAFunctions hook can seed it. It is
-         ESTABLISHED BEFORE PostgreSQL is installed: for a RoofSpan-managed fresh install the BAFunctions
-         hook CSPRNG-generates it in OnDetectComplete (before the chain); for an existing external/enterprise
-         PostgreSQL a DBA supplies it via override. NEVER committed. RoofSpan first-run then creates its own
-         least-privilege 'roofspan' role + database with a SEPARATE generated application password. -->
-    <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
+    <!-- PostgreSQL superuser/bootstrap credential. INITIALLY UNSET (no Type/Value) so nothing is stored:
+         the BAFunctions hook seeds it at runtime via SetVariableString (CSPRNG) and an enterprise DBA may
+         override it. Hidden (Burn REDACTS it in logs, including on the EDB command line) and NOT persisted
+         by Burn. NEVER committed. RoofSpan first-run then creates its own least-privilege 'roofspan' role +
+         database with a SEPARATE generated application password. -->
+    <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
       <!-- 1) RoofSpan-managed PostgreSQL prerequisite (silent, unattended, dedicated service + port).

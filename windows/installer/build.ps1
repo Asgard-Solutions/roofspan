@@ -57,15 +57,17 @@ $setup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
 
 Write-Host "==> Building RoofSpan Office $Version"
 
-# 1) MSI (payload harvested from $StageDir).
+# 1) MSI (payload harvested from $StageDir). WiX v5 extensions, pinned to the 5.0.2 toolset.
 wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir" `
-  -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
+  -ext WixToolset.Util.wixext/5.0.2 -ext WixToolset.Firewall.wixext/5.0.2 -o $msi
 if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains PostgreSQL prereq + MSI).
+# WiX v5 renamed the BAL extension for wix.exe to WixToolset.BootstrapperApplications.wixext
+# (the older Bal.wixext id is retained mainly for MSBuild PackageReference compatibility).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" -d "BaFunctionsDll=$BaFunctionsDll" `
-  -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -o $setup
+  -ext WixToolset.BootstrapperApplications.wixext/5.0.2 -ext WixToolset.Util.wixext/5.0.2 -o $setup
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 
 # 3) Authenticode signing (HUMAN REQUIRED for production; SmartScreen reputation needs a real EV/OV cert).

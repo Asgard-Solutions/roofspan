@@ -144,6 +144,33 @@ def test_bundle_chains_postgres_prereq_and_msi():
     assert "superpassword " not in b.lower() or "PgSuperPassword" in b
 
 
+def test_bafunctions_payload_uses_v5_bal_attribute():
+    b = _read(os.path.join(INSTALLER, "bundle.wxs"))
+    # WiX v5 Payload attribute is bal:BAFunctions; the v4-era bal:IsBAFunctions is rejected (WIX0004).
+    assert 'bal:BAFunctions="yes"' in b
+    assert "bal:IsBAFunctions" not in b
+
+
+def test_pgsuperpassword_variable_is_initially_unset_no_secret():
+    b = _read(os.path.join(INSTALLER, "bundle.wxs"))
+    m = re.search(r"<Variable\b[^>]*Name=\"PgSuperPassword\"[^>]*/>", b)
+    assert m, "PgSuperPassword Variable not found"
+    decl = m.group(0)
+    # WIX0010: Type without Value is invalid; and no hard-coded/placeholder secret may be committed.
+    assert "Type=" not in decl, "PgSuperPassword must not declare Type (would require a Value)"
+    assert "Value=" not in decl, "PgSuperPassword must have NO committed Value (BAFunctions seeds it)"
+    # security-critical attributes preserved
+    for attr in ('Hidden="yes"', 'Persisted="no"', 'bal:Overridable="yes"'):
+        assert attr in decl, f"PgSuperPassword lost required attribute {attr}"
+
+
+def test_build_script_uses_v5_bootstrapper_applications_extension():
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    # wix.exe v5 extension name for BAL; the old WixToolset.Bal.wixext must not be passed to wix build.
+    assert "WixToolset.BootstrapperApplications.wixext" in ps
+    assert "WixToolset.Bal.wixext" not in ps
+
+
 def test_build_script_is_fail_fast_and_builds_bundle():
     ps = _read(os.path.join(INSTALLER, "build.ps1"))
     assert "bundle.wxs" in ps and "RoofSpan.wxs" in ps

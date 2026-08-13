@@ -196,8 +196,9 @@ def test_wxs_secret_handoff_is_hidden_and_not_logged():
 
 def test_bundle_generates_credential_before_postgres_and_hands_off_same_value():
     b = _read(BUNDLE)
-    # BAFunctions hook generates PgSuperPassword before the chain (keeps standard UI).
-    assert 'bal:IsBAFunctions="yes"' in b
+    # BAFunctions hook generates PgSuperPassword before the chain (keeps standard UI). WiX v5 attribute
+    # is bal:BAFunctions (not the v4-proposal bal:IsBAFunctions).
+    assert 'bal:BAFunctions="yes"' in b and "bal:IsBAFunctions" not in b
     assert 'SourceFile="$(var.BaFunctionsDll)"' in b
     # SAME hidden variable handed to BOTH the EDB installer and the MSI.
     assert '--superpassword [PgSuperPassword]' in b
