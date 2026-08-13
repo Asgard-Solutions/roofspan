@@ -27,7 +27,9 @@ namespace RoofSpanOffice
 
         private readonly HttpClient _http = new HttpClient
         {
-            Timeout = TimeSpan.FromMilliseconds(AppConfig.HealthRequestTimeoutMs)
+            // Per-probe timeout is enforced via a linked CancellationTokenSource in WaitForBackendAsync, so
+            // the HttpClient's own timeout is disabled to keep the overall deadline authoritative.
+            Timeout = Timeout.InfiniteTimeSpan
         };
         private readonly Uri _baseUri = AppConfig.BaseUri();
         private CancellationTokenSource _cts = new CancellationTokenSource();
@@ -57,10 +59,10 @@ namespace RoofSpanOffice
         {
             ShowStarting();
             var ready = await WaitForBackendAsync(_cts.Token);
-            if (_cts.IsCancellationRequested) return;
+            if (_cts.IsCancellationRequested) return;   // user closed the window during startup
             if (!ready)
             {
-                ShowError("The local RoofSpan service did not respond in time.");
+                ShowBackendError();   // overall readiness deadline expired
                 return;
             }
             await InitializeWebViewAsync();
@@ -69,22 +71,34 @@ namespace RoofSpanOffice
         private async Task<bool> WaitForBackendAsync(CancellationToken ct)
         {
             var url = AppConfig.HealthUrl();
-            for (int attempt = 1; attempt <= AppConfig.ReadinessMaxAttempts; attempt++)
+            // Real OVERALL deadline: link the caller's token with a timer that fires after the overall
+            // readiness timeout. The loop below can never materially exceed this, regardless of how long
+            // individual probes take.
+            using (var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                if (ct.IsCancellationRequested) return false;
-                try
+                deadlineCts.CancelAfter(AppConfig.ReadinessOverallTimeout);
+                var token = deadlineCts.Token;
+                while (!token.IsCancellationRequested)
                 {
-                    using (var resp = await _http.GetAsync(url, ct))
+                    try
                     {
-                        if (resp.IsSuccessStatusCode) return true;
+                        // Bound EACH probe with its own short timeout (still capped by the overall deadline).
+                        using (var reqCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                        {
+                            reqCts.CancelAfter(AppConfig.HealthRequestTimeout);
+                            using (var resp = await _http.GetAsync(url, reqCts.Token))
+                            {
+                                if (resp.IsSuccessStatusCode) return true;   // stop immediately when healthy
+                            }
+                        }
                     }
-                }
-                catch { /* backend not up yet - keep polling within the bounded window */ }
+                    catch { /* not up yet / probe timed out - keep trying until the overall deadline */ }
 
-                try { await Task.Delay(AppConfig.ReadinessDelayMs, ct); }
-                catch (TaskCanceledException) { return false; }
+                    try { await Task.Delay(AppConfig.ReadinessDelayMs, token); }
+                    catch (OperationCanceledException) { break; }
+                }
             }
-            return false;   // bounded: give up after ReadinessMaxAttempts
+            return false;   // deadline (or user close) reached without a healthy backend
         }
 
         // ---- WebView2 host ---------------------------------------------------------------------------
@@ -114,7 +128,7 @@ namespace RoofSpanOffice
             }
             catch
             {
-                ShowError("RoofSpan Office could not start its display component.");
+                ShowDisplayError();   // WebView2 environment/runtime init or navigation setup failed
             }
         }
 
@@ -144,7 +158,8 @@ namespace RoofSpanOffice
             }
             else
             {
-                ShowError("RoofSpan Office could not load the local application.");
+                // WebView2 initialized fine but the local page did not load -> treat as a backend/page issue.
+                ShowBackendError();
             }
         }
 
@@ -311,16 +326,31 @@ namespace RoofSpanOffice
             _statusText.Text = msg;
         }
 
-        private void ShowError(string detail)
+        // Two DISTINCT, customer-safe failure states. Neither surfaces exception text, stack traces, file
+        // paths, secrets, configuration, JWT, or database details - only a fixed headline + fixed detail.
+        private void ShowBackendError()
         {
-            if (InvokeRequired) { BeginInvoke((Action)(() => ShowError(detail))); return; }
+            ShowFailure(
+                "RoofSpan Office could not connect to the local RoofSpan service.",
+                "The local RoofSpan service did not become ready. Make sure RoofSpan is running, then try again.");
+        }
+
+        private void ShowDisplayError()
+        {
+            ShowFailure(
+                "RoofSpan Office could not start its desktop display.",
+                "The Microsoft Edge WebView2 Runtime could not be initialized. Reinstall RoofSpan (or the Microsoft Edge WebView2 Runtime), then try again.");
+        }
+
+        private void ShowFailure(string headline, string detail)
+        {
+            if (InvokeRequired) { BeginInvoke((Action)(() => ShowFailure(headline, detail))); return; }
             _statusPanel.Visible = true;
             _webView.Visible = false;
             _progress.Visible = false;
             _statusText.ForeColor = Danger;
-            // Non-sensitive message only: never surface secrets, stack traces, or internal config.
-            _statusText.Text = "RoofSpan Office could not connect to the local RoofSpan service.\n\n" + detail;
-            _errorActions.Visible = true;
+            _statusText.Text = headline + "\n\n" + detail;
+            _errorActions.Visible = true;   // Retry / Close
         }
 
         private static Icon LoadAppIcon()

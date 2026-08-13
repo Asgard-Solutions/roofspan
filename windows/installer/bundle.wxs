@@ -45,12 +45,19 @@
                          Result="exists" Variable="RoofSpanPgPresent" />
 
     <!-- Detect the Microsoft Edge WebView2 Evergreen Runtime (required by RoofSpanOffice.exe, the WebView2
-         desktop shell). EdgeUpdate registers its per-machine client under WOW6432Node (it is a 32-bit
-         component); the GUID {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} identifies the WebView2 Runtime. If the
-         client key is absent the runtime is not installed and we chain Microsoft's official bootstrapper. -->
-    <util:RegistrySearch Id="WebView2RuntimeSearch" Root="HKLM"
+         desktop shell). Per Microsoft's WebView2 distribution guidance we read the 'pv' version value at BOTH
+         the per-machine (HKLM, under WOW6432Node because EdgeUpdate is a 32-bit component) AND per-user (HKCU)
+         locations for the Runtime client GUID {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}, and treat an unset/empty
+         value OR "0.0.0.0" as NOT installed. HKLM is authoritative for this per-machine (elevated) installer;
+         HKCU is also checked so we can skip installation when a usable per-user Runtime is visible. When
+         neither reports a usable version we fail closed by installing Microsoft's official bootstrapper below
+         (never install RoofSpan with a shell that cannot render). -->
+    <util:RegistrySearch Id="WebView2RuntimePvHklm" Root="HKLM"
                          Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
-                         Result="exists" Variable="WebView2RuntimePresent" />
+                         Value="pv" Result="value" Variable="WebView2RuntimePvHklm" />
+    <util:RegistrySearch Id="WebView2RuntimePvHkcu" Root="HKCU"
+                         Key="SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv" Result="value" Variable="WebView2RuntimePvHkcu" />
 
     <!-- The EDB installer path is resolved at BUILD TIME via $(var.PostgresInstaller) on the ExePackage
          SourceFile below (supplied by build.ps1 -d PostgresInstaller=...); no runtime Burn variable is
@@ -81,8 +88,8 @@
                   SourceFile="$(var.WebView2Bootstrapper)"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT WebView2RuntimePresent"
-                  DetectCondition="WebView2RuntimePresent"
+                  InstallCondition="NOT ((WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; '0.0.0.0') OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; '0.0.0.0'))"
+                  DetectCondition="(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; '0.0.0.0') OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; '0.0.0.0')"
                   InstallArguments="/silent /install"
                   Compressed="yes" />
 

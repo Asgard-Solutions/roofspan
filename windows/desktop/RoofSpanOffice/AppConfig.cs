@@ -15,11 +15,17 @@ namespace RoofSpanOffice
         public const string DefaultBaseUrl = "http://127.0.0.1:8001/";
         public const string HealthPath = "api/health";
 
-        // Backend-readiness polling is BOUNDED (no infinite hang). ~60s total tolerates a cold boot where the
-        // Windows services are still starting; if it never becomes healthy we show a branded failure screen.
-        public const int ReadinessMaxAttempts = 40;
-        public const int ReadinessDelayMs = 1500;
-        public const int HealthRequestTimeoutMs = 3000;
+        // Backend-readiness polling is bounded by a REAL overall DEADLINE (not attempt-count x delay). The
+        // shell probes /api/health repeatedly; each probe has a SHORT individual timeout, the loop stops the
+        // instant the backend is healthy, and the whole wait can never materially exceed the overall
+        // deadline. When the deadline expires we show the branded Retry/Close failure screen. No infinite
+        // retry loop.
+        public const int ReadinessOverallTimeoutMs = 60000;   // ~60s hard ceiling on startup wait
+        public const int ReadinessDelayMs = 1000;             // pause between probes
+        public const int HealthRequestTimeoutMs = 3000;       // per-probe timeout (short)
+
+        public static TimeSpan ReadinessOverallTimeout => TimeSpan.FromMilliseconds(ReadinessOverallTimeoutMs);
+        public static TimeSpan HealthRequestTimeout => TimeSpan.FromMilliseconds(HealthRequestTimeoutMs);
 
         public static string BaseUrl()
         {

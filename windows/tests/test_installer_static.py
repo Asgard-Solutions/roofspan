@@ -318,13 +318,32 @@ def test_webview2_shell_hosts_local_ui_not_browser():
     assert "webbrowser" not in src and "Process.Start(new ProcessStartInfo(AppConfig.BaseUrl" not in src
 
 
-def test_webview2_shell_backend_readiness_is_bounded():
+def test_webview2_shell_backend_readiness_is_bounded_by_overall_deadline():
     src = _shell_sources()
-    # Polls the EXISTING health endpoint with a bounded retry (no infinite hang) + a branded failure path.
+    # Polls the EXISTING health endpoint, but bounded by a REAL overall deadline (not attempt-count x delay):
+    # a linked CancellationTokenSource with CancelAfter(overall timeout) plus a short per-probe timeout.
     assert "api/health" in src
-    assert "ReadinessMaxAttempts" in src
-    assert "attempt <= AppConfig.ReadinessMaxAttempts" in src
-    assert "could not connect to the local RoofSpan service" in src
+    assert "ReadinessOverallTimeoutMs" in src
+    assert "CreateLinkedTokenSource" in src
+    assert "CancelAfter(AppConfig.ReadinessOverallTimeout)" in src
+    assert "CancelAfter(AppConfig.HealthRequestTimeout)" in src
+    # No infinite retry loop, and readiness is NOT derived from a fixed attempt count any more.
+    assert "while (true)" not in src
+    assert "ReadinessMaxAttempts" not in src
+
+
+def test_webview2_shell_separates_backend_and_display_errors():
+    src = _shell_sources()
+    # Two DISTINCT customer-facing failure states with their own headline + detail (not one hard-coded
+    # backend headline concatenated with every failure).
+    assert "ShowBackendError" in src and "ShowDisplayError" in src
+    assert "could not connect to the local RoofSpan service." in src
+    assert "could not start its desktop display." in src
+    assert "Microsoft Edge WebView2 Runtime could not be initialized" in src
+    # Backend readiness failure -> backend error; WebView2 init failure -> display error.
+    assert "ShowDisplayError();" in src
+    # Never leak exception text / stack traces to the customer error UI.
+    assert "ex.Message" not in src and "StackTrace" not in src
 
 
 def test_webview2_shell_external_navigation_and_new_windows():
@@ -373,12 +392,15 @@ def test_shell_build_pipeline_dotnet_and_staging():
 
 def test_bundle_chains_webview2_runtime():
     b = _read(os.path.join(INSTALLER, "bundle.wxs"))
-    # WebView2 runtime is accounted for by the installer: detected via the EdgeUpdate client GUID and, when
-    # absent, installed from Microsoft's official bootstrapper (embedded so the setup stays self-contained).
+    # WebView2 runtime is accounted for by the installer: detected via the EdgeUpdate client GUID at BOTH
+    # HKLM (per-machine) and HKCU (per-user) per Microsoft's guidance, treating "0.0.0.0" as not installed;
+    # when absent it installs Microsoft's official bootstrapper (embedded so setup stays self-contained).
     assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in b   # WebView2 Runtime client GUID
-    assert 'Variable="WebView2RuntimePresent"' in b
-    assert 'InstallCondition="NOT WebView2RuntimePresent"' in b
-    assert 'DetectCondition="WebView2RuntimePresent"' in b
+    assert 'Variable="WebView2RuntimePvHklm"' in b and 'Root="HKLM"' in b
+    assert 'Variable="WebView2RuntimePvHkcu"' in b and 'Root="HKCU"' in b
+    assert 'Value="pv"' in b                                # read the version value, not mere key existence
+    assert "0.0.0.0" in b                                   # 0.0.0.0 treated as not-installed
+    assert "InstallCondition=" in b and "DetectCondition=" in b
     assert "$(var.WebView2Bootstrapper)" in b
     # build.ps1 requires + validates + passes the bootstrapper.
     ps = _read(os.path.join(INSTALLER, "build.ps1"))
