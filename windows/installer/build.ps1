@@ -22,6 +22,62 @@ param(
 $ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = (Get-Content (Join-Path $PSScriptRoot "..\VERSION") -Raw).Trim() }
 
+# ---- WiX BAL extension resolution.
+# WiX v5 nominally renamed the BAL package to WixToolset.BootstrapperApplications.wixext, but on real
+# installs the CLI cache is inconsistent: the folder can be either WixToolset.Bal.wixext or
+# WixToolset.BootstrapperApplications.wixext, and the DLL inside is WixToolset.BootstrapperApplications.wixext.dll
+# (a folder/DLL name mismatch makes the package-id reference fail with WIX0144 or "damaged"). To be robust
+# on every machine we resolve the actual DLL from the per-user WiX extension cache and pass its PATH to
+# `wix build -ext <path>` (no hard-coded username or absolute path).
+function Resolve-WixExtensionDll {
+  param([Parameter(Mandatory=$true)][string]$DllName)
+  $roots = @()
+  foreach ($base in @($env:USERPROFILE, $env:HOME, "$HOME")) {
+    if ($base) {
+      $root = Join-Path $base ".wix\extensions"
+      if (Test-Path $root) { $roots += $root }
+    }
+  }
+  foreach ($root in ($roots | Select-Object -Unique)) {
+    $dll = Get-ChildItem -Path $root -Filter $DllName -File -Recurse -ErrorAction SilentlyContinue |
+           Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($dll) { return $dll.FullName }
+  }
+  return $null
+}
+
+function Resolve-BalExtension {
+  $dllName = "WixToolset.BootstrapperApplications.wixext.dll"
+  $bal = Resolve-WixExtensionDll -DllName $dllName
+  if ($bal) { return $bal }
+  # Not cached yet - try to add it globally under both known package ids, then re-resolve the DLL.
+  foreach ($pkg in @("WixToolset.BootstrapperApplications.wixext/5.0.2", "WixToolset.Bal.wixext/5.0.2")) {
+    Write-Host "==> Adding WiX BAL extension package $pkg"
+    & wix extension add -g $pkg 2>$null | Out-Null
+    $bal = Resolve-WixExtensionDll -DllName $dllName
+    if ($bal) { return $bal }
+  }
+  throw ("WiX BAL (BootstrapperApplications) extension could not be resolved. Install it with " +
+         "'wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2' and re-run.")
+}
+
+# ---- Fresh-output guard: `wix.exe` is a native tool, so a non-zero exit does NOT throw under
+# $ErrorActionPreference='Stop'. A stale artifact from a PREVIOUS successful build would then pass a naive
+# Test-Path and be mistaken for success. Every build step must (1) check $LASTEXITCODE and (2) confirm the
+# output was (re)written after this build started.
+function Assert-FreshBuild {
+  param([Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][datetime]$Since,
+        [Parameter(Mandatory=$true)][string]$What)
+  if ($LASTEXITCODE -ne 0) { throw "$What failed (wix exit code $LASTEXITCODE)." }
+  if (-not (Test-Path $Path)) { throw "$What failed: '$Path' not produced." }
+  $mtime = (Get-Item $Path).LastWriteTimeUtc
+  if ($mtime -lt $Since) {
+    throw ("$What produced no fresh output: '$Path' is stale (mtime $mtime < build start $Since). " +
+           "A prior artifact was left behind; treating this as a FAILED build.")
+  }
+}
+
 # ---- FAIL-FAST: required tooling, staged payload, and prerequisites must all exist. No partial builds.
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
   throw "WiX v5 not found. Install: dotnet tool install --global wix --version 5.*"
@@ -76,21 +132,32 @@ if (-not (Test-Path $BaFunctionsDll)) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $msi = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
 $setup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
+$stableSetup = Join-Path $OutDir "RoofSpanSetup.exe"
+$manifest = Join-Path $OutDir "latest.json"
+
+# ---- Delete this build's target outputs FIRST so a failed rebuild can never be masked by a stale artifact
+# from an earlier successful run (reported: an old RoofSpanSetup-0.1.0.exe made a failed bundle look OK).
+foreach ($out in @($msi, $setup, $stableSetup, $manifest)) {
+  if (Test-Path $out) { Remove-Item -LiteralPath $out -Force }
+}
+$buildStart = (Get-Date).ToUniversalTime()
 
 Write-Host "==> Building RoofSpan Office $Version"
 
 # 1) MSI (payload harvested from $StageDir). WiX v5 extensions, pinned to the 5.0.2 toolset.
 wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir" `
   -ext WixToolset.Util.wixext/5.0.2 -ext WixToolset.Firewall.wixext/5.0.2 -o $msi
-if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
+Assert-FreshBuild -Path $msi -Since $buildStart -What "MSI build"
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains PostgreSQL prereq + MSI).
-# WiX v5 renamed the BAL extension for wix.exe to WixToolset.BootstrapperApplications.wixext
-# (the older Bal.wixext id is retained mainly for MSBuild PackageReference compatibility).
+# Resolve the BAL extension DLL from the local WiX cache (robust to the v4/v5 package-id + folder/DLL name
+# mismatch) and pass its PATH to -ext.
+$balExt = Resolve-BalExtension
+Write-Host "==> Using BAL extension: $balExt"
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" -d "BaFunctionsDll=$BaFunctionsDll" `
-  -ext WixToolset.BootstrapperApplications.wixext/5.0.2 -ext WixToolset.Util.wixext/5.0.2 -o $setup
-if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
+  -ext "$balExt" -ext WixToolset.Util.wixext/5.0.2 -o $setup
+Assert-FreshBuild -Path $setup -Since $buildStart -What "Bundle build"
 
 # 3) Authenticode signing (HUMAN REQUIRED for production; SmartScreen reputation needs a real EV/OV cert).
 if ($SignCertThumbprint) {
@@ -103,11 +170,11 @@ if ($SignCertThumbprint) {
 # 4) Signed UPDATE manifest (latest.json) for the CloudFront /update path.
 if ($UpdateSigningPrivateKey) {
   python ..\release\make_manifest.py --version $Version --installer $setup `
-    --min-supported $Version --signing-key $UpdateSigningPrivateKey --out (Join-Path $OutDir "latest.json")
+    --min-supported $Version --signing-key $UpdateSigningPrivateKey --out $manifest
 }
 
 # 5) Stable name expected at downloads.roofspan.io/latest/.
-Copy-Item $setup (Join-Path $OutDir "RoofSpanSetup.exe") -Force
+Copy-Item $setup $stableSetup -Force
 Write-Host "==> Artifacts in $OutDir :"
 Write-Host "    RoofSpanOffice-$Version.msi"
 Write-Host "    RoofSpanSetup-$Version.exe   -> upload to /releases/"

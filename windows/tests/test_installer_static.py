@@ -210,11 +210,46 @@ def test_pgsuperpassword_variable_is_initially_unset_no_secret():
         assert attr in decl, f"PgSuperPassword lost required attribute {attr}"
 
 
-def test_build_script_uses_v5_bootstrapper_applications_extension():
+def test_build_script_resolves_bal_extension_dll_dynamically():
     ps = _read(os.path.join(INSTALLER, "build.ps1"))
-    # wix.exe v5 extension name for BAL; the old WixToolset.Bal.wixext must not be passed to wix build.
-    assert "WixToolset.BootstrapperApplications.wixext" in ps
-    assert "WixToolset.Bal.wixext" not in ps
+    # Resolve the actual BAL DLL from the local WiX cache and pass its PATH to -ext (robust to the
+    # v4/v5 package-id + folder/DLL name mismatch that causes WIX0144 on real installs).
+    assert "WixToolset.BootstrapperApplications.wixext.dll" in ps
+    assert 'Join-Path $base ".wix\\extensions"' in ps
+    assert "Resolve-BalExtension" in ps
+    assert '-ext "$balExt"' in ps
+    # Both known package ids may be attempted as a fallback for `wix extension add`.
+    assert "WixToolset.BootstrapperApplications.wixext/5.0.2" in ps
+
+
+def test_build_script_does_not_hardcode_user_path():
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    # No hard-coded Windows username or absolute user profile path (must use env/$HOME).
+    assert "C:\\Users\\" not in ps
+    assert "army_" not in ps
+    # The extension cache root is derived from environment, not literals.
+    assert "$env:USERPROFILE" in ps
+
+
+def test_build_script_checks_exit_code_and_fresh_output():
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    # Root cause of the false-success: wix.exe is native, so a non-zero exit does not throw. The script
+    # must check $LASTEXITCODE and confirm the artifact was freshly (re)produced after the build started.
+    assert "$LASTEXITCODE" in ps
+    assert "Assert-FreshBuild" in ps
+    assert "LastWriteTimeUtc" in ps
+    assert "$buildStart" in ps
+
+
+def test_build_script_clears_stale_outputs_before_building():
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    # Target outputs are deleted before building so a stale artifact from a previous successful build can
+    # never be mistaken for a fresh success (reported: stale RoofSpanSetup-0.1.0.exe masking a failure).
+    assert "Remove-Item -LiteralPath $out -Force" in ps
+    # deletion happens before the wix build invocations
+    del_at = ps.index("Remove-Item -LiteralPath $out -Force")
+    build_at = ps.index("wix build .\\RoofSpan.wxs")
+    assert del_at < build_at
 
 
 def test_build_script_is_fail_fast_and_builds_bundle():
