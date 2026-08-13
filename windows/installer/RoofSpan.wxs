@@ -105,10 +105,12 @@
         <File Id="OfficeLauncherExe" Source="$(var.StageDir)\tools\RoofSpanOffice.exe" KeyPath="yes" />
         <Shortcut Id="ScStartMenuOffice" Directory="StartMenuRoofSpan"
                   Name="RoofSpan Office"
+                  Target="[ToolsDir]RoofSpanOffice.exe"
                   Description="Open RoofSpan Office (your local roofing business application)."
                   WorkingDirectory="ToolsDir" />
         <Shortcut Id="ScDesktopOffice" Directory="DesktopFolder"
                   Name="RoofSpan Office"
+                  Target="[ToolsDir]RoofSpanOffice.exe"
                   Description="Open RoofSpan Office (your local roofing business application)."
                   WorkingDirectory="ToolsDir" />
       </Component>
@@ -208,8 +210,11 @@
     <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixSilentExec"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
 
-    <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;http://127.0.0.1:8001/&quot;"
+    <!-- First-run launch: open the installed RoofSpan Office WebView2 desktop shell (the SAME exe the
+         Desktop/Start Menu shortcuts target). FileRef resolves the installed file path in the deferred
+         phase; Impersonate=yes launches it in the installing user's interactive session. NOT a browser,
+         NOT cmd.exe, NOT a URL. -->
+    <CustomAction Id="LaunchFirstRun" FileRef="OfficeLauncherExe" ExeCommand=""
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
       <Custom Action="RoofSpanBootstrap" Before="StartServices" Condition="NOT Installed" />

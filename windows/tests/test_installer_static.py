@@ -273,6 +273,25 @@ def test_desktop_and_start_menu_shortcuts_launch_office():
     assert 'Directory="DesktopFolder"' in comp and 'Name="RoofSpan Office"' in comp, "missing desktop shortcut"
     assert 'Directory="StartMenuRoofSpan"' in comp, "missing Start Menu shortcut"
     assert comp.count('Name="RoofSpan Office"') >= 2, "both shortcuts should be named 'RoofSpan Office'"
+    # Both shortcuts must EXPLICITLY target the exe, not merely the tools directory (native inspection
+    # previously showed TargetPath = ...\tools instead of ...\tools\RoofSpanOffice.exe).
+    assert comp.count('Target="[ToolsDir]RoofSpanOffice.exe"') == 2, "both shortcuts must target RoofSpanOffice.exe"
+    assert 'Target="[ToolsDir]"' not in comp, "shortcuts must not target only the tools directory"
+
+
+def test_first_run_launches_desktop_shell_not_browser():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    m = re.search(r'<CustomAction Id="LaunchFirstRun".*?/>', wxs, re.S)
+    assert m, "LaunchFirstRun custom action not found"
+    ca = m.group(0)
+    # First-run launches the SAME installed desktop exe as the shortcuts...
+    assert 'FileRef="OfficeLauncherExe"' in ca
+    # ...and never the old browser-era behaviour.
+    assert "http://127.0.0.1:8001" not in ca
+    assert "cmd.exe /c start" not in ca
+    assert "cmd.exe" not in ca
+    # No browser URL launch anywhere in the installer authoring.
+    assert "cmd.exe /c start" not in wxs
 
 
 DESKTOP = os.path.join(HERE, "desktop")
