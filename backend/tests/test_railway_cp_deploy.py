@@ -35,16 +35,20 @@ def test_cp_asgi_exposes_only_control_plane_and_health():
 
 
 def test_start_command_binds_via_railway_port_no_hardcoded_port():
-    rj = _read(os.path.join(REPO, "railway.json"))
-    assert "uvicorn cp_asgi:app" in rj
-    assert "--host 0.0.0.0" in rj
-    assert "--port $PORT" in rj
-    assert "healthcheckPath" in rj and "/health" in rj
-    # No hard-coded production port anywhere in the Railway start/build config.
-    assert "--port 8000" not in rj and "--port 8001" not in rj
+    import json
+    rj_text = _read(os.path.join(REPO, "railway.json"))
+    rj = json.loads(rj_text)
+    # Railway must NOT define a deploy.startCommand: it is executed WITHOUT a shell, so "$PORT" would be
+    # passed literally to uvicorn ("Invalid value for '--port': '$PORT'"). The Dockerfile CMD (sh -c) is
+    # the single source of truth for process startup and expands $PORT correctly.
+    assert "startCommand" not in rj.get("deploy", {}), "railway.json must not define deploy.startCommand"
+    assert rj["deploy"]["healthcheckPath"] == "/health"        # healthcheck preserved
+    # The shell-expanding startup lives in the Dockerfile and honours Railway's $PORT with no hardcoded port.
     df = _read(os.path.join(REPO, "deploy", "railway", "Dockerfile"))
-    assert "${PORT" in df                      # honours Railway $PORT
-    assert "--port 8000" not in df
+    assert "sh" in df and "-c" in df                           # shell-based CMD
+    assert "${PORT:-8080}" in df                               # expands $PORT (fallback for local runs)
+    assert "uvicorn cp_asgi:app" in df and "--host 0.0.0.0" in df
+    assert "--port 8000" not in df and "--port 8001" not in df
 
 
 def test_production_config_fails_closed(monkeypatch):
