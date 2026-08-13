@@ -40,6 +40,41 @@ def test_wix_guids_are_valid_and_not_placeholder():
         assert "RS0FSPAN" not in _read(os.path.join(INSTALLER, f))
 
 
+# WIX0230: a component whose effective KeyPath is a directory (CreateFolder, no other explicit KeyPath)
+# CANNOT use Guid="*". Guard so directory-keypath ACL components never regress to an auto GUID.
+_COMPONENT_RE = re.compile(r"<Component\b(?P<attrs>[^>]*)>(?P<body>.*?)</Component>", re.S)
+
+
+def _dir_keypath_components(wxs):
+    """Yield (component_id, attrs, guid) for components whose effective KeyPath is a CreateFolder."""
+    for m in _COMPONENT_RE.finditer(wxs):
+        attrs, body = m.group("attrs"), m.group("body")
+        has_createfolder = "<CreateFolder" in body
+        has_explicit_keypath = 'KeyPath="yes"' in body  # File/RegistryValue keypath overrides the folder
+        if has_createfolder and not has_explicit_keypath:
+            cid = re.search(r'Id="([^"]+)"', attrs)
+            guid = re.search(r'Guid="([^"]*)"', attrs)
+            yield (cid.group(1) if cid else "?", attrs, guid.group(1) if guid else None)
+
+
+def test_no_directory_keypath_component_uses_wildcard_guid():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    offenders = [cid for cid, _attrs, guid in _dir_keypath_components(wxs) if guid == "*"]
+    assert not offenders, f"directory-keypath component(s) using Guid='*' (would trigger WIX0230): {offenders}"
+
+
+def test_acl_components_have_stable_unique_guids():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    guids = {}
+    for cid in ("AclConfig", "AclIdentity", "AclLogs", "AclSecrets"):
+        m = re.search(rf'<Component Id="{cid}"[^>]*Guid="([^"]+)"', wxs)
+        assert m, f"component {cid} not found"
+        g = m.group(1)
+        assert g != "*" and GUID_RE.match(g), f"{cid} must have a fixed valid GUID, got {g!r}"
+        guids[cid] = g
+    assert len(set(guids.values())) == 4, f"ACL component GUIDs must be unique: {guids}"
+
+
 def test_installer_uses_permanent_upgradecode_and_version_var():
     wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
     assert 'UpgradeCode="$(var.RoofSpanUpgradeCode)"' in wxs

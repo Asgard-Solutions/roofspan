@@ -755,3 +755,14 @@ Fixed the MSVC compile failure `balinfo.h(88): C3646 'sdVariables': unknown over
 - **Fix (`RoofSpanBaFunctions.vcxproj`):** expanded Link `AdditionalDependencies` to the official theme-link set `comctl32.lib;gdiplus.lib;msimg32.lib;shlwapi.lib;wininet.lib;version.lib;bcrypt.lib` (thmutil is transitively included via the BAL base). No package version changes — both pinned at 5.0.2. No `/WX` change; no error suppression.
 - **Preserved:** CSPRNG (`BCryptGenRandom`) superuser-password generation, `.def` exports (`BAFunctionsCreate`/`BAFunctionsDestroy`), bcrypt linkage, WiX v5 Function API integration.
 - **Test:** `test_bafunctions_pch_defines_dutil_types_before_bal_headers` (required DUtil headers present + ordered before the BAL headers; gdiplus/CommCtrl/bcrypt present) and extended vcxproj link-dep assertions. windows **112/112** pass. Native Release|x64 MSVC compile remains HUMAN REQUIRED on Windows (cannot run in the Linux container).
+
+## RoofSpan Office — WiX v5 WIX0230 fix (ACL component GUIDs) (2026-06)
+Fixed the MSI build failure where directory-keypath components used `Guid="*"`.
+- **Root cause:** the four ACL components (`AclConfig`, `AclIdentity`, `AclLogs`, `AclSecrets`) each have a `CreateFolder` (with `util:PermissionEx`) as their effective KeyPath and used `Guid="*"`. WiX v5 forbids auto-generated GUIDs for directory-keypath components → WIX0230.
+- **Fix (`windows/installer/RoofSpan.wxs`):** assigned fixed, source-controlled GUIDs (IDs, Directory, Permanent, NeverOverwrite, CreateFolder, PermissionEx all preserved):
+  - AclConfig = `72BB4997-F4EE-4837-B66C-076846B584EB`
+  - AclIdentity = `B3F5A500-B1CE-4197-AFD5-23BD26569A78`
+  - AclLogs = `61C6F56D-8F48-4A46-BA02-CFD36BA07CFC`
+  - AclSecrets = `6F879EC8-339B-4941-9D08-AE6717D02DB3`
+- **No other WIX0230 offenders:** `DataDirs` has a `CreateFolder` but an explicit `RegistryValue KeyPath="yes"`, so its `Guid="*"` is valid (unchanged). `Svc_*`/`Tool_*` use File keypaths and `StartMenuCleanup` a RegistryValue keypath — all valid with `Guid="*"`.
+- **Test (`windows/tests/test_installer_static.py`):** `test_no_directory_keypath_component_uses_wildcard_guid` (fails if any CreateFolder-only component uses `Guid="*"`) + `test_acl_components_have_stable_unique_guids`. windows **114/114** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).

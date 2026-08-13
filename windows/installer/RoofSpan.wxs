@@ -128,20 +128,20 @@
          by ServiceInstall); if ordering is a problem, move these grants to a post-StartServices custom
          action. -->
     <ComponentGroup Id="DataAcls">
-      <Component Id="AclConfig" Directory="ConfigDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <Component Id="AclConfig" Directory="ConfigDir" Guid="72BB4997-F4EE-4837-B66C-076846B584EB" Permanent="yes" NeverOverwrite="yes">
         <CreateFolder>
           <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
           <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
           <util:PermissionEx User="RoofSpanUpdate" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
         </CreateFolder>
       </Component>
-      <Component Id="AclIdentity" Directory="IdentityDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <Component Id="AclIdentity" Directory="IdentityDir" Guid="B3F5A500-B1CE-4197-AFD5-23BD26569A78" Permanent="yes" NeverOverwrite="yes">
         <CreateFolder>
           <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
           <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
         </CreateFolder>
       </Component>
-      <Component Id="AclLogs" Directory="LogsDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <Component Id="AclLogs" Directory="LogsDir" Guid="61C6F56D-8F48-4A46-BA02-CFD36BA07CFC" Permanent="yes" NeverOverwrite="yes">
         <CreateFolder>
           <util:PermissionEx User="RoofSpanRelay" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
           <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
@@ -150,7 +150,7 @@
       </Component>
       <!-- Installation secrets (JWT + encryption key) live here, writable ONLY by the Backend account.
            Relay/Updater get NO access. Persisted across upgrade/uninstall with customer data. -->
-      <Component Id="AclSecrets" Directory="SecretsDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <Component Id="AclSecrets" Directory="SecretsDir" Guid="6F879EC8-339B-4941-9D08-AE6717D02DB3" Permanent="yes" NeverOverwrite="yes">
         <CreateFolder>
           <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
         </CreateFolder>
