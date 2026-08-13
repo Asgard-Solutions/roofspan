@@ -254,3 +254,35 @@ def test_public_website_download_reflects_approved_availability():
     env = _read(os.path.join(os.path.dirname(HERE), "roofspan-website", ".env"))
     assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true" in env
     assert "downloads.roofspan.io/latest/RoofSpanSetup.exe" in env
+
+
+
+def test_powershell_build_scripts_are_ascii_only():
+    # Windows PowerShell 5.1 reads a BOM-less .ps1 as the system ANSI codepage; non-ASCII chars (e.g. an
+    # em-dash in a throw string) then mangle or break parsing. Keep every build script pure ASCII so it
+    # runs identically under Windows PowerShell 5.1 and PowerShell 7 with no manual encoding workaround.
+    scripts = [
+        os.path.join(INSTALLER, "stage.ps1"),
+        os.path.join(INSTALLER, "build.ps1"),
+        os.path.join(PACKAGING, "build_exes.ps1"),
+        os.path.join(HERE, "bafunctions", "build_bafunctions.ps1"),
+    ]
+    for s in scripts:
+        raw = open(s, "rb").read()
+        bad = [(i, b) for i, b in enumerate(raw) if b > 0x7F]
+        assert not bad, f"{os.path.basename(s)} has non-ASCII byte(s) at {bad[:5]}"
+
+
+def test_stage_script_resolves_stagedir_absolute_before_pushlocation():
+    # A relative -StageDir must not break the frontend copy: step 2 runs inside Push-Location (CWD changes
+    # to the frontend dir), so StageDir/derived paths must be resolved to ABSOLUTE first.
+    ps = _read(os.path.join(INSTALLER, "stage.ps1"))
+    assert "(Resolve-Path -LiteralPath $StageDir).Path" in ps
+    # StageDir must be made absolute BEFORE it is used to build the sub-dirs and BEFORE Push-Location.
+    resolve_at = ps.index("(Resolve-Path -LiteralPath $StageDir).Path")
+    services_at = ps.index('$services = Join-Path $StageDir "services"')
+    push_at = ps.index("Push-Location $FrontendDir")
+    assert resolve_at < services_at < push_at
+    # FrontendDir is also resolved to absolute (honors an absolute override; anchors a relative default).
+    assert "[System.IO.Path]::IsPathRooted($FrontendDir)" in ps
+    assert "(Resolve-Path -LiteralPath $FrontendDir).Path" in ps

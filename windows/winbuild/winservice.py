@@ -82,6 +82,15 @@ def build_service_class(svc_name: str, display_name: str, description: str, runn
     import win32service
     import servicemanager
 
+    def _safe_log(fn, message):
+        # servicemanager.LogInfoMsg/LogErrorMsg can raise (or, with the wrong pywin32, fault) before the
+        # event-source/message tables are available in a frozen exe. Service startup must NEVER crash on a
+        # logging call, so failures are swallowed (SCM + backend.log remain the source of truth).
+        try:
+            fn(message)
+        except Exception:  # noqa: BLE001
+            pass
+
     class _RoofSpanService(win32serviceutil.ServiceFramework):
         _svc_name_ = svc_name
         _svc_display_name_ = display_name
@@ -93,23 +102,23 @@ def build_service_class(svc_name: str, display_name: str, description: str, runn
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-            servicemanager.LogInfoMsg(f"{svc_name}: stop requested")
+            _safe_log(servicemanager.LogInfoMsg, f"{svc_name}: stop requested")
             if self._runner is not None:
                 self._runner.stop()
 
         def SvcDoRun(self):
-            servicemanager.LogInfoMsg(f"{svc_name}: starting")
+            _safe_log(servicemanager.LogInfoMsg, f"{svc_name}: starting")
             try:
                 self._runner = runner_factory()
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 self._runner.run()  # blocks until SvcStop cancels the task
             except SystemExit as e:
-                servicemanager.LogErrorMsg(f"{svc_name}: exiting (code {e.code})")
+                _safe_log(servicemanager.LogErrorMsg, f"{svc_name}: exiting (code {e.code})")
                 raise
             except Exception:  # noqa: BLE001
-                servicemanager.LogErrorMsg(f"{svc_name}: crashed; SCM will apply the restart policy")
+                _safe_log(servicemanager.LogErrorMsg, f"{svc_name}: crashed; SCM will apply the restart policy")
                 raise
-            servicemanager.LogInfoMsg(f"{svc_name}: stopped")
+            _safe_log(servicemanager.LogInfoMsg, f"{svc_name}: stopped")
 
     return _RoofSpanService
 

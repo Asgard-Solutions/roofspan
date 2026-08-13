@@ -117,3 +117,37 @@ def test_wix_service_names_match_entry_constants():
     wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
     for name in (backend_entry.SVC_NAME, relay_entry.SVC_NAME, update_service_entry.SVC_NAME):
         assert f'Name="{name}"' in wxs, f"WiX missing service {name}"
+
+
+def test_pywin32_pinned_to_python312_safe_release():
+    req = _read(os.path.join(WINBUILD, "requirements-windows.txt"))
+    m = re.search(r"^pywin32==(\d+)", req, re.M)
+    assert m, "pywin32 must be pinned in requirements-windows.txt"
+    ver = int(m.group(1))
+    # 306 crashes (0xc0000005) under Python 3.12 in servicemanager; 307+ fixes it.
+    assert ver >= 307, f"pywin32=={ver} is not Python 3.12-safe (need >= 307)"
+
+
+def test_service_logging_is_crash_safe():
+    src = _read(os.path.join(WINBUILD, "winservice.py"))
+    # servicemanager logging must go through the swallow-all wrapper, never a bare inline call that could
+    # fault before backend.log exists.
+    assert "def _safe_log(" in src
+    assert "servicemanager.LogInfoMsg(f\"" not in src
+    assert "servicemanager.LogErrorMsg(f\"" not in src
+    assert "_safe_log(servicemanager.LogInfoMsg" in src
+    assert "_safe_log(servicemanager.LogErrorMsg" in src
+
+
+def test_safe_log_swallows_logger_exceptions():
+    # Rebuild the wrapper behavior locally: a raising logger must NOT propagate.
+    def boom(_msg):
+        raise OSError("event source not registered")
+
+    def _safe_log(fn, message):
+        try:
+            fn(message)
+        except Exception:
+            pass
+
+    _safe_log(boom, "starting")  # must not raise

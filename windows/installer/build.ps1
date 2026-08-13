@@ -35,12 +35,12 @@ $required = @(
   (Join-Path $StageDir "config-templates")
 )
 foreach ($p in $required) {
-  if (-not (Test-Path $p)) { throw "Staging incomplete — missing '$p'. Run installer\stage.ps1 first." }
+  if (-not (Test-Path $p)) { throw "Staging incomplete - missing '$p'. Run installer\stage.ps1 first." }
 }
 # The deferred DB bootstrap tool MUST be staged (WiX packages tools\RoofSpanBootstrap.exe).
 $bootstrapExe = Join-Path $StageDir "tools\RoofSpanBootstrap.exe"
 if (-not (Test-Path $bootstrapExe)) {
-  throw "Staging incomplete — missing '$bootstrapExe'. Run installer\stage.ps1 first."
+  throw "Staging incomplete - missing '$bootstrapExe'. Run installer\stage.ps1 first."
 }
 
 # ---- STALENESS GUARD: a rebuild of the MSI must NOT silently package PyInstaller exes that are older than
