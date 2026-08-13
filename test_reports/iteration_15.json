@@ -1,0 +1,20 @@
+{
+  "summary": "Static source/test verification of Windows WiX installer fixes (Bug 1: shortcut Target; Bug 2: LaunchFirstRun via FileRef). Ran `python -m pytest windows/tests` -> 150 passed, 0 failed in 0.58s. Confirmed both fixes present in windows/installer/RoofSpan.wxs and file is well-formed XML. No app runtime testing performed (Windows-native codebase; not applicable in Linux container).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_installer_static.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Bug 1 fix verified — RoofSpan.wxs lines 106-115: ScStartMenuOffice (Directory=\"StartMenuRoofSpan\") and ScDesktopOffice (Directory=\"DesktopFolder\") both include Target=\"[ToolsDir]RoofSpanOffice.exe\", Name=\"RoofSpan Office\", WorkingDirectory=\"ToolsDir\". Neither targets the tools directory only (no Target=\"[ToolsDir]\").",
+    "Bug 2 fix verified — RoofSpan.wxs line 217: CustomAction Id=\"LaunchFirstRun\" FileRef=\"OfficeLauncherExe\" ExeCommand=\"\" Execute=\"deferred\" Impersonate=\"yes\" Return=\"asyncNoWait\". grep confirms no 'http://127.0.0.1:8001' and no 'cmd.exe /c start' anywhere in the .wxs file. The only 'cmd.exe' occurrence is on line 216 inside an XML comment explicitly documenting what LaunchFirstRun is NOT.",
+    "XML well-formedness verified via xml.etree.ElementTree parse of windows/installer/RoofSpan.wxs — no parse errors.",
+    "All 150 pre-existing WebView2-shell static tests still pass unchanged (project config, local-UI host, readiness deadline, error separation, external navigation, per-user WebView2 data dir hardening, single-instance, shell build pipeline, WebView2 runtime HKLM+HKCU detection, python-launcher-removal)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (150/150 static tests)", "frontend": "N/A"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Windows WiX/.NET codebase — static verification only. Command: `python -m pytest /app/windows/tests`. All 150 tests pass. Both installer bug fixes (shortcut Target + LaunchFirstRun FileRef) confirmed present.",
+  "rca of the issue": "Bug 1 RCA: The two <Shortcut> child elements under <Component Id=\"App_Launcher\"> had no explicit Target attribute, so their resolved TargetPath fell back to the containing ToolsDir directory — users got shortcuts that opened the tools folder in Explorer instead of launching RoofSpanOffice.exe. Fix: explicitly set Target=\"[ToolsDir]RoofSpanOffice.exe\" on both shortcuts. Bug 2 RCA: LaunchFirstRun previously ran `cmd.exe /c start http://127.0.0.1:8001/`, opening the local backend URL in the user's default browser rather than the installed WebView2 desktop shell — bypassing single-instance, WebView2 hardening, and per-user data-dir. Fix: use FileRef=\"OfficeLauncherExe\" with empty ExeCommand so MSI directly launches the installed RoofSpanOffice.exe in the deferred/impersonated phase."
+}
