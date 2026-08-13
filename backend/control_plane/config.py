@@ -4,6 +4,20 @@ import os
 from urllib.parse import urlparse, urlunparse
 
 
+def _normalize_async(url: str) -> str:
+    """Normalize a Postgres URL to the async driver the CP engine needs. Railway/Heroku hand out
+    'postgresql://' (and sometimes 'postgres://'); the CP async engine requires 'postgresql+asyncpg://'.
+    The Alembic env converts +asyncpg -> +psycopg and the migrations runner strips the driver for psycopg,
+    so normalizing to +asyncpg keeps ALL three paths correct."""
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
 def _derive_cp_url() -> str:
     """Default the Control Plane DB to a SEPARATE database on the same server as the business DB.
 
@@ -12,11 +26,11 @@ def _derive_cp_url() -> str:
     """
     explicit = os.environ.get("CONTROL_PLANE_DATABASE_URL")
     if explicit:
-        return explicit
+        return _normalize_async(explicit)
     base = os.environ.get("DATABASE_URL")
     if not base:
         return ""
-    parsed = urlparse(base)
+    parsed = urlparse(_normalize_async(base))
     # replace the path (database name) with the control-plane database
     new = parsed._replace(path="/roofspan_control_plane")
     return urlunparse(new)
@@ -97,6 +111,10 @@ def require_production_config() -> None:
     missing = []
     if BILLING_MODE != "stripe" or not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
         missing.append("Stripe (BILLING_MODE=stripe + STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET)")
+    if not CONTROL_PLANE_DATABASE_URL:
+        missing.append("CONTROL_PLANE_DATABASE_URL (central Control Plane database)")
+    elif ("127.0.0.1" in CONTROL_PLANE_DATABASE_URL) or ("localhost" in CONTROL_PLANE_DATABASE_URL):
+        missing.append("CONTROL_PLANE_DATABASE_URL must not point at localhost in production")
     if ENTITLEMENT_SIGNER == "kms" and not CP_KMS_SIGNING_KEY_ID:
         missing.append("CP_KMS_SIGNING_KEY_ID (KMS entitlement signer)")
     if not (CP_OPERATOR_ISSUER and CP_OPERATOR_AUDIENCE):
