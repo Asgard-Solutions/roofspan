@@ -98,6 +98,11 @@ $bootstrapExe = Join-Path $StageDir "tools\RoofSpanBootstrap.exe"
 if (-not (Test-Path $bootstrapExe)) {
   throw "Staging incomplete - missing '$bootstrapExe'. Run installer\stage.ps1 first."
 }
+# The Desktop/Start-Menu launcher MUST be staged (WiX packages tools\RoofSpanOffice.exe for the shortcuts).
+$launcherExe = Join-Path $StageDir "tools\RoofSpanOffice.exe"
+if (-not (Test-Path $launcherExe)) {
+  throw "Staging incomplete - missing '$launcherExe'. Run installer\stage.ps1 first."
+}
 
 # ---- STALENESS GUARD: a rebuild of the MSI must NOT silently package PyInstaller exes that are older than
 # their Python sources (e.g. re-running build.ps1 after editing bootstrap_db.py without re-staging). Fail

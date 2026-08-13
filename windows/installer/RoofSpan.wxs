@@ -96,7 +96,22 @@
         <Directory Id="StartMenuMaint" Name="Maintenance" />
       </Directory>
     </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
     <ComponentGroup Id="Tools" Directory="ToolsDir">
+      <!-- RoofSpan Office launcher: opens the local browser UI. Provides the Desktop icon AND the Start
+           Menu entry so RoofSpan Office appears in Windows Search / All Apps like any installed program.
+           Non-advertised shortcuts point at the launcher exe (Windows uses its embedded RoofSpan icon). -->
+      <Component Id="App_Launcher" Guid="*">
+        <File Id="OfficeLauncherExe" Source="$(var.StageDir)\tools\RoofSpanOffice.exe" KeyPath="yes" />
+        <Shortcut Id="ScStartMenuOffice" Directory="StartMenuRoofSpan"
+                  Name="RoofSpan Office"
+                  Description="Open RoofSpan Office (your local roofing business application)."
+                  WorkingDirectory="ToolsDir" />
+        <Shortcut Id="ScDesktopOffice" Directory="DesktopFolder"
+                  Name="RoofSpan Office"
+                  Description="Open RoofSpan Office (your local roofing business application)."
+                  WorkingDirectory="ToolsDir" />
+      </Component>
       <Component Id="Tool_OwnerRecovery" Guid="*">
         <File Id="OwnerRecoveryExe" Source="$(var.StageDir)\tools\RoofSpanOwnerRecovery.exe" KeyPath="yes" />
         <Shortcut Id="ScOwnerRecovery" Directory="StartMenuMaint"

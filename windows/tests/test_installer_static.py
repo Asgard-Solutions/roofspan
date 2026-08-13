@@ -260,6 +260,37 @@ def test_build_script_is_fail_fast_and_builds_bundle():
     assert "RoofSpanSetup.exe" in ps and "RoofSpanOffice-$Version.msi" in ps
 
 
+def test_desktop_and_start_menu_shortcuts_launch_office():
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    # A Desktop directory must exist for the desktop icon.
+    assert '<StandardDirectory Id="DesktopFolder"' in wxs
+    # The launcher component packages RoofSpanOffice.exe and defines BOTH a Desktop and a Start Menu
+    # shortcut named "RoofSpan Office" (the Start Menu entry is what makes it appear in Windows Search).
+    m = re.search(r'<Component Id="App_Launcher".*?</Component>', wxs, re.S)
+    assert m, "App_Launcher component (Desktop/Start-Menu launcher) not found"
+    comp = m.group(0)
+    assert 'tools\\RoofSpanOffice.exe' in comp, "launcher must package tools\\RoofSpanOffice.exe"
+    assert 'Directory="DesktopFolder"' in comp and 'Name="RoofSpan Office"' in comp, "missing desktop shortcut"
+    assert 'Directory="StartMenuRoofSpan"' in comp, "missing Start Menu shortcut"
+    assert comp.count('Name="RoofSpan Office"') >= 2, "both shortcuts should be named 'RoofSpan Office'"
+
+
+def test_office_launcher_is_built_and_packaged():
+    # Launcher entry script + spec exist and are wired into the build.
+    assert os.path.isfile(os.path.join(PACKAGING, "office_launcher.py"))
+    assert os.path.isfile(os.path.join(PACKAGING, "roofspan-office-launcher.spec"))
+    from winbuild.targets import TOOL_TARGETS
+    assert TOOL_TARGETS.get("RoofSpanOffice") == "office_launcher.py"
+    # The build script builds the launcher spec into the staged tools dir.
+    build_exes = _read(os.path.join(PACKAGING, "build_exes.ps1"))
+    assert "roofspan-office-launcher.spec" in build_exes
+    # A branded Windows icon is committed for the launcher exe + shortcuts.
+    assert os.path.isfile(os.path.join(INSTALLER, "RoofSpanOffice.ico"))
+    # build.ps1 fails fast if the launcher wasn't staged.
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    assert "tools\\RoofSpanOffice.exe" in ps
+
+
 def test_release_filenames_consistent():
     assert publish.stable_name() == "RoofSpanSetup.exe"
     assert publish.versioned_name("0.1.0") == "RoofSpanSetup-0.1.0.exe"
