@@ -140,6 +140,11 @@ def test_bundle_chains_postgres_prereq_and_msi():
     # Detection is keyed to the DEDICATED RoofSpan-managed service (not any PostgreSQL install).
     assert 'DetectCondition="RoofSpanPgPresent"' in b and 'InstallCondition="NOT RoofSpanPgPresent"' in b
     assert "PostgresInstaller" in b
+    # ExePackage/@SourceFile is resolved at BUILD TIME -> must use $(var.PostgresInstaller), not the Burn
+    # runtime form [PostgresInstaller] (WIX0103). No SourceFile may use Burn runtime [Variable] syntax.
+    assert 'SourceFile="$(var.PostgresInstaller)"' in b
+    assert 'SourceFile="[PostgresInstaller]"' not in b
+    assert not re.search(r'SourceFile="\[[^"]*\]"', b), "SourceFile must not use Burn runtime [Variable] syntax"
     # no committed secrets
     assert "superpassword " not in b.lower() or "PgSuperPassword" in b
 

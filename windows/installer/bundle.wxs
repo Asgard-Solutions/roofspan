@@ -43,8 +43,9 @@
                          Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
                          Result="exists" Variable="RoofSpanPgPresent" />
 
-    <!-- Overridable at build/runtime; no default binary is committed. -->
-    <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
+    <!-- The EDB installer path is resolved at BUILD TIME via $(var.PostgresInstaller) on the ExePackage
+         SourceFile below (supplied by build.ps1 -d PostgresInstaller=...); no runtime Burn variable is
+         needed for it. -->
     <!-- Compiled BAFunctions DLL (supplied by build.ps1 -d BaFunctionsDll=...). -->
     <!-- Dedicated RoofSpan-owned localhost PostgreSQL port (avoids colliding with an unrelated PostgreSQL
          that may already own 5432). Handed to the EDB install (the serverport argument) AND the MSI (PG_PORT) so the
@@ -64,7 +65,7 @@
               PgSuperPassword is Hidden so Burn REDACTS it in the log even here on the command line. -->
       <ExePackage Id="PostgreSQLPrereq"
                   DisplayName="PostgreSQL (RoofSpan-managed prerequisite)"
-                  SourceFile="[PostgresInstaller]"
+                  SourceFile="$(var.PostgresInstaller)"
                   Permanent="yes"
                   Vital="yes"
                   InstallCondition="NOT RoofSpanPgPresent"
