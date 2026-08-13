@@ -44,6 +44,14 @@
                          Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
                          Result="exists" Variable="RoofSpanPgPresent" />
 
+    <!-- Detect the Microsoft Edge WebView2 Evergreen Runtime (required by RoofSpanOffice.exe, the WebView2
+         desktop shell). EdgeUpdate registers its per-machine client under WOW6432Node (it is a 32-bit
+         component); the GUID {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} identifies the WebView2 Runtime. If the
+         client key is absent the runtime is not installed and we chain Microsoft's official bootstrapper. -->
+    <util:RegistrySearch Id="WebView2RuntimeSearch" Root="HKLM"
+                         Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Result="exists" Variable="WebView2RuntimePresent" />
+
     <!-- The EDB installer path is resolved at BUILD TIME via $(var.PostgresInstaller) on the ExePackage
          SourceFile below (supplied by build.ps1 -d PostgresInstaller=...); no runtime Burn variable is
          needed for it. -->
@@ -60,6 +68,24 @@
     <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
+      <!-- 0) Microsoft Edge WebView2 Evergreen Runtime - required by RoofSpanOffice.exe (the desktop shell).
+              Microsoft's OFFICIAL bootstrapper, supplied at BUILD TIME via -d WebView2Bootstrapper=... and
+              EMBEDDED (Compressed) so RoofSpanSetup.exe stays a single self-contained download. Installed
+              ONLY when the runtime is absent; Permanent so RoofSpan uninstall never removes the shared,
+              auto-updating Evergreen runtime. The ~2 MB Evergreen bootstrapper downloads the current runtime
+              from Microsoft at install time (needs internet on a machine that lacks it); for fully-offline
+              installs supply the Evergreen STANDALONE installer at the same path (same /silent /install
+              arguments). -->
+      <ExePackage Id="WebView2Runtime"
+                  DisplayName="Microsoft Edge WebView2 Runtime"
+                  SourceFile="$(var.WebView2Bootstrapper)"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallCondition="NOT WebView2RuntimePresent"
+                  DetectCondition="WebView2RuntimePresent"
+                  InstallArguments="/silent /install"
+                  Compressed="yes" />
+
       <!-- 1) RoofSpan-managed PostgreSQL prerequisite (silent, unattended, dedicated service + port).
               Installed ONLY when RoofSpan's own instance is absent; an unrelated PostgreSQL never
               suppresses it. Permanent = never uninstalled by RoofSpan (protects the DB service + data).

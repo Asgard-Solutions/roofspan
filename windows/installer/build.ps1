@@ -6,14 +6,20 @@
 #
 #   .\stage.ps1  -StageDir ..\..\_stage -UpdatePublicKey <pub.pem>
 #   .\build.ps1  -StageDir ..\..\_stage -PostgresInstaller C:\prereq\postgresql-16-windows-x64.exe `
+#                -WebView2Bootstrapper C:\prereq\MicrosoftEdgeWebview2Setup.exe `
 #                [-Version 0.1.0] [-BaFunctionsDll <override.dll>] [-SignCertThumbprint <thumb>] `
 #                [-UpdateSigningPrivateKey <priv.pem>]
+# The WebView2 bootstrapper is Microsoft's official Evergreen installer (MicrosoftEdgeWebview2Setup.exe,
+# ~2 MB) from https://developer.microsoft.com/microsoft-edge/webview2/ ; it is embedded into RoofSpanSetup.exe
+# and installs the runtime ONLY on machines that lack it (supply the Evergreen STANDALONE installer at the
+# same path for fully-offline installs).
 # By default the BAFunctions DLL is built automatically from windows\bafunctions\ (no manual pre-build);
 # -BaFunctionsDll is an optional CI/override to consume a pre-built DLL.
 param(
   [string]$Version = "",                                       # defaults to windows/VERSION
   [Parameter(Mandatory=$true)][string]$StageDir,               # from stage.ps1
   [Parameter(Mandatory=$true)][string]$PostgresInstaller,      # EDB PostgreSQL silent installer (.exe)
+  [Parameter(Mandatory=$true)][string]$WebView2Bootstrapper,   # Microsoft Edge WebView2 Evergreen bootstrapper (.exe)
   [string]$BaFunctionsDll = "",                                # optional override; auto-built if empty
   [string]$SignCertThumbprint = "",                            # HUMAN REQUIRED for production
   [string]$UpdateSigningPrivateKey = "",                       # SEPARATE from entitlement keys; OFFLINE
@@ -123,6 +129,9 @@ if ($stale) {
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."
 }
+if (-not (Test-Path $WebView2Bootstrapper)) {
+  throw "Microsoft Edge WebView2 bootstrapper not found at '$WebView2Bootstrapper'. Download the official Evergreen bootstrapper (MicrosoftEdgeWebview2Setup.exe) from https://developer.microsoft.com/microsoft-edge/webview2/"
+}
 
 # ---- BAFunctions DLL: build it here so a normal installer build is self-contained (K.I.S.S.). It
 # CSPRNG-generates PgSuperPassword before the PostgreSQL prerequisite runs. Override via -BaFunctionsDll.
@@ -160,7 +169,8 @@ Assert-FreshBuild -Path $msi -Since $buildStart -What "MSI build"
 $balExt = Resolve-BalExtension
 Write-Host "==> Using BAL extension: $balExt"
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
-  -d "PostgresInstaller=$PostgresInstaller" -d "BaFunctionsDll=$BaFunctionsDll" `
+  -d "PostgresInstaller=$PostgresInstaller" -d "WebView2Bootstrapper=$WebView2Bootstrapper" `
+  -d "BaFunctionsDll=$BaFunctionsDll" `
   -ext "$balExt" -ext WixToolset.Util.wixext/5.0.2 -o $setup
 Assert-FreshBuild -Path $setup -Since $buildStart -What "Bundle build"
 

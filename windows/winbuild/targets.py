@@ -16,12 +16,11 @@ SERVICE_TARGETS = {
 SERVICE_EXES = [f"{name}.exe" for name in SERVICE_TARGETS]
 
 # Non-service operator tools (packaged with Office; NOT registered as services / not auto-started).
+# NOTE: RoofSpanOffice.exe (the WebView2 desktop shell) is intentionally NOT here - it is a .NET WinForms
+# build (windows\desktop\), produced by build_shell.ps1, not a PyInstaller target.
 TOOL_TARGETS = {
     "RoofSpanOwnerRecovery": "owner_recovery.py",
     "RoofSpanBootstrap": "bootstrap_db.py",
-    # Desktop/Start-Menu launcher: opens the local Office UI in the browser (makes RoofSpan Office show
-    # in Windows Search / All Apps). Windowless; not a service; not auto-started.
-    "RoofSpanOffice": "office_launcher.py",
 }
 TOOL_EXES = [f"{name}.exe" for name in TOOL_TARGETS]
 

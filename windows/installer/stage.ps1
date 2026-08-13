@@ -38,6 +38,10 @@ $null = New-Item -ItemType Directory -Force -Path $services,$frontend,$runtime,$
 # 1) Service executables (PyInstaller).
 & (Join-Path $PSScriptRoot "..\winbuild\build_exes.ps1") -OutDir $services
 
+# 1b) RoofSpan Office desktop shell (WebView2, .NET WinForms). Staged under tools\ alongside the operator
+# tools. Requires the .NET 10 SDK on the build machine (build_shell.ps1 fails fast with guidance if absent).
+& (Join-Path $PSScriptRoot "..\desktop\build_shell.ps1") -ToolsDir (Join-Path $StageDir "tools")
+
 # 2) Office frontend production build (Office UI ONLY - never roofspan-website).
 Push-Location $FrontendDir
 try {

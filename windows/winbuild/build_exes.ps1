@@ -20,8 +20,10 @@ $ToolsDir = Join-Path (Split-Path $OutDir -Parent) "tools"
 New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 
 # service specs -> staged under services\ ; the recovery tool -> staged under tools\ (NOT a service).
+# NOTE: RoofSpanOffice.exe (the WebView2 desktop shell) is a .NET build, NOT PyInstaller - it is produced
+# by windows\desktop\build_shell.ps1 (invoked from installer\stage.ps1) and staged into tools\ separately.
 $serviceSpecs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
-$toolSpecs = @("roofspan-owner-recovery.spec", "roofspan-bootstrap.spec", "roofspan-office-launcher.spec")
+$toolSpecs = @("roofspan-owner-recovery.spec", "roofspan-bootstrap.spec")
 $distRoot = Join-Path $PSScriptRoot "dist"
 foreach ($spec in ($serviceSpecs + $toolSpecs)) {
   $specPath = Join-Path $PSScriptRoot $spec

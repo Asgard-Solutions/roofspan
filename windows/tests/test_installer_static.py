@@ -275,20 +275,115 @@ def test_desktop_and_start_menu_shortcuts_launch_office():
     assert comp.count('Name="RoofSpan Office"') >= 2, "both shortcuts should be named 'RoofSpan Office'"
 
 
-def test_office_launcher_is_built_and_packaged():
-    # Launcher entry script + spec exist and are wired into the build.
-    assert os.path.isfile(os.path.join(PACKAGING, "office_launcher.py"))
-    assert os.path.isfile(os.path.join(PACKAGING, "roofspan-office-launcher.spec"))
+DESKTOP = os.path.join(HERE, "desktop")
+SHELL_PROJ = os.path.join(DESKTOP, "RoofSpanOffice")
+
+
+def test_python_browser_launcher_removed():
+    # The old browser launcher must be fully gone (not left installed alongside the WebView2 shell).
+    assert not os.path.exists(os.path.join(PACKAGING, "office_launcher.py"))
+    assert not os.path.exists(os.path.join(PACKAGING, "roofspan-office-launcher.spec"))
     from winbuild.targets import TOOL_TARGETS
-    assert TOOL_TARGETS.get("RoofSpanOffice") == "office_launcher.py"
-    # The build script builds the launcher spec into the staged tools dir.
+    assert "RoofSpanOffice" not in TOOL_TARGETS, "RoofSpanOffice must not be a PyInstaller tool target"
     build_exes = _read(os.path.join(PACKAGING, "build_exes.ps1"))
-    assert "roofspan-office-launcher.spec" in build_exes
-    # A branded Windows icon is committed for the launcher exe + shortcuts.
-    assert os.path.isfile(os.path.join(INSTALLER, "RoofSpanOffice.ico"))
-    # build.ps1 fails fast if the launcher wasn't staged.
+    assert "roofspan-office-launcher.spec" not in build_exes
+
+
+def test_webview2_shell_project_present_and_configured():
+    csproj = _read(os.path.join(SHELL_PROJ, "RoofSpanOffice.csproj"))
+    # Real Microsoft Edge WebView2 SDK (not Electron/Tauri/CEF/bundled Chromium).
+    assert 'Include="Microsoft.Web.WebView2"' in csproj
+    assert "<UseWindowsForms>true</UseWindowsForms>" in csproj
+    # Single self-contained exe so WiX packages exactly one file; static loader = no separate loader DLL.
+    assert "<PublishSingleFile>true</PublishSingleFile>" in csproj
+    assert "<SelfContained>true</SelfContained>" in csproj
+    assert "<WebView2LoaderPreference>Static</WebView2LoaderPreference>" in csproj
+    assert "RoofSpanOffice.ico" in csproj  # branded exe icon
+    assert "<AssemblyName>RoofSpanOffice</AssemblyName>" in csproj  # executable identity preserved
+
+
+def _shell_sources():
+    import glob
+    return "\n".join(_read(p) for p in glob.glob(os.path.join(SHELL_PROJ, "*.cs")))
+
+
+def test_webview2_shell_hosts_local_ui_not_browser():
+    src = _shell_sources()
+    # Uses a real WebView2 host, navigates to the LOCAL default URL, keeps the ROOFSPAN_OFFICE_URL override,
+    # and titles the window "RoofSpan Office". Must NOT launch the system browser to show the app.
+    assert "EnsureCoreWebView2Async" in src and "CoreWebView2Environment" in src
+    assert "http://127.0.0.1:8001/" in src
+    assert "ROOFSPAN_OFFICE_URL" in src
+    assert '"RoofSpan Office"' in src
+    assert "webbrowser" not in src and "Process.Start(new ProcessStartInfo(AppConfig.BaseUrl" not in src
+
+
+def test_webview2_shell_backend_readiness_is_bounded():
+    src = _shell_sources()
+    # Polls the EXISTING health endpoint with a bounded retry (no infinite hang) + a branded failure path.
+    assert "api/health" in src
+    assert "ReadinessMaxAttempts" in src
+    assert "attempt <= AppConfig.ReadinessMaxAttempts" in src
+    assert "could not connect to the local RoofSpan service" in src
+
+
+def test_webview2_shell_external_navigation_and_new_windows():
+    src = _shell_sources()
+    # Internal 127.0.0.1 origin stays in-app; external links open in the system browser; new-window
+    # requests are intercepted (no popup WebView, external not allowed to replace the main window).
+    assert "NavigationStarting" in src and "NewWindowRequested" in src
+    assert "IsInternal" in src
+    assert "UseShellExecute = true" in src
+    assert "e.Cancel = true" in src
+
+
+def test_webview2_shell_per_user_data_and_hardening():
+    src = _shell_sources()
+    # WebView2 profile is per-user (LOCALAPPDATA\RoofSpan\Office), never Program Files; DevTools + password
+    # autosave disabled.
+    assert "LocalApplicationData" in src
+    assert '"RoofSpan"' in src and '"Office"' in src and '"WebView2"' in src
+    assert "SpecialFolder.ProgramFiles" not in src   # never write WebView2 state into Program Files
+    assert "AreDevToolsEnabled = false" in src
+    assert "IsPasswordAutosaveEnabled = false" in src
+
+
+def test_webview2_shell_single_instance():
+    src = _shell_sources()
+    assert "Mutex" in src
+    assert "RegisterWindowMessage" in src
+    assert "SetForegroundWindow" in src
+
+
+def test_shell_build_pipeline_dotnet_and_staging():
+    bs = _read(os.path.join(DESKTOP, "build_shell.ps1"))
+    assert "dotnet publish" in bs and "--self-contained" in bs
+    assert "$LASTEXITCODE" in bs                       # fail on non-zero dotnet exit
+    assert "LastWriteTimeUtc -lt $buildStart" in bs    # fail closed on a stale exe
+    assert 'Copy-Item $exe (Join-Path $ToolsDir "RoofSpanOffice.exe")' in bs
+    # stage.ps1 invokes the shell build so a fresh tools\RoofSpanOffice.exe is always produced.
+    stage = _read(os.path.join(INSTALLER, "stage.ps1"))
+    assert "build_shell.ps1" in stage
+    # build.ps1 still fails fast if the shell exe was not staged.
     ps = _read(os.path.join(INSTALLER, "build.ps1"))
     assert "tools\\RoofSpanOffice.exe" in ps
+    # A branded Windows icon is committed for the shell exe + shortcuts.
+    assert os.path.isfile(os.path.join(INSTALLER, "RoofSpanOffice.ico"))
+
+
+def test_bundle_chains_webview2_runtime():
+    b = _read(os.path.join(INSTALLER, "bundle.wxs"))
+    # WebView2 runtime is accounted for by the installer: detected via the EdgeUpdate client GUID and, when
+    # absent, installed from Microsoft's official bootstrapper (embedded so the setup stays self-contained).
+    assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in b   # WebView2 Runtime client GUID
+    assert 'Variable="WebView2RuntimePresent"' in b
+    assert 'InstallCondition="NOT WebView2RuntimePresent"' in b
+    assert 'DetectCondition="WebView2RuntimePresent"' in b
+    assert "$(var.WebView2Bootstrapper)" in b
+    # build.ps1 requires + validates + passes the bootstrapper.
+    ps = _read(os.path.join(INSTALLER, "build.ps1"))
+    assert "WebView2Bootstrapper" in ps
+    assert 'Mandatory=$true)][string]$WebView2Bootstrapper' in ps
 
 
 def test_release_filenames_consistent():
@@ -332,6 +427,7 @@ def test_powershell_build_scripts_are_ascii_only():
         os.path.join(INSTALLER, "build.ps1"),
         os.path.join(PACKAGING, "build_exes.ps1"),
         os.path.join(HERE, "bafunctions", "build_bafunctions.ps1"),
+        os.path.join(HERE, "desktop", "build_shell.ps1"),
     ]
     for s in scripts:
         raw = open(s, "rb").read()
