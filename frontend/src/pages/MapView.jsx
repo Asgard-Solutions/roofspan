@@ -273,6 +273,17 @@ export default function MapView() {
     loadProperties(t.id);
   };
 
+  const handleImportComplete = useCallback(async () => {
+    // After an import reaches `completed`, refresh in place — NO page reload / reselect required:
+    // territory list/count metadata, the selected territory source, and the property GeoJSON (which
+    // updates propCount, features, and the visible MapLibre points).
+    const list = await loadTerritories();
+    if (selectedId) {
+      setTerritorySource(list, selectedId);
+      await loadProperties(selectedId);
+    }
+  }, [loadTerritories, setTerritorySource, loadProperties, selectedId]);
+
   const applyPropFilter = useCallback(() => {
     const map = mapRef.current;
     if (!map || !map.getLayer("prop-points")) return;
@@ -774,7 +785,7 @@ export default function MapView() {
       </Dialog>
 
       {selected && (
-        <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={() => loadProperties(selectedId)} />
+        <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={handleImportComplete} />
       )}
       <PropertySheet propertyId={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} onChanged={() => loadProperties(selectedId)} />
     </div>

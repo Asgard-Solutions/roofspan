@@ -48,7 +48,7 @@ export default function ImportDialog({ open, onOpenChange, territory, onComplete
       }
       const { data: fin } = await api.get(`/imports/${data.id}`);
       if (fin.status === "completed") {
-        toast.success(`Imported ${fin.created_count} new, updated ${fin.updated_count}`);
+        toast.success(`Import complete: ${fin.created_count} added, ${fin.updated_count} updated`);
         onComplete && onComplete();
       } else if (fin.status === "failed") {
         toast.error(`Import failed: ${fin.error || "unknown error"}`);
@@ -61,6 +61,7 @@ export default function ImportDialog({ open, onOpenChange, territory, onComplete
   };
 
   const pct = job && job.total ? Math.round((job.processed / job.total) * 100) : job && job.status === "running" ? 5 : 0;
+  const fmt = (n) => Number(n || 0).toLocaleString();
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!running) { onOpenChange(v); if (!v) reset(); } }}>
@@ -112,10 +113,24 @@ export default function ImportDialog({ open, onOpenChange, territory, onComplete
           {job && (
             <div className="space-y-2" data-testid="import-progress">
               <Progress value={pct} />
-              <div className="flex justify-between text-xs text-slate-500">
-                <span>{job.status === "completed" ? <span className="inline-flex items-center gap-1 text-green-600"><CheckCircle2 className="h-3.5 w-3.5" /> Completed</span> : job.status}</span>
-                <span>{job.processed}/{job.total || "—"} · +{job.created_count} new</span>
-              </div>
+              {job.status === "completed" ? (
+                <div className="rounded-md border border-green-200 bg-green-50 p-3" data-testid="import-result">
+                  <div className="mb-2 inline-flex items-center gap-1.5 text-sm font-semibold text-green-700">
+                    <CheckCircle2 className="h-4 w-4" /> Completed
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-slate-700">
+                    <div className="flex justify-between"><span className="text-slate-500">Processed</span><span className="font-medium" data-testid="import-processed">{fmt(job.processed)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Added</span><span className="font-medium" data-testid="import-added">{fmt(job.created_count)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Updated</span><span className="font-medium" data-testid="import-updated">{fmt(job.updated_count)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Skipped</span><span className="font-medium" data-testid="import-skipped">{fmt(job.skipped_count)}</span></div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>{job.status}</span>
+                  <span>{fmt(job.processed)}/{job.total ? fmt(job.total) : "—"} processed</span>
+                </div>
+              )}
             </div>
           )}
         </div>
