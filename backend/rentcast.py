@@ -8,6 +8,15 @@ from geo import bbox, point_in_polygon, centroid
 RENTCAST_BASE = "https://api.rentcast.io/v1"
 
 
+def occupancy_status(owner_occupied):
+    """Simplify RentCast's ownerOccupied flag to what sales needs: owned / rented / unknown."""
+    if owner_occupied is True:
+        return "owned"
+    if owner_occupied is False:
+        return "rented"
+    return "unknown"
+
+
 def normalize_rentcast(raw: dict) -> dict:
     owner = raw.get("owner") or {}
     names = owner.get("names") or []
@@ -38,12 +47,12 @@ def normalize_rentcast(raw: dict) -> dict:
     }
 
 
-async def fetch_rentcast_properties(key: str, lat: float, lng: float, radius: float, max_records: int, page_size: int = 500):
+async def fetch_rentcast_properties(key: str, lat: float, lng: float, radius: float, max_records: int | None = None, page_size: int = 500):
     results = []
     offset = 0
     async with httpx.AsyncClient(base_url=RENTCAST_BASE, timeout=30) as client:
-        while len(results) < max_records:
-            limit = min(page_size, max_records - len(results))
+        while max_records is None or len(results) < max_records:
+            limit = page_size if max_records is None else min(page_size, max_records - len(results))
             r = await client.get(
                 "/properties",
                 params={"latitude": lat, "longitude": lng, "radius": radius, "limit": limit, "offset": offset},
@@ -60,13 +69,14 @@ async def fetch_rentcast_properties(key: str, lat: float, lng: float, radius: fl
     return results
 
 
-async def fetch_rentcast_by_zip(key: str, zip_code: str, max_records: int, page_size: int = 500):
-    """Pull properties for an exact ZIP code (RentCast's native zipCode filter; cheaper + exact vs radius)."""
+async def fetch_rentcast_by_zip(key: str, zip_code: str, max_records: int | None = None, page_size: int = 500):
+    """Pull properties for an exact ZIP code (RentCast's native zipCode filter). When max_records is None
+    (the default), keep paging until RentCast returns everything for the ZIP."""
     results = []
     offset = 0
     async with httpx.AsyncClient(base_url=RENTCAST_BASE, timeout=30) as client:
-        while len(results) < max_records:
-            limit = min(page_size, max_records - len(results))
+        while max_records is None or len(results) < max_records:
+            limit = page_size if max_records is None else min(page_size, max_records - len(results))
             r = await client.get(
                 "/properties",
                 params={"zipCode": zip_code, "limit": limit, "offset": offset},

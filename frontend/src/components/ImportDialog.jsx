@@ -2,16 +2,12 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Download, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 
-const SIZES = [10, 25, 50, 100, 250, 500];
-
 export default function ImportDialog({ open, onOpenChange, territory, onComplete }) {
-  const [maxRecords, setMaxRecords] = useState(25);
+  const [maxRecords] = useState(250);  // only used for sample mode / preview; real RentCast import pulls ALL
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const [job, setJob] = useState(null);
@@ -80,14 +76,8 @@ export default function ImportDialog({ open, onOpenChange, territory, onComplete
               Exact ZIP pull: RentCast will fetch addresses for ZIP <strong>{territory.zip_code}</strong>, filtered to this boundary.
             </div>
           )}
-          <div className="space-y-1.5">
-            <Label>Max properties</Label>
-            <Select value={String(maxRecords)} onValueChange={(v) => { setMaxRecords(Number(v)); setPreview(null); }}>
-              <SelectTrigger data-testid="import-max-records"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {SIZES.map((s) => <SelectItem key={s} value={String(s)}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600" data-testid="import-all-note">
+            This imports <strong>all</strong> properties RentCast has for this {territory?.zip_code ? "ZIP" : "territory"} (paged automatically) and saves them locally, so you won't re-pull unless you import again.
           </div>
 
           {!preview && !job && (

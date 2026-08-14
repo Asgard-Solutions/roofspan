@@ -189,7 +189,15 @@ export default function MapView() {
           id: "prop-points", type: "circle", source: "properties",
           paint: {
             "circle-radius": 8,
-            "circle-color": ["case", ["get", "do_not_knock"], "#DC2626", "#2563EB"],
+            // Do-not-knock always shows red; otherwise color by occupancy so sales can read the map:
+            // owned = green (talk to the homeowner), rented = amber, unknown = gray.
+            "circle-color": [
+              "case",
+              ["get", "do_not_knock"], "#DC2626",
+              ["==", ["get", "occupancy"], "owned"], "#16A34A",
+              ["==", ["get", "occupancy"], "rented"], "#D97706",
+              "#64748B",
+            ],
             "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
           },
         });
@@ -498,7 +506,12 @@ export default function MapView() {
           {selected && (
             <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary">
               <span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map
-              <span className="ml-2 inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-600" /> Do Not Knock</span>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-600" /> Owned</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Rented</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> Unknown</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Do Not Knock</span>
+              </div>
             </div>
           )}
         </div>

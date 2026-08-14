@@ -11,7 +11,8 @@ from models import Territory, Property, PropertyContact, ImportJob, IntegrationS
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
 from geo import centroid, enclosing_radius_miles, point_in_polygon
-from rentcast import fetch_rentcast_properties, fetch_rentcast_by_zip, normalize_rentcast, generate_sample_properties
+from rentcast import (fetch_rentcast_properties, fetch_rentcast_by_zip, normalize_rentcast,
+                      generate_sample_properties)
 
 router = APIRouter(prefix="/api", tags=["imports"])
 
@@ -66,9 +67,9 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         est_requests = math.ceil(payload.max_records / 500)
         return ImportPreviewOut(
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
-            estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
+            estimated_properties=len(inside) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)).",
+            note="Full import pulls ALL properties for this ZIP/territory from RentCast (paged automatically). The list below is a small preview sample.",
         )
 
     # sample mode
@@ -95,11 +96,11 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                     raise RuntimeError("RentCast is not configured")
                 key = decrypt_secret(setting.secret_ciphertext)
                 if territory.zip_code:
-                    raws = await fetch_rentcast_by_zip(key, territory.zip_code, max_records)
+                    raws = await fetch_rentcast_by_zip(key, territory.zip_code, None)  # pull ALL in the ZIP
                 else:
                     clng, clat = centroid(territory.geometry)
                     radius = enclosing_radius_miles(territory.geometry)
-                    raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
+                    raws = await fetch_rentcast_properties(key, clat, clng, radius, None)  # pull ALL in the area
                 normalized = [normalize_rentcast(r) for r in raws
                               if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)]
             else:

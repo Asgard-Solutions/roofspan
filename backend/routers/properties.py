@@ -15,6 +15,9 @@ from schemas_phase2 import (
 router = APIRouter(prefix="/api/properties", tags=["properties"])
 
 
+from rentcast import occupancy_status
+
+
 def _prop_out(p: Property) -> PropertyOut:
     return PropertyOut(
         id=str(p.id), external_id=p.external_id, source=p.source,
@@ -24,6 +27,7 @@ def _prop_out(p: Property) -> PropertyOut:
         latitude=p.latitude, longitude=p.longitude, property_type=p.property_type,
         bedrooms=p.bedrooms, bathrooms=p.bathrooms, square_footage=p.square_footage,
         year_built=p.year_built, owner_occupied=p.owner_occupied,
+        occupancy=occupancy_status(p.owner_occupied),
         do_not_knock=p.do_not_knock, do_not_knock_reason=p.do_not_knock_reason,
         notes=p.notes, created_at=p.created_at,
     )
@@ -61,6 +65,14 @@ async def properties_geojson(
     if territory_id:
         stmt = stmt.where(Property.territory_id == territory_id)
     rows = (await db.execute(stmt)).scalars().all()
+    # owner name per property (for the map popup / lead prefill) in one query
+    prop_ids = [p.id for p in rows]
+    owners = {}
+    if prop_ids:
+        ocs = (await db.execute(select(PropertyContact).where(
+            PropertyContact.property_id.in_(prop_ids), PropertyContact.kind == "owner"))).scalars().all()
+        for oc in ocs:
+            owners.setdefault(oc.property_id, oc.name)
     features = [
         {
             "type": "Feature",
@@ -70,6 +82,8 @@ async def properties_geojson(
                 "address": p.formatted_address,
                 "do_not_knock": p.do_not_knock,
                 "property_type": p.property_type,
+                "occupancy": occupancy_status(p.owner_occupied),
+                "owner_name": owners.get(p.id) or "",
             },
         }
         for p in rows
@@ -159,12 +173,14 @@ async def convert_to_lead(property_id: str, payload: ConvertLeadIn, request: Req
     if not p:
         raise HTTPException(status_code=404, detail="Property not found")
     name = payload.name.strip()
+    owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()
     if not name:
-        owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()
-        name = owner.name if owner else p.formatted_address
+        name = owner.name if (owner and owner.name) else p.formatted_address
     lead = Lead(
         property_id=p.id, source_visit_id=payload.visit_id, name=name,
-        phone=payload.phone, email=payload.email, address=p.formatted_address,
+        phone=payload.phone or (owner.phone if owner else None),
+        email=payload.email or (owner.email if owner else None),
+        address=p.formatted_address,
         status="new", notes=payload.notes, created_by=user.email,
     )
     db.add(lead)

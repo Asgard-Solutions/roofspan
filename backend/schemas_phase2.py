@@ -79,6 +79,7 @@ class PropertyOut(BaseModel):
     square_footage: Optional[int] = None
     year_built: Optional[int] = None
     owner_occupied: Optional[bool] = None
+    occupancy: str = "unknown"  # owned | rented | unknown (simplified for sales)
     do_not_knock: bool
     do_not_knock_reason: Optional[str] = None
     notes: Optional[str] = None
