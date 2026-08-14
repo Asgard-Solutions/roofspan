@@ -33,6 +33,7 @@ export default function MapView() {
   const loadedRef = useRef(false);
   const drawing = useRef(false);
   const drawPts = useRef([]);
+  const vertexMarkers = useRef([]);
   const openSheetRef = useRef(null);
 
   const [territories, setTerritories] = useState([]);
@@ -40,6 +41,9 @@ export default function MapView() {
   const [propCount, setPropCount] = useState(0);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawCount, setDrawCount] = useState(0);
+  const [zip, setZip] = useState("");
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [zipHit, setZipHit] = useState(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -99,6 +103,21 @@ export default function MapView() {
     map.fitBounds(b, { padding: 60, maxZoom: 15, duration: 600 });
   }, []);
 
+  const renderVertexMarkers = useCallback((pts) => {
+    const map = mapRef.current;
+    if (!map) return;
+    vertexMarkers.current.forEach((m) => m.remove());
+    vertexMarkers.current = [];
+    pts.forEach((c, i) => {
+      const el = document.createElement("div");
+      el.className = "rs-vertex-marker";
+      el.setAttribute("data-testid", `draw-vertex-${i + 1}`);
+      el.textContent = String(i + 1);
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(c).addTo(map);
+      vertexMarkers.current.push(marker);
+    });
+  }, []);
+
   const updateDrawSource = useCallback(() => {
     const map = mapRef.current;
     if (!map || !map.getSource("draw")) return;
@@ -111,7 +130,8 @@ export default function MapView() {
     }
     map.getSource("draw").setData(feat);
     map.getSource("draw-pts").setData({ type: "FeatureCollection", features: pts.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
-  }, []);
+    renderVertexMarkers(pts);
+  }, [renderVertexMarkers]);
 
   // init map once
   useEffect(() => {
@@ -150,7 +170,7 @@ export default function MapView() {
         map.addLayer({ id: "draw-fill", type: "fill", source: "draw", paint: { "fill-color": "#EA580C", "fill-opacity": 0.15 } });
         map.addLayer({ id: "draw-line", type: "line", source: "draw", paint: { "line-color": "#EA580C", "line-width": 2, "line-dasharray": [2, 1] } });
         map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 4, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
+        map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 7, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
 
         loadedRef.current = true;
 
@@ -189,6 +209,44 @@ export default function MapView() {
     setTerritorySource(territories, t.id);
     fitToTerritory(t);
     loadProperties(t.id);
+  };
+
+  const searchZip = async (e) => {
+    e?.preventDefault?.();
+    const code = zip.trim();
+    if (!code) { toast.error("Enter a ZIP or postal code"); return; }
+    setGeoLoading(true);
+    try {
+      const { data } = await api.get(`/geocode/zip?zip=${encodeURIComponent(code)}`);
+      setZipHit(data);
+      const map = mapRef.current;
+      if (map) {
+        const [[w, s], [e2, n]] = data.bbox;
+        map.fitBounds([[w, s], [e2, n]], { padding: 60, maxZoom: 15, duration: 800 });
+      }
+      toast.success(`Centered on ${data.display_name}`);
+    } catch (err) {
+      setZipHit(null);
+      toast.error(apiError(err));
+    } finally {
+      setGeoLoading(false);
+    }
+  };
+
+  const addZipAsTerritory = () => {
+    if (!zipHit) return;
+    const [[w, s], [e2, n]] = zipHit.bbox;
+    drawPts.current = [[w, s], [e2, s], [e2, n], [w, n]];  // ZIP bbox rectangle (lng,lat) corners
+    drawing.current = true;
+    setIsDrawing(true);
+    setDrawCount(4);
+    updateDrawSource();
+    const map = mapRef.current;
+    if (map) {
+      map.getCanvas().style.cursor = "crosshair";
+      map.fitBounds([[w, s], [e2, n]], { padding: 60, maxZoom: 15, duration: 600 });
+    }
+    toast.info("ZIP area added as an editable rectangle. Adjust corners or click Finish to name & save.");
   };
 
   const startDraw = () => {
@@ -271,6 +329,27 @@ export default function MapView() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            {/* ZIP / postal code search */}
+            <div className="space-y-2 border-b border-border p-4" data-testid="zip-search-panel">
+              <Label className="text-xs font-semibold text-slate-600">Find a ZIP / postal code</Label>
+              <form onSubmit={searchZip} className="flex gap-2">
+                <Input value={zip} onChange={(e) => setZip(e.target.value)} placeholder="e.g. 78701" data-testid="zip-search-input" />
+                <Button type="submit" variant="outline" disabled={geoLoading} data-testid="zip-search-button">
+                  {geoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+                </Button>
+              </form>
+              {zipHit && (
+                <>
+                  <p className="truncate text-xs text-slate-500" title={zipHit.display_name} data-testid="zip-result-name">{zipHit.display_name}</p>
+                  {canManage && !isDrawing && (
+                    <Button onClick={addZipAsTerritory} variant="secondary" className="w-full" data-testid="add-zip-territory-button">
+                      <Plus className="h-4 w-4" /> Add ZIP area as territory
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+
             {/* Draw controls */}
             {canManage && (
               <div className="border-b border-border p-4">

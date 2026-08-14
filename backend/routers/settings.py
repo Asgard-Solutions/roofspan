@@ -71,6 +71,41 @@ async def update_map_config(payload: MapConfigUpdate, request: Request, user: Us
     return await get_map_config(user=user, db=db)
 
 
+# ---- ZIP / postal code geocoding (server-side proxy to OSM Nominatim; only the ZIP leaves the machine) ----
+@router.get("/geocode/zip")
+async def geocode_zip(zip: str, country: str = "us", user: User = Depends(get_current_user)):
+    code = (zip or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Enter a ZIP or postal code")
+    params = {
+        "postalcode": code,
+        "countrycodes": (country or "us").strip().lower(),
+        "format": "jsonv2",
+        "limit": 1,
+        "addressdetails": 0,
+    }
+    headers = {"User-Agent": "RoofSpanOffice/1.0 (territory mapping)"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get("https://nominatim.openstreetmap.org/search", params=params, headers=headers)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not reach the geocoding service. Check your internet connection.")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Geocoding service error. Please try again.")
+    results = r.json()
+    if not results:
+        raise HTTPException(status_code=404, detail=f"No location found for ZIP/postal code '{code}'")
+    hit = results[0]
+    # Nominatim boundingbox = [south, north, west, east] (strings). Return [lng, lat] geometry.
+    bb = [float(x) for x in hit["boundingbox"]]
+    south, north, west, east = bb[0], bb[1], bb[2], bb[3]
+    return {
+        "center": [float(hit["lon"]), float(hit["lat"])],
+        "bbox": [[west, south], [east, north]],
+        "display_name": hit.get("display_name", code),
+    }
+
+
 # ---- Company profile ----
 @router.get("/company", response_model=CompanyProfile)
 async def get_company(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

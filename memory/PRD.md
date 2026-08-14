@@ -983,3 +983,11 @@ Clean installs failed: Burn "Failed to parse condition ... Unexpected character 
 - **Migration:** none.
 - **Tests:** `windows/tests/test_installer_static.py` — 51 passed, incl. new: no single-quoted literals; Detect/Install are logical inverse with `"0.0.0.0"`; a faithful Burn-condition LEXER compiles the actual bundle.wxs conditions AND reproduces the OLD failure at exactly position 52; bundle.wxs well-formed XML. Full `windows/tests/` suite: 170 passed. (Real `wix build` Burn compile runs on Windows only — the documented mocked native env; the in-container Burn-lexer + XML parse are the deterministic compile validation.)
 
+
+## Added (2026-06) — Map Draw Territory: visible numbered points + ZIP search
+- **Bug (points invisible):** draw vertices were tiny 4px circles. Fixed: each corner now renders as a high-contrast numbered DOM marker (1,2,3…) with white halo + shadow (`.rs-vertex-marker` in `index.css`), plus the underlying vertex circle bumped to r=7; the connecting outline/fill is unchanged. User now sees exactly what was added and in what order.
+- **ZIP → territory:** new left-panel search box. Backend proxy `GET /api/geocode/zip?zip=&country=` in `backend/routers/settings.py` calls OSM Nominatim server-side (User-Agent set; only the ZIP leaves the machine) and returns `{center:[lng,lat], bbox:[[w,s],[e,n]], display_name}`. Frontend `searchZip` fits the map to the ZIP; `addZipAsTerritory` drops the ZIP bbox as an editable 4-corner rectangle into the existing draw flow (Finish → name & save). Config choice = "both" (center always + Add-as-territory button).
+- **Files changed:** `backend/routers/settings.py` (geocode endpoint); `frontend/src/pages/MapView.jsx` (numbered markers, ZIP box, handlers); `frontend/src/index.css` (marker style); new `backend/tests/test_geocode_zip.py`.
+- **Migration:** none.
+- **Verified:** geocode 4/4 tests pass (bbox transform, 404, 400, 502); live curl `78701` → correct center/bbox; screenshot shows numbered markers 1–4 with polygon outline, ZIP result "78701, Austin…", and the Add-as-territory button.
+
