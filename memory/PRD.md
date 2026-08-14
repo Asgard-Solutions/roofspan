@@ -1066,3 +1066,8 @@ Clarified: "RestCast" = **RentCast** (app was already modeled for it: `propertie
 - **Backend:** no change — `/api/properties/geojson` already filters non-null lat/lng and returns a FeatureCollection; `ImportJobOut` already exposes all count fields.
 - **Files:** `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx`; tests `frontend/src/components/ImportDialog.test.jsx` (new).
 - **Tests:** 4 new ImportDialog regression tests + full frontend suite 21/21 pass.
+
+## Enhanced (2026-06) — Auto-select a brand-new territory on creation
+- After drawing/creating a territory (hand-drawn OR snapped from a ZIP boundary), it is now reliably auto-selected: highlighted in the sidebar, fit into view, and its property GeoJSON loaded — so imported points appear instantly with no manual click.
+- Fix: `selectTerritory(t, list=territories)` now accepts the fresh territory list; `saveTerritory` passes the just-loaded `list` (previously it re-set the map source with a STALE `territories` closure that omitted the new territory, so selection/polygon could fail until a manual reselect).
+- File: `frontend/src/pages/MapView.jsx`. Verified via e2e draw→save: new territory renders selected with its Import panel, map fit to it, no manual click.

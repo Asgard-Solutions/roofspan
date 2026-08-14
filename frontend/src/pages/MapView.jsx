@@ -266,9 +266,9 @@ export default function MapView() {
 
   openSheetRef.current = (id) => { setSheetId(id); setSheetOpen(true); };
 
-  const selectTerritory = (t) => {
+  const selectTerritory = (t, list = territories) => {
     setSelectedId(t.id);
-    setTerritorySource(territories, t.id);
+    setTerritorySource(list, t.id);
     fitToTerritory(t);
     loadProperties(t.id);
   };
@@ -509,9 +509,11 @@ export default function MapView() {
       setDrawCount(0);
       updateDrawSource();
       const list = await loadTerritories();
-      setTerritorySource(list, data.id);
       const created = list.find((t) => t.id === data.id);
-      if (created) selectTerritory(created);
+      // Auto-select the brand-new territory (fresh list) so it highlights, fits into view, and its
+      // points load instantly — no manual click needed.
+      if (created) selectTerritory(created, list);
+      else setTerritorySource(list, data.id);
     } catch (e) {
       toast.error(apiError(e));
     } finally {
