@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/operator/login", "destination": "/api/operator/login" },
+    { "source": "/operator/callback", "destination": "/api/operator/callback" },
+    { "source": "/operator", "destination": "/operator/index.html" }
+  ]
+}

@@ -248,6 +248,14 @@ async def stripe_portal(company_id: str, return_url: str | None = None, _: bool 
         raise _cp_error(e)
 
 
+@router.get("/operator/me")
+async def operator_me(_: bool = Depends(_require_admin)):
+    """Minimal read-only proof endpoint: 200 only if a valid operator bearer (prod: Cognito id_token;
+    dev: X-RoofSpan-Admin) is presented. Used by the Vercel /operator page to confirm the login token is
+    accepted by the Control Plane. No secrets/PII returned."""
+    return {"operator": True}
+
+
 @router.post("/billing/stripe/reconcile")
 async def stripe_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
     try:
