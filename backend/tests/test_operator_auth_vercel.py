@@ -6,7 +6,7 @@ import glob
 import os
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # /app
-VC = os.path.join(REPO, "deploy", "vercel")
+VC = os.path.join(REPO, "roofspan-website")  # operator auth now lives in the actual Vercel project root
 
 
 def _read(p):
@@ -15,8 +15,9 @@ def _read(p):
 
 
 def _all_client_side():
-    # Browser-served assets (must contain NO secrets and NO token storage).
-    files = glob.glob(os.path.join(VC, "public", "**", "*.*"), recursive=True)
+    # Browser-served operator assets (must contain NO secrets and NO token storage). Scoped to the
+    # operator console; the marketing site's own public/ assets are unrelated to this boundary.
+    files = glob.glob(os.path.join(VC, "public", "operator", "**", "*.*"), recursive=True)
     return "\n".join(_read(f) for f in files)
 
 
@@ -57,7 +58,7 @@ def test_no_cognito_client_secret_shipped_to_browser():
 
 def test_production_callback_url_exact():
     lib = _read(os.path.join(VC, "api", "operator", "_lib.js"))
-    assert "https://roofspan.io/operator/callback" in lib
+    assert "https://www.roofspan.io/operator/callback" in lib
 
 
 def test_bearer_is_id_token_and_hits_control_plane_operator_endpoint():

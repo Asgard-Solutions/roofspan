@@ -19,8 +19,8 @@ function cfg() {
     domain: (process.env.COGNITO_DOMAIN || '').replace(/\/$/, ''),      // e.g. https://roofspan-ops.auth.us-east-2.amazoncognito.com
     clientId: process.env.COGNITO_CLIENT_ID || '',
     clientSecret: process.env.COGNITO_CLIENT_SECRET || '',              // optional (confidential client); SERVER ONLY
-    redirectUri: process.env.OPERATOR_REDIRECT_URI || 'https://roofspan.io/operator/callback',
-    logoutUri: process.env.COGNITO_LOGOUT_URI || 'https://roofspan.io/operator/login',
+    redirectUri: process.env.OPERATOR_REDIRECT_URI || 'https://www.roofspan.io/operator/callback',
+    logoutUri: process.env.COGNITO_LOGOUT_URI || 'https://www.roofspan.io/operator/login',
     cpBase: (process.env.CONTROL_PLANE_BASE_URL || 'https://cp.roofspan.io').replace(/\/$/, ''),
   };
 }
