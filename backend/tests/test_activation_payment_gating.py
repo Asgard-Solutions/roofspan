@@ -10,17 +10,38 @@ Run: cd /app/backend && PYTHONPATH=/app/backend python -m pytest tests/test_acti
 import os
 import uuid
 import asyncio
+import sys
+import subprocess
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
 import psycopg
 
+_ISOLATED = os.environ.get("RS_ISOLATED") == "1"
 _base = "postgresql+asyncpg://roofspan:roofspan_local_pwd@127.0.0.1:5432"
 _NAME = f"cpgate_{uuid.uuid4().hex[:8]}"
-os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_NAME}"
-os.environ.setdefault("DATABASE_URL", f"{_base}/{_NAME}_app")
+# Bind the throwaway Control Plane DB ONLY inside the isolated child (see _run_isolated) so importing
+# this module in the full suite never rebinds engines for other tests.
+if _ISOLATED:
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_NAME}"
+    os.environ.setdefault("DATABASE_URL", f"{_base}/{_NAME}_app")
 
 _admin_dsn = "postgresql://roofspan:roofspan_local_pwd@127.0.0.1:5432/postgres"
+
+
+def _run_isolated(nodeid: str) -> bool:
+    """Run this DB-provisioning integration test in its OWN process so its import-time env (throwaway
+    CP DB) takes effect and cannot contaminate — or be contaminated by — the rest of the suite.
+    Returns True in the parent (child already ran + asserted); False inside the isolated child."""
+    if _ISOLATED:
+        return False
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", nodeid, "-o", "addopts=", "-q", "-p", "no:cacheprovider"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        env={**os.environ, "RS_ISOLATED": "1"},
+    )
+    assert r.returncode == 0, f"isolated subprocess failed for {nodeid}"
+    return True
 
 
 def _mk(n):
@@ -155,6 +176,8 @@ async def _flow():
 
 
 def test_activation_payment_gating_lifecycle():
+    if _run_isolated("tests/test_activation_payment_gating.py::test_activation_payment_gating_lifecycle"):
+        return
     _mk(_NAME)
     try:
         asyncio.run(_flow())

@@ -11,20 +11,39 @@ blocked -> +1 seat -> 6th ok.
 import os
 import uuid
 import asyncio
+import sys
+import subprocess
 
-# ---- Bind the app to a throwaway database BEFORE importing anything app-related ----
+# ---- Bind the app to a throwaway database ONLY inside the isolated child process ----
+_ISOLATED = os.environ.get("RS_ISOLATED") == "1"
 _DB = os.environ.get("DATABASE_URL", "postgresql+asyncpg://roofspan:roofspan_local_pwd@127.0.0.1:5432/roofspan")
 _base = _DB.rsplit("/", 1)[0]
 _FRESH = f"roofspan_onb_{uuid.uuid4().hex[:8]}"
-os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
-os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
-os.environ["LICENSING_MODE"] = "dev"
-os.environ["BILLING_MODE"] = "mock"
-os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"  # truly fresh: no seeded owner
+if _ISOLATED:
+    os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
+    os.environ["LICENSING_MODE"] = "dev"
+    os.environ["BILLING_MODE"] = "mock"
+    os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"  # truly fresh: no seeded owner
 
 import psycopg  # noqa: E402
 
 _admin_dsn = "postgresql://roofspan:roofspan_local_pwd@127.0.0.1:5432/postgres"
+
+
+def _run_isolated(nodeid: str) -> bool:
+    """Run this fresh-DB onboarding E2E in its OWN process so its import-time env (throwaway DB) takes
+    effect and cannot contaminate — or be contaminated by — the rest of the suite. Returns True in the
+    parent (child already ran + asserted); False inside the isolated child."""
+    if _ISOLATED:
+        return False
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", nodeid, "-o", "addopts=", "-q", "-p", "no:cacheprovider"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        env={**os.environ, "RS_ISOLATED": "1"},
+    )
+    assert r.returncode == 0, f"isolated subprocess failed for {nodeid}"
+    return True
 
 
 def _create_db(name: str):
@@ -130,6 +149,8 @@ async def _flow():
 
 
 def test_full_onboarding_flow():
+    if _run_isolated("tests/test_onboarding.py::test_full_onboarding_flow"):
+        return
     _create_db(_FRESH)
     _create_db(f"{_FRESH}_cp")
     try:

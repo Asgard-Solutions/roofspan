@@ -6,16 +6,21 @@ import os
 import sys
 import uuid
 import asyncio
+import subprocess
 
+_ISOLATED = os.environ.get("RS_ISOLATED") == "1"
 _DB = os.environ.get("DATABASE_URL", "postgresql+asyncpg://roofspan:roofspan_local_pwd@127.0.0.1:5432/roofspan")
 _base = _DB.rsplit("/", 1)[0]
 _FRESH = f"roofspan_tok_{uuid.uuid4().hex[:8]}"
-os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
-os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
-os.environ["LICENSING_MODE"] = "dev"
-os.environ["BILLING_MODE"] = "mock"
-os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"
-os.environ["ROOFSPAN_CONFIG_DIR"] = "/nonexistent-config"  # recovery tool must not find a stale .env
+# Import-time env (throwaway DB) MUST only take effect inside the isolated child process (see
+# _run_isolated) so it never rebinds the DB engine for the rest of the suite.
+if _ISOLATED:
+    os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
+    os.environ["LICENSING_MODE"] = "dev"
+    os.environ["BILLING_MODE"] = "mock"
+    os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"
+    os.environ["ROOFSPAN_CONFIG_DIR"] = "/nonexistent-config"  # recovery tool must not find a stale .env
 
 import psycopg  # noqa: E402
 from httpx import AsyncClient, ASGITransport  # noqa: E402
@@ -24,6 +29,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from winbuild import owner_recovery as rec  # noqa: E402
 
 _admin = "postgresql://roofspan:roofspan_local_pwd@127.0.0.1:5432/postgres"
+
+
+def _run_isolated(nodeid: str) -> bool:
+    """Run this DB-provisioning integration test in its OWN process so its import-time env (throwaway
+    DB) takes effect and cannot contaminate — or be contaminated by — the rest of the suite. Returns
+    True in the parent (child already ran + asserted); False inside the isolated child."""
+    if _ISOLATED:
+        return False
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", nodeid, "-o", "addopts=", "-q", "-p", "no:cacheprovider"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        env={**os.environ, "RS_ISOLATED": "1"},
+    )
+    assert r.returncode == 0, f"isolated subprocess failed for {nodeid}"
+    return True
 
 
 def _drop(n):
@@ -126,6 +146,8 @@ async def _flow():
 
 
 def test_token_version_and_owner_recovery_flow():
+    if _run_isolated("tests/test_token_recovery.py::test_token_version_and_owner_recovery_flow"):
+        return
     _mk(_FRESH); _mk(f"{_FRESH}_cp")
     try:
         asyncio.run(_flow())

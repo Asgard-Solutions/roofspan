@@ -10,22 +10,43 @@ Run in isolation (binds the app to a throwaway DB):
 import os
 import uuid
 import asyncio
+import sys
+import subprocess
 
+_ISOLATED = os.environ.get("RS_ISOLATED") == "1"
 _DB = os.environ.get("DATABASE_URL", "postgresql+asyncpg://roofspan:roofspan_local_pwd@127.0.0.1:5432/roofspan")
 _base = _DB.rsplit("/", 1)[0]
 _FRESH = f"roofspan_p14b_{uuid.uuid4().hex[:8]}"
-os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
-os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
-os.environ["LICENSING_MODE"] = "http"                       # PRODUCTION-style client
-os.environ["LICENSING_CONTROL_PLANE_URL"] = "https://cp.roofspan.io/api/control-plane"
-os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"
-os.environ.pop("STRIPE_SECRET_KEY", None)                   # local backend must NOT require this
-os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
+# Import-time env (throwaway DB + http licensing mode + stripe-secret removal) MUST only take effect
+# inside the isolated child process (see _run_isolated) so it never contaminates the rest of the suite.
+if _ISOLATED:
+    os.environ["DATABASE_URL"] = f"{_base}/{_FRESH}"
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = f"{_base}/{_FRESH}_cp"
+    os.environ["LICENSING_MODE"] = "http"                       # PRODUCTION-style client
+    os.environ["LICENSING_CONTROL_PLANE_URL"] = "https://cp.roofspan.io/api/control-plane"
+    os.environ["ROOFSPAN_OWNER_SEED"] = "disabled"
+    os.environ.pop("STRIPE_SECRET_KEY", None)                   # local backend must NOT require this
+    os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
 
 import psycopg  # noqa: E402
 from httpx import AsyncClient, ASGITransport  # noqa: E402
 
 _admin_dsn = "postgresql://roofspan:roofspan_local_pwd@127.0.0.1:5432/postgres"
+
+
+def _run_isolated(nodeid: str) -> bool:
+    """Run this DB-provisioning boundary test in its OWN process so its import-time env takes effect
+    and cannot contaminate — or be contaminated by — the rest of the suite. Returns True in the parent
+    (child already ran + asserted); False inside the isolated child."""
+    if _ISOLATED:
+        return False
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", nodeid, "-o", "addopts=", "-q", "-p", "no:cacheprovider"],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        env={**os.environ, "RS_ISOLATED": "1"},
+    )
+    assert r.returncode == 0, f"isolated subprocess failed for {nodeid}"
+    return True
 
 
 def _create_db(name):
@@ -132,6 +153,8 @@ async def _flow():
 
 
 def test_production_billing_boundary():
+    if _run_isolated("tests/test_setup_billing_boundary.py::test_production_billing_boundary"):
+        return
     _create_db(_FRESH)
     _create_db(f"{_FRESH}_cp")
     try:

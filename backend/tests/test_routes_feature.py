@@ -27,18 +27,28 @@ def owner_tok():
     return _login(*OWNER)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_sales_users(owner_tok):
+    """Self-seed the two sales accounts so this suite is data-independent (they may not pre-exist on a
+    given DB). Creating an existing user returns 409, which is fine."""
+    for email, pw in (SALES1, SALES2):
+        requests.post(f"{API}/users", headers=_h(owner_tok),
+                      json={"email": email, "full_name": email.split("@")[0], "password": pw, "role": "sales"},
+                      timeout=15)
+
+
 @pytest.fixture(scope="module")
-def sales1_tok():
+def sales1_tok(_ensure_sales_users):
     return _login(*SALES1)
 
 
 @pytest.fixture(scope="module")
-def sales2_tok():
+def sales2_tok(_ensure_sales_users):
     return _login(*SALES2)
 
 
 @pytest.fixture(scope="module")
-def sales_ids(owner_tok):
+def sales_ids(owner_tok, _ensure_sales_users):
     r = requests.get(f"{API}/users/assignable", headers=_h(owner_tok), timeout=15)
     assert r.status_code == 200
     users = r.json()
