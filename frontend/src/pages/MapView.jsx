@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";
@@ -34,6 +34,7 @@ export default function MapView() {
   const drawing = useRef(false);
   const drawPts = useRef([]);
   const vertexMarkers = useRef([]);
+  const routeMarkers = useRef([]);
   const zipForTerritory = useRef(null);
   const openSheetRef = useRef(null);
 
@@ -49,6 +50,8 @@ export default function MapView() {
   const [baseLayer, setBaseLayer] = useState("map");
   const [occFilter, setOccFilter] = useState("all");
   const [contactableOnly, setContactableOnly] = useState(false);
+  const [features, setFeatures] = useState([]);
+  const [routeInfo, setRouteInfo] = useState(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -89,12 +92,14 @@ export default function MapView() {
     if (!territoryId) {
       map.getSource("properties").setData({ type: "FeatureCollection", features: [] });
       setPropCount(0);
+      setFeatures([]);
       return;
     }
     try {
       const { data } = await api.get(`/properties/geojson?territory_id=${territoryId}`);
       map.getSource("properties").setData(data);
       setPropCount(data.features.length);
+      setFeatures(data.features || []);
     } catch (e) {
       toast.error(apiError(e));
     }
@@ -215,6 +220,12 @@ export default function MapView() {
         map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 7, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
 
+        // Walking-route line (built from the filtered contactable/owner set)
+        map.addSource("route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "route-line", type: "line", source: "route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": "#4F46E5", "line-width": 4, "line-opacity": 0.85 } });
+
         loadedRef.current = true;
 
         map.on("click", (e) => {
@@ -266,6 +277,63 @@ export default function MapView() {
   }, [occFilter, contactableOnly]);
 
   useEffect(() => { applyPropFilter(); }, [applyPropFilter]);
+
+  const filteredFeatures = useMemo(() => features.filter((f) => {
+    const p = f.properties || {};
+    if (occFilter !== "all" && p.occupancy !== occFilter) return false;
+    if (contactableOnly && !p.contactable) return false;
+    return true;
+  }), [features, occFilter, contactableOnly]);
+
+  const clearRoute = useCallback(() => {
+    const map = mapRef.current;
+    routeMarkers.current.forEach((m) => m.remove());
+    routeMarkers.current = [];
+    if (map && map.getSource("route")) map.getSource("route").setData({ type: "FeatureCollection", features: [] });
+    setRouteInfo(null);
+  }, []);
+
+  const _haversineMi = (a, b) => {
+    const R = 3958.8, toRad = (d) => (d * Math.PI) / 180;
+    const dLat = toRad(b[1] - a[1]), dLng = toRad(b[0] - a[0]);
+    const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  };
+
+  const buildRoute = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = filteredFeatures.slice(0, 200).map((f) => ({ id: f.properties.id, c: f.geometry.coordinates }));
+    if (pts.length < 2) { toast.error("Need at least 2 matching stops to build a route"); return; }
+    // Nearest-neighbour walking order starting from the western-most stop.
+    const remaining = [...pts].sort((a, b) => a.c[0] - b.c[0]);
+    const order = [remaining.shift()];
+    let miles = 0;
+    while (remaining.length) {
+      const last = order[order.length - 1].c;
+      let bi = 0, bd = Infinity;
+      remaining.forEach((r, i) => { const d = _haversineMi(last, r.c); if (d < bd) { bd = d; bi = i; } });
+      miles += bd;
+      order.push(remaining.splice(bi, 1)[0]);
+    }
+    map.getSource("route").setData({
+      type: "FeatureCollection",
+      features: [{ type: "Feature", geometry: { type: "LineString", coordinates: order.map((o) => o.c) }, properties: {} }],
+    });
+    routeMarkers.current.forEach((m) => m.remove());
+    routeMarkers.current = order.map((o, i) => {
+      const el = document.createElement("div");
+      el.className = "rs-route-marker";
+      el.textContent = String(i + 1);
+      return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(o.c).addTo(map);
+    });
+    map.fitBounds(order.reduce((b, o) => b.extend(o.c), new maplibregl.LngLatBounds(order[0].c, order[0].c)), { padding: 70, duration: 700 });
+    setRouteInfo({ stops: order.length, miles: miles.toFixed(1) });
+    toast.success(`Route ready: ${order.length} stops, ~${miles.toFixed(1)} mi`);
+  }, [filteredFeatures]);
+
+  useEffect(() => { clearRoute(); }, [features, clearRoute]);
+
 
 
   const switchBase = (layer) => {
@@ -489,6 +557,24 @@ export default function MapView() {
                 <span>Contactable leads only</span>
                 <span>{contactableOnly ? "On" : "Off"}</span>
               </button>
+              <div className="pt-1 text-xs text-slate-500" data-testid="filtered-count">
+                Showing <span className="font-semibold text-slate-800">{filteredFeatures.length}</span> of {features.length}
+                {(occFilter !== "all" || contactableOnly) && <span> matching</span>}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" variant="secondary" className="flex-1" onClick={buildRoute}
+                  disabled={filteredFeatures.length < 2} data-testid="build-route-button">
+                  Build walking route
+                </Button>
+                {routeInfo && (
+                  <Button size="sm" variant="ghost" onClick={clearRoute} data-testid="clear-route-button">Clear</Button>
+                )}
+              </div>
+              {routeInfo && (
+                <div className="rounded-md bg-indigo-50 px-3 py-1.5 text-xs text-indigo-800" data-testid="route-info">
+                  Route: <strong>{routeInfo.stops}</strong> stops · ~<strong>{routeInfo.miles}</strong> mi walking
+                </div>
+              )}
             </div>
 
 

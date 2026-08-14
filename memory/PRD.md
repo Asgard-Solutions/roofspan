@@ -1024,3 +1024,10 @@ Clarified: "RestCast" = **RentCast** (app was already modeled for it: `propertie
 - **Files changed:** `backend/rentcast.py`, `backend/routers/imports.py`, `backend/routers/properties.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/PropertySheet.jsx`. Migration: none.
 - **Verified:** rentcast-zip 2/2 + geocode 6/6 pass; live e2e (sample): geojson 25 features → occupancy {owned:14, rented:11}, contactable {True:22, False:3}; re-import deduped; screenshot shows the filter panel (Owned + Contactable On) and legend. Real RentCast phone/email only populate when the provider returns them.
 
+
+## Added (2026-06) — Filtered count + walking-route builder (map, client-side)
+- **Live "Showing X of Y":** MapView stores the loaded geojson features in state; a `useMemo` filteredFeatures applies the occupancy + contactable filters and the panel shows "Showing N of M matching" that updates instantly with the toggles.
+- **Route Builder:** "Build walking route" button turns the currently filtered set (capped 200) into a nearest-neighbour walking order starting from the western-most stop; draws an indigo `route-line` LineString layer + numbered `.rs-route-marker` stop markers, fits bounds, and shows "Route: N stops · ~X mi walking" (haversine distance). "Clear" removes it; the route auto-clears when the selected territory changes. Purely client-side (no backend/API).
+- **Files changed:** `frontend/src/pages/MapView.jsx` (features state, filteredFeatures memo, buildRoute/clearRoute, route source/layer, count + route UI), `frontend/src/index.css` (`.rs-route-marker`). Backend/migration: none.
+- **Verified (screenshot):** All→"Showing 25 of 25"; Owned+Contactable→"Showing 11 of 25 matching"; Build route → toast "Route ready: 11 stops, ~3.9 mi", 11 numbered markers + route line on map, sidebar "Route: 11 stops · ~3.9 mi walking".
+
