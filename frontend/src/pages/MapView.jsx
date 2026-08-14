@@ -34,6 +34,7 @@ export default function MapView() {
   const drawing = useRef(false);
   const drawPts = useRef([]);
   const vertexMarkers = useRef([]);
+  const zipForTerritory = useRef(null);
   const openSheetRef = useRef(null);
 
   const [territories, setTerritories] = useState([]);
@@ -299,6 +300,7 @@ export default function MapView() {
       if (a[0] === b[0] && a[1] === b[1]) ring = ring.slice(0, -1);
     }
     drawPts.current = ring.map((c) => [c[0], c[1]]);
+    zipForTerritory.current = (zip || "").trim() || null;  // remember the ZIP for an exact RentCast pull
     drawing.current = true;
     setIsDrawing(true);
     setDrawCount(drawPts.current.length);
@@ -313,6 +315,7 @@ export default function MapView() {
   const startDraw = () => {
     drawing.current = true;
     drawPts.current = [];
+    zipForTerritory.current = null;  // a hand-drawn territory is not tied to a ZIP
     setIsDrawing(true);
     setDrawCount(0);
     updateDrawSource();
@@ -349,6 +352,7 @@ export default function MapView() {
       const { data } = await api.post("/territories", {
         name: newName.trim(), color: newColor,
         geometry: { type: "Polygon", coordinates: [ring] },
+        zip_code: zipForTerritory.current || undefined,
       });
       toast.success("Territory created");
       setSaveOpen(false);

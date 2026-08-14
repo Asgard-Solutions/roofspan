@@ -999,3 +999,12 @@ Clean installs failed: Burn "Failed to parse condition ... Unexpected character 
 - **Migration:** none.
 - **Verified:** geocode 6/6 tests pass (Census polygon path, Nominatim fallback, non-US skips Census, 404/400/502); live `zip=78701` → real 264-vertex Polygon + tight bbox + "78701, Austin…" name; screenshot: snapping created a 263-point ZIP-boundary territory in draw mode; base toggle correctly hidden when MapTiler unconfigured.
 
+
+## Added (2026-06) — RentCast ("RestCast") direct ZIP pull → save to DB → map
+Clarified: "RestCast" = **RentCast** (app was already modeled for it: `properties.source` default "rentcast"). The pull→save→read-from-DB pipeline already existed (territory import via centroid+radius+point-in-polygon, dedup by `external_id`, `ImportJob` tracking, map reads `/properties/geojson`). Added the missing **direct ZIP pull** (option a: ZIP → territory → import).
+- **Territory remembers its ZIP:** new nullable `territories.zip_code` column (migration `a1b2c3d4e5f6`); `TerritoryIn`/`TerritoryOut` + create route carry it; `MapView.addZipAsTerritory` records the searched ZIP and `saveTerritory` posts `zip_code`.
+- **Exact ZIP pull:** `rentcast.fetch_rentcast_by_zip()` uses RentCast's native `GET /v1/properties?zipCode=` (paginated, `X-Api-Key`). `imports.py` (preview + `_run_import`) uses the ZIP query when `territory.zip_code` is set (cheaper/exact vs radius), still point-in-polygon filtered to the boundary; everything else (save/dedup/refresh/map) reused unchanged. Key entered under Settings → Integrations → RentCast (encrypted).
+- **Files changed:** `backend/models.py`, `backend/schemas_phase2.py`, `backend/routers/territories.py`, `backend/rentcast.py`, `backend/routers/imports.py`, new migration `alembic/versions/a1b2c3d4e5f6_*.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx` (exact-ZIP note); new `backend/tests/test_rentcast_zip.py`.
+- **Verified:** rentcast-zip 2/2 + geocode 6/6 tests pass; migration applied; live e2e (sample mode, no key in preview): ZIP territory created with `zip_code=78701` → preview → import saved 25 → `/properties/geojson` returns 25 → map shows "25 properties on map"; screenshot confirms the "Exact ZIP pull" note. Re-import refreshes via `external_id` upsert.
+- NOTE: preview DB has no RentCast key so imports fall back to SAMPLE data; with the customer's real key the ZIP territory pulls live RentCast addresses.
+

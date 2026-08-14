@@ -74,6 +74,7 @@ class Territory(Base):
     description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     color: Mapped[str] = mapped_column(String(16), default="#2563EB", nullable=False)
     geometry: Mapped[dict] = mapped_column(JSONB, nullable=False)  # GeoJSON Polygon
+    zip_code: Mapped[str | None] = mapped_column(String(16), nullable=True)  # set when created from a ZIP search
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

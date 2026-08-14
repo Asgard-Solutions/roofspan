@@ -11,7 +11,7 @@ from models import Territory, Property, PropertyContact, ImportJob, IntegrationS
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
 from geo import centroid, enclosing_radius_miles, point_in_polygon
-from rentcast import fetch_rentcast_properties, normalize_rentcast, generate_sample_properties
+from rentcast import fetch_rentcast_properties, fetch_rentcast_by_zip, normalize_rentcast, generate_sample_properties
 
 router = APIRouter(prefix="/api", tags=["imports"])
 
@@ -56,7 +56,10 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         clng, clat = centroid(t.geometry)
         key = decrypt_secret(setting.secret_ciphertext)
         try:
-            raws = await fetch_rentcast_properties(key, clat, clng, radius, min(payload.max_records, 50))
+            if t.zip_code:
+                raws = await fetch_rentcast_by_zip(key, t.zip_code, min(payload.max_records, 50))
+            else:
+                raws = await fetch_rentcast_properties(key, clat, clng, radius, min(payload.max_records, 50))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"RentCast preview failed: {e.__class__.__name__}")
         inside = [normalize_rentcast(r) for r in raws if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], t.geometry)]
@@ -91,9 +94,12 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                 if not (setting and setting.enabled and setting.secret_ciphertext):
                     raise RuntimeError("RentCast is not configured")
                 key = decrypt_secret(setting.secret_ciphertext)
-                clng, clat = centroid(territory.geometry)
-                radius = enclosing_radius_miles(territory.geometry)
-                raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
+                if territory.zip_code:
+                    raws = await fetch_rentcast_by_zip(key, territory.zip_code, max_records)
+                else:
+                    clng, clat = centroid(territory.geometry)
+                    radius = enclosing_radius_miles(territory.geometry)
+                    raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
                 normalized = [normalize_rentcast(r) for r in raws
                               if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)]
             else:

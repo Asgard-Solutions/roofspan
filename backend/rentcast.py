@@ -60,6 +60,29 @@ async def fetch_rentcast_properties(key: str, lat: float, lng: float, radius: fl
     return results
 
 
+async def fetch_rentcast_by_zip(key: str, zip_code: str, max_records: int, page_size: int = 500):
+    """Pull properties for an exact ZIP code (RentCast's native zipCode filter; cheaper + exact vs radius)."""
+    results = []
+    offset = 0
+    async with httpx.AsyncClient(base_url=RENTCAST_BASE, timeout=30) as client:
+        while len(results) < max_records:
+            limit = min(page_size, max_records - len(results))
+            r = await client.get(
+                "/properties",
+                params={"zipCode": zip_code, "limit": limit, "offset": offset},
+                headers={"Accept": "application/json", "X-Api-Key": key},
+            )
+            r.raise_for_status()
+            batch = r.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            results.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
+    return results
+
+
 _STREETS = ["Oak", "Maple", "Cedar", "Pine", "Elm", "Birch", "Willow", "Aspen", "Juniper", "Magnolia"]
 _TYPES = ["Single Family", "Single Family", "Single Family", "Townhouse", "Duplex"]
 _FIRST = ["James", "Maria", "Robert", "Linda", "David", "Susan", "Carlos", "Angela", "Michael", "Patricia"]

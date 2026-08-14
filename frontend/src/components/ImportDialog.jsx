@@ -75,6 +75,11 @@ export default function ImportDialog({ open, onOpenChange, territory, onComplete
         </DialogHeader>
 
         <div className="space-y-4">
+          {territory?.zip_code && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800" data-testid="import-zip-note">
+              Exact ZIP pull: RentCast will fetch addresses for ZIP <strong>{territory.zip_code}</strong>, filtered to this boundary.
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Max properties</Label>
             <Select value={String(maxRecords)} onValueChange={(v) => { setMaxRecords(Number(v)); setPreview(null); }}>

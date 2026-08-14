@@ -11,6 +11,7 @@ class TerritoryIn(BaseModel):
     color: str = "#2563EB"
     geometry: dict  # GeoJSON Polygon
     active: bool = True
+    zip_code: Optional[str] = None  # set when the territory was created from a ZIP search
 
 
 class TerritoryUpdate(BaseModel):
@@ -28,6 +29,7 @@ class TerritoryOut(BaseModel):
     color: str
     geometry: dict
     active: bool
+    zip_code: Optional[str] = None
     property_count: int = 0
     created_by: Optional[str] = None
     created_at: datetime
