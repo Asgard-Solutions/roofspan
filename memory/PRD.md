@@ -971,3 +971,15 @@ Bug: `control_plane/service.activate()` created the Subscription with `state="AC
 - **Migration:** NONE (reused existing Subscription columns; seats=0 / current_period_end=NULL are valid).
 - **Tests:** `test_activation_payment_gating.py` 3/3 (activation → SUSPENDED/0 identity registered; unpaid install can authenticate + refresh + request initial checkout; verified webhook → ACTIVE; post-webhook refresh → ACTIVE/5 seats; idempotent retry no dup + paid customer unaffected; promo support enabled). Default-CP-DB group (kms+cp_migrations+prod_infra+licensing_unit+promo) 27/27; setup_activation 2/2; setup_billing_boundary 2/2. (Combined run shows the pre-existing cross-module env-leak isolation quirk — throwaway-DB test modules mutate CONTROL_PLANE_DATABASE_URL at import; each suite passes in its own invocation. `test_stripe_billing.py` is live-infra integration.)
 
+
+## Fixed (2026-06) — WiX v5 Burn WebView2 detection condition (0x8007000d "The data is invalid")
+Clean installs failed: Burn "Failed to parse condition ... Unexpected character at position 52. Detect failed for package: WebView2Runtime."
+- **Root cause:** Burn v5 condition string literals must be delimited by DOUBLE quotes; the WebView2 `InstallCondition`/`DetectCondition` used SINGLE-quoted `'0.0.0.0'`. The `'` sits at 0-based position 52 in the decoded expression → the Burn condition lexer rejects it (`<>` inequality itself is valid Burn syntax).
+- **Corrected condition (both InstallCondition & DetectCondition, WiX-encoded in `windows/installer/bundle.wxs`):**
+  - Detect: `(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;)`
+  - Install: `NOT (…same…)` — i.e. decoded literals are now `"0.0.0.0"`. Behavior preserved: skip the bundled WebView2 bootstrapper when a usable Evergreen runtime is in HKLM or HKCU; install it when neither registry value exists.
+- **Untouched:** PostgreSQL detection, BAFunctions, MSI sequencing, all other installer code.
+- **Files changed:** `windows/installer/bundle.wxs` (2 conditions); `windows/tests/test_installer_static.py` (regression guards).
+- **Migration:** none.
+- **Tests:** `windows/tests/test_installer_static.py` — 51 passed, incl. new: no single-quoted literals; Detect/Install are logical inverse with `"0.0.0.0"`; a faithful Burn-condition LEXER compiles the actual bundle.wxs conditions AND reproduces the OLD failure at exactly position 52; bundle.wxs well-formed XML. Full `windows/tests/` suite: 170 passed. (Real `wix build` Burn compile runs on Windows only — the documented mocked native env; the in-container Burn-lexer + XML parse are the deterministic compile validation.)
+

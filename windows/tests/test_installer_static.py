@@ -210,6 +210,135 @@ def test_pgsuperpassword_variable_is_initially_unset_no_secret():
         assert attr in decl, f"PgSuperPassword lost required attribute {attr}"
 
 
+# --- WebView2 Evergreen Runtime detection condition (Burn v5 syntax) ---------------------------
+# Regression guard for the clean-install failure 0x8007000d "The data is invalid" /
+# "Failed to parse condition ... Unexpected character at position 52. Detect failed for package:
+# WebView2Runtime." Root cause: Burn condition string literals MUST be delimited by DOUBLE quotes;
+# single-quoted '0.0.0.0' is rejected by the Burn condition parser.
+_WEBVIEW2_EXEPACKAGE_RE = re.compile(r"<ExePackage\b[^>]*\bId=\"WebView2Runtime\"[^>]*?/>", re.S)
+
+
+def _webview2_conditions():
+    b = _read(os.path.join(INSTALLER, "bundle.wxs"))
+    m = _WEBVIEW2_EXEPACKAGE_RE.search(b)
+    assert m, "WebView2Runtime ExePackage not found in bundle.wxs"
+    pkg = m.group(0)
+    inst = re.search(r'InstallCondition="([^"]*)"', pkg)
+    det = re.search(r'DetectCondition="([^"]*)"', pkg)
+    assert inst and det, "WebView2Runtime must declare both InstallCondition and DetectCondition"
+    import html
+    # Decode XML entities to inspect the ACTUAL Burn condition string the engine parses.
+    return html.unescape(inst.group(1)), html.unescape(det.group(1))
+
+
+def test_webview2_condition_uses_no_single_quoted_string_literals():
+    """Burn v5 rejects single-quoted literals (WIX0144 -> 0x8007000d at runtime). The '0.0.0.0'
+    literal MUST be double-quoted."""
+    inst, det = _webview2_conditions()
+    for cond in (inst, det):
+        assert "'0.0.0.0'" not in cond, "single-quoted literal is invalid Burn v5 condition syntax"
+        assert '"0.0.0.0"' in cond, "version literal must be a DOUBLE-quoted Burn string literal"
+        assert "'" not in cond, f"no single quotes allowed in a Burn condition: {cond}"
+
+
+def test_webview2_detect_and_install_conditions_are_logical_inverse():
+    """Behavior preserved: install the bootstrapper ONLY when no usable runtime is detected."""
+    inst, det = _webview2_conditions()
+    # Detect: a usable runtime exists in HKLM or HKCU (present AND not the null version).
+    expected_detect = ('(WebView2RuntimePvHklm AND WebView2RuntimePvHklm <> "0.0.0.0") OR '
+                       '(WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu <> "0.0.0.0")')
+    assert det == expected_detect, f"unexpected DetectCondition: {det}"
+    # Install: exactly NOT(detect) -> install the bundled bootstrapper when neither runtime is present.
+    assert inst == f"NOT ({expected_detect})", f"InstallCondition must be NOT(DetectCondition): {inst}"
+
+
+def test_webview2_condition_parses_under_burn_grammar():
+    """Tokenize the decoded conditions with Burn's lexical rules and assert every string literal is
+    double-quoted and balanced (this is exactly what failed at 'position 52')."""
+    inst, det = _webview2_conditions()
+    for cond in (inst, det):
+        # No stray single quote may start a literal; every double quote must be paired.
+        assert cond.count('"') % 2 == 0, f"unbalanced double-quoted literal: {cond}"
+        # The only comparison operator used is the valid Burn inequality '<>'.
+        assert "<>" in cond and "!=" not in cond
+
+
+# Faithful re-implementation of the WiX v5 Burn condition LEXER (engine/condition.cpp) so we can
+# compile-validate the WebView2 condition in-container (the real `wix build` needs Windows). It
+# reproduces the exact failure: a single-quote is an "Unexpected character".
+class BurnConditionError(Exception):
+    def __init__(self, position):
+        super().__init__(f"Unexpected character at position {position}.")
+        self.position = position
+
+
+_BURN_OPERATORS = ("~>=", "~<=", "~<>", "~=", "~<", "~>", "<=", ">=", "<>", "<", ">", "=")
+
+
+def burn_tokenize(s):
+    """Lex a Burn condition string. Raises BurnConditionError(position) on an invalid character,
+    mirroring the engine so single-quoted literals fail exactly as the installer log reported."""
+    i, n, tokens = 0, len(s), []
+    while i < n:
+        c = s[i]
+        if c in " \t\r\n":
+            i += 1
+        elif c == '"':                                   # double-quoted string literal (the ONLY string form)
+            j = i + 1
+            while j < n and s[j] != '"':
+                j += 1
+            if j >= n:
+                raise BurnConditionError(i)              # unterminated literal
+            tokens.append(("string", s[i + 1:j]))
+            i = j + 1
+        elif c in "()":
+            tokens.append(("paren", c)); i += 1
+        elif c.isalpha() or c == "_":                    # identifier / keyword (AND/OR/NOT/variable)
+            j = i
+            while j < n and (s[j].isalnum() or s[j] == "_"):
+                j += 1
+            tokens.append(("ident", s[i:j])); i = j
+        elif c.isdigit():                                # numeric literal
+            j = i
+            while j < n and (s[j].isdigit() or s[j] == "."):
+                j += 1
+            tokens.append(("number", s[i:j])); i = j
+        else:
+            op = next((o for o in _BURN_OPERATORS if s.startswith(o, i)), None)
+            if op is None:
+                raise BurnConditionError(i)              # e.g. a single quote -> unexpected character
+            tokens.append(("op", op)); i += len(op)
+    return tokens
+
+
+def test_webview2_conditions_compile_under_burn_lexer():
+    """Compile-validate the actual bundle.wxs WebView2 conditions with the Burn lexer (no Windows)."""
+    inst, det = _webview2_conditions()
+    for cond in (inst, det):
+        toks = burn_tokenize(cond)                       # must NOT raise
+        assert ("string", "0.0.0.0") in toks             # literal lexed as a proper Burn string
+        assert ("op", "<>") in toks
+
+
+def test_old_single_quoted_condition_reproduces_position_52_failure():
+    """The pre-fix expression must fail exactly as the installer log did (proves the lexer is faithful
+    and that this precise regression is caught)."""
+    old = ("(WebView2RuntimePvHklm AND WebView2RuntimePvHklm <> '0.0.0.0') OR "
+           "(WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu <> '0.0.0.0')")
+    try:
+        burn_tokenize(old)
+        raise AssertionError("old single-quoted condition should have failed to lex")
+    except BurnConditionError as e:
+        assert e.position == 52, f"expected failure at position 52, got {e.position}"
+
+
+def test_bundle_wxs_is_well_formed_and_webview2_pkg_present():
+    """The full Burn bundle source parses as XML and still contains the WebView2 ExePackage."""
+    import xml.etree.ElementTree as ET
+    ET.parse(os.path.join(INSTALLER, "bundle.wxs"))       # raises on malformed XML
+    assert _WEBVIEW2_EXEPACKAGE_RE.search(_read(os.path.join(INSTALLER, "bundle.wxs")))
+
+
 def test_build_script_resolves_bal_extension_dll_dynamically():
     ps = _read(os.path.join(INSTALLER, "build.ps1"))
     # Resolve the actual BAL DLL from the local WiX cache and pass its PATH to -ext (robust to the

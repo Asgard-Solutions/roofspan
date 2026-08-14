@@ -88,8 +88,8 @@
                   SourceFile="$(var.WebView2Bootstrapper)"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT ((WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; '0.0.0.0') OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; '0.0.0.0'))"
-                  DetectCondition="(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; '0.0.0.0') OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; '0.0.0.0')"
+                  InstallCondition="NOT ((WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;))"
+                  DetectCondition="(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;)"
                   InstallArguments="/silent /install"
                   Compressed="yes" />
 
