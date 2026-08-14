@@ -25,6 +25,30 @@ function cfg() {
   };
 }
 
+// Canonical operator host. op_token is host-only on www.roofspan.io, so every operator route must be on
+// www to avoid apex/www session splitting (a host-only www cookie is not sent to the apex host).
+const CANONICAL_HOST = 'www.roofspan.io';
+const APEX_HOST = 'roofspan.io';
+
+// Returns the absolute canonical https://www.roofspan.io URL (path + query preserved) when the request
+// is on the apex host; otherwise null. Defense-in-depth alongside the vercel.json edge redirects.
+function canonicalRedirect(host, url) {
+  const h = String(host || '').split(':')[0].toLowerCase();
+  if (h !== APEX_HOST) return null;
+  const path = url && url.startsWith('/') ? url : `/${url || ''}`;
+  return `https://${CANONICAL_HOST}${path}`;
+}
+
+// 308-redirect to the canonical www host BEFORE any auth/session handling. Returns true if it redirected.
+function redirectToCanonical(req, res) {
+  const loc = canonicalRedirect(req.headers && req.headers.host, req.url);
+  if (!loc) return false;
+  res.statusCode = 308;
+  res.setHeader('Location', loc);
+  res.end();
+  return true;
+}
+
 function parseCookies(req) {
   const out = {};
   (req.headers.cookie || '').split(';').forEach((p) => {
@@ -66,4 +90,4 @@ async function exchangeCode({ code, verifier }, deps = {}) {
   return resp.json();
 }
 
-module.exports = { b64url, pkce, randomState, cfg, parseCookies, cookie, clearCookie, validateCallback, exchangeCode };
+module.exports = { b64url, pkce, randomState, cfg, parseCookies, cookie, clearCookie, validateCallback, exchangeCode, canonicalRedirect, redirectToCanonical, CANONICAL_HOST, APEX_HOST };

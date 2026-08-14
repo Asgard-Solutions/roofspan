@@ -2,7 +2,7 @@
 // id_token in an HttpOnly cookie (this is the bearer the Control Plane's operator_auth accepts, since it
 // validates audience=app client id which is present on the id_token). Never exposes tokens to the browser.
 'use strict';
-const { parseCookies, cookie, clearCookie, validateCallback, exchangeCode } = require('./_lib');
+const { parseCookies, cookie, clearCookie, validateCallback, exchangeCode, redirectToCanonical } = require('./_lib');
 
 function fail(res, message) {
   // Safe user-facing error only: no tokens, secrets, raw Cognito response, or server diagnostics.
@@ -15,6 +15,7 @@ function fail(res, message) {
 }
 
 module.exports = async function handler(req, res) {
+  if (redirectToCanonical(req, res)) return;
   try {
     const query = req.query || Object.fromEntries(new URL(req.url, 'http://x').searchParams);
     const cookies = parseCookies(req);

@@ -21,6 +21,16 @@ Vercel auto-detects the Create React App build (`react-scripts build` -> `build/
 Node serverless functions and `public/operator/index.html` is copied to `build/operator/index.html`.
 The marketing React app is untouched.
 
+## Canonical host — apex/www session split fix
+`op_token` is **host-only on www.roofspan.io** (least privilege — no `Domain` attribute). To prevent an
+apex/www split (a host-only www cookie is not sent to `roofspan.io`), every operator route is forced to
+the canonical **www** host:
+- `vercel.json` `redirects` 308 any apex request for `/operator`, `/operator/:path*`, `/api/operator/:path*`
+  to `https://www.roofspan.io/...` (host-gated via `has: host = roofspan.io`; query string preserved).
+- Defense-in-depth: `login.js`/`callback.js`/`whoami.js` call `redirectToCanonical(req,res)` first and
+  308 to www BEFORE any PKCE/state/token/cookie handling if hit on apex.
+The cookie is unchanged (HttpOnly, Secure, SameSite=Lax, Path=/, host-only).
+
 ## Canonical production host
 Vercel redirects apex `roofspan.io` -> `www.roofspan.io`, so the operator flow uses **www**:
 - Callback: `https://www.roofspan.io/operator/callback`

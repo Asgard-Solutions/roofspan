@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    { "source": "/operator", "has": [{ "type": "host", "value": "roofspan.io" }], "destination": "https://www.roofspan.io/operator", "permanent": true },
+    { "source": "/operator/:path*", "has": [{ "type": "host", "value": "roofspan.io" }], "destination": "https://www.roofspan.io/operator/:path*", "permanent": true },
+    { "source": "/api/operator/:path*", "has": [{ "type": "host", "value": "roofspan.io" }], "destination": "https://www.roofspan.io/api/operator/:path*", "permanent": true }
+  ],
   "rewrites": [
     { "source": "/operator/login", "destination": "/api/operator/login" },
     { "source": "/operator/callback", "destination": "/api/operator/callback" },

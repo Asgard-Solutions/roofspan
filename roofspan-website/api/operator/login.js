@@ -1,8 +1,9 @@
 // GET /operator/login -> start Cognito PKCE Authorization Code flow (redirect to Hosted UI).
 'use strict';
-const { pkce, randomState, cfg, cookie } = require('./_lib');
+const { pkce, randomState, cfg, cookie, redirectToCanonical } = require('./_lib');
 
 module.exports = function handler(req, res) {
+  if (redirectToCanonical(req, res)) return;
   const c = cfg();
   if (!c.domain || !c.clientId) { res.statusCode = 500; return res.end('Operator auth not configured.'); }
   const { verifier, challenge } = pkce();
