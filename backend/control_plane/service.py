@@ -142,6 +142,29 @@ async def activate(db: AsyncSession, *, company_name: str, requested_seats: int,
         raise CPError(401, "Invalid activation credential")
     seats = max(config.MIN_SEATS, min(config.MAX_SEATS, int(requested_seats)))
 
+    # Idempotency: a retried activation from the SAME installation (same public key) must NOT create a
+    # duplicate company/installation. Reuse the existing identity and re-issue a fresh entitlement.
+    existing = (await db.execute(
+        select(Installation).where(Installation.public_key_pem == public_key_pem))).scalars().first()
+    if existing is not None and existing.status == "ACTIVE":
+        license_row = (await db.execute(
+            select(License).where(License.installation_id == existing.id))).scalars().first()
+        subscription = (await db.execute(
+            select(Subscription).where(Subscription.company_id == existing.company_id))).scalar_one_or_none()
+        if license_row is not None and subscription is not None:
+            token = await _issue_entitlement(db, installation=existing, license_row=license_row,
+                                             subscription=subscription, reason="activation-idempotent")
+            await audit(db, actor=str(existing.id), action="installation.activate.idempotent",
+                        entity_type="installation", entity_id=str(existing.id),
+                        detail={"company_id": str(existing.company_id)})
+            return {
+                "installation_id": str(existing.id),
+                "company_id": str(existing.company_id),
+                "license_id": str(license_row.id),
+                "entitlement_jws": token,
+                "signing_public_keys": await cp_keys.public_keys(db),
+            }
+
     company = Company(name=company_name or "")
     db.add(company)
     await db.flush()

@@ -42,20 +42,36 @@ def prepare_runtime() -> None:
 
 
 def _setup_logging(log_path: str) -> None:
-    root = logging.getLogger("roofspan")
-    if root.handlers:
+    roofspan = logging.getLogger("roofspan")
+    if roofspan.handlers:
         return
-    root.setLevel(logging.INFO)
-    handlers = [logging.StreamHandler(sys.stdout)]
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    file_handler = None
     try:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        handlers.append(RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5, encoding="utf-8"))
+        file_handler = RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
+        file_handler.setFormatter(fmt)
     except OSError as e:
-        root.warning("backend: file logging unavailable (%s); console only", e)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    for h in handlers:
-        h.setFormatter(fmt)
-        root.addHandler(h)
+        logging.getLogger().warning("backend: file logging unavailable (%s); console only", e)
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(fmt)
+
+    roofspan.setLevel(logging.INFO)
+    if file_handler is not None:
+        roofspan.addHandler(file_handler)
+    roofspan.addHandler(stream)
+    # roofspan.* records go straight to our handlers; do not also bubble to root (avoids duplicates).
+    roofspan.propagate = False
+
+    # Also capture WARNING+ from EVERYTHING ELSE (uvicorn/fastapi request tracebacks, third-party) into
+    # the SAME backend.log, so checkout/activation failures and any unhandled request exception are
+    # never lost. A single shared handler instance is safe across loggers (no rotation race).
+    if file_handler is not None:
+        root = logging.getLogger()
+        if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+            if root.level == logging.NOTSET or root.level > logging.WARNING:
+                root.setLevel(logging.WARNING)
+            root.addHandler(file_handler)
 
 
 def build_runner():

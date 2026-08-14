@@ -123,13 +123,16 @@ def render_deployed_env(template_text: str, db_password: str) -> str:
     return rendered
 
 
-def write_deployed_config(template_path: str, deployed_path: str, db_password: str) -> str:
+def write_deployed_config(template_path: str, deployed_path: str, db_password: str,
+                          installed_version: str | None = None) -> str:
     """Fresh install: render template -> deployed config with the real DATABASE_URL. Upgrade/repair: keep
     the existing deployed config (preserve credentials). Returns the deployed path."""
     if os.path.isfile(deployed_path):
         return deployed_path  # preserve customer creds across upgrade/repair
     with open(template_path, "r", encoding="utf-8") as f:
         rendered = render_deployed_env(f.read(), db_password)
+    if installed_version:
+        rendered = set_env_version(rendered, installed_version)
     os.makedirs(os.path.dirname(deployed_path), exist_ok=True)
     with open(deployed_path, "w", encoding="utf-8") as f:
         f.write(rendered)
@@ -138,6 +141,103 @@ def write_deployed_config(template_path: str, deployed_path: str, db_password: s
     except OSError:
         pass
     return deployed_path
+
+
+# --------------------------------------------------------------------------------------------------
+# Upgrade config reconciliation (pure, unit-tested)
+# --------------------------------------------------------------------------------------------------
+# Keys that are secret and/or machine-specific: NEVER add-from-template and NEVER overwrite on upgrade.
+# (DATABASE_URL carries the generated app password; JWT_SECRET/SECRETS_ENCRYPTION_KEY live in secrets.env
+# but are guarded here defensively.)
+PRESERVE_ONLY_KEYS = {"DATABASE_URL", "JWT_SECRET", "SECRETS_ENCRYPTION_KEY"}
+
+
+def _env_keys(text: str) -> set:
+    keys = set()
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("#") and "=" in s:
+            keys.add(s.split("=", 1)[0].strip())
+    return keys
+
+
+def set_env_version(text: str, version: str) -> str:
+    """Return `text` with ROOFSPAN_VERSION set to `version` (updating the existing line or appending)."""
+    out, found = [], False
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("#") and s.split("=", 1)[0].strip() == "ROOFSPAN_VERSION":
+            out.append(f"ROOFSPAN_VERSION={version}")
+            found = True
+        else:
+            out.append(line)
+    result = "\n".join(out)
+    if not found:
+        if result and not result.endswith("\n"):
+            result += "\n"
+        result += f"ROOFSPAN_VERSION={version}\n"
+        return result
+    if text.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result
+
+
+def reconcile_deployed_env(existing_text: str, template_text: str,
+                           installed_version: str | None = None) -> tuple[str, bool]:
+    """Upgrade-safe merge. ADDS any new NON-SECRET template keys missing from the deployed config (e.g.
+    LICENSING_CONTROL_PLANE_URL introduced in a newer release) and updates ROOFSPAN_VERSION to the
+    installed version. NEVER overwrites an existing value and NEVER touches secret/machine-specific keys
+    (DATABASE_URL, generated secrets, installation keypair path). Returns (new_text, changed)."""
+    existing_keys = _env_keys(existing_text)
+    additions = []
+    for line in template_text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        key, val = s.split("=", 1)
+        key = key.strip()
+        if key in existing_keys or key in PRESERVE_ONLY_KEYS or key == "ROOFSPAN_VERSION":
+            continue
+        if PLACEHOLDER in val:
+            continue  # never introduce an unrendered placeholder (e.g. a fresh DATABASE_URL)
+        additions.append(f"{key}={val.strip()}")
+
+    new_text = existing_text
+    changed = False
+    if additions:
+        if new_text and not new_text.endswith("\n"):
+            new_text += "\n"
+        new_text += "# --- added by upgrade (new non-secret config keys) ---\n"
+        new_text += "\n".join(additions) + "\n"
+        changed = True
+    if installed_version:
+        before = new_text
+        new_text = set_env_version(new_text, installed_version)
+        if new_text != before:
+            changed = True
+    return new_text, changed
+
+
+def reconcile_upgrade_config(deployed_path: str, template_path: str,
+                             installed_version: str | None = None) -> bool:
+    """Upgrade/repair: merge NEW non-secret keys from the shipped template + update the version, while
+    PRESERVING every existing secret/credential/identity/customer value. No-op when nothing changes;
+    never provisions the database. Returns True if the deployed config was updated."""
+    if not os.path.isfile(deployed_path) or not os.path.isfile(template_path):
+        return False
+    with open(deployed_path, "r", encoding="utf-8") as f:
+        existing = f.read()
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+    new_text, changed = reconcile_deployed_env(existing, template, installed_version)
+    if changed:
+        with open(deployed_path, "w", encoding="utf-8") as f:
+            f.write(new_text)
+        try:
+            os.chmod(deployed_path, 0o600)
+        except OSError:
+            pass
+    return changed
 
 
 # --------------------------------------------------------------------------------------------------
@@ -228,12 +328,16 @@ def provision_database(*, psql_path: str, host: str, port: int, super_password: 
 def run_bootstrap(*, supplied_super_pw: str, deployed_path: str, template_path: str, psql_path: str,
                   port: int = DEFAULT_PG_PORT, host: str = DB_HOST,
                   bootstrap_secret_path: str = DEFAULT_BOOTSTRAP_SECRET,
+                  installed_version: str | None = None,
                   provision_fn=provision_database) -> int:
     """Provision the DB then render the deployed config. FAIL CLOSED: config is written ONLY after
-    successful provisioning. Upgrade/repair (deployed config present) preserves both credentials and
-    regenerates nothing. On success the recoverable DPAPI bootstrap secret is securely purged."""
+    successful provisioning. Upgrade/repair (deployed config present) preserves all existing
+    credentials/identity and only RECONCILES new non-secret keys + the version (regenerates nothing).
+    On success the recoverable DPAPI bootstrap secret is securely purged."""
     if os.path.isfile(deployed_path):
-        return 0  # upgrade/repair: preserve creds + config; regenerate nothing
+        # upgrade/repair: preserve creds + identity; add new non-secret keys + update version only.
+        reconcile_upgrade_config(deployed_path, template_path, installed_version)
+        return 0
 
     if not os.path.isfile(template_path):
         raise BootstrapError(f"config template missing: {template_path}", code=5)
@@ -245,7 +349,7 @@ def run_bootstrap(*, supplied_super_pw: str, deployed_path: str, template_path: 
 
     # Provision FIRST. Only render the deployed DATABASE_URL if provisioning succeeded.
     provision_fn(psql_path=psql_path, host=host, port=port, super_password=super_pw, db_password=db_pw)
-    write_deployed_config(template_path, deployed_path, db_pw)
+    write_deployed_config(template_path, deployed_path, db_pw, installed_version)
     # Provisioning + config both succeeded -> the recoverable superuser secret is no longer needed.
     purge_bootstrap_secret(bootstrap_secret_path)
     return 0
@@ -260,18 +364,29 @@ def parse_args(argv) -> argparse.Namespace:
     ap.add_argument("--deployed", default=os.environ.get("ROOFSPAN_DEPLOYED_CONFIG", DEFAULT_DEPLOYED))
     ap.add_argument("--bootstrap-secret-path",
                     default=os.environ.get("ROOFSPAN_BOOTSTRAP_SECRET", DEFAULT_BOOTSTRAP_SECRET))
+    # Authoritative installed version (WiX passes windows\VERSION). Used to update ROOFSPAN_VERSION on
+    # fresh install AND to reconcile the version on upgrade (so it never stays 0.1.0).
+    ap.add_argument("--roofspan-version", dest="roofspan_version",
+                    default=os.environ.get("ROOFSPAN_VERSION", ""))
     return ap.parse_args(argv)
 
 
 def main(argv=None) -> int:  # pragma: no cover (native install-time orchestration)
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    version = (args.roofspan_version or "").strip() or None
     if os.path.isfile(args.deployed):
-        return 0  # upgrade/repair short-circuit (no psql discovery needed)
+        # upgrade/repair: reconcile new non-secret keys + version; never provision, preserve secrets.
+        try:
+            reconcile_upgrade_config(args.deployed, args.template, version)
+        except Exception as e:  # non-fatal: a reconcile hiccup must not fail an upgrade
+            log.error("RoofSpan config reconcile skipped (non-fatal): %s", type(e).__name__)
+        return 0
     try:
         psql_path = discover_psql()
         return run_bootstrap(supplied_super_pw=args.pg_superpassword, deployed_path=args.deployed,
                              template_path=args.template, psql_path=psql_path, port=args.pg_port,
-                             bootstrap_secret_path=args.bootstrap_secret_path)
+                             bootstrap_secret_path=args.bootstrap_secret_path,
+                             installed_version=version)
     except BootstrapError as e:
         # Non-secret cause is logged with a distinct exit code (2=credential, 4=psql, 5=template, 3=other).
         log.error("RoofSpan DB bootstrap failed (exit %d, fail-closed): %s", e.code, e)

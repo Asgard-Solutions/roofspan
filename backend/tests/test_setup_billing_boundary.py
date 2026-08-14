@@ -66,18 +66,14 @@ async def _flow():
     # boundary: the local backend only relays through the client.
     calls = {"activate": 0, "checkout": 0}
 
-    async def _fake_activate(self, db):
+    async def _fake_activate(self, db, *, company_name=None, requested_seats=None):
         calls["activate"] += 1
-        from sqlalchemy import select as _s
-        from models import AppConfig
-        val = {"installation_id": "inst-123", "company_id": "co-abc", "license_id": "lic-1"}
-        row = (await db.execute(_s(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
-        if row is None:
-            db.add(AppConfig(key="installation", value=val))
-        else:
-            row.value = val
-        await db.commit()
-        return val
+        calls["company_name"] = company_name
+        calls["requested_seats"] = requested_seats
+        # New boundary: the client returns the CP-assigned identity + entitlement; local persistence is
+        # done by licensing.service.persist_activation (adopts ids, marks activated, caches entitlement).
+        return {"installation_id": "inst-123", "company_id": "co-abc", "license_id": "lic-1",
+                "entitlement_jws": None, "signing_public_keys": {}}
 
     async def _fake_checkout(self, db, *, company_id, installation_id=None, seats=None):
         calls["checkout"] += 1
@@ -102,6 +98,9 @@ async def _flow():
         assert j["checkout_url"].startswith("https://checkout.stripe.com/"), j
         assert j["seats"] == 5 and j["monthly_price_usd"] == 245
         assert calls["checkout"] == 1
+        # Activation happened exactly once, with the REAL company name + initial 5 seats.
+        assert calls["activate"] == 1
+        assert calls["company_name"] == "Acme Roofing" and calls["requested_seats"] == 5
 
         # Idempotent: a second click reuses the pending checkout (no second central call).
         r2 = await client.post("/api/setup/checkout", headers=auth)

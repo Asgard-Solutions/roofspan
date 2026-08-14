@@ -91,18 +91,20 @@ class HttpControlPlaneClient:
             raise ControlPlaneUnavailable("Control Plane URL not configured")
         return base.rstrip("/")
 
-    async def activate(self, db: AsyncSession) -> dict:
-        """First-run activation: register the installation public key and receive the first
-        entitlement. Stores the Control-Plane-assigned ids and caches its verification keys."""
-        import time
+    async def activate(self, db: AsyncSession, *, company_name: str | None = None,
+                       requested_seats: int | None = None) -> dict:
+        """First-run activation: register this installation's PUBLIC key and receive the CP-assigned
+        identity + first signed entitlement. ONLY the public key is sent — the private key never
+        leaves the machine. This method performs NO local persistence; the caller
+        (licensing.service.persist_activation) adopts the returned ids/entitlement so the operation is
+        idempotent and testable."""
         import httpx
-        from sqlalchemy import select as _select
-        from licensing import identity, keys as lkeys
+        from licensing import identity
 
-        _priv, pub_pem = identity.get_or_create_identity()
+        _priv, pub_pem = identity.get_or_create_identity()  # _priv stays local; only pub_pem is sent
         payload = {
-            "company_name": config.ACTIVATION_COMPANY_NAME,
-            "requested_seats": config.ACTIVATION_REQUESTED_SEATS,
+            "company_name": company_name or config.ACTIVATION_COMPANY_NAME,
+            "requested_seats": int(requested_seats if requested_seats is not None else config.ACTIVATION_REQUESTED_SEATS),
             "installation_public_key": pub_pem,
             "software_version": config.SOFTWARE_VERSION,
             "bootstrap_credential": config.ACTIVATION_BOOTSTRAP_CREDENTIAL,
@@ -114,18 +116,7 @@ class HttpControlPlaneClient:
             raise ControlPlaneUnavailable(f"Activation request failed: {e}") from e
         if resp.status_code != 200:
             raise ControlPlaneUnavailable(f"Activation rejected ({resp.status_code}): {resp.text[:200]}")
-        data = resp.json()
-        lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
-        # Adopt the Control-Plane-assigned identity ids.
-        row = (await db.execute(_select(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
-        value = {"installation_id": data["installation_id"], "company_id": data["company_id"],
-                 "license_id": data["license_id"]}
-        if row is None:
-            db.add(AppConfig(key="installation", value=value))
-        else:
-            row.value = value
-        await db.commit()
-        return data
+        return resp.json()
 
     async def fetch_entitlement(self, db: AsyncSession, *, installation_id: str, company_id: str) -> str:
         import time

@@ -156,6 +156,98 @@ def test_run_bootstrap_upgrade_preserves_and_regenerates_nothing(tmp_path):
     assert rc == 0 and "EXISTING" in dep.read_text()             # preserved untouched
 
 
+# --- upgrade config reconciliation (new non-secret keys + version; secrets preserved) -------------
+_UPGRADE_TMPL = (
+    "DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5442/roofspan\n"
+    "ROOFSPAN_VERSION=0.1.0\n"
+    "LICENSING_MODE=http\n"
+    "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane\n"
+    "CONTROL_PLANE_BASE_URL=https://cp.roofspan.io\n"
+)
+
+
+def test_reconcile_adds_new_nonsecret_keys_and_updates_version_preserving_secrets():
+    existing = (
+        "DATABASE_URL=postgresql+asyncpg://roofspan:REALPW@127.0.0.1:5442/roofspan\n"
+        "INSTALLATION_KEYS_DIR=C:\\ProgramData\\RoofSpan\\identity\n"
+        "ROOFSPAN_VERSION=0.1.0\n"
+        "LICENSING_MODE=http\n"
+    )
+    new, changed = bs.reconcile_deployed_env(existing, _UPGRADE_TMPL, installed_version="1.2.3")
+    assert changed
+    # new non-secret keys added (this is the live-fix: upgraded installs gain the CP url)
+    assert "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane" in new
+    assert "CONTROL_PLANE_BASE_URL=https://cp.roofspan.io" in new
+    # version updated (no longer stuck at 0.1.0)
+    assert "ROOFSPAN_VERSION=1.2.3" in new and "ROOFSPAN_VERSION=0.1.0" not in new
+    # secrets + machine identity preserved untouched
+    assert "REALPW" in new
+    assert "INSTALLATION_KEYS_DIR=C:\\ProgramData\\RoofSpan\\identity" in new
+    # never introduce the DATABASE_URL placeholder and never duplicate DATABASE_URL
+    assert "__GENERATED_AT_FIRST_RUN__" not in new
+    assert new.count("DATABASE_URL=") == 1
+
+
+def test_reconcile_is_noop_when_nothing_missing_or_changed():
+    existing = "ROOFSPAN_VERSION=2.0.0\nLICENSING_MODE=http\nDATABASE_URL=x\n"
+    template = "ROOFSPAN_VERSION=0.1.0\nLICENSING_MODE=http\n"
+    new, changed = bs.reconcile_deployed_env(existing, template, installed_version="2.0.0")
+    assert changed is False and new == existing
+
+
+def test_reconcile_never_overwrites_existing_nonsecret_value():
+    existing = "LICENSING_CONTROL_PLANE_URL=https://custom.example/api\nDATABASE_URL=x\n"
+    new, _ = bs.reconcile_deployed_env(existing, _UPGRADE_TMPL, installed_version=None)
+    assert "https://custom.example/api" in new                 # existing value kept
+    assert new.count("LICENSING_CONTROL_PLANE_URL=") == 1
+
+
+def test_reconcile_upgrade_config_writes_file(tmp_path):
+    dep = tmp_path / "roofspan.env"
+    tmpl = tmp_path / "t.env"
+    dep.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:REALPW@127.0.0.1:5442/roofspan\nROOFSPAN_VERSION=0.1.0\n")
+    tmpl.write_text(_UPGRADE_TMPL)
+    changed = bs.reconcile_upgrade_config(str(dep), str(tmpl), installed_version="1.5.0")
+    assert changed
+    body = dep.read_text()
+    assert "REALPW" in body
+    assert "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane" in body
+    assert "ROOFSPAN_VERSION=1.5.0" in body and "__GENERATED_AT_FIRST_RUN__" not in body
+
+
+def test_run_bootstrap_upgrade_reconciles_new_keys_and_version(tmp_path):
+    tmpl = tmp_path / "t.env"
+    tmpl.write_text(_UPGRADE_TMPL)
+    dep = tmp_path / "config" / "roofspan.env"
+    dep.parent.mkdir(parents=True)
+    dep.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:EXISTING@127.0.0.1:5442/roofspan\nROOFSPAN_VERSION=0.1.0\n")
+
+    def fake_provision(**_):
+        raise AssertionError("upgrade must not re-provision or regenerate credentials")
+
+    rc = bs.run_bootstrap(supplied_super_pw="", deployed_path=str(dep), template_path=str(tmpl),
+                          psql_path="psql.exe", provision_fn=fake_provision, installed_version="3.3.3")
+    body = dep.read_text()
+    assert rc == 0 and "EXISTING" in body                       # creds preserved
+    assert "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane" in body
+    assert "ROOFSPAN_VERSION=3.3.3" in body
+
+
+def test_fresh_write_deployed_config_sets_installed_version(tmp_path):
+    tmpl = tmp_path / "t.env"
+    tmpl.write_text(_UPGRADE_TMPL)
+    dep = tmp_path / "config" / "roofspan.env"
+    bs.write_deployed_config(str(tmpl), str(dep), "APPPW", installed_version="4.0.0")
+    body = dep.read_text()
+    assert "ROOFSPAN_VERSION=4.0.0" in body and "APPPW" in body
+    assert "__GENERATED_AT_FIRST_RUN__" not in body
+
+
+def test_parse_args_accepts_roofspan_version():
+    a = bs.parse_args(["--roofspan-version", "9.9.9"])
+    assert a.roofspan_version == "9.9.9"
+
+
 # --- argv parsing ---------------------------------------------------------------------------------
 def test_parse_args_defaults_and_port():
     a = bs.parse_args([])

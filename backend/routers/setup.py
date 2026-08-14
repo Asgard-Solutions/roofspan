@@ -32,6 +32,7 @@ logger = logging.getLogger("roofspan.setup")
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 _SETUP_LOCK = 728419  # advisory lock key serializing concurrent bootstraps
+_ACTIVATION_LOCK = 728421  # advisory lock key serializing concurrent first-run activations
 SEAT_PRICE_USD = 49
 INITIAL_SEATS = lic_config.MIN_SEATS  # 5
 
@@ -126,19 +127,29 @@ async def bootstrap(payload: BootstrapIn, request: Request, db: AsyncSession = D
     }
 
 
+async def _company_name(db: AsyncSession) -> str:
+    """The real company name entered during bootstrap (stored in app_config company_profile) — used as
+    the authoritative activation company name, not an env default."""
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+    if row and isinstance(row.value, dict) and (row.value.get("name") or "").strip():
+        return row.value["name"].strip()
+    return lic_config.ACTIVATION_COMPANY_NAME
+
+
 async def _ensure_installation_identity(db: AsyncSession, client) -> tuple[str, str]:
-    """PRODUCTION (http mode): return (installation_id, company_id) from the local installation record,
-    activating with the central Control Plane first if this installation has not yet been activated.
-    This is the smallest secure bootstrap: activation uses the installation's own key pair + the
-    (short-lived, non-master) activation bootstrap credential - never a shared master key."""
-    row = (await db.execute(select(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
-    val = row.value if (row and isinstance(row.value, dict)) else {}
-    installation_id = val.get("installation_id")
-    company_id = val.get("company_id")
-    if not installation_id or not company_id:
-        data = await client.activate(db)  # registers this installation's public key; stores CP-assigned ids
-        installation_id, company_id = data["installation_id"], data["company_id"]
-    return installation_id, company_id
+    """PRODUCTION (http mode): return the SERVER-AUTHORITATIVE (installation_id, company_id), activating
+    with the central Control Plane exactly once if this installation is not yet activated.
+
+    Idempotent: a concurrent/retried setup serializes on an advisory lock and re-checks the activation
+    marker inside it, so it never creates a duplicate company/installation. Activation registers only
+    the installation's PUBLIC key + the short-lived bootstrap credential (never a master key), then the
+    Control-Plane-assigned ids + initial entitlement are persisted locally (replacing the provisional
+    local identity)."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _ACTIVATION_LOCK})
+    if await lic_service.is_activated(db):
+        return await lic_service.get_installation(db)  # reuse the server-authoritative identity
+    data = await client.activate(db, company_name=await _company_name(db), requested_seats=INITIAL_SEATS)
+    return await lic_service.persist_activation(db, data)
 
 
 @router.post("/checkout")

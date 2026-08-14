@@ -55,6 +55,84 @@ async def get_installation(db: AsyncSession) -> tuple[str, str]:
     return value["installation_id"], value["company_id"]
 
 
+async def _installation_row(db: AsyncSession):
+    return (await db.execute(select(AppConfig).where(AppConfig.key == INSTALLATION_KEY))).scalar_one_or_none()
+
+
+async def is_activated(db: AsyncSession) -> bool:
+    """True only once the Control Plane has issued this installation an authoritative identity.
+
+    Presence of a locally-generated provisional installation_id/company_id (from get_installation) is
+    NOT activation: a provisional identity is unknown to the Control Plane and must never be used for
+    signed refresh/checkout requests until /activate has adopted the CP-assigned ids."""
+    row = await _installation_row(db)
+    return bool(row and isinstance(row.value, dict) and row.value.get("activated") is True)
+
+
+async def persist_activation(db: AsyncSession, data: dict) -> tuple[str, str]:
+    """Adopt the Control-Plane-assigned authoritative identity and cache its first signed entitlement.
+
+    Replaces any provisional local installation_id/company_id with the server-issued ids, marks the
+    installation activated, caches the CP verification keys, and stores + verifies the initial
+    entitlement JWS into license_cache. Idempotent: safe to call again with the same activation data.
+    """
+    installation_id = data["installation_id"]
+    company_id = data["company_id"]
+    license_id = data.get("license_id")
+
+    # Trust the CP verification keys so the entitlement verifies (now and offline).
+    keys.cache_trusted_cp_keys(data.get("signing_public_keys", {}) or {})
+
+    # Authoritative identity + activation marker (replaces the provisional local identity).
+    row = await _installation_row(db)
+    base = row.value if (row and isinstance(row.value, dict)) else {}
+    value = {**base, "installation_id": installation_id, "company_id": company_id,
+             "license_id": license_id, "activated": True,
+             "activated_at": datetime.now(timezone.utc).isoformat()}
+    if row is None:
+        db.add(AppConfig(key=INSTALLATION_KEY, value=value))
+    else:
+        row.value = value
+    await db.commit()
+
+    # Cache + cryptographically verify the initial entitlement into license_cache.
+    token = data.get("entitlement_jws")
+    if token:
+        try:
+            entitlement = ent.verify_entitlement(token, keys.get_trusted_verify_keys())
+        except ent.EntitlementError as e:
+            logger.warning("Activation entitlement failed verification (kept identity): %s", e)
+            return installation_id, company_id
+        crow = await _get_cache_row(db)
+        if crow is not None and crow.installation_id != installation_id:
+            await db.delete(crow)  # drop a stale provisional cache row (installation_id is the PK)
+            await db.flush()
+            crow = None
+        now = datetime.now(timezone.utc)
+        if crow is None:
+            crow = LicenseCache(installation_id=installation_id, company_id=company_id)
+            db.add(crow)
+        crow.installation_id = installation_id
+        crow.company_id = entitlement.company_id
+        crow.license_id = entitlement.license_id
+        crow.entitlement_jws = token
+        crow.kid = entitlement.kid
+        crow.subscription_state = entitlement.subscription_state
+        crow.seats_licensed = entitlement.seats_licensed
+        crow.product = entitlement.product
+        crow.min_supported_version = entitlement.min_supported_version
+        crow.issued_at = entitlement.issued_at
+        crow.refresh_at = entitlement.refresh_at
+        crow.grace_until = entitlement.grace_until
+        crow.fetched_at = now
+        crow.last_check_at = now
+        crow.last_check_ok = True
+        crow.last_error = None
+        await db.commit()
+        invalidate_snapshot()
+    return installation_id, company_id
+
+
 async def _get_cache_row(db: AsyncSession) -> Optional[LicenseCache]:
     return (await db.execute(select(LicenseCache).limit(1))).scalar_one_or_none()
 
@@ -70,6 +148,10 @@ async def refresh(db: AsyncSession, *, force: bool = False) -> dict:
     On a Control Plane/network outage, the existing cache is preserved (offline tolerance) and the
     failure is recorded — the installation is NOT suspended by an outage.
     """
+    if config.LICENSING_MODE == "http" and not await is_activated(db):
+        # Not yet activated: signing a refresh with the provisional local id would be rejected by the
+        # Control Plane ("Unknown installation"). Wait until first-run activation adopts the CP id.
+        return {"ok": False, "offline": True, "error": "not activated (awaiting first-run activation)"}
     installation_id, company_id = await get_installation(db)
     client = control_plane.get_client()
     now = datetime.now(timezone.utc)
@@ -170,6 +252,10 @@ async def effective_state_cached() -> str:
 async def bootstrap(db: AsyncSession) -> None:
     """Startup: ensure installation identity and a cached entitlement exist."""
     await get_installation(db)
+    if config.LICENSING_MODE == "http" and not await is_activated(db):
+        # Fresh production install: nothing to refresh until the owner completes setup + activation.
+        # Never sign a Control Plane request with the provisional local id (would 404 at the CP).
+        return
     row = await _get_cache_row(db)
     if row is None or not row.entitlement_jws:
         await refresh(db, force=True)
