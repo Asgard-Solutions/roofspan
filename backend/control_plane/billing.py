@@ -229,6 +229,7 @@ class StripeBillingProvider(BillingProvider):
             client_reference_id=company_id,
             subscription_data={"metadata": {"company_id": company_id}},
             metadata={"company_id": company_id},
+            allow_promotion_codes=True,                       # let customers enter a valid Stripe promo code
             automatic_tax={"enabled": True},                 # Stripe Tax calculates sales tax by location
             billing_address_collection="required",           # required for Stripe Tax
             tax_id_collection={"enabled": True},             # B2B tax id capture

@@ -955,3 +955,8 @@ Live failure: a fresh Office install used LOCALLY-generated installation_id/comp
 - **Files changed:** `backend/licensing/service.py`, `backend/licensing/control_plane.py`, `backend/routers/setup.py`, `backend/control_plane/service.py`, `windows/winbuild/bootstrap_db.py`, `windows/winbuild/backend_entry.py`, `backend/tests/test_setup_billing_boundary.py`; new `backend/tests/test_setup_activation.py`, tests appended to `windows/tests/test_db_bootstrap.py`.
 - **Tests:** backend activation 2/2, billing boundary 3/3, licensing units 17, prod infra; windows db-bootstrap 43/43, service-host + prod-config 20 (84 total green) + in-process CP idempotency check (1 company/1 installation, stable ids). Pre-existing `test_control_plane.py` integration failures are environmental (hit the external preview URL → Cloudflare 502), unchanged, deferred to P1-6.
 
+
+## Changed (2026-06) — Stripe Checkout accepts customer promo codes
+- `backend/control_plane/billing.py` `StripeBillingProvider.create_checkout_session()`: added `allow_promotion_codes=True` to the `stripe.checkout.Session.create(...)` call so hosted Checkout shows the promo-code input (customer manually enters e.g. OWNERTEST). No coupon auto-applied, no code hard-coded. Pricing, seat minimums, price lookup, webhooks, entitlement/subscription logic, mode="subscription", line items, company metadata, automatic tax, billing-address + tax-id collection, success/cancel URLs all unchanged.
+- Test: new `backend/tests/test_stripe_checkout_promo.py` (2/2 pass) asserts `allow_promotion_codes=True` is passed + preserved fields intact + no hard-coded OWNERTEST/coupon. (`test_stripe_billing.py` is live-infra integration.)
+
