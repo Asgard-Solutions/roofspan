@@ -16,8 +16,8 @@ const WORDMARK_LIGHT = "/brand/roofspan-wordmark-light.webp";
 
 const MAIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
-  { to: "/leads", label: "Leads", icon: Contact, testid: "nav-leads" },
   { to: "/map", label: "Map", icon: Map, testid: "nav-map" },
+  { to: "/leads", label: "Leads", icon: Contact, testid: "nav-leads" },
   { to: "/routes", label: "Routes", icon: RouteIcon, testid: "nav-routes" },
   { to: "/customers", label: "Customers", icon: Users2, testid: "nav-customers" },
   { to: "/jobs", label: "Jobs", icon: Hammer, testid: "nav-jobs" },
