@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";
-import { api, apiError } from "@/lib/api";
+import { api, apiError, getToken, API_BASE } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +44,8 @@ export default function MapView() {
   const [zip, setZip] = useState("");
   const [geoLoading, setGeoLoading] = useState(false);
   const [zipHit, setZipHit] = useState(null);
+  const [mapConfig, setMapConfig] = useState(null);
+  const [baseLayer, setBaseLayer] = useState("map");
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -108,6 +110,9 @@ export default function MapView() {
     if (!map) return;
     vertexMarkers.current.forEach((m) => m.remove());
     vertexMarkers.current = [];
+    // Numbered corner markers are for hand-drawn territories. A snapped ZIP boundary can have hundreds
+    // of vertices, so past a small count we show only the outline (the draw-line/fill layers).
+    if (pts.length > 24) return;
     pts.forEach((c, i) => {
       const el = document.createElement("div");
       el.className = "rs-vertex-marker";
@@ -137,16 +142,43 @@ export default function MapView() {
   useEffect(() => {
     api.get("/map-config").then(({ data }) => {
       if (mapRef.current || !containerRef.current) return;
+      setMapConfig(data);
+      const startBase = data.satellite_enabled ? "satellite" : "map";
+      setBaseLayer(startBase);
       const map = new maplibregl.Map({
         container: containerRef.current,
         style: baseStyle(),
         center: data.default_center,
         zoom: data.default_zoom,
+        // Satellite tiles are proxied through the local backend (key stays server-side) and require the
+        // auth token; map raster requests bypass our axios interceptor, so attach the Bearer here.
+        transformRequest: (url) => {
+          if (url.includes("/map/tiles/satellite/")) {
+            return { url, headers: { Authorization: `Bearer ${getToken()}` } };
+          }
+          return { url };
+        },
       });
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       mapRef.current = map;
 
       map.on("load", () => {
+        // Satellite base (MapTiler via backend proxy), added first so territory/property/draw layers
+        // stack on top. Visibility follows the saved default; the on-map toggle switches osm <-> satellite.
+        if (data.maptiler_configured) {
+          map.addSource("satellite", {
+            type: "raster",
+            tiles: [`${API_BASE}/map/tiles/satellite/{z}/{x}/{y}`],
+            tileSize: 512,
+            attribution: "© MapTiler © OpenStreetMap contributors",
+          });
+          map.addLayer({
+            id: "satellite-layer", type: "raster", source: "satellite",
+            layout: { visibility: startBase === "satellite" ? "visible" : "none" },
+          });
+          map.setLayoutProperty("osm", "visibility", startBase === "satellite" ? "none" : "visible");
+        }
+
         map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
         map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
@@ -211,6 +243,19 @@ export default function MapView() {
     loadProperties(t.id);
   };
 
+  const switchBase = (layer) => {
+    const map = mapRef.current;
+    if (!map || layer === baseLayer) return;
+    if (layer === "satellite" && !map.getLayer("satellite-layer")) return;
+    setBaseLayer(layer);
+    if (map.getLayer("satellite-layer")) {
+      map.setLayoutProperty("satellite-layer", "visibility", layer === "satellite" ? "visible" : "none");
+    }
+    if (map.getLayer("osm")) {
+      map.setLayoutProperty("osm", "visibility", layer === "satellite" ? "none" : "visible");
+    }
+  };
+
   const searchZip = async (e) => {
     e?.preventDefault?.();
     const code = zip.trim();
@@ -236,17 +281,33 @@ export default function MapView() {
   const addZipAsTerritory = () => {
     if (!zipHit) return;
     const [[w, s], [e2, n]] = zipHit.bbox;
-    drawPts.current = [[w, s], [e2, s], [e2, n], [w, n]];  // ZIP bbox rectangle (lng,lat) corners
+    let ring = null;
+    const geom = zipHit.geometry;
+    if (geom && geom.type === "Polygon" && geom.coordinates?.[0]?.length >= 3) {
+      ring = geom.coordinates[0];
+    } else if (geom && geom.type === "MultiPolygon" && geom.coordinates?.length) {
+      ring = geom.coordinates.map((poly) => poly[0]).sort((a, b) => b.length - a.length)[0];  // largest ring
+    }
+    if (!ring || ring.length < 3) {
+      ring = [[w, s], [e2, s], [e2, n], [w, n]];  // fallback: bbox rectangle when no boundary available
+      toast.info("No exact boundary for this ZIP — added its area as an editable rectangle.");
+    } else {
+      toast.info("Snapped the ZIP boundary. Review and click Finish to name & save.");
+    }
+    if (ring.length > 1) {  // drop the closing duplicate vertex (save re-closes the ring)
+      const a = ring[0], b = ring[ring.length - 1];
+      if (a[0] === b[0] && a[1] === b[1]) ring = ring.slice(0, -1);
+    }
+    drawPts.current = ring.map((c) => [c[0], c[1]]);
     drawing.current = true;
     setIsDrawing(true);
-    setDrawCount(4);
+    setDrawCount(drawPts.current.length);
     updateDrawSource();
     const map = mapRef.current;
     if (map) {
       map.getCanvas().style.cursor = "crosshair";
       map.fitBounds([[w, s], [e2, n]], { padding: 60, maxZoom: 15, duration: 600 });
     }
-    toast.info("ZIP area added as an editable rectangle. Adjust corners or click Finish to name & save.");
   };
 
   const startDraw = () => {
@@ -329,6 +390,31 @@ export default function MapView() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            {/* Base layer toggle (only when MapTiler satellite is configured) */}
+            {mapConfig?.maptiler_configured && (
+              <div className="space-y-2 border-b border-border p-4" data-testid="basemap-panel">
+                <Label className="text-xs font-semibold text-slate-600">Base map</Label>
+                <div className="flex gap-1 rounded-md bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => switchBase("map")}
+                    className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "map" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    data-testid="basemap-map-button"
+                  >
+                    Street
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchBase("satellite")}
+                    className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "satellite" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    data-testid="basemap-satellite-button"
+                  >
+                    Satellite
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* ZIP / postal code search */}
             <div className="space-y-2 border-b border-border p-4" data-testid="zip-search-panel">
               <Label className="text-xs font-semibold text-slate-600">Find a ZIP / postal code</Label>

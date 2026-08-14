@@ -991,3 +991,11 @@ Clean installs failed: Burn "Failed to parse condition ... Unexpected character 
 - **Migration:** none.
 - **Verified:** geocode 4/4 tests pass (bbox transform, 404, 400, 502); live curl `78701` → correct center/bbox; screenshot shows numbered markers 1–4 with polygon outline, ZIP result "78701, Austin…", and the Add-as-territory button.
 
+
+## Fixed/Added (2026-06) — Map satellite rendering + real ZIP boundary snapping
+- **Satellite bug:** MapView's `baseStyle()` only ever rendered OSM; there was NO satellite rendering even when `satellite_enabled` + MapTiler key were configured (backend `/api/map/tiles/satellite/{z}/{x}/{y}` proxy existed but was unused). Fix: `MapView.jsx` now adds a `satellite` raster source (via the backend proxy, `tileSize:512`) + `satellite-layer` when `maptiler_configured`, plus a Street/Satellite toggle (`switchBase`) that flips layer visibility; default follows the saved `satellite_enabled`. Raster tile requests bypass the axios interceptor, so `transformRequest` attaches the Bearer token to the proxy tile URLs. (Wiring verified in preview; actual imagery needs the customer's MapTiler key — the toggle only appears when configured.)
+- **Real ZIP boundary:** US ZIPs aren't OSM admin boundaries (Nominatim returns only a centroid Point), so `backend/routers/settings.py` `geocode_zip` now queries the authoritative US Census ZCTA layer (`tigerweb.geo.census.gov/.../tigerWMS_Current/MapServer/2`, `where=ZCTA5='<zip>'`, `f=geojson`) for the real polygon (center/bbox derived from it), keeping Nominatim for the friendly display name + non-US/fallback. `MapView.addZipAsTerritory` now snaps to the real polygon outer ring (largest ring for MultiPolygon), falling back to a bbox rectangle only when no boundary exists; numbered vertex markers are capped (≤24) so a large ZIP ring shows a clean outline.
+- **Files changed:** `frontend/src/pages/MapView.jsx`, `backend/routers/settings.py` (+`import re`); test rewritten: `backend/tests/test_geocode_zip.py`.
+- **Migration:** none.
+- **Verified:** geocode 6/6 tests pass (Census polygon path, Nominatim fallback, non-US skips Census, 404/400/502); live `zip=78701` → real 264-vertex Polygon + tight bbox + "78701, Austin…" name; screenshot: snapping created a 263-point ZIP-boundary territory in draw mode; base toggle correctly hidden when MapTiler unconfigured.
+

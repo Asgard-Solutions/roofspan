@@ -1,3 +1,5 @@
+import re
+
 import httpx
 from fastapi import APIRouter, Depends, Request, HTTPException, Response
 from sqlalchemy import select, func
@@ -71,38 +73,97 @@ async def update_map_config(payload: MapConfigUpdate, request: Request, user: Us
     return await get_map_config(user=user, db=db)
 
 
-# ---- ZIP / postal code geocoding (server-side proxy to OSM Nominatim; only the ZIP leaves the machine) ----
-@router.get("/geocode/zip")
-async def geocode_zip(zip: str, country: str = "us", user: User = Depends(get_current_user)):
-    code = (zip or "").strip()
-    if not code:
-        raise HTTPException(status_code=400, detail="Enter a ZIP or postal code")
-    params = {
-        "postalcode": code,
-        "countrycodes": (country or "us").strip().lower(),
-        "format": "jsonv2",
-        "limit": 1,
-        "addressdetails": 0,
-    }
-    headers = {"User-Agent": "RoofSpanOffice/1.0 (territory mapping)"}
+# ---- ZIP / postal code geocoding (server-side; only the ZIP string leaves the machine) ----
+# US ZIPs: the authoritative boundary comes from the US Census ZCTA dataset (US ZIP codes are NOT OSM
+# admin boundaries, so Nominatim only returns a centroid Point). Nominatim still supplies a friendly
+# display name and non-US / fallback lookups.
+_GEO_HEADERS = {"User-Agent": "RoofSpanOffice/1.0 (territory mapping)"}
+_CENSUS_ZCTA = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_Current/MapServer/2/query"
+
+
+def _bounds_from_geometry(geom: dict):
+    """Return (west, south, east, north) covering a GeoJSON Polygon/MultiPolygon, or None."""
+    if not geom:
+        return None
+    t = geom.get("type")
+    if t == "Polygon":
+        rings = geom.get("coordinates", [])
+    elif t == "MultiPolygon":
+        rings = [ring for poly in geom.get("coordinates", []) for ring in poly]
+    else:
+        return None
+    xs, ys = [], []
+    for ring in rings:
+        for pt in ring:
+            xs.append(pt[0]); ys.append(pt[1])
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+async def _census_zcta_polygon(client: "httpx.AsyncClient", code: str):
+    """Fetch the real US ZIP (ZCTA) boundary polygon from the Census, or None."""
+    params = {"where": f"ZCTA5='{code}'", "outFields": "ZCTA5", "f": "geojson", "returnGeometry": "true"}
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get("https://nominatim.openstreetmap.org/search", params=params, headers=headers)
+        r = await client.get(_CENSUS_ZCTA, params=params, headers=_GEO_HEADERS)
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    feats = (r.json() or {}).get("features") or []
+    if not feats:
+        return None
+    return feats[0].get("geometry")
+
+
+async def _nominatim_lookup(client: "httpx.AsyncClient", code: str, country: str):
+    params = {"postalcode": code, "countrycodes": country, "format": "jsonv2", "limit": 1,
+              "addressdetails": 0, "polygon_geojson": 1}
+    try:
+        r = await client.get("https://nominatim.openstreetmap.org/search", params=params, headers=_GEO_HEADERS)
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Could not reach the geocoding service. Check your internet connection.")
     if r.status_code != 200:
         raise HTTPException(status_code=502, detail="Geocoding service error. Please try again.")
     results = r.json()
-    if not results:
+    return results[0] if results else None
+
+
+@router.get("/geocode/zip")
+async def geocode_zip(zip: str, country: str = "us", user: User = Depends(get_current_user)):
+    code = (zip or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Enter a ZIP or postal code")
+    cc = (country or "us").strip().lower()
+    async with httpx.AsyncClient(timeout=20) as client:
+        nomi = await _nominatim_lookup(client, code, cc)
+        census_geom = None
+        if cc == "us" and re.fullmatch(r"\d{5}", code):
+            census_geom = await _census_zcta_polygon(client, code)
+
+    # Prefer the authoritative Census ZIP boundary (tighter bbox + real outline) when available.
+    if census_geom:
+        b = _bounds_from_geometry(census_geom)
+        if b:
+            west, south, east, north = b
+            display = nomi.get("display_name") if nomi else f"ZIP {code}, United States"
+            return {
+                "center": [(west + east) / 2, (south + north) / 2],
+                "bbox": [[west, south], [east, north]],
+                "display_name": display or f"ZIP {code}, United States",
+                "geometry": census_geom,
+            }
+
+    if not nomi:
         raise HTTPException(status_code=404, detail=f"No location found for ZIP/postal code '{code}'")
-    hit = results[0]
     # Nominatim boundingbox = [south, north, west, east] (strings). Return [lng, lat] geometry.
-    bb = [float(x) for x in hit["boundingbox"]]
+    bb = [float(x) for x in nomi["boundingbox"]]
     south, north, west, east = bb[0], bb[1], bb[2], bb[3]
     return {
-        "center": [float(hit["lon"]), float(hit["lat"])],
+        "center": [float(nomi["lon"]), float(nomi["lat"])],
         "bbox": [[west, south], [east, north]],
-        "display_name": hit.get("display_name", code),
+        "display_name": nomi.get("display_name", code),
+        "geometry": nomi.get("geojson"),  # boundary when available, else a Point (frontend falls back)
     }
 
 
