@@ -20,6 +20,7 @@ from models import User
 from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
+from routers import routes as routes_router
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
 from routers import setup as setup_router, reports as reports_router
@@ -49,6 +50,7 @@ app.include_router(territories.router)
 app.include_router(properties.router)
 app.include_router(imports.router)
 app.include_router(leads.router)
+app.include_router(routes_router.router)
 app.include_router(customers.router)
 app.include_router(inspections.router)
 app.include_router(estimates.router)

@@ -9,6 +9,8 @@ import Login from "@/pages/Login";
 import Setup from "@/pages/Setup";
 import Dashboard from "@/pages/Dashboard";
 import MapView from "@/pages/MapView";
+import RoutesPage from "@/pages/Routes";
+import RouteDetail from "@/pages/RouteDetail";
 import Leads from "@/pages/Leads";
 import LeadDetail from "@/pages/LeadDetail";
 import Customers from "@/pages/Customers";
@@ -45,6 +47,8 @@ function App() {
             >
               <Route path="/" element={<Dashboard />} />
               <Route path="/map" element={<MapView />} />
+              <Route path="/routes" element={<RoutesPage />} />
+              <Route path="/routes/:id" element={<RouteDetail />} />
               <Route path="/leads" element={<Leads />} />
               <Route path="/leads/:id" element={<LeadDetail />} />
               <Route path="/customers" element={<Customers />} />

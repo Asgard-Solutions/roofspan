@@ -8,7 +8,7 @@ import ChangePasswordDialog from "@/components/ChangePasswordDialog";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Smartphone,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Smartphone, Route as RouteIcon,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
@@ -18,6 +18,7 @@ const MAIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
   { to: "/leads", label: "Leads", icon: Contact, testid: "nav-leads" },
   { to: "/map", label: "Map", icon: Map, testid: "nav-map" },
+  { to: "/routes", label: "Routes", icon: RouteIcon, testid: "nav-routes" },
   { to: "/customers", label: "Customers", icon: Users2, testid: "nav-customers" },
   { to: "/jobs", label: "Jobs", icon: Hammer, testid: "nav-jobs" },
   { to: "/inventory", label: "Inventory", icon: Boxes, testid: "nav-inventory" },

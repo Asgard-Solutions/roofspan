@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";
@@ -10,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import ImportDialog from "@/components/ImportDialog";
 import PropertySheet from "@/components/PropertySheet";
-import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2 } from "lucide-react";
+import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2, UserPlus } from "lucide-react";
 
 const OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const MANAGE = ["owner", "administrator", "office"];
@@ -27,6 +28,7 @@ function baseStyle() {
 export default function MapView() {
   const { user } = useAuth();
   const canManage = MANAGE.includes(user?.role);
+  const navigate = useNavigate();
 
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -52,6 +54,12 @@ export default function MapView() {
   const [contactableOnly, setContactableOnly] = useState(false);
   const [features, setFeatures] = useState([]);
   const [routeInfo, setRouteInfo] = useState(null);
+  const [builtRoute, setBuiltRoute] = useState([]);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [reps, setReps] = useState([]);
+  const [routeName, setRouteName] = useState("");
+  const [routeRepId, setRouteRepId] = useState("");
+  const [savingRoute, setSavingRoute] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -291,6 +299,7 @@ export default function MapView() {
     routeMarkers.current = [];
     if (map && map.getSource("route")) map.getSource("route").setData({ type: "FeatureCollection", features: [] });
     setRouteInfo(null);
+    setBuiltRoute([]);
   }, []);
 
   const _haversineMi = (a, b) => {
@@ -303,7 +312,7 @@ export default function MapView() {
   const buildRoute = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-    const pts = filteredFeatures.slice(0, 200).map((f) => ({ id: f.properties.id, c: f.geometry.coordinates }));
+    const pts = filteredFeatures.slice(0, 200).map((f) => ({ id: f.properties.id, c: f.geometry.coordinates, address: f.properties.address }));
     if (pts.length < 2) { toast.error("Need at least 2 matching stops to build a route"); return; }
     // Nearest-neighbour walking order starting from the western-most stop.
     const remaining = [...pts].sort((a, b) => a.c[0] - b.c[0]);
@@ -329,10 +338,47 @@ export default function MapView() {
     });
     map.fitBounds(order.reduce((b, o) => b.extend(o.c), new maplibregl.LngLatBounds(order[0].c, order[0].c)), { padding: 70, duration: 700 });
     setRouteInfo({ stops: order.length, miles: miles.toFixed(1) });
+    setBuiltRoute(order.map((o, i) => ({
+      property_id: o.id, latitude: o.c[1], longitude: o.c[0], sort: i, address: o.address || "",
+    })));
     toast.success(`Route ready: ${order.length} stops, ~${miles.toFixed(1)} mi`);
   }, [filteredFeatures]);
 
   useEffect(() => { clearRoute(); }, [features, clearRoute]);
+
+  const openAssign = useCallback(async () => {
+    setRouteName(selected?.name ? `${selected.name} route` : (zipHit?.zip ? `ZIP ${zipHit.zip} route` : "Canvassing route"));
+    setRouteRepId("");
+    setAssignOpen(true);
+    try {
+      const { data } = await api.get("/users/assignable");
+      setReps(data);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  }, [selected, zipHit]);
+
+  const saveRoute = useCallback(async () => {
+    if (!routeName.trim()) { toast.error("Give the route a name"); return; }
+    if (builtRoute.length < 2) { toast.error("Build a walking route first"); return; }
+    setSavingRoute(true);
+    try {
+      const { data } = await api.post("/routes", {
+        name: routeName.trim(),
+        territory_id: selectedId || null,
+        assigned_user_id: routeRepId || null,
+        est_miles: routeInfo ? Number(routeInfo.miles) : 0,
+        stops: builtRoute,
+      });
+      toast.success(routeRepId ? "Route assigned" : "Route saved");
+      setAssignOpen(false);
+      navigate(`/routes/${data.id}`);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingRoute(false);
+    }
+  }, [routeName, builtRoute, selectedId, routeRepId, routeInfo, navigate]);
 
 
 
@@ -575,6 +621,11 @@ export default function MapView() {
                   Route: <strong>{routeInfo.stops}</strong> stops · ~<strong>{routeInfo.miles}</strong> mi walking
                 </div>
               )}
+              {routeInfo && canManage && (
+                <Button size="sm" className="w-full" onClick={openAssign} data-testid="assign-route-button">
+                  <UserPlus className="h-4 w-4" /> Assign route to rep
+                </Button>
+              )}
             </div>
 
 
@@ -679,6 +730,44 @@ export default function MapView() {
             <Button variant="outline" onClick={() => { setSaveOpen(false); cancelDraw(); }}>Cancel</Button>
             <Button onClick={saveTerritory} disabled={saving} data-testid="save-territory-button">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create territory</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
+        <DialogContent data-testid="assign-route-dialog">
+          <DialogHeader>
+            <DialogTitle>Assign this route</DialogTitle>
+            <DialogDescription>Save the {builtRoute.length}-stop walking route and assign it to a sales rep for canvassing.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Route name</Label>
+              <Input value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="e.g. North Austin route" data-testid="route-name-input" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Assign to rep</Label>
+              <select
+                value={routeRepId}
+                onChange={(e) => setRouteRepId(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+                data-testid="route-rep-select"
+              >
+                <option value="">Unassigned (assign later)</option>
+                {reps.map((u) => (
+                  <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>
+                ))}
+              </select>
+            </div>
+            <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              {builtRoute.length} stops{routeInfo ? ` · ~${routeInfo.miles} mi walking` : ""}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
+            <Button onClick={saveRoute} disabled={savingRoute} data-testid="save-route-button">
+              {savingRoute ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UserPlus className="h-4 w-4" /> {routeRepId ? "Assign route" : "Save route"}</>}
             </Button>
           </DialogFooter>
         </DialogContent>
