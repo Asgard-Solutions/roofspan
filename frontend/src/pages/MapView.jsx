@@ -105,9 +105,25 @@ export default function MapView() {
     }
     try {
       const { data } = await api.get(`/properties/geojson?territory_id=${territoryId}`);
-      map.getSource("properties").setData(data);
-      setPropCount(data.features.length);
-      setFeatures(data.features || []);
+      // Defensive: coerce coordinates to finite numbers and drop any out-of-range/invalid points so a
+      // single bad row can never stop MapLibre from rendering the rest.
+      const feats = (data.features || []).filter((f) => {
+        const c = f?.geometry?.coordinates;
+        return (
+          f?.geometry?.type === "Point" && Array.isArray(c) && c.length >= 2 &&
+          Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1])) &&
+          Number(c[0]) >= -180 && Number(c[0]) <= 180 &&
+          Number(c[1]) >= -90 && Number(c[1]) <= 90
+        );
+      }).map((f) => ({
+        ...f,
+        geometry: { ...f.geometry, coordinates: [Number(f.geometry.coordinates[0]), Number(f.geometry.coordinates[1])] },
+      }));
+      const normalized = { type: "FeatureCollection", features: feats };
+      map.getSource("properties").setData(normalized);
+      if (map.getLayer("prop-points")) map.setLayoutProperty("prop-points", "visibility", "visible");
+      setPropCount(feats.length);
+      setFeatures(feats);
     } catch (e) {
       toast.error(apiError(e));
     }
