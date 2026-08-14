@@ -73,6 +73,17 @@ class DevControlPlaneClient:
         kid, priv = keys.get_dev_signing_key()
         return ent.sign_entitlement(private_key=priv, kid=kid, claims=claims)
 
+    async def fetch_public_signing_keys(self) -> dict:
+        """DEV: publish the local dev PUBLIC verify key (kid -> PEM) so trusted-key recovery is
+        exercised without a network Control Plane. Never returns any private material."""
+        from cryptography.hazmat.primitives import serialization
+        kid, priv = keys.get_dev_signing_key()
+        pub_pem = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        return {kid: pub_pem}
+
     async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
                                       installation_id: str | None = None, seats: int | None = None) -> dict:
         """DEV: return a mock hosted-checkout URL (no external account, no Stripe secret)."""
@@ -150,6 +161,24 @@ class HttpControlPlaneClient:
         data = resp.json()
         lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
         return data["entitlement_jws"]
+
+    async def fetch_public_signing_keys(self) -> dict:
+        """Fetch the current Control Plane PUBLIC entitlement-verification keys (kid -> PEM) from the
+        configured HTTPS Control Plane. This is a PUBLIC, unauthenticated endpoint by design — it
+        returns verification (public) keys only; a private signing key never leaves the Control
+        Plane/KMS. Used by automatic trusted-key recovery after an upgrade removed the local cache.
+        The source is strictly the configured LICENSING_CONTROL_PLANE_URL (same trust anchor as
+        activation/refresh) — arbitrary URLs are never consulted."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"{self._base()}/signing-keys/public")
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Public signing-key fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Public signing-key fetch rejected ({resp.status_code})")
+        data = resp.json()
+        return data.get("keys", {}) or {}
 
     async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
                                       installation_id: str | None = None, seats: int | None = None) -> dict:

@@ -163,6 +163,7 @@ _UPGRADE_TMPL = (
     "LICENSING_MODE=http\n"
     "LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane\n"
     "CONTROL_PLANE_BASE_URL=https://cp.roofspan.io\n"
+    "LICENSING_TRUSTED_KEYS_DIR=C:\\ProgramData\\RoofSpan\\licensing\\trusted_keys\n"
 )
 
 
@@ -193,6 +194,52 @@ def test_reconcile_is_noop_when_nothing_missing_or_changed():
     template = "ROOFSPAN_VERSION=0.1.0\nLICENSING_MODE=http\n"
     new, changed = bs.reconcile_deployed_env(existing, template, installed_version="2.0.0")
     assert changed is False and new == existing
+
+
+# --- P0 upgrade hardening: trusted-key path + version reconciliation on an OLD deployed config -----
+_REAL_TEMPLATE = os.path.join(WINBUILD, "config", "roofspan.env.template")
+
+
+def test_real_template_sets_trusted_keys_dir_under_programdata():
+    """The shipped template MUST persist trusted CP verification keys under ProgramData (NOT Program
+    Files) so a major upgrade cannot delete them."""
+    body = _read(_REAL_TEMPLATE)
+    assert "LICENSING_TRUSTED_KEYS_DIR=C:\\ProgramData\\RoofSpan\\licensing\\trusted_keys" in body
+
+
+def test_upgrade_adds_trusted_keys_dir_and_updates_version_preserving_everything():
+    """Reproduces the broken 0.1.4 machine: deployed config has ROOFSPAN_VERSION=0.1.0 and NO
+    LICENSING_TRUSTED_KEYS_DIR. Upgrade reconciliation must ADD the trusted-key path, update the
+    version, and preserve DATABASE_URL + installation identity + secrets untouched."""
+    existing = (
+        "DATABASE_URL=postgresql+asyncpg://roofspan:REALPW@127.0.0.1:5442/roofspan\n"
+        "INSTALLATION_KEYS_DIR=C:\\ProgramData\\RoofSpan\\identity\n"
+        "JWT_SECRET=should-never-be-touched\n"
+        "ROOFSPAN_VERSION=0.1.0\n"
+        "LICENSING_MODE=http\n"
+    )
+    new, changed = bs.reconcile_deployed_env(existing, _read(_REAL_TEMPLATE), installed_version="0.1.5")
+    assert changed
+    assert "LICENSING_TRUSTED_KEYS_DIR=C:\\ProgramData\\RoofSpan\\licensing\\trusted_keys" in new
+    assert "ROOFSPAN_VERSION=0.1.5" in new and "ROOFSPAN_VERSION=0.1.0" not in new
+    assert "REALPW" in new
+    assert "JWT_SECRET=should-never-be-touched" in new                 # secret preserved verbatim
+    assert new.count("JWT_SECRET=") == 1
+    assert "INSTALLATION_KEYS_DIR=C:\\ProgramData\\RoofSpan\\identity" in new
+
+
+def test_upgrade_reconciliation_is_idempotent_on_repeat():
+    """Repeated upgrade/repair must not duplicate keys, re-add the trusted path, or churn secrets."""
+    existing = (
+        "DATABASE_URL=postgresql+asyncpg://roofspan:REALPW@127.0.0.1:5442/roofspan\n"
+        "ROOFSPAN_VERSION=0.1.0\n"
+        "LICENSING_MODE=http\n"
+    )
+    once, changed1 = bs.reconcile_deployed_env(existing, _read(_REAL_TEMPLATE), installed_version="0.1.5")
+    twice, changed2 = bs.reconcile_deployed_env(once, _read(_REAL_TEMPLATE), installed_version="0.1.5")
+    assert changed1 and changed2 is False and twice == once
+    assert once.count("LICENSING_TRUSTED_KEYS_DIR=") == 1
+    assert once.count("DATABASE_URL=") == 1
 
 
 def test_reconcile_never_overwrites_existing_nonsecret_value():

@@ -53,6 +53,33 @@ def test_fail_closed_when_persist_fails(secret_env):
         local_secrets.ensure_local_secrets()
 
 
+def test_upgrade_does_not_regenerate_existing_secrets(secret_env, caplog):
+    """P0 req 5: an in-place upgrade (secrets.env already present under preserved ProgramData) must
+    reuse the persisted secrets and NOT regenerate them (regenerating SECRETS_ENCRYPTION_KEY would
+    make locally-encrypted integration credentials undecryptable)."""
+    local_secrets.ensure_local_secrets()
+    jwt1, enc1 = os.environ["JWT_SECRET"], os.environ["SECRETS_ENCRYPTION_KEY"]
+    # simulate the upgraded backend starting fresh: env cleared, same persisted secrets.env present
+    del os.environ["JWT_SECRET"], os.environ["SECRETS_ENCRYPTION_KEY"]
+    with caplog.at_level("INFO", logger="roofspan.secrets"):
+        local_secrets.ensure_local_secrets()
+    assert os.environ["JWT_SECRET"] == jwt1
+    assert os.environ["SECRETS_ENCRYPTION_KEY"] == enc1
+    assert "Generated" not in caplog.text  # no new-secret generation on upgrade
+
+
+def test_only_missing_secret_is_generated_others_preserved(secret_env):
+    """If one persistent secret already exists, only the genuinely-missing one is generated; the
+    existing value is preserved (idempotent merge)."""
+    (secret_env / "secrets.env").write_text("JWT_SECRET=preserved-jwt\n")
+    local_secrets.ensure_local_secrets()
+    assert os.environ["JWT_SECRET"] == "preserved-jwt"          # kept as-is
+    assert os.environ["SECRETS_ENCRYPTION_KEY"]                 # generated
+    body = (secret_env / "secrets.env").read_text()
+    assert "JWT_SECRET=preserved-jwt" in body and "SECRETS_ENCRYPTION_KEY=" in body
+
+
+
 def test_owner_seed_double_gated(monkeypatch):
     import server
     from licensing import config as lc

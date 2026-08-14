@@ -30,6 +30,15 @@ SEAT_ADVISORY_LOCK_KEY = 748419  # arbitrary constant; serializes concurrent sea
 # In-process effective-state snapshot for the guard middleware (avoids per-request DB/CP work).
 _snapshot: dict = {"state": None, "at": 0.0}
 
+# Throttle for automatic trusted-key recovery so a persistent CP outage cannot hammer the network.
+_recovery: dict = {"at": 0.0}
+RECOVERY_THROTTLE_SECONDS = float(getattr(config, "TRUSTED_KEY_RECOVERY_THROTTLE_SECONDS", 300))
+
+
+def reset_recovery_throttle() -> None:
+    """Test/ops hook: allow the next trusted-key recovery attempt immediately."""
+    _recovery["at"] = 0.0
+
 
 def invalidate_snapshot() -> None:
     _snapshot["state"] = None
@@ -197,14 +206,80 @@ async def refresh(db: AsyncSession, *, force: bool = False) -> dict:
 
 
 async def load_cached_entitlement(db: AsyncSession) -> Optional[ent.Entitlement]:
-    """Load and cryptographically re-verify the cached entitlement. Returns None if absent/invalid."""
+    """Load and cryptographically re-verify the cached entitlement.
+
+    Returns the verified entitlement, or None if absent/expired/tampered. If verification fails ONLY
+    because the signing key id is not in the local trusted set (e.g. an MSI major upgrade replaced
+    Program Files and removed the cached CP public key), this attempts a safe, throttled recovery of
+    the Control Plane's PUBLIC verification keys and re-verifies. Recovery NEVER invents trust: keys
+    come only from the configured HTTPS Control Plane, and a tampered/expired token can never be made
+    valid by fetching public keys. Failure modes are logged distinctly (never logging secrets/JWS)."""
     row = await _get_cache_row(db)
     if row is None or not row.entitlement_jws:
+        logger.debug("licensing: no cached entitlement present")
         return None
+    kid = row.kid or "?"
     try:
         return ent.verify_entitlement(row.entitlement_jws, keys.get_trusted_verify_keys())
-    except ent.EntitlementError:
-        return None  # expired (offline grace exhausted) or tampered -> treated as no entitlement
+    except ent.EntitlementError as e:
+        reason = getattr(e, "reason", "error")
+        if reason == ent.R_UNKNOWN_KID:
+            logger.warning(
+                "licensing: cached entitlement kid=%s is not in the local trusted key set; "
+                "attempting Control Plane public-key recovery", kid)
+            if await _maybe_recover_trusted_keys(db):
+                try:
+                    result = ent.verify_entitlement(row.entitlement_jws, keys.get_trusted_verify_keys())
+                    logger.info("licensing: entitlement re-verified after trusted-key recovery (kid=%s)", kid)
+                    return result
+                except ent.EntitlementError as e2:
+                    logger.error("licensing: re-verification still failed after key recovery "
+                                 "(kid=%s, reason=%s) — failing closed", kid, getattr(e2, "reason", "error"))
+                    return None
+            logger.error("licensing: trusted-key recovery unavailable (kid=%s) — failing closed "
+                         "(cached subscription state NOT mutated)", kid)
+            return None
+        if reason == ent.R_EXPIRED:
+            logger.info("licensing: cached entitlement expired — offline grace exhausted (kid=%s)", kid)
+            return None
+        # bad_signature / malformed / invalid_claims -> possible tampering; recovery cannot help.
+        logger.error("licensing: cached entitlement failed verification (kid=%s, reason=%s) — not honored", kid, reason)
+        return None
+
+
+async def _maybe_recover_trusted_keys(db: AsyncSession) -> bool:
+    """Safely recover the Control Plane PUBLIC verification keys for an activated http installation.
+
+    Guards: only runs in http mode for an activated installation; throttled so a persistent failure
+    (CP unavailable) cannot hammer the network. Returns True only if at least one valid public key was
+    fetched from the configured Control Plane and cached. Never downloads or stores private keys."""
+    if config.LICENSING_MODE != "http":
+        return False
+    if not await is_activated(db):
+        return False
+    now = time.monotonic()
+    if _recovery["at"] and (now - _recovery["at"]) < RECOVERY_THROTTLE_SECONDS:
+        return False
+    _recovery["at"] = now  # mark attempt (throttles repeated failures)
+    client = control_plane.get_client()
+    fetch = getattr(client, "fetch_public_signing_keys", None)
+    if fetch is None:
+        return False
+    try:
+        pub = await fetch()
+    except control_plane.ControlPlaneUnavailable as e:
+        logger.warning("licensing: Control Plane unavailable during trusted-key recovery: %s", e)
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("licensing: trusted-key recovery error: %s", e)
+        return False
+    written = keys.cache_trusted_cp_keys(pub or {})
+    if written:
+        _recovery["at"] = 0.0  # success -> clear throttle
+        logger.info("licensing: recovered %d trusted CP public key(s) from the Control Plane", written)
+        return True
+    logger.warning("licensing: Control Plane returned no usable public keys during recovery")
+    return False
 
 
 async def get_effective(db: AsyncSession) -> state_mod.EffectiveStatus:
@@ -250,8 +325,15 @@ async def effective_state_cached() -> str:
 
 
 async def bootstrap(db: AsyncSession) -> None:
-    """Startup: ensure installation identity and a cached entitlement exist."""
+    """Startup: ensure installation identity and a cached, verifiable entitlement exist."""
     await get_installation(db)
+    if config.LICENSING_MODE == "http" and not config.trusted_keys_dir_is_persistent():
+        # Production must persist trusted CP keys OUTSIDE Program Files (a major upgrade replaces it).
+        logger.warning(
+            "licensing: LICENSING_TRUSTED_KEYS_DIR is not set to a persistent path (using %s). "
+            "On Windows this MUST point under ProgramData (e.g. %s) so a major upgrade cannot delete "
+            "trusted Control Plane verification keys.",
+            config.TRUSTED_KEYS_DIR, config.TRUSTED_KEYS_PROGRAMDATA_DEFAULT)
     if config.LICENSING_MODE == "http" and not await is_activated(db):
         # Fresh production install: nothing to refresh until the owner completes setup + activation.
         # Never sign a Control Plane request with the provisional local id (would 404 at the CP).
@@ -259,3 +341,9 @@ async def bootstrap(db: AsyncSession) -> None:
     row = await _get_cache_row(db)
     if row is None or not row.entitlement_jws:
         await refresh(db, force=True)
+        return
+    # A cached entitlement exists. Verify it now so that, if a prior upgrade removed the local trusted
+    # CP key cache, startup auto-recovers the public keys and re-verifies BEFORE the guard evaluates —
+    # an already-ACTIVE customer is never locked out by a replaceable-location key loss.
+    await load_cached_entitlement(db)
+    invalidate_snapshot()
