@@ -175,8 +175,12 @@ async def activate(db: AsyncSession, *, company_name: str, requested_seats: int,
     license_row = License(company_id=company.id, installation_id=installation.id, product=config.PRODUCT)
     db.add(license_row)
     await db.flush()
-    subscription = Subscription(company_id=company.id, license_id=license_row.id, state="ACTIVE", seats=seats,
-                                current_period_end=datetime.now(timezone.utc) + timedelta(days=config.BILLING_PERIOD_DAYS))
+    # Activation registers identity ONLY — it does NOT grant paid access. The subscription starts in the
+    # fail-closed non-active state (SUSPENDED, 0 usable seats) so Office stays locked until Stripe
+    # confirms payment. Stripe is authoritative: a signature-verified webhook (checkout.session.completed
+    # / customer.subscription.* / invoice.paid) flips this to ACTIVE with the PURCHASED seat quantity.
+    subscription = Subscription(company_id=company.id, license_id=license_row.id, state="SUSPENDED", seats=0,
+                                current_period_end=None)
     db.add(subscription)
     await db.commit()
     await db.refresh(installation)
@@ -186,8 +190,9 @@ async def activate(db: AsyncSession, *, company_name: str, requested_seats: int,
     token = await _issue_entitlement(db, installation=installation, license_row=license_row,
                                      subscription=subscription, reason="activation")
     await audit(db, actor=str(installation.id), action="installation.activate", entity_type="installation",
-                entity_id=str(installation.id), detail={"company_id": str(company.id), "seats": seats,
-                                                        "software_version": software_version})
+                entity_id=str(installation.id), detail={"company_id": str(company.id),
+                                                        "requested_seats": seats, "granted_seats": 0,
+                                                        "state": "SUSPENDED", "software_version": software_version})
     return {
         "installation_id": str(installation.id),
         "company_id": str(company.id),
