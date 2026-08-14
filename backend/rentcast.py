@@ -17,10 +17,23 @@ def occupancy_status(owner_occupied):
     return "unknown"
 
 
+def _first_value(*vals):
+    for v in vals:
+        if isinstance(v, list) and v:
+            return str(v[0]).strip() or None
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def normalize_rentcast(raw: dict) -> dict:
     owner = raw.get("owner") or {}
     names = owner.get("names") or []
     mailing = (owner.get("mailingAddress") or {}).get("formattedAddress")
+    # RentCast rarely includes contact info, but pull phone/email wherever it does provide them.
+    phone = _first_value(owner.get("phone"), owner.get("phones"), owner.get("telephone"),
+                         raw.get("ownerPhone"))
+    email = _first_value(owner.get("email"), owner.get("emails"), raw.get("ownerEmail"))
     return {
         "external_id": raw.get("id"),
         "source": "rentcast",
@@ -42,6 +55,8 @@ def normalize_rentcast(raw: dict) -> dict:
             "name": ", ".join(names) if names else "",
             "type": owner.get("type"),
             "mailing_address": mailing,
+            "phone": phone,
+            "email": email,
         },
         "raw": raw,
     }
@@ -122,6 +137,9 @@ def generate_sample_properties(territory_id: str, geometry: dict, count: int):
         zipc = f"{78700 + (idx % 40):05d}"
         owner_name = f"{_FIRST[idx % len(_FIRST)]} {_LAST[(idx * 3) % len(_LAST)]}"
         occupied = rnd.random() > 0.35
+        # ~half the sample owners have contact info (demonstrates the "contactable" flag/filter)
+        has_phone = rnd.random() > 0.5
+        has_email = rnd.random() > 0.55
         out.append({
             "external_id": f"sample-{territory_id}-{idx}",
             "source": "sample",
@@ -143,6 +161,8 @@ def generate_sample_properties(territory_id: str, geometry: dict, count: int):
                 "name": owner_name,
                 "type": "Individual",
                 "mailing_address": f"{addr1}, {city}, {base_state} {zipc}" if occupied else f"PO Box {200 + idx}, {city}, {base_state} {zipc}",
+                "phone": f"(512) 555-{1000 + idx % 9000:04d}" if has_phone else None,
+                "email": f"{owner_name.split()[0].lower()}.{owner_name.split()[-1].lower()}@example.com" if has_email else None,
             },
             "raw": {"sample": True},
         })

@@ -1016,3 +1016,11 @@ Clarified: "RestCast" = **RentCast** (app was already modeled for it: `propertie
 - **Files changed:** `backend/rentcast.py`, `backend/routers/imports.py`, `backend/routers/properties.py`, `backend/schemas_phase2.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx`, `frontend/src/components/PropertySheet.jsx`. Migration: none.
 - **Verified:** rentcast-zip 2/2 + geocode 6/6 pass; live e2e (sample): geojson returns 25 features with occupancy mix {owned:13, rented:12} + owner_name; property detail occupancy=rented; convert-to-lead prefilled "Maria Miller" + "102 Maple St, Field City, TX 78701"; map legend shows all four colors; import dialog shows "imports all".
 
+
+## Added (2026-06) — Occupancy filters + lead contact enrichment
+- **Occupancy map filters:** MapView "Show properties" panel with All / Owned / Rented / Unknown pills + a "Contactable leads only" toggle. Applied via maplibre `setFilter` on `prop-points`/`prop-hit` using feature props `occupancy` and `contactable` (no reload).
+- **Lead enrichment (phone/email):** `rentcast.normalize_rentcast` now extracts owner `phone`/`email` best-effort (owner.phone/phones/telephone/ownerPhone, owner.email/emails/ownerEmail). `imports.py` persists them on the owner `PropertyContact` (create + update). `/properties/geojson` adds a `contactable` boolean (owner has phone or email). PropertySheet shows a "Contactable" / "No contact info" badge plus the owner phone/email; `convert-to-lead` already prefills phone/email from the owner.
+- **Sample data:** `generate_sample_properties` now gives ~half the owners phone/email so the flag/filter are demonstrable without a RentCast key.
+- **Files changed:** `backend/rentcast.py`, `backend/routers/imports.py`, `backend/routers/properties.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/PropertySheet.jsx`. Migration: none.
+- **Verified:** rentcast-zip 2/2 + geocode 6/6 pass; live e2e (sample): geojson 25 features → occupancy {owned:14, rented:11}, contactable {True:22, False:3}; re-import deduped; screenshot shows the filter panel (Owned + Contactable On) and legend. Real RentCast phone/email only populate when the provider returns them.
+

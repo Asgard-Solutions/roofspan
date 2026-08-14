@@ -132,8 +132,15 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner / Renter</div>
               {owner ? (
                 <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="owner-info">
-                  <div className="flex items-center gap-2 font-medium text-slate-900"><User className="h-4 w-4 text-slate-400" /> {owner.name}</div>
+                  <div className="flex flex-wrap items-center gap-2 font-medium text-slate-900">
+                    <User className="h-4 w-4 text-slate-400" /> {owner.name}
+                    {(owner.phone || owner.email)
+                      ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800" data-testid="contactable-badge">Contactable</span>
+                      : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500" data-testid="no-contact-badge">No contact info</span>}
+                  </div>
                   <div className="mt-1 text-slate-500">{owner.contact_type || "—"} · {p.occupancy === "owned" ? "Owner-occupied" : p.occupancy === "rented" ? "Rented (non-owner-occupied)" : "Occupancy unknown"}</div>
+                  {owner.phone && <div className="mt-1 text-slate-700" data-testid="owner-phone">📞 {owner.phone}</div>}
+                  {owner.email && <div className="mt-0.5 text-slate-700" data-testid="owner-email">✉️ {owner.email}</div>}
                   {owner.mailing_address && <div className="mt-1 text-slate-500">Mailing: {owner.mailing_address}</div>}
                 </div>
               ) : (

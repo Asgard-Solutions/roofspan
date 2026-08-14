@@ -140,8 +140,10 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                         oc.name = owner.get("name") or oc.name
                         oc.contact_type = owner.get("type") or oc.contact_type
                         oc.mailing_address = owner.get("mailing_address") or oc.mailing_address
+                        oc.phone = owner.get("phone") or oc.phone
+                        oc.email = owner.get("email") or oc.email
                     elif owner.get("name"):
-                        db.add(PropertyContact(property_id=existing.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address")))
+                        db.add(PropertyContact(property_id=existing.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address"), phone=owner.get("phone"), email=owner.get("email")))
                     job.updated_count += 1
                 else:
                     p = Property(
@@ -155,7 +157,7 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                     db.add(p)
                     await db.flush()
                     if owner.get("name"):
-                        db.add(PropertyContact(property_id=p.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address")))
+                        db.add(PropertyContact(property_id=p.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address"), phone=owner.get("phone"), email=owner.get("email")))
                     job.created_count += 1
                 job.processed += 1
                 if job.processed % 10 == 0:

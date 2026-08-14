@@ -72,7 +72,7 @@ async def properties_geojson(
         ocs = (await db.execute(select(PropertyContact).where(
             PropertyContact.property_id.in_(prop_ids), PropertyContact.kind == "owner"))).scalars().all()
         for oc in ocs:
-            owners.setdefault(oc.property_id, oc.name)
+            owners.setdefault(oc.property_id, oc)
     features = [
         {
             "type": "Feature",
@@ -83,7 +83,8 @@ async def properties_geojson(
                 "do_not_knock": p.do_not_knock,
                 "property_type": p.property_type,
                 "occupancy": occupancy_status(p.owner_occupied),
-                "owner_name": owners.get(p.id) or "",
+                "owner_name": (owners.get(p.id).name if owners.get(p.id) else "") or "",
+                "contactable": bool(owners.get(p.id) and (owners[p.id].phone or owners[p.id].email)),
             },
         }
         for p in rows

@@ -47,6 +47,8 @@ export default function MapView() {
   const [zipHit, setZipHit] = useState(null);
   const [mapConfig, setMapConfig] = useState(null);
   const [baseLayer, setBaseLayer] = useState("map");
+  const [occFilter, setOccFilter] = useState("all");
+  const [contactableOnly, setContactableOnly] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -252,6 +254,20 @@ export default function MapView() {
     loadProperties(t.id);
   };
 
+  const applyPropFilter = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer("prop-points")) return;
+    const clauses = ["all"];
+    if (occFilter !== "all") clauses.push(["==", ["get", "occupancy"], occFilter]);
+    if (contactableOnly) clauses.push(["==", ["get", "contactable"], true]);
+    const f = clauses.length > 1 ? clauses : null;
+    map.setFilter("prop-points", f);
+    if (map.getLayer("prop-hit")) map.setFilter("prop-hit", f);
+  }, [occFilter, contactableOnly]);
+
+  useEffect(() => { applyPropFilter(); }, [applyPropFilter]);
+
+
   const switchBase = (layer) => {
     const map = mapRef.current;
     if (!map || layer === baseLayer) return;
@@ -447,6 +463,34 @@ export default function MapView() {
                 </>
               )}
             </div>
+
+            {/* Property filters — focus reps on homeowners / contactable leads */}
+            <div className="space-y-2 border-b border-border p-4" data-testid="property-filters">
+              <Label className="text-xs font-semibold text-slate-600">Show properties</Label>
+              <div className="flex flex-wrap gap-1">
+                {[["all", "All"], ["owned", "Owned"], ["rented", "Rented"], ["unknown", "Unknown"]].map(([v, label]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setOccFilter(v)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${occFilter === v ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                    data-testid={`occ-filter-${v}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setContactableOnly((v) => !v)}
+                className={`flex w-full items-center justify-between rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${contactableOnly ? "border-green-600 bg-green-50 text-green-800" : "border-border bg-white text-slate-600 hover:bg-slate-50"}`}
+                data-testid="contactable-toggle"
+              >
+                <span>Contactable leads only</span>
+                <span>{contactableOnly ? "On" : "Off"}</span>
+              </button>
+            </div>
+
 
             {/* Draw controls */}
             {canManage && (
