@@ -425,3 +425,11 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Bug: property GeoJSON source + `prop-points` circle layer could be added before the style finished loading; suspected silent MapLibre rejection so pins might not render.
 - Fix (`frontend/src/pages/MapView.jsx`): sources/layers now added via `initMapLayers()` gated on `map.isStyleLoaded()` (runs on `load` event, or immediately if already loaded, deferring via `map.once("load")` otherwise); idempotent `getSource`/`getLayer` guards prevent duplicate-definition errors; added `map.on("error", ...)` that `console.error`s `[MapLibre error]`.
 - Verified by testing_agent (iteration_12): frontend 100%, blue pins render after selecting territories (1 & 20 properties), correct counts, ZERO `[MapLibre error]` and no JS errors. retest_needed=false.
+
+## Map property clustering (2026-06)
+- Feature: cluster property pins at low zoom so dense territories stay readable + fast (`frontend/src/pages/MapView.jsx`).
+- IMPORTANT build note: MapLibre geojson WORKER does not reliably tile a `geojson` source in this webpack build (both `cluster:true` and plain geojson failed to render — verified iteration_13/14). Solution: main-thread clustering via `supercluster@9.0.0` rendered as HTML DOM markers (`maplibregl.Marker`), which bypass the worker. Removed the `properties` geojson source + `prop-*` layers.
+- Impl: `loadProperties()` builds a Supercluster index (radius 55, maxZoom 16) from GET /api/properties/geojson; `renderClusters()` runs on territory-load and map `moveend`, computes `index.getClusters(bbox, round(zoom))` and (re)places DOM markers. Cluster marker (`data-testid=map-cluster`) shows count, click -> `getClusterExpansionZoom` -> `easeTo`. Point marker (`data-testid=map-property-pin`) blue/red(do_not_knock), click -> PropertySheet.
+- Also fixed: OSM raster `maxzoom:19` + Map `maxZoom:19` (eliminates z20 tile CORS `[MapLibre error]`).
+- Verified testing_agent iteration_15: frontend 100% (7/7), retest_needed=false, zero MapLibre/JS errors.
+- Dep added: `supercluster@9.0.0` (yarn add, package.json updated).

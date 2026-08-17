@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as maplibregl from "maplibre-gl";
+import Supercluster from "supercluster";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
@@ -19,7 +20,7 @@ const COLORS = ["#2563EB", "#EA580C", "#16A34A", "#9333EA", "#DC2626", "#0891B2"
 function baseStyle() {
   return {
     version: 8,
-    sources: { osm: { type: "raster", tiles: [OSM], tileSize: 256, attribution: "© OpenStreetMap contributors" } },
+    sources: { osm: { type: "raster", tiles: [OSM], tileSize: 256, maxzoom: 19, attribution: "© OpenStreetMap contributors" } },
     layers: [{ id: "osm", type: "raster", source: "osm" }],
   };
 }
@@ -34,6 +35,9 @@ export default function MapView() {
   const drawing = useRef(false);
   const drawPts = useRef([]);
   const openSheetRef = useRef(null);
+  const superRef = useRef(null);
+  const markersRef = useRef([]);
+  const clusterZoomMax = 16;
 
   const [territories, setTerritories] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -74,22 +78,77 @@ export default function MapView() {
     });
   }, []);
 
+  const clearMarkers = useCallback(() => {
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = [];
+  }, []);
+
+  // Main-thread clustering (supercluster) rendered with HTML DOM markers. We do NOT use a MapLibre
+  // geojson source/layer for property pins because the geojson worker does not reliably tile the
+  // 'properties' source in this webpack build. DOM markers (maplibregl.Marker) always render.
+  const renderClusters = useCallback(() => {
+    const map = mapRef.current;
+    const index = superRef.current;
+    clearMarkers();
+    if (!map || !index) return;
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const zoom = Math.round(map.getZoom());
+    const features = index.getClusters(bbox, zoom);
+    for (const f of features) {
+      const [lng, lat] = f.geometry.coordinates;
+      const el = document.createElement("div");
+      if (f.properties.cluster) {
+        const count = f.properties.point_count;
+        const size = count >= 50 ? 46 : count >= 10 ? 38 : 30;
+        const color = count >= 50 ? "#1D4ED8" : count >= 10 ? "#3B82F6" : "#60A5FA";
+        el.setAttribute("data-testid", "map-cluster");
+        el.style.cssText = `width:${size}px;height:${size}px;background:${color};color:#fff;border:2px solid #fff;border-radius:9999px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35)`;
+        el.textContent = f.properties.point_count_abbreviated;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          try {
+            const z = Math.min(index.getClusterExpansionZoom(f.properties.cluster_id), 19);
+            map.easeTo({ center: [lng, lat], zoom: z, duration: 500 });
+          } catch (err) { /* noop */ }
+        });
+      } else {
+        const dnk = !!f.properties.do_not_knock;
+        el.setAttribute("data-testid", "map-property-pin");
+        el.style.cssText = `width:16px;height:16px;background:${dnk ? "#DC2626" : "#2563EB"};border:2px solid #fff;border-radius:9999px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.35)`;
+        const id = f.properties.id;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (drawing.current) return;
+          if (id && openSheetRef.current) openSheetRef.current(id);
+        });
+      }
+      const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map);
+      markersRef.current.push(marker);
+    }
+  }, [clearMarkers]);
+
   const loadProperties = useCallback(async (territoryId) => {
     const map = mapRef.current;
-    if (!map || !map.getSource("properties")) return;
+    if (!map) return;
     if (!territoryId) {
-      map.getSource("properties").setData({ type: "FeatureCollection", features: [] });
+      superRef.current = null;
+      clearMarkers();
       setPropCount(0);
       return;
     }
     try {
       const { data } = await api.get(`/properties/geojson?territory_id=${territoryId}`);
-      map.getSource("properties").setData(data);
-      setPropCount(data.features.length);
+      const feats = (data.features || []).filter((f) => f?.geometry?.type === "Point");
+      const index = new Supercluster({ radius: 55, maxZoom: clusterZoomMax });
+      index.load(feats);
+      superRef.current = index;
+      setPropCount(feats.length);
+      renderClusters();
     } catch (e) {
       toast.error(apiError(e));
     }
-  }, []);
+  }, [renderClusters, clearMarkers]);
 
   const fitToTerritory = useCallback((t) => {
     const map = mapRef.current;
@@ -122,6 +181,7 @@ export default function MapView() {
         style: baseStyle(),
         center: data.default_center,
         zoom: data.default_zoom,
+        maxZoom: 19,
       });
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       mapRef.current = map;
@@ -140,26 +200,15 @@ export default function MapView() {
           map.once("load", initMapLayers);
           return;
         }
-        if (map.getLayer("prop-points")) return; // already initialized (idempotent)
+        if (map.getLayer("draw-vertices")) return; // already initialized (idempotent)
 
         if (!map.getSource("territories")) map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         if (!map.getLayer("terr-fill")) map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
         if (!map.getLayer("terr-line")) map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
 
-        if (!map.getSource("properties")) map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        if (!map.getLayer("prop-points")) map.addLayer({
-          id: "prop-points", type: "circle", source: "properties",
-          paint: {
-            "circle-radius": 8,
-            "circle-color": ["case", ["get", "do_not_knock"], "#DC2626", "#2563EB"],
-            "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
-          },
-        });
-        // Larger invisible hit target for easier clicking / touch (accessibility)
-        if (!map.getLayer("prop-hit")) map.addLayer({
-          id: "prop-hit", type: "circle", source: "properties",
-          paint: { "circle-radius": 16, "circle-color": "#000000", "circle-opacity": 0 },
-        });
+        // NOTE: property clusters/points are rendered as HTML DOM markers (see renderClusters), NOT as a
+        // geojson source+layer. In this webpack build the geojson worker does not reliably tile the
+        // 'properties' source, so DOM markers (maplibregl.Marker) are used to guarantee rendering.
 
         if (!map.getSource("draw")) map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         if (!map.getLayer("draw-fill")) map.addLayer({ id: "draw-fill", type: "fill", source: "draw", paint: { "fill-color": "#EA580C", "fill-opacity": 0.15 } });
@@ -176,18 +225,9 @@ export default function MapView() {
             setDrawCount(drawPts.current.length);
           }
         });
-        map.on("click", "prop-points", (e) => {
-          if (drawing.current) return;
-          const id = e.features?.[0]?.properties?.id;
-          if (id && openSheetRef.current) openSheetRef.current(id);
-        });
-        map.on("click", "prop-hit", (e) => {
-          if (drawing.current) return;
-          const id = e.features?.[0]?.properties?.id;
-          if (id && openSheetRef.current) openSheetRef.current(id);
-        });
-        map.on("mouseenter", "prop-hit", () => { map.getCanvas().style.cursor = "pointer"; });
-        map.on("mouseleave", "prop-hit", () => { map.getCanvas().style.cursor = ""; });
+
+        // Re-cluster (and re-place DOM markers) for the new viewport whenever the map settles.
+        map.on("moveend", () => renderClusters());
 
         loadTerritories().then((list) => setTerritorySource(list, null));
       };
