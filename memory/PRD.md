@@ -420,3 +420,8 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - **Tests**: website jest 12/12 (config 7 + content 5); mobile pairing/version/connection Node 11 assertions; all changed mobile files babel-parse OK; marketing `yarn build` compiles clean. Mobile paywall visual is device-only (Expo) → HUMAN REQUIRED native verification.
 - **Env var added**: `EXPO_PUBLIC_WEB_APP_URL` (default `https://roofspan.io`) — set to the exact web billing/account URL if different.
 
+
+## MapView MapLibre source/layer timing fix (2026-06)
+- Bug: property GeoJSON source + `prop-points` circle layer could be added before the style finished loading; suspected silent MapLibre rejection so pins might not render.
+- Fix (`frontend/src/pages/MapView.jsx`): sources/layers now added via `initMapLayers()` gated on `map.isStyleLoaded()` (runs on `load` event, or immediately if already loaded, deferring via `map.once("load")` otherwise); idempotent `getSource`/`getLayer` guards prevent duplicate-definition errors; added `map.on("error", ...)` that `console.error`s `[MapLibre error]`.
+- Verified by testing_agent (iteration_12): frontend 100%, blue pins render after selecting territories (1 & 20 properties), correct counts, ZERO `[MapLibre error]` and no JS errors. retest_needed=false.

@@ -126,13 +126,28 @@ export default function MapView() {
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       mapRef.current = map;
 
-      map.on("load", () => {
-        map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
-        map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
+      // Surface any MapLibre errors (style/source/layer/tile) that would otherwise fail silently.
+      map.on("error", (e) => {
+        // eslint-disable-next-line no-console
+        console.error("[MapLibre error]", (e && e.error) || e);
+      });
 
-        map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({
+      const initMapLayers = () => {
+        // Guard: never add sources/layers before the style is ready.
+        if (!map.isStyleLoaded()) {
+          // eslint-disable-next-line no-console
+          console.warn("[MapView] initMapLayers called before style loaded — deferring");
+          map.once("load", initMapLayers);
+          return;
+        }
+        if (map.getLayer("prop-points")) return; // already initialized (idempotent)
+
+        if (!map.getSource("territories")) map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!map.getLayer("terr-fill")) map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
+        if (!map.getLayer("terr-line")) map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
+
+        if (!map.getSource("properties")) map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!map.getLayer("prop-points")) map.addLayer({
           id: "prop-points", type: "circle", source: "properties",
           paint: {
             "circle-radius": 8,
@@ -141,16 +156,16 @@ export default function MapView() {
           },
         });
         // Larger invisible hit target for easier clicking / touch (accessibility)
-        map.addLayer({
+        if (!map.getLayer("prop-hit")) map.addLayer({
           id: "prop-hit", type: "circle", source: "properties",
           paint: { "circle-radius": 16, "circle-color": "#000000", "circle-opacity": 0 },
         });
 
-        map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "draw-fill", type: "fill", source: "draw", paint: { "fill-color": "#EA580C", "fill-opacity": 0.15 } });
-        map.addLayer({ id: "draw-line", type: "line", source: "draw", paint: { "line-color": "#EA580C", "line-width": 2, "line-dasharray": [2, 1] } });
-        map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 4, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
+        if (!map.getSource("draw")) map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!map.getLayer("draw-fill")) map.addLayer({ id: "draw-fill", type: "fill", source: "draw", paint: { "fill-color": "#EA580C", "fill-opacity": 0.15 } });
+        if (!map.getLayer("draw-line")) map.addLayer({ id: "draw-line", type: "line", source: "draw", paint: { "line-color": "#EA580C", "line-width": 2, "line-dasharray": [2, 1] } });
+        if (!map.getSource("draw-pts")) map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!map.getLayer("draw-vertices")) map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 4, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
 
         loadedRef.current = true;
 
@@ -175,7 +190,12 @@ export default function MapView() {
         map.on("mouseleave", "prop-hit", () => { map.getCanvas().style.cursor = ""; });
 
         loadTerritories().then((list) => setTerritorySource(list, null));
-      });
+      };
+
+      // Only add sources/layers once the style is ready: use the load event, or run
+      // immediately if the style is already loaded (e.g. cached/fast init).
+      if (map.isStyleLoaded()) initMapLayers();
+      else map.on("load", initMapLayers);
     });
     return () => {
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }

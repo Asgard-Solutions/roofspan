@@ -1,0 +1,23 @@
+{
+  "summary": "Verified MapView MapLibre source/layer timing bug fix. Logged in as Owner, navigated to Map, and confirmed the OSM base map renders inside [data-testid=map-container] with a valid canvas. Selected two existing territories (TEST_P4_Terr_8e66d2 with 1 property, TEST_Territory_f7843e with 20 properties) and confirmed blue property circle pins visibly render on the map after selection. selected-summary correctly reports property counts. Console captured: ZERO occurrences of '[MapLibre error]' and no React/JS pageerrors — only benign WebGL 'GPU stall due to ReadPixels' warnings. The 'properties' source and 'prop-points' circle layer are being added successfully after style load, no silent rejection.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MapView.jsx (~200 lines of logic) is manageable but the init useEffect is dense; consider extracting initMapLayers into a module for readability.",
+    "loadProperties/setTerritorySource silently no-op if source not yet added — fine, but a single console.debug could aid future debugging.",
+    "Property pin click uses two layers (prop-points + prop-hit); ensure no double-open of PropertySheet when both fire — currently both call openSheetRef with same id so effectively idempotent, OK."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "None — used existing seeded territories (TEST_P4_Terr_8e66d2 with 1 property, TEST_Territory_f7843e with 20 properties).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Owner login works. 12 territories already seeded (TEST_* prefix). Map page loads OSM raster tiles and property pins render as expected. PropertySheet-on-pin-click was not manually verified by click coordinates (pin positions were not deterministic from viewport center), but the click handlers are wired to both prop-points and prop-hit layers, and code path is correct. If deeper pin-click verification is needed, use maplibre queryRenderedFeatures via page.evaluate to get a pin's screen coord before clicking.",
+  "rca of the issue": "Fix in MapView.jsx correctly defers addSource('properties') + addLayer('prop-points') until map.on('load') (with idempotent getSource/getLayer guards) and attaches map.on('error') to surface MapLibre errors. Verified: no '[MapLibre error]' logged, pins render on territory selection, selected-summary property count matches. Bug fix confirmed."
+}
