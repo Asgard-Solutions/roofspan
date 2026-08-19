@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from urllib.parse import urlparse, unquote
 
@@ -68,7 +69,12 @@ def run_migrations() -> None:
     Fails loudly if a migration cannot be applied.
     """
     ensure_database()
-    root = os.path.dirname(os.path.abspath(__file__))
+    # In the PyInstaller frozen service, alembic.ini + alembic/ are bundled datas under sys._MEIPASS
+    # (the ONEDIR _internal dir), NOT relative to the source checkout / current working directory.
+    if getattr(sys, "frozen", False):
+        root = sys._MEIPASS
+    else:
+        root = os.path.dirname(os.path.abspath(__file__))
     cfg = Config(os.path.join(root, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(root, "alembic"))
     command.upgrade(cfg, "head")

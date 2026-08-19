@@ -217,7 +217,7 @@ def make_service_class(svc_name: str, svc_display: str, worker_factory, log_file
                     pass
                 # Report a nonzero service-specific error so SCM does NOT think the start succeeded.
                 self.ReportServiceStatus(win32service.SERVICE_STOPPED,
-                                         win32ExitCode=win32service.ERROR_SERVICE_SPECIFIC_ERROR,
+                                         win32ExitCode=win32service.SERVICE_SPECIFIC_ERROR,
                                          svcExitCode=1)
 
     return _RoofSpanService

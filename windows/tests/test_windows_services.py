@@ -254,6 +254,67 @@ def test_backend_uses_controllable_server_not_blocking_run():
     assert "use_colors=False" in src, "uvicorn.Config must set use_colors=False for a console-less service"
 
 
+def test_service_failure_path_uses_valid_pywin32_constant():
+    """Regression: pywin32 has SERVICE_SPECIFIC_ERROR, NOT ERROR_SERVICE_SPECIFIC_ERROR. Using the wrong
+    name crashes the SCM host while reporting a failed start."""
+    src = (WINBUILD / "roofspan_service.py").read_text(encoding="utf-8")
+    assert "win32service.ERROR_SERVICE_SPECIFIC_ERROR" not in src, "invalid pywin32 constant"
+    assert "win32service.SERVICE_SPECIFIC_ERROR" in src, "must use the valid pywin32 constant"
+    assert "svcExitCode=1" in src, "nonzero failed-start exit code must be preserved"
+
+
+def test_backend_surfaces_and_logs_lifespan_startup_failure(tmp_path, monkeypatch):
+    """When uvicorn exits with started=False (FastAPI lifespan startup failed), the worker must surface a
+    REAL error and the underlying exception/traceback must land in backend-service.log - not only the
+    generic 'reported not started'."""
+    import logging
+    import uvicorn
+
+    import backend_entry
+
+    monkeypatch.setenv("ROOFSPAN_DATA_ROOT", str(tmp_path))
+
+    class _FakeServer:
+        def __init__(self, config):
+            self.started = False
+            self.should_exit = False
+
+        def run(self):
+            # Mirror uvicorn: log the lifespan failure via uvicorn.error, then RETURN (no re-raise).
+            logging.getLogger("uvicorn.error").error(
+                "Application startup failed. Exiting.\nTraceback (most recent call last):\n"
+                "  ...\nRuntimeError: INJECTED_LIFESPAN_BOOM")
+            # started stays False
+
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+
+    log = __import__("roofspan_service").get_logger("bt-fail", "backend-service.log")
+    worker = backend_entry.BackendWorker(log)
+    worker._provision_database = lambda: None  # DB bootstrap is out of scope for this test
+
+    worker.start(on_ready=None)
+    with pytest.raises(Exception) as ei:
+        worker.wait_ready(timeout=5)
+    assert "startup failed" in str(ei.value).lower() or "lifespan" in str(ei.value).lower()
+
+    for h in log.handlers:
+        try:
+            h.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    logfile = tmp_path / "logs" / "backend-service.log"
+    assert logfile.exists(), "backend-service.log must be written"
+    contents = logfile.read_text(encoding="utf-8", errors="ignore")
+    assert "INJECTED_LIFESPAN_BOOM" in contents, "the underlying lifespan exception must be logged"
+
+
+def test_migrations_runner_is_frozen_runtime_safe():
+    src = (Path(rs.__file__).resolve().parents[2] / "backend" / "migrations_runner.py").read_text(encoding="utf-8")
+    assert 'getattr(sys, "frozen"' in src and "_MEIPASS" in src, \
+        "run_migrations must resolve alembic paths from the frozen bundle, not __file__/CWD"
+
+
 def test_backend_uvicorn_config_builds_without_a_console(monkeypatch):
     """Reproduce the Windows SCM (no stdout/stderr) environment: building the backend's uvicorn.Config
     must NOT raise. Without use_colors=False, uvicorn's DefaultFormatter calls sys.stdout.isatty() ->

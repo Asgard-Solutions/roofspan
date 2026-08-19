@@ -322,6 +322,35 @@ jobs:
           }
           Write-Host "OK: reinstall/upgrade preserved DB credentials + config; all services Running"
 
+      - name: A FAILED startup surfaces the real exception in backend-service.log (fix regression)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "C:\ProgramData\RoofSpan\config\roofspan.env"
+          $orig = Get-Content $cfg -Raw
+          Stop-Service RoofSpanBackend -Force -ErrorAction SilentlyContinue
+          Start-Sleep 3
+          # Corrupt ONLY the DB password so the FastAPI lifespan (Alembic connect) fails at authentication.
+          $bad = [regex]::Replace($orig, 'roofspan:[^@]+@', 'roofspan:WRONGPASSWORD_INJECTED@')
+          Set-Content -Encoding ASCII -Path $cfg -Value $bad
+          Clear-Content "C:\ProgramData\RoofSpan\logs\backend-service.log" -ErrorAction SilentlyContinue
+          try { Start-Service RoofSpanBackend -ErrorAction Stop } catch { }
+          Start-Sleep 20
+          $running = (Get-Service RoofSpanBackend).Status -eq "Running"
+          $log = ""
+          if (Test-Path "C:\ProgramData\RoofSpan\logs\backend-service.log") { $log = Get-Content "C:\ProgramData\RoofSpan\logs\backend-service.log" -Raw }
+          # Restore ORIGINAL config + service BEFORE asserting so cleanup always runs.
+          Stop-Service RoofSpanBackend -Force -ErrorAction SilentlyContinue
+          Set-Content -Encoding ASCII -Path $cfg -Value $orig
+          Start-Service RoofSpanBackend -ErrorAction SilentlyContinue
+          if ($running) { throw "backend wrongly reached Running with an invalid DB password (masked failure)" }
+          if ($log -notmatch 'password|authentication|InvalidPassword|startup failed|Traceback') {
+            throw "backend-service.log did not surface the underlying startup exception:`n$log"
+          }
+          if ($log -match 'WRONGPASSWORD_INJECTED') { throw "SECRET LEAK: the DB password appears in the log" }
+          Write-Host "OK: failed startup surfaced the real exception (not just 'reported not started'); no secret leaked"
+
+
       - name: Dump service + install logs (on failure)
         if: failure()
         shell: pwsh

@@ -39,7 +39,20 @@ class BackendWorker:
         )
 
     def start(self, on_ready=None):
+        import logging
         import uvicorn
+
+        # Route uvicorn/alembic/app logging - INCLUDING any FastAPI lifespan-startup traceback (uvicorn
+        # logs it via 'uvicorn.error' and then exits WITHOUT re-raising) - into backend-service.log so a
+        # failed startup is diagnosable instead of the generic "not started". Secrets are never logged
+        # by these components; we only attach handlers, we do not print env/DATABASE_URL.
+        for h in self.log.handlers:
+            for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access", "alembic", "roofspan"):
+                lg = logging.getLogger(name)
+                if h not in lg.handlers:
+                    lg.addHandler(h)
+                if lg.level == logging.NOTSET or lg.level > logging.INFO:
+                    lg.setLevel(logging.INFO)
 
         # Provision + load DATABASE_URL synchronously before importing the app (server:app -> db.py).
         self._provision_database()
@@ -53,6 +66,14 @@ class BackendWorker:
             try:
                 self.log.info("backend: uvicorn serving on 127.0.0.1:8001")
                 self._server.run()  # blocks; runs lifespan startup (migrations/seed/bootstrap)
+                # uvicorn catches a FastAPI lifespan-startup failure, LOGS it (uvicorn.error, now routed
+                # to backend-service.log) and returns WITHOUT re-raising. Detect that here so wait_ready
+                # surfaces a real failure instead of a false success.
+                if not getattr(self._server, "started", False) and self._error is None:
+                    self._error = RuntimeError(
+                        "FastAPI application/lifespan startup failed before uvicorn reported started; "
+                        "see the 'Application startup failed' traceback above in backend-service.log")
+                    self.log.error("backend: %s", self._error)
             except Exception as e:  # noqa: BLE001
                 self._error = e
                 self.log.exception("backend: server crashed")
