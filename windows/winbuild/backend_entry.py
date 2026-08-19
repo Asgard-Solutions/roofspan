@@ -45,7 +45,8 @@ class BackendWorker:
         self._provision_database()
 
         config = uvicorn.Config("server:app", host="127.0.0.1", port=8001,
-                                log_level="info", loop="asyncio", lifespan="on")
+                                log_level="info", loop="asyncio", lifespan="on",
+                                use_colors=False)
         self._server = uvicorn.Server(config)
 
         def _run():

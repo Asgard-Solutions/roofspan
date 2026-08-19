@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 WINBUILD = Path(__file__).resolve().parents[1] / "winbuild"
 sys.path.insert(0, str(WINBUILD))
 
@@ -248,6 +250,27 @@ def test_backend_uses_controllable_server_not_blocking_run():
     assert "should_exit = True" in src, "SvcStop must be able to signal a clean uvicorn shutdown"
     assert "uvicorn.run(" not in src, "backend must NOT use the blocking uvicorn.run() as the service"
     assert '127.0.0.1' in src and "8001" in src
+    # No-console fix: color/TTY detection must be disabled (SCM services have no stdout/stderr).
+    assert "use_colors=False" in src, "uvicorn.Config must set use_colors=False for a console-less service"
+
+
+def test_backend_uvicorn_config_builds_without_a_console(monkeypatch):
+    """Reproduce the Windows SCM (no stdout/stderr) environment: building the backend's uvicorn.Config
+    must NOT raise. Without use_colors=False, uvicorn's DefaultFormatter calls sys.stdout.isatty() ->
+    AttributeError: 'NoneType' object has no attribute 'isatty' / ValueError: Unable to configure
+    formatter 'default' (this test fails against the pre-fix code and passes after)."""
+    import uvicorn
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    # The FIXED configuration (mirrors backend_entry.BackendWorker.start) must construct cleanly.
+    cfg = uvicorn.Config("server:app", host="127.0.0.1", port=8001, log_level="info",
+                         loop="asyncio", lifespan="on", use_colors=False)
+    assert cfg.use_colors is False
+    # The source must build the console-less config exactly this way (fails against pre-fix code).
+    src = (WINBUILD / "backend_entry.py").read_text(encoding="utf-8")
+    assert "use_colors=False" in src
 
 
 def test_relay_does_not_require_user_shell_env_var():

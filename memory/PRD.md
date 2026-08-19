@@ -552,3 +552,9 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Regression: test_bundle_compile.py::test_burn_package_cache_ids_are_unique asserts every package effective cache identity (explicit CacheId else SourceFile) is unique and that powershell-helper packages carry explicit CacheIds.
 - Burn compile: no WIX8000/schema errors (Linux shows only path artifacts). Windows CI bundle-compile is authoritative.
 - Files: windows/installer/bundle.wxs, windows/tests/test_bundle_compile.py.
+
+## Uvicorn no-console startup fix (2026-06)
+- RoofSpanBackend SCM service crashed at uvicorn logging.py __init__ AttributeError 'NoneType'.isatty / ValueError formatter 'default' - service has no stdout/stderr, uvicorn DefaultFormatter did TTY/color detection.
+- Fix: added use_colors=False to the existing uvicorn.Config(...) in windows/winbuild/backend_entry.py. Controllable uvicorn.Server / should_exit / START_PENDING / RUNNING unchanged.
+- Regression: test_windows_services.py::test_backend_uvicorn_config_builds_without_a_console builds the config under sys.stdout=None/sys.stderr=None (no raise) + asserts use_colors=False in source; test_backend_uses_controllable_server_not_blocking_run also requires use_colors=False. Verified both FAIL on pre-fix code and PASS after. 43 passed / 1 skipped.
+- Files: windows/winbuild/backend_entry.py, windows/tests/test_windows_services.py.
