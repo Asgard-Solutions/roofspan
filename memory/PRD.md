@@ -439,3 +439,8 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - `/api/version` added to the subscription-guard ALLOWLIST so it is readable WITHOUT auth and even when the subscription is inactive/suspended (exactly when support needs it).
 - UI: `AppShell.jsx` sidebar footer shows `RoofSpan Office v{display_version}` (data-testid=app-version), e.g. "RoofSpan Office v0.1.0-dev".
 - Verified testing_agent iteration_16: backend 100% + frontend 100%, retest_needed=false.
+
+## MapView build-structure verification (2026-06)
+- Reported prod build SyntaxError (MapView.jsx 322:7, `map.on("load", () => {` mis-structured) does NOT exist in this codebase. Working tree AND git HEAD already have `const initMapLayers = () => { ... }` (~L195) + `if (map.isStyleLoaded()) initMapLayers(); else map.on("load", initMapLayers);` (~L237). No stray `map.on("load", () => {` block anywhere; no satellite/route code here (the failing build is a divergent copy).
+- `yarn build` (CI=false) => Compiled with warnings, BUILD_EXIT=0, produced frontend/build/index.html. config.test.js 3/3 pass. testing_agent iteration_17: no SyntaxError at runtime, /map shell renders, zero [MapLibre error]; retest_needed=false. Full map/clustering only blocked by the env being in SUSPENDED subscription (403 on /map-config) — environment state, not a regression.
+- No files changed this turn (fix pre-existing). Current commit SHA: f63fc4aa26428b67bc4a4f16ca4724378cf587d8.
