@@ -473,3 +473,11 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Verified testing_agent iteration_20 (backend 100%, retest_needed=false): 8/8 pytest, pwsh 0 parse errors, no non-ASCII, bundle.wxs well-formed WebView2-before-MSI. Windows MSI build + stage.ps1 e2e = Windows-only (HUMAN REQUIRED on build host).
 - Files changed: windows/installer/build.ps1, windows/installer/stage.ps1, windows/winbuild/build_exes.ps1, windows/installer/bundle.wxs, windows/tests/test_build_scripts.py (new), .github/workflows/windows-build-scripts.yml (new), windows/BUILD.md (new).
 - PENDING USER: normal Save to Github (fast-forward, NO force-push) to main; report GitHub commit SHA after push.
+
+## stage.ps1 relative-path staging bug fix (2026-06)
+- Bug: relative -StageDir (..\..\_stage) used for $frontend then Push-Location into frontend + Copy-Item to still-relative $frontend -> output landed in stray D:\AsgardSolutions\_stage; build.ps1 failed "Staging incomplete - missing ..\..\_stage\frontend\index.html".
+- Fix (stage.ps1): Resolve-AbsPath normalizes -StageDir (IsPathRooted/GetFullPath, works before dir exists) + FrontendDir to ABSOLUTE up front, BEFORE any Push-Location/child script/build/copy. All destinations use absolute $stageRoot (services/frontend/runtime/config). Copy targets absolute $frontend. Final completeness check (3 EXEs + frontend\index.html + runtime + config) throws "Stage incomplete" BEFORE printing success. Success prints resolved absolute path: "==> Stage assembled at $stageRoot". No more stray parent _stage. Canonical command unchanged.
+- Regression: +2 tests in windows/tests/test_build_scripts.py (path normalization before Push-Location; payload validated before success). Suite now 9 tests.
+- Verified testing_agent iteration_21 (backend 100%, retest_needed=false): 9/9 pytest, pwsh parse 0 errors on stage/build/build_exes, all 6 static invariants confirmed.
+- Files changed: windows/installer/stage.ps1, windows/tests/test_build_scripts.py.
+- PENDING USER: normal Save to Github (fast-forward, NO force) to main; report commit SHA after push.

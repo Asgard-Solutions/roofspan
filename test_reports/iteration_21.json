@@ -1,0 +1,21 @@
+{
+  "summary": "Verified Windows staging path-normalization fix. Ran pytest suite in windows/tests/test_build_scripts.py (9/9 passed incl. the two new tests test_stage_normalizes_paths_before_directory_changes and test_stage_validates_full_payload_before_success). Parsed stage.ps1, build.ps1, and winbuild/build_exes.ps1 with PowerShell 7 language parser - ZERO errors. Manually confirmed all six static invariants in windows/installer/stage.ps1.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_build_scripts.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "stage.ps1: Resolve-AbsPath + $stageRoot/$feDirResolved computed at lines 21-27 (via IsPathRooted / GetFullPath) BEFORE first Push-Location at line 47 - correct fix for the reported bug.",
+    "No 'Join-Path $StageDir' occurrences remain; every stage subdir uses absolute $stageRoot (lines 37-40).",
+    "Frontend Copy-Item targets absolute $frontend (line 55) so relative CWD after Push-Location can't split the tree.",
+    "Completeness check (lines 69-80) throws 'Stage incomplete - missing ...' for all three service exes + frontend/index.html + runtime + config BEFORE success message 'Write-Host \"==> Stage assembled at $stageRoot\"' at line 82.",
+    "Success message prints the RESOLVED ABSOLUTE $stageRoot as required."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "n/a"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Windows MSI/stage e2e is Windows-only and out of scope on Linux. Verification here is limited to (1) pytest static-analysis suite in windows/tests/test_build_scripts.py, (2) pwsh AST parse of the three ps1 files, (3) grep-level invariant checks. pwsh is available at /usr/local/bin/pwsh. Regression checks (ASCII-only ps1, spec references backend/alembic, build_exes uses repo .venv, build.ps1 -WebView2Bootstrapper param, bundle.wxs WebView2 before MSI) are covered by the 9-test suite and all pass.",
+  "rca of the issue": "Original bug: stage.ps1 accepted -StageDir as a relative path (e.g. ..\\..\\_stage), built $frontend via Join-Path on the still-relative $StageDir, then Push-Location'd into the frontend source dir. After the CWD changed, the relative Copy-Item destination re-resolved against the new CWD, landing files in a stray D:\\AsgardSolutions\\_stage. Fix: introduced Resolve-AbsPath (IsPathRooted + GetFullPath, tolerates non-existent paths) and computed $stageRoot and $feDirResolved to absolute paths BEFORE any Push-Location/child script/build/copy. All stage subdirs derived from absolute $stageRoot. Added pre-success completeness validation that throws 'Stage incomplete - missing <path>' if any required artifact (3 service exes, frontend/index.html, runtime, config) is missing. Success line now prints the resolved absolute path. Verified via 9-test pytest suite (all pass) and pwsh AST parse (0 errors)."
+}

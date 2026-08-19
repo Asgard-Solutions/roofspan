@@ -77,7 +77,48 @@ def test_stage_always_syncs_yarn():
     assert "yarn.lock" in txt and "package.json" in txt, "stage must fail-fast on missing frontend lockfiles"
 
 
-def test_build_ps1_parameter_contract():
+def test_stage_normalizes_paths_before_directory_changes():
+    """Regression: a relative -StageDir must be resolved to ABSOLUTE before any Push-Location, so staged
+    output cannot escape to a stray parent-directory _stage (D:\\AsgardSolutions\\_stage)."""
+    lines = (INSTALLER / "stage.ps1").read_text(encoding="utf-8").splitlines()
+    txt = "\n".join(lines)
+
+    def lineno(substr, code_only=False):
+        for i, l in enumerate(lines):
+            s = l.strip()
+            if code_only and s.startswith("#"):
+                continue
+            if code_only:
+                if s.startswith(substr):
+                    return i
+            elif substr in l:
+                return i
+        return 10**9
+
+    assert "IsPathRooted" in txt and "GetFullPath" in txt, "stage.ps1 must normalize paths to absolute"
+    assert "$stageRoot" in txt, "stage.ps1 must use an absolute $stageRoot"
+    push = lineno("Push-Location", code_only=True)
+    assert lineno("$stageRoot = ", code_only=True) < push, "stageRoot must be resolved before Push-Location"
+    assert lineno("$feDirResolved = ", code_only=True) < push, "FrontendDir must be resolved before Push-Location"
+    # Destinations derive from the absolute root, NOT the raw relative $StageDir.
+    assert 'Join-Path $StageDir' not in txt, "must not build stage paths from the raw relative $StageDir"
+    assert "$services = Join-Path $stageRoot" in txt
+    assert "$frontend = Join-Path $stageRoot" in txt
+    assert 'Copy-Item ".\\build\\*" $frontend' in txt, "frontend copy must target the absolute $frontend"
+    # Completeness must be validated BEFORE the success message, which prints the resolved absolute root.
+    assert 'Write-Host "==> Stage assembled at $stageRoot"' in txt
+    assert lineno("Stage incomplete") < lineno("Stage assembled at $stageRoot"), \
+        "stage must validate the complete payload before printing success"
+
+
+
+
+def test_stage_validates_full_payload_before_success():
+    txt = (INSTALLER / "stage.ps1").read_text(encoding="utf-8")
+    for needed in ("roofspan-backend.exe", "roofspan-relay-connector.exe",
+                   "roofspan-update-service.exe", "index.html"):
+        assert needed in txt, f"stage completeness check must assert {needed}"
+
     txt = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
     for param in ("$Version", "$StageDir", "$PostgresInstaller", "$WebView2Bootstrapper"):
         assert param in txt, f"build.ps1 must accept {param}"
