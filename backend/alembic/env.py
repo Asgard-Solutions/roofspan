@@ -18,7 +18,9 @@ from db import Base  # noqa: E402
 import models  # noqa: E402,F401  (registers all tables on Base.metadata)
 
 config = context.config
-if config.config_file_name is not None:
+# Alembic CLI may own logging, but programmatic Windows-service startup must preserve the service's
+# RotatingFileHandler. migrations_runner sets configure_logger=False for that path.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
