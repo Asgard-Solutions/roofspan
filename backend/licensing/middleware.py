@@ -18,6 +18,7 @@ logger = logging.getLogger("roofspan")
 # Always-allowed API prefixes (auth + licensing/billing/recovery + health + dev tooling + Control Plane).
 _ALLOWLIST = (
     "/api/health",
+    "/api/version",
     "/api/auth",
     "/api/subscription",
     "/api/license",

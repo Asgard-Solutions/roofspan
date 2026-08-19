@@ -433,3 +433,9 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Also fixed: OSM raster `maxzoom:19` + Map `maxZoom:19` (eliminates z20 tile CORS `[MapLibre error]`).
 - Verified testing_agent iteration_15: frontend 100% (7/7), retest_needed=false, zero MapLibre/JS errors.
 - Dep added: `supercluster@9.0.0` (yarn add, package.json updated).
+
+## App version visible for support (2026-06)
+- Support can now see the running RoofSpan Office version. Backend `GET /api/version` -> {version, display_version, channel} reading authoritative `windows/VERSION` (env `ROOFSPAN_VERSION`/`ROOFSPAN_CHANNEL` override; fallback 0.1.0). `/api/health` also includes version. New `backend/version.py`.
+- `/api/version` added to the subscription-guard ALLOWLIST so it is readable WITHOUT auth and even when the subscription is inactive/suspended (exactly when support needs it).
+- UI: `AppShell.jsx` sidebar footer shows `RoofSpan Office v{display_version}` (data-testid=app-version), e.g. "RoofSpan Office v0.1.0-dev".
+- Verified testing_agent iteration_16: backend 100% + frontend 100%, retest_needed=false.

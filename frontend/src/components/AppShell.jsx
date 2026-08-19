@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -81,7 +82,12 @@ function Brand() {
 export default function AppShell() {
   const { user, logout, isSensitive } = useAuth();
   const [open, setOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const navigate = useNavigate();
+
+  useEffect(() => {
+    api.get("/version").then(({ data }) => setAppVersion(data.display_version || data.version || "")).catch(() => {});
+  }, []);
 
   const handleLogout = async () => {
     await logout();
@@ -103,6 +109,11 @@ export default function AppShell() {
       <Button variant="outline" size="sm" className="mt-1 w-full justify-start gap-2" onClick={handleLogout} data-testid="logout-button">
         <LogOut className="h-4 w-4" /> Sign out
       </Button>
+      {appVersion && (
+        <div className="mt-3 text-[11px] text-slate-400" data-testid="app-version" title="RoofSpan Office version (for support)">
+          RoofSpan Office v{appVersion}
+        </div>
+      )}
     </div>
   );
 
