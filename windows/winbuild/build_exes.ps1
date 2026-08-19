@@ -9,10 +9,23 @@ $ErrorActionPreference = "Stop"
 # Repo root is two levels up from windows\winbuild.
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $backend = Join-Path $repoRoot "backend"
+$alembicDir = Join-Path $backend "alembic"
 
 # ---- FAIL-FAST: backend Alembic assets that the spec packages must exist.
-if (-not (Test-Path (Join-Path $backend "alembic")))     { throw "backend\alembic directory not found at '$backend'." }
+if (-not (Test-Path $alembicDir))                         { throw "backend\alembic directory not found at '$backend'." }
 if (-not (Test-Path (Join-Path $backend "alembic.ini"))) { throw "backend\alembic.ini not found at '$backend'." }
+
+# ---- CLEAN INPUT + OUTPUT: PyInstaller datas copy the entire backend\alembic tree. Never allow stale
+# __pycache__/*.pyc migration artifacts or a previous dist/build tree to leak into a new installer.
+Get-ChildItem -Path $alembicDir -Directory -Filter "__pycache__" -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
+Get-ChildItem -Path $alembicDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+foreach ($cleanDir in @((Join-Path $PSScriptRoot "dist"), (Join-Path $PSScriptRoot "build"))) {
+  if (Test-Path $cleanDir) { Remove-Item $cleanDir -Recurse -Force }
+}
+$staleBytecode = Get-ChildItem -Path $alembicDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue
+if ($staleBytecode) { throw "Stale Alembic bytecode remains after cleanup; refusing to freeze service executables." }
 
 # Prefer the repository-local virtualenv PyInstaller so the user does NOT have to activate .venv.
 $venvPyi = Join-Path $repoRoot ".venv\Scripts\pyinstaller.exe"
@@ -49,6 +62,7 @@ foreach ($spec in $specs) {
   Write-Host "==> PyInstaller $spec"
   & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $spec (exit $LASTEXITCODE)." }
   $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
   # ONEDIR: PyInstaller emits dist\<name>\<name>.exe + dist\<name>\_internal\. Stage the WHOLE folder
   # so the SCM-launched exe finds its dependencies regardless of the working directory.
