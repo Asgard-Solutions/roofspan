@@ -109,6 +109,8 @@ def get_logger(name: str, filename: str) -> logging.Logger:
     if log.handlers:
         return log
     log.setLevel(logging.INFO)
+    # Service-owned records must not bubble to root and get written twice after backend logging is wired.
+    log.propagate = False
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
         fh = logging.handlers.RotatingFileHandler(
@@ -117,9 +119,12 @@ def get_logger(name: str, filename: str) -> logging.Logger:
         log.addHandler(fh)
     except OSError:
         pass
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    log.addHandler(sh)
+    # SCM services have no interactive stderr. Do not construct a console handler around a None stream.
+    # In `...exe debug` mode stderr exists, so the same logger still mirrors output to the console.
+    if sys.stderr is not None:
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(fmt)
+        log.addHandler(sh)
     return log
 
 
