@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RoofSpan Operator</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f172a; color:#e2e8f0; padding:48px; }
+    a.btn { display:inline-block; background:#f97316; color:#0f172a; font-weight:700;
+            padding:10px 18px; border-radius:8px; text-decoration:none; }
+    .muted { color:#94a3b8; }
+  </style>
+</head>
+<body>
+  <h1>RoofSpan Operator Console</h1>
+  <p id="status" class="muted">Checking Control Plane access…</p>
+  <p id="actions"></p>
+  <script>
+    // NOTE: the operator token lives ONLY in a server-set HttpOnly cookie - it is NEVER read by this page
+    // or persisted in any browser storage.
+    fetch('/api/operator/whoami', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var s = document.getElementById('status');
+        var a = document.getElementById('actions');
+        if (j && j.authenticated) {
+          s.textContent = 'Authenticated. The Control Plane accepted your operator token.';
+        } else {
+          s.textContent = 'Not signed in as a RoofSpan operator.';
+          a.innerHTML = '<a class="btn" href="/operator/login">Sign in with Cognito</a>';
+        }
+      })
+      .catch(function () {
+        document.getElementById('status').textContent = 'Unable to reach the Control Plane. Try again shortly.';
+      });
+  </script>
+</body>
+</html>

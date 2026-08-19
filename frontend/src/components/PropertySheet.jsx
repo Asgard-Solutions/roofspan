@@ -105,6 +105,13 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               <SheetTitle className="pr-6 font-heading text-lg">{p.formatted_address || p.address_line1}</SheetTitle>
             </SheetHeader>
 
+            <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="occupancy-badge">
+              {p.occupancy === "owned" && <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800">Owned</span>}
+              {p.occupancy === "rented" && <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">Rented</span>}
+              {(!p.occupancy || p.occupancy === "unknown") && <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">Occupancy unknown</span>}
+              <span className="text-xs text-slate-400">{[p.city, p.state, p.zip_code].filter(Boolean).join(", ")}</span>
+            </div>
+
             {p.do_not_knock && (
               <div className="mt-3 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700" data-testid="dnk-banner">
                 <Ban className="h-4 w-4" /> Do Not Knock{p.do_not_knock_reason ? ` — ${p.do_not_knock_reason}` : ""}
@@ -125,8 +132,15 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner / Renter</div>
               {owner ? (
                 <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="owner-info">
-                  <div className="flex items-center gap-2 font-medium text-slate-900"><User className="h-4 w-4 text-slate-400" /> {owner.name}</div>
-                  <div className="mt-1 text-slate-500">{owner.contact_type || "—"} · {p.owner_occupied === true ? "Owner-occupied" : p.owner_occupied === false ? "Non-owner-occupied" : "Occupancy unknown"}</div>
+                  <div className="flex flex-wrap items-center gap-2 font-medium text-slate-900">
+                    <User className="h-4 w-4 text-slate-400" /> {owner.name}
+                    {(owner.phone || owner.email)
+                      ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800" data-testid="contactable-badge">Contactable</span>
+                      : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500" data-testid="no-contact-badge">No contact info</span>}
+                  </div>
+                  <div className="mt-1 text-slate-500">{owner.contact_type || "—"} · {p.occupancy === "owned" ? "Owner-occupied" : p.occupancy === "rented" ? "Rented (non-owner-occupied)" : "Occupancy unknown"}</div>
+                  {owner.phone && <div className="mt-1 text-slate-700" data-testid="owner-phone">📞 {owner.phone}</div>}
+                  {owner.email && <div className="mt-0.5 text-slate-700" data-testid="owner-email">✉️ {owner.email}</div>}
                   {owner.mailing_address && <div className="mt-1 text-slate-500">Mailing: {owner.mailing_address}</div>}
                 </div>
               ) : (

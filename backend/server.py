@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+import local_secrets
+local_secrets.ensure_local_secrets()  # generate/load per-installation JWT + encryption secrets before use
+
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -17,8 +20,11 @@ from models import User
 from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
+from routers import routes as routes_router
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
+from routers import setup as setup_router, reports as reports_router
+import onboarding
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -51,6 +57,7 @@ app.include_router(territories.router)
 app.include_router(properties.router)
 app.include_router(imports.router)
 app.include_router(leads.router)
+app.include_router(routes_router.router)
 app.include_router(customers.router)
 app.include_router(inspections.router)
 app.include_router(estimates.router)
@@ -62,6 +69,8 @@ app.include_router(purchasing.router)
 app.include_router(cron.router)
 app.include_router(admin_ops.router)
 app.include_router(mobile.router)
+app.include_router(setup_router.router)
+app.include_router(reports_router.router)
 app.include_router(licensing_router.router)
 if licensing_config.LICENSING_MODE == "dev":
     from routers import licensing_dev
@@ -83,7 +92,19 @@ app.add_middleware(
 )
 
 
+def _owner_seed_enabled() -> bool:
+    """Env Owner seed is a DEV/TEST/recovery mechanism only. Double-gated: it is IMPOSSIBLE in production
+    licensing mode, and even in dev mode it requires an explicit ROOFSPAN_OWNER_SEED opt-in. Production
+    first-run uses the setup wizard; Owner recovery uses RoofSpanOwnerRecovery.exe."""
+    if licensing_config.LICENSING_MODE != "dev":
+        return False
+    return os.environ.get("ROOFSPAN_OWNER_SEED", "").strip().lower() in ("1", "true", "enabled", "yes")
+
+
 async def seed_owner():
+    if not _owner_seed_enabled():
+        logger.info("Owner env seed disabled (production onboarding uses the first-run setup wizard)")
+        return
     email = os.environ.get("ADMIN_EMAIL", "").lower().strip()
     password = os.environ.get("ADMIN_PASSWORD", "")
     name = os.environ.get("ADMIN_NAME", "Owner")
@@ -108,6 +129,8 @@ async def on_startup():
     # no manual SQL). Fresh DB builds from full history; existing DB migrates forward non-destructively.
     await asyncio.to_thread(run_migrations)
     await seed_owner()
+    async with SessionLocal() as db:
+        await onboarding.ensure_backfill(db)
     async with SessionLocal() as db:
         await licensing_service.bootstrap(db)
     try:

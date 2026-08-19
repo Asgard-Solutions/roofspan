@@ -6,7 +6,7 @@ import { apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { HardHat, Eye, EyeOff, Loader2 } from "lucide-react";
+import { HardHat, Eye, EyeOff, Loader2, Building2 } from "lucide-react";
 
 const BG_IMAGE = "/brand/roofspan-login-bg.png";
 
@@ -86,6 +86,22 @@ export default function Login() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sign in"}
           </Button>
         </form>
+
+        <div className="mt-6 border-t border-slate-100 pt-5 text-center">
+          <p className="text-sm text-slate-500">New to RoofSpan?</p>
+          <button
+            type="button"
+            onClick={() => navigate("/setup")}
+            className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-orange-600 transition-colors hover:text-orange-700"
+            data-testid="login-register-link"
+          >
+            <Building2 className="h-4 w-4" />
+            Create your company account
+          </button>
+          <p className="mt-2 text-xs text-slate-400">
+            Set up your company, owner account, and subscription.
+          </p>
+        </div>
         </div>
       </div>
     </div>

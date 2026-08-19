@@ -21,6 +21,8 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="sales")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Bumped on every password change/reset/recovery -> immediately invalidates all prior JWTs.
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -72,6 +74,7 @@ class Territory(Base):
     description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     color: Mapped[str] = mapped_column(String(16), default="#2563EB", nullable=False)
     geometry: Mapped[dict] = mapped_column(JSONB, nullable=False)  # GeoJSON Polygon
+    zip_code: Mapped[str | None] = mapped_column(String(16), nullable=True)  # set when created from a ZIP search
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -442,6 +445,36 @@ class Photo(Base):
     category: Mapped[str | None] = mapped_column(String(60), nullable=True)
     uploaded_by: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+# ---------- Canvassing Routes ----------
+
+class Route(Base):
+    __tablename__ = "routes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    territory_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("territories.id", ondelete="SET NULL"), nullable=True, index=True)
+    assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="assigned", nullable=False)  # assigned | in_progress | completed
+    stop_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    est_miles: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class RouteStop(Base):
+    __tablename__ = "route_stops"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    route_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), index=True)
+    property_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    address: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending | knocked | skipped
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 # ---------- Commercial Layer / Phase C0: Licensing ----------

@@ -78,7 +78,11 @@ def get_trusted_verify_keys() -> dict[str, Ed25519PublicKey]:
 
 
 def load_trusted_cp_keys() -> dict[str, Ed25519PublicKey]:
-    """Load Control-Plane public keys cached under TRUSTED_KEYS_DIR (kid.public.pem)."""
+    """Load Control-Plane public keys cached under TRUSTED_KEYS_DIR (kid.public.pem).
+
+    Rotation-safe: every well-formed kid.public.pem is loaded so entitlements signed by an older,
+    still-trusted key keep verifying alongside a newly-rotated key. A malformed/partial file is
+    skipped (never crashes startup)."""
     out: dict[str, Ed25519PublicKey] = {}
     d = config.TRUSTED_KEYS_DIR
     if not os.path.isdir(d):
@@ -89,14 +93,34 @@ def load_trusted_cp_keys() -> dict[str, Ed25519PublicKey]:
             try:
                 with open(os.path.join(d, fname), "rb") as f:
                     out[kid] = serialization.load_pem_public_key(f.read())
-            except Exception:
+            except Exception as e:  # noqa: BLE001 - never let a bad cache file crash verification
+                logger.warning("Skipping malformed trusted CP key file %r: %s", fname, e)
                 continue
     return out
 
 
-def cache_trusted_cp_keys(keys: dict[str, str]) -> None:
-    """Persist Control-Plane public keys (kid -> PEM) so entitlements verify offline."""
+def cache_trusted_cp_keys(keys: dict[str, str]) -> int:
+    """Persist Control-Plane PUBLIC keys (kid -> PEM) so entitlements verify offline.
+
+    Rotation-safe MERGE: each kid is written to its own file, so caching a new key never deletes an
+    existing trusted key. Returns the number of keys written. Validates each PEM before writing so a
+    bad value can never poison the trusted directory."""
+    written = 0
+    if not keys:
+        return 0
     os.makedirs(config.TRUSTED_KEYS_DIR, exist_ok=True)
     for kid, pem in keys.items():
+        if not kid or not pem:
+            continue
+        try:
+            serialization.load_pem_public_key(pem.encode("utf-8") if isinstance(pem, str) else pem)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Refusing to cache invalid trusted CP public key for kid=%s: %s", kid, e)
+            continue
         with open(os.path.join(config.TRUSTED_KEYS_DIR, f"{kid}.public.pem"), "w") as f:
             f.write(pem)
+        written += 1
+    if written:
+        logger.info("Cached %d trusted CP public key(s) [kids=%s] under %s",
+                    written, ",".join(sorted(keys.keys())), config.TRUSTED_KEYS_DIR)
+    return written

@@ -11,7 +11,10 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=["updater.manifest", "updater.signing", "updater.service",
-                   "updater.orchestrator", "httpx"],
+                   "updater.orchestrator", "httpx",
+                   # Windows service host (pywin32 SCM integration) + reusable runner.
+                   "winbuild.winservice", "winservice",
+                   "win32serviceutil", "win32service", "win32event", "servicemanager", "win32timezone"],
     excludes=[],
 )
 pyz = PYZ(a.pure)

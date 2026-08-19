@@ -413,29 +413,668 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 
 
 ## Mobile paywall UX + download polish (2026-06)
-- **P1 Mobile entitlement/paywall**: `SubscriptionLock` (screens/StatusScreens.js) now has a primary "Manage Subscription on the Web" button (opens `WEB_APP_URL`) + secondary "Try Again" + helper text. Copy (connectionState.js SUBSCRIPTION_INACTIVE) rewritten to direct owners/admins to RoofSpan on the web (passes the no-internal-jargon Node test). `config.js` adds `WEB_APP_URL` (`EXPO_PUBLIC_WEB_APP_URL` || app.json extra.webAppUrl || `https://roofspan.io`). **No Apple/Google in-app purchasing.** More.js gains an owner/admin-only "Billing & account" card ("Manage on RoofSpan Web", no in-app purchase note).
+- **P1 Mobile entitlement/paywall**: `SubscriptionLock` (screens/StatusScreens.js) directs owners/admins to RoofSpan Office (see 2026-06 billing-architecture correction below — the earlier "Manage Subscription on the Web" button + `WEB_APP_URL` were REMOVED). "Try Again" is the primary retry. **No Apple/Google in-app purchasing.** More.js has an owner/admin-only "Billing & account" card that is informational only (no external link).
 - **P2 Download polish (config-controlled)**: marketing `MarketingSite.jsx` Hero + Pricing CTAs are now availability-driven (`WINDOWS_INSTALLER_AVAILABLE`): live → "Download for Windows" / "Get RoofSpan for Windows" to the CloudFront URL; not-available → existing "Coming Soon". Download section adds a free-Mobile note. **No system requirements invented** (none exist in the project). Office `WindowsDownload.jsx` unchanged (already config-controlled + verified).
 - **P3**: reinforced the web-billing model via the mobile More screen billing entry (small, aligned workflow touch). Broader field/job workflows already exist (Leads/Jobs/Inspection/Photos/Map + offline queue) — untouched this batch.
 - **Not done (per instructions)**: version-aware download UI, latest.json parsing, in-app desktop update banner, invented versions, any AWS/Terraform/deploy work.
 - **Tests**: website jest 12/12 (config 7 + content 5); mobile pairing/version/connection Node 11 assertions; all changed mobile files babel-parse OK; marketing `yarn build` compiles clean. Mobile paywall visual is device-only (Expo) → HUMAN REQUIRED native verification.
-- **Env var added**: `EXPO_PUBLIC_WEB_APP_URL` (default `https://roofspan.io`) — set to the exact web billing/account URL if different.
+- **Env var (SUPERSEDED)**: `EXPO_PUBLIC_WEB_APP_URL` was added here but REMOVED in the 2026-06 billing-architecture correction (below). Mobile has no hosted billing/account URL.
 
 
-## MapView MapLibre source/layer timing fix (2026-06)
-- Bug: property GeoJSON source + `prop-points` circle layer could be added before the style finished loading; suspected silent MapLibre rejection so pins might not render.
-- Fix (`frontend/src/pages/MapView.jsx`): sources/layers now added via `initMapLayers()` gated on `map.isStyleLoaded()` (runs on `load` event, or immediately if already loaded, deferring via `map.once("load")` otherwise); idempotent `getSource`/`getLayer` guards prevent duplicate-definition errors; added `map.on("error", ...)` that `console.error`s `[MapLibre error]`.
-- Verified by testing_agent (iteration_12): frontend 100%, blue pins render after selecting territories (1 & 20 properties), correct counts, ZERO `[MapLibre error]` and no JS errors. retest_needed=false.
+## Billing Architecture Correction — Billing lives in RoofSpan Office, NOT roofspan.io (2026-06, LOCKED)
+**PERMANENT ARCHITECTURE RULE (do not change unless the product owner explicitly instructs otherwise):**
+- `roofspan.io` = **public marketing/pricing website + initial RoofSpan Office Windows installer download only**. It is NOT a customer operational web app, NOT a hosted account portal, NOT a subscription/billing/seat/user management portal, and there is **no place to run RoofSpan on roofspan.io**. Do NOT call roofspan.io the "RoofSpan Web App."
+- **There is NO centrally hosted RoofSpan operational/customer web application.**
+- **RoofSpan Office** = the customer application, installed on the customer's Windows computer/server: local backend/services, local PostgreSQL, local auth/users/RBAC, local roofing business data, the browser-based **RoofSpan Office local browser UI**, and **all subscription/seat/billing/account administration** (with redirects to approved **Stripe-hosted checkout/customer-portal** pages where appropriate). The UI opening in a browser does NOT make it a hosted web app. Correct terms: **RoofSpan Office** or **RoofSpan Office local browser UI** — do not casually say "web app."
+- **RoofSpan Mobile** = a **free companion app**. No Apple in-app purchasing, no Google Play billing, no subscription/seat purchasing in-app, no external billing/account portal linked from Mobile. Mobile users are provisioned through RoofSpan Office. On an **inactive subscription**, Mobile tells the user that owners/administrators manage the subscription **in RoofSpan Office on the company's Windows computer**, or to **contact their administrator**.
+- **Billing flow (LOCKED):** Owner/Admin → opens RoofSpan Office on the company's Windows computer → Subscription/Billing inside RoofSpan Office → manages subscription/seats/payment (may redirect to Stripe-hosted checkout/portal). Mobile never initiates this via roofspan.io; roofspan.io never manages the subscription.
 
-## Map property clustering (2026-06)
-- Feature: cluster property pins at low zoom so dense territories stay readable + fast (`frontend/src/pages/MapView.jsx`).
-- IMPORTANT build note: MapLibre geojson WORKER does not reliably tile a `geojson` source in this webpack build (both `cluster:true` and plain geojson failed to render — verified iteration_13/14). Solution: main-thread clustering via `supercluster@9.0.0` rendered as HTML DOM markers (`maplibregl.Marker`), which bypass the worker. Removed the `properties` geojson source + `prop-*` layers.
-- Impl: `loadProperties()` builds a Supercluster index (radius 55, maxZoom 16) from GET /api/properties/geojson; `renderClusters()` runs on territory-load and map `moveend`, computes `index.getClusters(bbox, round(zoom))` and (re)places DOM markers. Cluster marker (`data-testid=map-cluster`) shows count, click -> `getClusterExpansionZoom` -> `easeTo`. Point marker (`data-testid=map-property-pin`) blue/red(do_not_knock), click -> PropertySheet.
-- Also fixed: OSM raster `maxzoom:19` + Map `maxZoom:19` (eliminates z20 tile CORS `[MapLibre error]`).
-- Verified testing_agent iteration_15: frontend 100% (7/7), retest_needed=false, zero MapLibre/JS errors.
-- Dep added: `supercluster@9.0.0` (yarn add, package.json updated).
+**Code correction applied (this task):**
+- `mobile/src/config.js`: removed `WEB_APP_URL` export and the `EXPO_PUBLIC_WEB_APP_URL` / `extra.webAppUrl` resolution; added a LOCKED comment forbidding reintroduction of a hosted billing URL.
+- `mobile/src/screens/StatusScreens.js` (`SubscriptionLock`): removed the "Manage Subscription on the Web" button and the `Linking.openURL(WEB_APP_URL)` billing action + `WEB_APP_URL` import. Now "Try Again" is the primary action; helper: "Owners and administrators can manage the subscription from RoofSpan Office on the company's Windows computer. If you're a field user, contact your RoofSpan administrator." (Store-update Linking for UpdateRequired/OptionalUpdateBanner is a legitimate non-billing use — kept.)
+- `mobile/src/connectionState.js`: `SUBSCRIPTION_INACTIVE` copy → title "Subscription inactive", message "Your company's RoofSpan subscription needs attention." (removed the "billing … on the web" wording).
+- `mobile/src/screens/More.js`: owner/admin-only "Billing & account" card is now **informational only** ("Subscription, seats, and billing are managed in RoofSpan Office on your company's Windows computer. There are no in-app purchases.") — removed the "Manage on RoofSpan Web" button, `openBillingWeb`, `WEB_APP_URL` import, and the unused `Linking` import. Field (sales/office) users see no billing control.
+- Tests: added `mobile/src/tests/architecture.node.test.js` (11 assertions) enforcing: no `WEB_APP_URL`, `EXPO_PUBLIC_WEB_APP_URL` not required for billing (regression), no "Manage Subscription on the Web" button, SubscriptionLock points to RoofSpan Office + Windows computer + administrator with "Try Again", copy has no "on the web"/"web app", More billing card role-gated + informational, no external billing link, no IAP/billing SDK. Existing `pairing.node.test.js` (11) still green; all changed files babel-parse clean.
+- **Not changed (per scope):** roofspan.io marketing/features/pricing/Windows-download behavior; `downloads.roofspan.io` installer infrastructure; RoofSpan Office Subscription/Billing UI (`frontend/src/pages/admin/Subscription.jsx`) + Stripe checkout/portal entry; licensing logic; Stripe pricing; AWS/Terraform/download infrastructure. No Apple/Google billing added.
+- **HUMAN REQUIRED:** native Mobile device verification (Expo Go / device build) of the SubscriptionLock "Try Again" screen, the owner/admin informational Billing & account card, and field-user behavior. No native billing SDK to add.
 
-## App version visible for support (2026-06)
-- Support can now see the running RoofSpan Office version. Backend `GET /api/version` -> {version, display_version, channel} reading authoritative `windows/VERSION` (env `ROOFSPAN_VERSION`/`ROOFSPAN_CHANNEL` override; fallback 0.1.0). `/api/health` also includes version. New `backend/version.py`.
-- `/api/version` added to the subscription-guard ALLOWLIST so it is readable WITHOUT auth and even when the subscription is inactive/suspended (exactly when support needs it).
-- UI: `AppShell.jsx` sidebar footer shows `RoofSpan Office v{display_version}` (data-testid=app-version), e.g. "RoofSpan Office v0.1.0-dev".
-- Verified testing_agent iteration_16: backend 100% + frontend 100%, retest_needed=false.
+## RoofSpan Office — P0 Completion: First-Run Onboarding + Reports + Artifact Cleanup (2026-06)
+Authoritative backlog = `memory/OFFICE_COMPLETION_AUDIT.md`. RoofSpan Office is the sole active
+workstream until CODE-COMPLETE. This entry records P0 (items 1–8), implemented & verified.
+
+**Decisions (locked by product owner):** Option B restricted Owner login before payment; mock billing
+for dev/test with a REAL 5-seat entitlement (not the 1000-seat dev default); build a real Reports page.
+
+**First-run onboarding (state machine, durable/restart-safe):**
+- `backend/onboarding.py`: states UNINITIALIZED → OWNER_CREATED → PAYMENT_PENDING → ACTIVE, stored in
+  `app_config` key `onboarding`. `ensure_backfill()` marks any install that already has users as ACTIVE
+  (legacy DB + dev owner seed never re-enter setup); an empty install is UNINITIALIZED. 5s in-process
+  snapshot for the guard.
+- `backend/routers/setup.py` (`/api/setup`, allowlisted): `GET /status` (unauth, non-sensitive labels
+  setup_required/owner_created/payment_required/initialized); `POST /bootstrap` (advisory-lock race-safe,
+  creates company_profile + first Owner=seat#1, refuses once initialized → 409, returns Bearer token);
+  `POST /checkout` (mandatory initial 5-seat/$245 via provider abstraction `checkout_url`, idempotent);
+  `GET /payment-status` (on paid → dev 5-seat entitlement via `set_dev_subscription` + `service.refresh`
+  → ACTIVE); `POST /dev/pay` (mock-only simulate paid).
+- **Restricted pre-payment session enforced SERVER-SIDE**: `SubscriptionGuardMiddleware` now has an
+  onboarding gate that blocks ALL business `/api/*` (403 `setup_required`) until state==ACTIVE; only the
+  setup/auth/subscription/license/billing/dev/control-plane/relay allowlist is reachable. The lifecycle
+  subscription guard (ACTIVE/GRACE/SUSPENDED/CANCELLED) is unchanged and runs after the onboarding gate.
+- **Frontend**: `pages/Setup.jsx` wizard (Company+Owner → mandatory 5-seat checkout → payment-pending
+  with Open Checkout / Check Status / dev-simulate; sign-in-to-resume when returning during PAYMENT_PENDING).
+  `App.js` `SetupGate` routes uninitialized → `/setup`, initialized away from `/setup`. `$49/seat/mo`,
+  5-seat min shown; no card data handled by RoofSpan.
+
+**Production Owner-seed safety:** `seed_owner()` gated by `ROOFSPAN_OWNER_SEED` (default enabled only in
+`LICENSING_MODE=dev`; production template sets it disabled). Prod first-run uses the wizard; env seed is
+dev/test/recovery only and never silently creates/replaces a customer Owner every startup.
+
+**Reports (P0-E):** `backend/routers/reports.py` `GET /api/reports/summary` — Sales Pipeline (leads by
+status/active/converted), Jobs by status, Inventory low-stock (threshold-based), and **Finance
+(invoice revenue: invoiced/paid/outstanding) only for MANAGE_ROLES (owner/administrator/office); Sales
+excluded**. `pages/Reports.jsx` replaces the dead `/reports` Placeholder (still in nav).
+
+**Dev/phase artifact cleanup (P0-F):** removed `"phase": "Office Phase 1 — Foundation"` from
+dashboard_summary + Dashboard.jsx; removed "…arrive in Phase 4" from Jobs.jsx. Placeholder.jsx now unused.
+
+**Relay audit correction:** the outbound Relay tunnel is a SEPARATE Windows connector service
+(`windows/winbuild/relay_entry.py` + PyInstaller/WiX `RelayConnector`), NOT started inside FastAPI. P1
+audits/finishes that service wiring. (Audit doc updated.)
+
+**Verified:** `backend/tests/test_onboarding.py` fresh-install E2E PASS (isolated throwaway DB: uninit →
+bootstrap → restricted session blocked → 5-seat checkout → restart-safe → mock pay → ACTIVE 5 seats,
+Owner=1/available=4 → users 2–5 ok / 6th 422 / +1 seat → 6th ok). 65 licensing/seat/guard/etc tests pass
+(1 unrelated failure = network timeout to the external preview URL). Frontend testing agent iteration_12
+= 100% (login+dashboard no phase text; Reports sections + finance RBAC for owner vs sales; /setup gate on
+initialized install; no Phase 4 copy). `yarn build` clean.
+
+**Run the fresh-install E2E:** `cd /app/backend && python -m pytest tests/test_onboarding.py -o addopts=""`
+
+**Not done (awaiting review):** P1 (Mobile-pairing UI, Relay connector service audit, forgotten-Owner
+recovery DESIGN, packaging config, restore model, full Office regression suite) and P2. No AWS/Terraform/
+Mobile-expansion/website/installer-publish work performed.
+
+
+## RoofSpan Office — P1-1: Office Mobile Pairing Administration UI (2026-06)
+- **Page** `frontend/src/pages/admin/MobileDevices.jsx` (route `/admin/devices`, `RequireSensitive`; nav
+  `nav-admin-devices` in AppShell ADMIN_NAV, sensitive-roles only). Uses the EXISTING Office pairing
+  proxy endpoints — no new backend: `POST /api/admin/mobile/pair` (QR payload + 6-digit numeric code +
+  expiry), `GET /api/admin/mobile/devices` (handles list OR `{devices:[]}`), `POST /api/admin/mobile/
+  devices/{id}/revoke`.
+- **Features:** Generate pairing code → QR (`qrcode.react` `QRCodeSVG` of the no-secrets qr_payload) +
+  formatted numeric code + live expiry countdown; paired-device table (label/status/paired/last-seen) +
+  Refresh; Revoke with confirm dialog (status → REVOKED). Graceful "pairing service unavailable" state
+  (local Office unaffected). Copy states pairing is NOT sign-in (field users still log in with their own
+  account). Dep added: `qrcode.react@4.2.0` (yarn, `--ignore-engines`).
+- **Verified:** backend curl (pair → resolve → device listed → revoke); frontend testing agent
+  iteration_13 = 100% (owner generate/QR/countdown/refresh/revoke; **Sales RBAC** — nav hidden + direct
+  `/admin/devices` shows Access restricted, page not rendered); `yarn build` clean. No new persistent
+  credentials. Not started: P1-2..P1-6. No AWS/Mobile-field/website work.
+
+
+## RoofSpan Office — P1-2: Windows Secure Relay Connector Service Audit/Completion (2026-06)
+Architecture PRESERVED: two separate Windows services — **RoofSpanBackend** (local API + UI, 127.0.0.1)
+and **RoofSpanRelayConnector** (outbound-only tunnel). InstallationTunnel NOT merged into FastAPI.
+- **Audit result — already correct (preserved, not rewritten):** WiX `RoofSpanRelayConnector`
+  `Type=ownProcess Start=auto`, restricted `NT SERVICE\RoofSpanRelay` account, restart-on-failure (3×,
+  15s), install/stop/remove control, exe from staged `services\`; ProgramData `pgdata`/`identity`
+  PRESERVED on upgrade/uninstall; `targets.py` maps `roofspan-relay-connector`→`relay_entry.py`;
+  PyInstaller spec produces the exe (cross-checked by `test_installer_static`); `tunnel_client` is
+  outbound WSS with bounded reconnect backoff + `stop()`, no inbound socket → no firewall port.
+- **Gaps fixed in `windows/winbuild/relay_entry.py`** (a Windows service does NOT auto-load a .env):
+  now loads `C:\ProgramData\RoofSpan\config\roofspan.env` (KEY=VALUE, no external dep) with **service/
+  machine env taking precedence over the file**; defaults `INSTALLATION_KEYS_DIR`; configures **rotating
+  file logging** → `C:\ProgramData\RoofSpan\logs\relay-connector.log` (+console); resolves relay/local
+  URLs; if `ROOFSPAN_RELAY_WS_URL` missing → logs a clear message and `sys.exit(2)` (no bare-KeyError
+  tight-loop under the restart policy). Refactored into pure testable helpers (`load_env_file`,
+  `apply_env`, `resolve_config`, `setup_logging`). Outbound tunnel architecture unchanged.
+- **Env template** `windows/winbuild/config/roofspan.env.template`: documents that the connector loads
+  this file (env vars win) + adds `ROOFSPAN_LOG_DIR`. No secrets.
+- **Tests:** new `windows/tests/test_relay_connector.py` (8 tests: env parse/precedence, config resolve,
+  graceful missing-config exit(2), separate-process (no uvicorn/server import), WiX autostart/restart/
+  restricted-account/no-firewall, outbound+bounded-reconnect tunnel). Full windows suite: **52 passed**;
+  1 PRE-EXISTING failure `test_public_website_download_remains_disabled` (website `.env` set AVAILABLE=
+  true during earlier P2 — WEBSITE scope, NOT P1-2; not modified here — flagged for decision).
+- **HUMAN REQUIRED:** native Windows service execution/registration + live relay reconnect on a real box.
+- **Not started:** P1-3..P1-6. No AWS/Terraform/Relay-infra, Mobile-field, or website work performed.
+
+
+## RoofSpan Office — P1-2 (revised): Windows Relay Connector SCM Service Runtime (2026-06)
+**Root cause found on review:** there was NO SCM wrapper anywhere — `backend_entry.py`, `relay_entry.py`,
+`update_service_entry.py` were all plain console `main()` loops, yet WiX registered them via
+`ServiceInstall Type=ownProcess`. A console exe never calls `StartServiceCtrlDispatcher`, so SCM start
+would fail (error 1053). **Scope: Relay + Backend + Updater all share this.** Per instruction, fixed ONLY
+the Relay connector in P1-2; Backend + Updater reported for approval (do not modify without sign-off).
+- **New reusable SCM host** `windows/winbuild/winservice.py`: `AsyncServiceRunner` (pure, OS-independent —
+  runs one long-lived coroutine on a dedicated loop, thread-safe `stop()` cancels the task + invokes an
+  `on_stop` callback; unit-tested on Linux) + `build_service_class()` (pywin32 `ServiceFramework` with
+  `SvcDoRun`/`SvcStop`, reports RUNNING/STOP_PENDING; pywin32 imported LAZILY so the module imports on
+  Linux) + `dispatch()` (SCM `StartServiceCtrlDispatcher` when SCM-launched, else `HandleCommandLine`).
+- **`relay_entry.py`**: when `sys.frozen` → builds the `RoofSpanRelayConnector` service class (`_svc_name_`
+  matches the WiX Name) and dispatches to SCM; else runs foreground (dev). Tunnel logic (InstallationTunnel)
+  NOT duplicated; `SvcStop` → `tunnel.stop()` + task cancel. Retains config-file load + rotating logs +
+  graceful missing-URL exit(2). Separate-process architecture preserved (no FastAPI merge).
+- **Build**: spec adds pywin32 + `winbuild.winservice` hiddenimports; new `windows/winbuild/
+  requirements-windows.txt` (`pywin32`, `pyinstaller`); `build_exes.ps1` verifies pywin32 present.
+- **Service-account ACLs (WiX)**: new `DataAcls` component group grants `NT SERVICE\RoofSpanRelay` (and
+  Backend/Updater) least-privilege access — read `config`, read/write `identity`, write `logs` under
+  ProgramData (dirs preserved on upgrade/uninstall). HUMAN REQUIRED: verify `NT SERVICE\<name>` resolves
+  at MSI ACL time on a real box; fallback = a post-StartServices custom action if ordering is an issue.
+- **Tests** `windows/tests/test_relay_connector.py` (15): SCM host structure (`StartServiceCtrlDispatcher`,
+  `ServiceFramework`, `SvcDoRun/SvcStop`, `_svc_name_` binding), **async runner start/stop + on_stop
+  invoked**, separate-process, spec hiddenimports, WiX autostart/restart/restricted-account/no-firewall,
+  ACL grants, env template, outbound+bounded-reconnect tunnel, config/logging/missing-URL. Updated stale
+  `test_public_website_download_remains_disabled` → `_reflects_approved_availability` (=true, per approved
+  decision; test-only, no website change). Full `windows/tests`: **57 passed**.
+- **HUMAN REQUIRED**: native Windows — register/start `RoofSpanRelayConnector`, observe RUNNING/STOP + live
+  tunnel reconnect + ACL resolution. **DECISION REQUIRED**: apply the same SCM host to Backend + Updater
+  (recommended; awaiting approval). No backend/frontend runtime changed; no AWS/Mobile-field/website work.
+
+
+## RoofSpan Office — P1-2b: Backend + Updater SCM Services (one common host) (2026-06)
+Both remaining console-exe services converted to real Windows SCM services, reusing the P1-2
+`winservice.py` host (no new framework; no WinSW/NSSM).
+- **`winservice.AsyncServiceRunner`** gained `graceful_stop` (small reusable enhancement): when True,
+  `stop()` relies on `on_stop` to end the coroutine (no task.cancel) — used by the backend for a clean
+  uvicorn shutdown. Also added shared config helpers `load_env_file`/`apply_env`/`load_programdata_env`.
+- **`backend_entry.py`** (`RoofSpanBackend`): frozen → pywin32 SCM host; foreground/dev preserved. Runs
+  `uvicorn.Server.serve()` inside the runner bound to **127.0.0.1:8001 only** (no 0.0.0.0). STOP →
+  `on_stop` sets `server.should_exit=True` → **graceful uvicorn shutdown** (FastAPI shutdown lifecycle →
+  PostgreSQL engine + relay-hub cleanup run as designed). Loads ProgramData config, sets `ROOFSPAN_STATIC_DIR`
+  (packaged frontend) + `INSTALLATION_KEYS_DIR`, rotating `backend.log`. (Full prod-config cleanup deferred
+  to P1-4.)
+- **`update_service_entry.py`** (`RoofSpanUpdateService`): frozen → SCM host; foreground/dev preserved.
+  Loop `check_once()` (fetch manifest + verify sig/SHA + plan) via `asyncio.to_thread`, then
+  `asyncio.sleep(CHECK_INTERVAL_SECONDS=12h)`; **cancel-based stop interrupts the sleep immediately** (no
+  waiting the interval). Update behavior/cadence unchanged; apply remains HUMAN REQUIRED.
+- **Specs**: backend + updater specs add pywin32 + `winbuild.winservice` hiddenimports (shared
+  `requirements-windows.txt` stays authoritative — no duplicate dep declarations).
+- **ACLs (reviewed, least-privilege — from P1-2 `DataAcls`, correct for all three):** config=read (all
+  three); identity=read/write (Backend + Relay); logs=read/write (all three). No broad Full Control on
+  ProgramData/Program Files. Updater's current fetch/verify/plan needs only config-read + logs-write.
+- **Tests** `windows/tests/test_service_host.py` (11): graceful runner stop; Backend name/SCM/graceful/
+  127.0.0.1-only/dev-path; Updater name/SCM/prompt-stop/behavior-preserved; all-three-common-host;
+  all-specs-bundle-pywin32; no-WinSW/NSSM; WiX names match entry `SVC_NAME` constants. Full `windows/tests`:
+  **68 passed**.
+- **HUMAN REQUIRED (native Windows):** MSI install + SCM registration; all three services reach RUNNING;
+  clean STOP (backend graceful shutdown, updater prompt exit); restart policy; ACL resolution; backend
+  reachable on 127.0.0.1:8001; updater/relay native behavior.
+- **DECISION REQUIRED (future, NOT now):** when native update *apply* is implemented, replacing Program
+  Files binaries needs elevation — `NT SERVICE\RoofSpanUpdate` is not admin. Choose a privilege model
+  (e.g. run updater as LocalSystem, or a separate elevated apply helper) rather than over-permissioning.
+  No AWS/Mobile-field/website work.
+
+
+## RoofSpan Office — P1-3: Local Windows-Admin Owner Recovery + JWT token_version invalidation (2026-06)
+Trust model (LOCKED): local machine + Windows Administrator elevation + direct local DB. No email/
+public-endpoint/security-question/master-password/backdoor/remote reset.
+- **Token invalidation:** `users.token_version` INTEGER NOT NULL DEFAULT 1 (Alembic `9f2a7c4b1d33`, head).
+  JWT carries `tv`; `get_current_user` rejects when `tv != user.token_version` (401 → re-login). Bumped on
+  **self change-password, admin reset, and Owner recovery** — invalidates that user's prior tokens
+  immediately. `create_access_token(..., token_version)`; `login`/setup `bootstrap` embed it.
+  Self change-password returns a fresh token (`{ok, access_token}`) so the caller stays signed in;
+  `ChangePasswordDialog.jsx` stores it. One-time re-login for pre-upgrade tokens (they lack `tv`).
+- **Recovery tool** `windows/winbuild/owner_recovery.py` → `RoofSpanOwnerRecovery.exe` (own PyInstaller
+  spec; `TOOL_TARGETS` in targets.py; staged to `tools\`, NOT `services\`; NOT a service/auto-start).
+  Requires elevation (`IsUserAnAdmin`; mockable via `ROOFSPAN_RECOVERY_ASSUME_ADMIN` for tests) — refuses
+  and instructs if not elevated. Local-only: no network/port/AWS/Relay/CP/Stripe/Internet (static-asserted).
+  Loads packaged ProgramData config for `DATABASE_URL` (no hardcoded dev URL). Finds Owner(s) (auto if 1,
+  explicit select if >1), **refuses non-Owner** accounts, reuses `core.hash_password`, `getpass` (never
+  echoes), bumps `token_version`, writes `owner.recovery` audit (no secrets in detail), single
+  transaction — no service stop needed. WiX: Start Menu shortcut "RoofSpan Owner Recovery (Administrator)"
+  under RoofSpan Office → Maintenance (Advertise; RemoveFolder on uninstall).
+- **Tests:** backend `tests/test_token_recovery.py` (4) — elevation gate, password rules, change-password
+  invalidation end-to-end (old token 401, new token 200), recovery bumps version + rehash + audit +
+  non-Owner refused + recovered login works + pre-recovery token dead. `windows/tests/test_owner_recovery.py`
+  (7) — packaging/local-only/hash-reuse/token-bump/audit/admin-check/Start-Menu/tools-staging. Full windows
+  suite **75 passed**; `tests/test_onboarding.py` still green; main app login/me/leads OK post-migration.
+- **HUMAN REQUIRED (native Windows):** exe build; Start Menu launch; UAC elevation; admin detection;
+  connect to packaged PostgreSQL; real Owner reset; old browser/token rejected; new-password login.
+- **DECISION REQUIRED (recorded, future):** updater Program-Files-patch privilege — restricted
+  RoofSpanUpdateService + a small separate ELEVATED apply helper (NOT LocalSystem). Not built yet.
+  No AWS/Mobile-field/website work.
+
+
+## RoofSpan Office — P1-4a: Production Config & Security Readiness (2026-06)
+Local runtime LOCKED (browser → 127.0.0.1:8001 → local FastAPI → local PostgreSQL; only licensing/billing/
+pairing/relay/update go outbound). This is code/config readiness — no AWS deploy, no real Stripe charge.
+- **Owner env seed DOUBLE-gated** (`server._owner_seed_enabled`): returns True only if
+  `LICENSING_MODE=="dev"` AND `ROOFSPAN_OWNER_SEED` opt-in — **impossible in production `http` mode** even if
+  the var is set. Dev keeps seeding (added `ROOFSPAN_OWNER_SEED=enabled` to backend/.env). No production
+  Owner-reset backdoor; prod first-run = wizard, recovery = RoofSpanOwnerRecovery.exe.
+- **Per-installation secrets** `backend/local_secrets.py::ensure_local_secrets()` (called at server startup
+  before use): generates `JWT_SECRET` (`token_urlsafe(48)`) + `SECRETS_ENCRYPTION_KEY`
+  (urlsafe-b64 of 32 random bytes → AES-256) with a CSPRNG, persists to
+  `C:\ProgramData\RoofSpan\config\secrets.env` (chmod 600; Windows ProgramData ACLs from P1-2), reuses on
+  later starts. **Environment wins** (dev/.env or service env) so nothing is generated/written when already
+  set. Unique per install, survives restart/upgrade (lives with data), never logged/committed. No cloud dep.
+- **Finalized `roofspan.env.template` contract:** production `LICENSING_MODE=http` (real CP client, no dev
+  1000-seat auto-issue) + `BILLING_MODE=stripe`; installer-generated local values (local Postgres URL w/
+  `__GENERATED_AT_FIRST_RUN__` password, paths, identity, logs, static); central-service URLs
+  (`cp.roofspan.io`, `wss://relay.roofspan.io`, `downloads.roofspan.io/update/windows/latest.json`); secrets
+  NOT shipped (generated). Only the PUBLIC update-verification key ships (no private signing key).
+- **Frontend packaging:** `lib/api.js` `BACKEND_URL = process.env.REACT_APP_BACKEND_URL || ""` → API base is
+  same-origin relative `/api` when unset (packaged Office served by the local backend). Dev preview keeps
+  its env var.
+- **Preview/dev scan (classified):** packaged config template + WiX = NO preview host (test-asserted).
+  `frontend/.env` REACT_APP_BACKEND_URL and `backend/.env` (APP_BASE_URL/local DB/dev secrets) are DEV-ONLY
+  and not shipped (production uses ProgramData `roofspan.env` + generated `secrets.env`). No test creds in
+  packaged config/templates.
+- **Tests:** backend `tests/test_local_secrets.py` (4: generate+persist, reuse-across-restart, env-wins-no-
+  write, owner-seed double-gate incl. prod-impossible). windows `tests/test_production_config.py` (6: prod
+  modes, local 127.0.0.1 + local Postgres, CP/Relay/update URLs, no secrets in template, no preview host,
+  frontend same-origin fallback). Full windows **81 passed**; backend affected (local_secrets + onboarding +
+  token_recovery) **9 passed**; frontend `yarn build` clean; running app login/me OK after changes.
+- **HUMAN REQUIRED (native):** installer generation; fresh install generating local secrets; packaged local
+  Postgres connection; real CP/Relay endpoints; native services. **P1-4b** (production Stripe onboarding
+  completion + mocked-Stripe test replacing `/api/setup/dev/pay`) is the next checkpoint — NOT started.
+
+
+## RoofSpan Office — P1-4a (revised): fail-closed secrets + first-install DB/config bootstrap (2026-06)
+Fixes two review blockers on P1-4a.
+- **Secrets storage moved** to Backend-only `C:\ProgramData\RoofSpan\secrets\secrets.env`
+  (`local_secrets.DEFAULT_SECRETS_DIR`). WiX `SecretsDir` + `AclSecrets` grants **only** `NT SERVICE\
+  RoofSpanBackend` read/write; Relay/Updater get none. **FAIL-CLOSED:** if a generated secret cannot be
+  durably persisted, `ensure_local_secrets()` raises RuntimeError (startup fails) instead of continuing
+  with an ephemeral key — prevents session/credential loss on restart. Env-provided secrets (dev/.env)
+  still win and skip generation. Secret values never logged. WiX ACL is authoritative on Windows (chmod is
+  POSIX-only best effort); native ACL HUMAN REQUIRED.
+- **DB + deployed-config bootstrap** `windows/winbuild/bootstrap_db.py` → `RoofSpanBootstrap.exe`
+  (TOOL_TARGETS + spec + build_exes tool list). WiX custom action `RoofSpanBootstrap` sequenced **Before
+  StartServices** (NOT Installed): generates a unique random local DB password (never `postgres`/`roofspan`/
+  universal/committed/logged), provisions least-privilege `roofspan` role + `roofspan` database via the
+  bundled PG superpassword, and renders the shipped template → DEPLOYED `C:\ProgramData\RoofSpan\config\
+  roofspan.env` with the real `DATABASE_URL` — so Backend never starts with the `__GENERATED_AT_FIRST_RUN__`
+  placeholder. Upgrade/repair PRESERVES the existing deployed config/creds (idempotent). Template stays
+  secret-free with the placeholder; clearly distinguishes TEMPLATE (Program Files) vs DEPLOYED (ProgramData).
+- **Tests:** windows `test_db_bootstrap.py` (7: password random/unique/strong, placeholder substitution,
+  fresh-write real URL + upgrade-preserve, packaged+custom-action-before-StartServices, Backend-only secrets
+  ACL) + `test_production_config.py`/`test_local_secrets.py` additions (fail-closed persist). windows
+  **87 passed**; backend `test_local_secrets` **5 passed** + onboarding/token_recovery regression **5 passed**;
+  running app health/login/me OK. Preserved all prior P1-4a work (seed double-gate, http/stripe modes,
+  same-origin frontend, CP/Relay/update URLs, no preview/secrets in package).
+- **HUMAN REQUIRED (native):** MSI custom-action execution + PG role/db provisioning + secrets/config ACL
+  resolution on a real Windows box; verify Backend starts only after bootstrap. **P1-4b NOT started.**
+
+
+
+## RoofSpan Office — P1-4a (revised #2): hybrid PG bootstrap + secure Burn→MSI→CA credential handoff (2026-06)
+Finalizes the last P1-4a blocker: secure PostgreSQL superuser credential handoff and self-contained fresh-install DB provisioning (Option C — Hybrid, user-approved).
+- **bundle.wxs**: `PgSuperPassword` Burn variable (Hidden; empty default = RoofSpan-managed self-generation, non-empty = enterprise override) handed to the MSI via `<MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />`.
+- **RoofSpan.wxs**: `PG_SUPERPASSWORD` property `Hidden="yes" Secure="yes"`; immediate `SetProperty` (Id == deferred CA) builds the CustomActionData argv; deferred CA `Wix4UtilCA_$(sys.BUILDARCHSHORT)`/`WixSilentExec` with `HideTarget="yes"` (no command-line or CAData logging). Removed dead `SetBootstrapEnv` CA and the env-var dependency.
+- **bootstrap_db.py** (hybrid, fail-closed): fresh RoofSpan-managed install generates a temporary bootstrap superpassword (no DBA input); external/enterprise PG requires supplied credential else fails closed. Bootstrap vs application DB passwords are always SEPARATE random values; only the least-privilege app password is persisted to the deployed DATABASE_URL; neither is logged. Config rendered ONLY after successful provisioning; provisioning error / missing credential → non-zero exit → MSI rollback. Registry-based deterministic `psql.exe` discovery (`HKLM\SOFTWARE\PostgreSQL\Installations`). RoofSpan-managed detection via service `RoofSpanPostgreSQL` (unrelated PG never adopted). Upgrades regenerate neither credential.
+- **local_secrets.py**: docstring corrected to describe fail-closed behavior (no in-memory fallback).
+- **Tests**: `windows/tests/test_db_bootstrap.py` extended (both branches, separate-password guarantee, config-only-after-provision, fail-closed rollback, argv parsing, WiX/bundle handoff assertions). **windows 100/100 pass.**
+- **HUMAN REQUIRED (native):** MSI/Burn execution, EDB PostgreSQL init + superuser finalization for the generated temp credential, psql/role/db provisioning, ACL resolution on a real Windows box. **P1-4b NOT started — pending GitHub review + approval.**
+- **Pre-existing (out of scope, flagged):** some backend integration tests (photo upload, onboarding, token_recovery) currently fail in the forked container despite PG running — unrelated to Windows bootstrap; needs separate investigation.
+
+## RoofSpan Office — P1-4a (revised #3): pre-EDB credential generation + collision-safe managed PG (2026-06)
+Resolves the two GitHub-review blockers on revision #2.
+- **Blocker 1 (credential too late):** revision #2 had `RoofSpanBootstrap.exe` generate the superuser password AFTER EDB installed PostgreSQL, then try to `ALTER USER postgres` — unauthenticatable/circular. FIXED: the superuser/bootstrap password is now generated in Burn BEFORE the PostgreSQL package via a minimal WiX v4 **BAFunctions** native hook (`windows/bafunctions/RoofSpanBaFunctions.cpp` + `.def` + `README.md`) on the stock `WixStandardBootstrapperApplication` (standard UI preserved; no custom BA/UI project). In `OnDetectComplete` (before Plan) it CSPRNG-generates (`BCryptGenRandom` → 64 hex chars) into the Hidden `PgSuperPassword` variable ONLY for a fresh RoofSpan-managed install (skips on enterprise override or `RoofSpanPgPresent`). Referenced via `bal:IsBAFunctions="yes"`; `build.ps1` now requires `-BaFunctionsDll` and fails fast if absent.
+- **Same value to both packages:** the one Hidden `PgSuperPassword` is handed to the EDB installer `--superpassword [PgSuperPassword]` AND the MSI `PG_SUPERPASSWORD` (Hidden ⇒ Burn redacts it in logs, including command lines).
+- **bootstrap_db.py:** removed `generate_bootstrap_password`/`resolve_bootstrap_password`/`set_superuser` and the superuser-reset SQL. New `require_bootstrap_password()` REQUIRES the handed-off credential (fail-closed if missing) and only authenticates + provisions the least-privilege `roofspan` role/db with a SEPARATE random app password. Only the app password is persisted (deployed `DATABASE_URL`). Config written only after successful provisioning; provisioning error → non-zero exit → MSI rollback. Deterministic registry-based `psql.exe` discovery retained.
+- **Blocker 2 (detection too broad):** Burn now detects the DEDICATED RoofSpan service (`HKLM\SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL` → `RoofSpanPgPresent`, `InstallCondition="NOT RoofSpanPgPresent"`). An unrelated PostgreSQL install no longer suppresses RoofSpan's own instance and is never silently adopted. Enterprise/external PostgreSQL remains an explicit override (supplied `PgSuperPassword`), not inferred.
+- **Port collision:** RoofSpan-managed PostgreSQL uses dedicated port **5442** (EDB `--serverport [PgPort]`, MSI `PG_PORT`, deployed `DATABASE_URL`, `bootstrap_db.DEFAULT_PG_PORT`) instead of assuming 5432. Dev container backend/.env is unaffected (uses its own 5432). **DECISION flagged for user** — no field installs exist (v0.1.0), so the change is safe; overridable via Burn `PgPort`.
+- **Security:** bootstrap credential is CSPRNG, unique per install, Hidden, not persisted by Burn, not in MSI logs (`HideTarget` + `WixSilentExec`), not in RoofSpan config, not reused as the app password. Hidden Burn variables are redacted even on the EDB command line (verified via WiX docs).
+- **Tests:** `windows/tests/test_db_bootstrap.py` rewritten; `test_production_config.py` + `test_installer_static.py` updated for the port and detection changes. windows **103/103** pass.
+- **HUMAN REQUIRED (native):** compile the BAFunctions DLL (MSVC + `WixToolset.WixStandardBootstrapperApplicationFunctionApi` NuGet; reconcile exact BA API signatures), MSI/Burn/EDB execution, ACL resolution, and verify `PgSuperPassword` is redacted in the Burn log on a real box. **P1-4b NOT started — pending GitHub review + approval.**
+- **Pre-existing (recorded, out of scope):** some backend integration tests (photo upload, onboarding, token_recovery) fail in the forked container; NOT caused by this Windows change; to be resolved before P1-6 regression approval.
+
+## RoofSpan Office — P1-4a (revised #4): build-valid BAFunctions + reproducible build + WiX v5 pin (2026-06)
+Final BAFunctions gate: the native hook is now REAL, compilable source (no pseudocode) with a checked-in reproducible build, modeled on Microsoft PowerToys' verified WiX v5 BAFunctions project.
+- **Real sources** (`windows/bafunctions/`): `pch.h` (WiX v5 SDK includes + `bcrypt.h`), `RoofSpanBaFunctions.cpp` (`CRoofSpanBAFunctions : public CBalBaseBAFunctions`, constructor `CBalBaseBAFunctions(hModule)`, `OnPlanBegin(DWORD, BOOL*)` doing `BCryptGenRandom` 32B→64 hex → `BalSetStringVariable(L"PgSuperPassword", …, FALSE)`, `CreateBAFunctions` calling `OnCreate(pEngine, pCommand)`), `dllmain.cpp` (`DllMain` + exported `BAFunctionsCreate`/`BAFunctionsDestroy`, `BalInitialize`/`BalUninitialize`), `RoofSpanBaFunctions.def`. All placeholder/"reconcile"/pseudocode comments removed.
+- **Source-review items verified against WiX v5 headers:** base class + `OnCreate` wiring (PowerToys pattern); `OnPlanBegin` signature; read via `BalGetStringVariable`(alloc)+`BalGetNumericVariable`(E_NOTFOUND=absent); write via `BalSetStringVariable(…, BOOL fFormatted)` (3-arg, confirmed); export/create signature `BAFunctionsCreate`; string ownership (`ReleaseStr`/`ReleaseObject`); CSPRNG error handling; password buffer `SecureZeroMemory`; override not overwritten; `RoofSpanPgPresent` skip; **RNG failure fails closed** (`*pfCancel = TRUE` + failing HRESULT → planning aborts; never proceeds with empty `--superpassword`).
+- **Reproducible build:** `RoofSpanBaFunctions.vcxproj` (x64 DynamicLibrary, def-file exports, `bcrypt.lib`, PCH) **pins** `WixToolset.BootstrapperApplicationApi` **5.0.2** and `WixToolset.WixStandardBootstrapperApplicationFunctionApi` **5.0.2` (DUtil transitive). The FunctionApi package line begins at 5.0.0 (no v4) → **installer standardized on WiX v5** (DECISION). `build_bafunctions.ps1` runs `msbuild /t:Restore;Build` and prints the DLL path.
+- **build.ps1 integration:** auto-builds the BAFunctions DLL from `windows/bafunctions/` before the Burn bundle (`-BaFunctionsDll` is now an optional CI/override, no longer mandatory); requires `wix --version 5.*`.
+- **Tests:** added `test_bafunctions_source_generates_hidden_credential` (OnPlanBegin/BalSetStringVariable/fail-closed), `test_bafunctions_exports_and_entrypoints_present`, `test_bafunctions_source_has_no_placeholder_pseudocode`, `test_bafunctions_build_project_pins_wix_v5_sdk`, `test_installer_build_autobuilds_bafunctions`. windows **107/107** pass.
+- **HUMAN REQUIRED (cannot run in Linux container):** actual MSVC compile of the DLL + `wix build` of the MSI and Burn bundle on Windows/VS2022 + WiX v5. This gate proves source + build-definition correctness; native compile/build results must be captured on Windows.
+- **P1-4b NOT started — pending GitHub review + approval.**
+
+## RoofSpan Office — First-run routing hardening (SetupGate) (2026-06)
+Fixes a first-run UX bug where a brand-new (uninitialized) install could briefly show `/login` instead of `/setup`.
+- **Root cause:** `SetupGate` in `frontend/src/App.js` swallowed `/api/setup/status` failures (`.catch(() => {})`) and always set `ready=true` in `.finally`, so if the local backend was still starting/unreachable the router finished and could render `/login`.
+- **Fix:** extracted `frontend/src/components/SetupGate.jsx` with a 3-phase gate (`checking`→`ready`|`error`). Children (the router) never render until the authoritative status decision is made, so login can't flash. Bounded retry while the backend starts (1s interval × 20 attempts ≈ 20s), staying on the loading UI; on exhaustion a retryable startup-error screen is shown (manual Retry) — never a silent fall-through to `/login`. Server remains authoritative; only `state === "initialized"` allows normal routing, every other onboarding state → `/setup`; initialized install on `/setup` still redirected out. Decision logic + retry policy in `frontend/src/lib/setupStatus.js`.
+- **Tests:** `frontend/src/lib/setupStatus.test.js` (pure decision/policy) + `frontend/src/components/SetupGate.test.jsx` (A fresh→/setup, A2 payment_required→/setup, B slow-start retry no-flash, C initialized keeps /login + /setup→app, D exhausted→retryable error→manual retry recovers, E wizard entry preserved). Added `@testing-library/react@16`, `@testing-library/dom@10`, `@testing-library/jest-dom@6.6.3`, `@testing-library/user-event@14`; `src/setupTests.js` (jest-dom + TextEncoder/act polyfills); craco `jest.moduleNameMapper` (`@` alias + react-router v7 CJS mapping — RR7 ships `main: dist/main.js` which doesn't exist). **Frontend: 14/14 tests pass; `yarn build` succeeds.**
+- Onboarding wizard/billing (`Setup.jsx`, dev-pay) unchanged; full company+owner+payment flow remains covered by `backend/tests/test_onboarding.py`.
+- **Note:** live browser smoke not possible in this forked container — backend is stuck at "Waiting for application startup" and nothing is bound on 8001/3000 (pre-existing environment condition, not caused by this change; it is exactly the slow/unavailable-backend case the new gate handles gracefully).
+
+## RoofSpan Office — Windows PyInstaller backend spec fix (Alembic path) (2026-06)
+Fixed a native packaging failure: `roofspan-backend.spec` referenced a non-existent `backend/migrations` directory.
+- **Root cause:** the backend uses `backend/alembic/` (with `alembic.ini`), but the spec's `datas` still bundled `backend/migrations` → PyInstaller "Unable to find …\backend\migrations".
+- **Old path:** `(os.path.join(BACKEND, "migrations"), "migrations")`.
+- **Corrected path:** `(os.path.join(BACKEND, "alembic"), "alembic")` (alembic.ini already bundled at `"."`).
+- **Runtime consistency:** `migrations_runner.py` does `root = dirname(__file__)` (== `_MEIPASS` in onefile) then `Config(join(root,"alembic.ini"))` + `script_location = join(root,"alembic")`. Bundling `alembic.ini`→`.` and `alembic`→`alembic` puts both exactly where the runner looks; the packaged exe now contains `alembic.ini`, `alembic/env.py`, `alembic/script.py.mako`, and all `alembic/versions/*.py`.
+- **Other specs:** relay/update/owner-recovery/bootstrap specs have empty `datas` — no stale paths. Only the backend spec was affected.
+- **Test added:** `windows/tests/test_pyinstaller_specs.py` — fails if any spec `datas` source path is missing, if any spec still references `migrations`, and asserts the backend spec's alembic layout matches what `migrations_runner.py` loads. windows **111/111** pass (native PyInstaller build remains HUMAN REQUIRED on Windows).
+
+## RoofSpan Office — BAFunctions native compile fix (WiX v5 DUtil include order) (2026-06)
+Fixed the MSVC compile failure `balinfo.h(88): C3646 'sdVariables': unknown override specifier` on the BAFunctions DLL.
+- **Root cause:** WiX v5.0.2 `balinfo.h` (pulled by `BootstrapperApplicationBase.h`) declares `STRINGDICT_HANDLE sdVariables;`, but `windows/bafunctions/pch.h` did not include `dictutil.h` (which defines `STRINGDICT_HANDLE`) before the BAL/BAFunctions headers.
+- **Missing type:** `STRINGDICT_HANDLE` — defined by WiX DUtil `dictutil.h`.
+- **Fix (`pch.h`):** mirrored the official WiX v5 BAFunctions precompiled-header include set/order (from the verified PowerToys build): system `windows.h`, `gdiplus.h` (warning 4458 push/pop), `bcrypt.h`, `msiquery.h`, `objbase.h`, `shlobj.h`, `shlwapi.h`, `stdlib.h`, `strsafe.h`, `CommCtrl.h`; then DUtil `dutil.h`, `dictutil.h`, `fileutil.h`, `pathutil.h`, `strutil.h`, `regutil.h`; then `BootstrapperApplicationBase.h`, `BAFunctions.h`, `IBAFunctions.h`. (Added `dictutil.h`, `fileutil.h`, `pathutil.h`, `gdiplus.h`, `CommCtrl.h`, `shlobj.h`.)
+- **Fix (`RoofSpanBaFunctions.vcxproj`):** expanded Link `AdditionalDependencies` to the official theme-link set `comctl32.lib;gdiplus.lib;msimg32.lib;shlwapi.lib;wininet.lib;version.lib;bcrypt.lib` (thmutil is transitively included via the BAL base). No package version changes — both pinned at 5.0.2. No `/WX` change; no error suppression.
+- **Preserved:** CSPRNG (`BCryptGenRandom`) superuser-password generation, `.def` exports (`BAFunctionsCreate`/`BAFunctionsDestroy`), bcrypt linkage, WiX v5 Function API integration.
+- **Test:** `test_bafunctions_pch_defines_dutil_types_before_bal_headers` (required DUtil headers present + ordered before the BAL headers; gdiplus/CommCtrl/bcrypt present) and extended vcxproj link-dep assertions. windows **112/112** pass. Native Release|x64 MSVC compile remains HUMAN REQUIRED on Windows (cannot run in the Linux container).
+
+## RoofSpan Office — WiX v5 WIX0230 fix (ACL component GUIDs) (2026-06)
+Fixed the MSI build failure where directory-keypath components used `Guid="*"`.
+- **Root cause:** the four ACL components (`AclConfig`, `AclIdentity`, `AclLogs`, `AclSecrets`) each have a `CreateFolder` (with `util:PermissionEx`) as their effective KeyPath and used `Guid="*"`. WiX v5 forbids auto-generated GUIDs for directory-keypath components → WIX0230.
+- **Fix (`windows/installer/RoofSpan.wxs`):** assigned fixed, source-controlled GUIDs (IDs, Directory, Permanent, NeverOverwrite, CreateFolder, PermissionEx all preserved):
+  - AclConfig = `72BB4997-F4EE-4837-B66C-076846B584EB`
+  - AclIdentity = `B3F5A500-B1CE-4197-AFD5-23BD26569A78`
+  - AclLogs = `61C6F56D-8F48-4A46-BA02-CFD36BA07CFC`
+  - AclSecrets = `6F879EC8-339B-4941-9D08-AE6717D02DB3`
+- **No other WIX0230 offenders:** `DataDirs` has a `CreateFolder` but an explicit `RegistryValue KeyPath="yes"`, so its `Guid="*"` is valid (unchanged). `Svc_*`/`Tool_*` use File keypaths and `StartMenuCleanup` a RegistryValue keypath — all valid with `Guid="*"`.
+- **Test (`windows/tests/test_installer_static.py`):** `test_no_directory_keypath_component_uses_wildcard_guid` (fails if any CreateFolder-only component uses `Guid="*"`) + `test_acl_components_have_stable_unique_guids`. windows **114/114** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — WiX WIX0104 fix (invalid XML comments) (2026-06)
+Fixed the bundle XML parse failure caused by "--" inside XML comments.
+- **Root cause:** two comments in `windows/installer/bundle.wxs` contained literal CLI switches — `(--superpassword)` (line 32) and `(--serverport)` (line 50). XML comments cannot contain `--`, so WiX v5 raised WIX0104.
+- **Fix:** comment text only — `(--superpassword)` → `(the superpassword argument)`, `(--serverport)` → `(the serverport argument)`. No runtime markup changed: `InstallArguments="… --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL --serverport [PgPort]"` and all package order / PG detection / PgSuperPassword / PgPort / BAFunctions / MSI / signing behavior are untouched. All three installer files (`bundle.wxs`, `RoofSpan.wxs`, `constants.wxi`) now parse as well-formed XML.
+- **Test (`windows/tests/test_installer_static.py`):** `test_wix_sources_are_well_formed_xml` + `test_no_xml_comment_contains_double_hyphen` (scans every .wxs/.wxi). windows **116/116** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — WiX v5 Burn bundle authoring fixes (WIX0004 / WIX0010 + v5 migration) (2026-06)
+Fixed two native WiX 5.0.2 bundle errors and completed the v4→v5 migration of the bundle.
+- **WIX0004 (BAFunctions Payload):** `windows/installer/bundle.wxs` used `bal:IsBAFunctions="yes"` (not valid on the v5 Payload schema). Changed to `bal:BAFunctions="yes"`. BAFunctions DLL/behavior unchanged.
+- **WIX0010 (PgSuperPassword):** the variable declared `Type="string"` with no `Value` (v5 requires `Value` when `Type` is set). Removed `Type` so it stays INITIALLY UNSET — `Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes"`. **No placeholder/empty/hard-coded password added**; BAFunctions still CSPRNG-generates it at runtime (or an enterprise DBA overrides it).
+- **v5 migration:** confirmed the rest is v5-valid and unchanged — `ExePackage/@InstallArguments` (correct v4/v5 name), `MsiPackage`/`MsiProperty`, `WixStandardBootstrapperApplication`, `util:RegistrySearch`, `Variable` (PostgresInstaller/PgPort keep Type because they have Value). Updated stale "WiX v4" comments to "WiX v5" (comment text only).
+- **build.ps1:** switched the `wix build` bundle extension from `WixToolset.Bal.wixext` to `WixToolset.BootstrapperApplications.wixext` and pinned all `wix build -ext` refs to `/5.0.2` (Util, Firewall, BootstrapperApplications).
+- **Preserved:** stock WixStdBA UI, PG prerequisite chain order, dedicated `RoofSpanPostgreSQL` detection, port 5442, BAFunctions CSPRNG, hidden PgSuperPassword, EDB installer args, MSI property forwarding, `Permanent` prerequisite, no committed secrets.
+- **Tests (`test_installer_static.py`):** `test_bafunctions_payload_uses_v5_bal_attribute`, `test_pgsuperpassword_variable_is_initially_unset_no_secret`, `test_build_script_uses_v5_bootstrapper_applications_extension` (+ existing XML well-formedness). windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — WiX v5 WIX0103 fix (ExePackage SourceFile build-time var) (2026-06)
+Fixed the bundle build failure where the PostgreSQL ExePackage used Burn runtime syntax for a build-time path.
+- **Root cause:** `ExePackage/@SourceFile="[PostgresInstaller]"` (Burn runtime variable) — but SourceFile is resolved at BUILD time from `-d PostgresInstaller=<path>`, so WiX couldn't find the payload → WIX0103.
+- **Fix (`windows/installer/bundle.wxs`):** `SourceFile="$(var.PostgresInstaller)"` (build-time preprocessor variable). Removed the now-redundant runtime `<Variable Name="PostgresInstaller" …>` — after the fix nothing referenced `[PostgresInstaller]` at runtime (its only consumer was that SourceFile), and a runtime override can't affect a build-time-baked SourceFile. All other SourceFile attrs already correct (`$(var.BaFunctionsDll)`, `$(var.MsiPath)`).
+- **Runtime `[Variable]` usage verified correct:** `[PgSuperPassword]`/`[PgPort]` remain only in `InstallArguments` + `MsiProperty` (genuine Burn runtime). No other build-time/runtime misuse found.
+- **Unchanged:** PostgreSQL InstallArguments, PgSuperPassword handling, PgPort, DetectCondition/InstallCondition, Permanent/Vital, package order, MSI property forwarding, BAFunctions behavior.
+- **Test (`test_installer_static.py`):** asserts the PG ExePackage SourceFile uses `$(var.PostgresInstaller)` (not `[PostgresInstaller]`) and that no SourceFile uses Burn `[Variable]` syntax. windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — Embed PostgreSQL prerequisite in RoofSpanSetup.exe (2026-06)
+Fixed the real Windows failure "postgresql-16.14-2-windows-x64.exe File not found" — RoofSpanSetup.exe was requiring the EDB installer as an external file next to it.
+- **Root cause:** the PostgreSQL `ExePackage` had `Compressed="no"`, making the EDB installer an EXTERNAL Burn payload (customer had to place it alongside RoofSpanSetup.exe).
+- **Fix (`windows/installer/bundle.wxs`):** `Compressed="no"` → `Compressed="yes"` (correct WiX v5 Burn authoring to EMBED a payload inside the bundle exe). Header comment updated to state the EDB installer is embedded at build time.
+- **Result:** customers download and run ONLY `RoofSpanSetup.exe`; it carries/extracts the PostgreSQL prerequisite itself.
+- **Preserved:** `SourceFile="$(var.PostgresInstaller)"`, InstallCondition/DetectCondition, Permanent/Vital, PgSuperPassword, PgPort 5442, `RoofSpanPostgreSQL` service name, silent InstallArguments, package order, BAFunctions.
+- **build.ps1:** no change needed — already emits `RoofSpanSetup-<Version>.exe` + `RoofSpanSetup.exe`.
+- **Size impact:** RoofSpanSetup.exe grows by ~the compressed EDB PostgreSQL 16 x64 installer (~300–370 MB source; Burn compresses it) — the bundle becomes a single large self-contained installer.
+- **Test (`test_installer_static.py`):** asserts the PG ExePackage is `Compressed="yes"` and that no payload is `Compressed="no"`. windows **119/119** pass. Native `wix build` remains HUMAN REQUIRED (Windows only).
+
+## RoofSpan Office — Windows service virtual-account naming fix (2026-06)
+Fixed clean-install failure "Service 'RoofSpan Relay Connector' could not be installed" caused by NT SERVICE virtual accounts not matching their service names.
+- **Root cause:** a Windows virtual service account `NT SERVICE\<X>` must exactly equal the ServiceInstall `Name`. Relay/Updater used shortened account names, so SCM couldn't create the virtual accounts.
+- **Fix (`windows/installer/RoofSpan.wxs`):**
+  - Relay: Name `RoofSpanRelayConnector` — Account `NT SERVICE\RoofSpanRelay` → `NT SERVICE\RoofSpanRelayConnector`.
+  - Updater: Name `RoofSpanUpdateService` — Account `NT SERVICE\RoofSpanUpdate` → `NT SERVICE\RoofSpanUpdateService`.
+  - Backend already matched (`RoofSpanBackend`) — unchanged.
+- **ACL identities corrected** (`util:PermissionEx`, so the corrected services keep folder access): `RoofSpanRelay` → `RoofSpanRelayConnector` (ConfigDir, LogsDir, DataRoot); `RoofSpanUpdate` → `RoofSpanUpdateService` (ConfigDir, DataRoot). SecretsDir remains backend-only.
+- **No other mismatches found.** Unchanged: service exe paths, DisplayNames, service Names, startup type, restart-on-failure, PostgreSQL config, bundle, service architecture (ServiceInstall element Ids left as-is; they are internal, not the service Name).
+- **Tests:** `test_service_virtual_accounts_match_service_names` + `test_acl_identities_use_canonical_service_names` in `test_installer_static.py`; updated a stale account assertion in `test_relay_connector.py`. windows **121/121** pass.
+
+## RoofSpan Office — Retry-safe PostgreSQL bootstrap credential (DPAPI recovery) (2026-06)
+Fixed the stranding bug where a rolled-back MSI after a successful PostgreSQL install left the generated superpassword unrecoverable, so reruns failed at RoofSpanBootstrap (WixSilentExec 0x80070002 → 1603).
+- **Root cause:** BAFunctions generated `PgSuperPassword` only in memory; on rerun it skipped generation when `RoofSpanPgPresent` and had no way to recover the original, so `PG_SUPERPASSWORD` was empty and provisioning could never proceed. 0x80070002 (ERROR_FILE_NOT_FOUND) is the inner WixSilentExec code; the old bootstrap couldn't distinguish credential-missing vs psql-missing vs template-missing.
+- **Fix — secure persistence/recovery:** BAFunctions (`RoofSpanBaFunctions.cpp`) now persists the generated superpassword via **DPAPI `CryptProtectData` (CRYPTPROTECT_LOCAL_MACHINE)** to `%ProgramData%\RoofSpan\bootstrap\pgsuper.bin` *before* the chain, and on rerun **recovers** it (`CryptUnprotectData`). New order: override → recover → generate+persist. If PG is present but no recoverable secret exists → fail closed (never generate a wrong password, never touch customer data). Added `crypt32.lib`; `wincrypt.h` to pch.
+- **Deletion timing:** `bootstrap_db.py` securely purges the DPAPI file (`purge_bootstrap_secret`) ONLY after the `roofspan` role/db + deployed `DATABASE_URL` are provisioned. On provisioning failure the file is kept (recoverable on next run); if the MSI later rolls back after full success, the deployed config already exists so reruns short-circuit.
+- **Diagnostics:** distinct fail-closed exit codes with non-secret messages — 2 = bootstrap credential unavailable (rerun to recover), 4 = psql.exe not found, 5 = config template missing, 3 = provisioning/other. Passwords never logged.
+- **Retry/reboot:** the DPAPI machine blob survives Burn exit, MSI rollback, and reboot; rerunning RoofSpanSetup.exe recovers it and completes bootstrap. Successful installs keep preserving their app DB creds (upgrade short-circuit unchanged).
+- **Preserved:** RoofSpanPostgreSQL service, port 5442, separate random app password, Permanent PostgreSQL, fail-closed provisioning, hidden/redacted secrets, no committed secrets, no reliance on unrelated PostgreSQL.
+- **Tests:** Python purge-on-success/keep-on-failure, recovered-credential retry sequence, exit-code 2/5, and C++/vcxproj DPAPI static assertions (CryptProtect/Unprotect, LOCAL_MACHINE, persist-before-chain, recover-before-generate, crypt32.lib). windows **128/128** pass. Native compile/build + on-box retry verification remain HUMAN REQUIRED.
+
+## RoofSpan Office — Bootstrap template filename mismatch + stale-exe guard (2026-06)
+Fixed RoofSpanBootstrap failing with WixSilentExec 0x80070003 (ERROR_PATH_NOT_FOUND) → 1603.
+- **Root cause 1 (template):** `bootstrap_db.DEFAULT_TEMPLATE` was `…\config-templates\roofspan.env` but the MSI installs `…\config-templates\roofspan.env.template`, so the bootstrap couldn't open the template. **Fix:** canonical filename `roofspan.env.template` (matches staging `winbuild/config/roofspan.env.template` and the WiX-installed file); deployed runtime file stays `roofspan.env`.
+- **Root cause 2 (stale exe):** `winbuild/build_exes.ps1` globbed every exe in the accumulating `dist/` each spec iteration (could stage a cross/old exe), and `build.ps1` re-built the MSI from a stage that wasn't regenerated after `bootstrap_db.py` changed. **Fixes:** build_exes now `Remove-Item $distRoot` before each spec + asserts exactly one produced exe (always fresh, no leftovers); `build.ps1` adds a STALENESS GUARD that fails fast if any staged `services\*.exe`/`tools\*.exe` is older than the newest `winbuild`/`backend` `*.py` source, and requires `tools\RoofSpanBootstrap.exe`.
+- **Preserved:** DPAPI retry credential recovery, no change/deletion of PostgreSQL instance/data on failure.
+- **Tests:** `test_default_template_matches_wix_installed_config_template`, `test_build_exes_rebuilds_fresh_per_spec_no_stale_artifacts`, `test_build_script_has_stale_artifact_guard`. windows **130/130** pass.
+- **Windows rebuild order:** (1) `installer\stage.ps1 -StageDir ..\..\_stage -UpdatePublicKey <pub.pem>` (rebuilds ALL PyInstaller exes incl. RoofSpanBootstrap.exe into _stage\services + _stage\tools); (2) BAFunctions auto-built by build.ps1 (or `bafunctions\build_bafunctions.ps1 -Configuration Release -Platform x64`); (3) `installer\build.ps1 -StageDir ..\..\_stage -PostgresInstaller <edb.exe>` → MSI + embedded RoofSpanSetup(-<v>).exe.
+
+## RoofSpan Office — pywin32 3.12 service-crash fix (0xc0000005 / exit 1067) (2026-06)
+Fixed the production blocker where all three packaged Windows services crashed on a clean install.
+- **Root cause:** `pywin32==306` faults (access violation 0xc0000005 in python312.dll) under Python 3.12 when a service calls `servicemanager.LogInfoMsg` — RoofSpan called it as the first line of `SvcDoRun`, so RoofSpanBackend/RelayConnector/UpdateService died with Win32 exit 1067 before `backend.log` was created.
+- **Fixes:** (1) `windows/winbuild/requirements-windows.txt` `pywin32==306` → **`pywin32==311`** (307+ fixes the crash). (2) `windows/winbuild/winservice.py` — all `servicemanager.LogInfoMsg`/`LogErrorMsg` calls now go through a swallow-all `_safe_log()` so a logging failure can never crash service startup (SCM + backend.log remain the source of truth). Service architecture/model unchanged.
+- **Rebuild note:** all three service EXEs must be rebuilt via `stage.ps1` (build_exes.ps1) against the new pin; the build.ps1 staleness guard enforces fresh exes.
+- **Tests (`test_service_host.py`):** `test_pywin32_pinned_to_python312_safe_release` (>=307, not 306), `test_service_logging_is_crash_safe` (only `_safe_log`-wrapped calls), `test_safe_log_swallows_logger_exceptions`. **testing_agent verified: windows 133/133 pass; pywin32==311; winservice imports clean on Linux.** Native clean-Windows validation (services stay Running, backend listens on 127.0.0.1:8001) remains HUMAN REQUIRED.
+
+## RoofSpan Office — Native build hardening + pywin32 fix now committed (2026-06)
+Audit before the user's re-run of native Windows P1-4a validation with the pywin32 v311 fix.
+- **CRITICAL — pywin32 fix was UNCOMMITTED:** the `pywin32==306`->`311` bump, the `_safe_log()` crash-safe wrapper in `winservice.py`, and the 3 `test_service_host.py` guards existed only in the container working tree (git HEAD still had `pywin32==306`, no `_safe_log`). A "fresh git pull" would NOT have contained the fix. Now included in the commit. **User MUST "Save to Github" before pulling on the Windows build box.**
+- **stage.ps1 relative/absolute StageDir across Push-Location (was a real bug, FIXED):** a relative `-StageDir` broke the frontend copy because step 2 runs inside `Push-Location $FrontendDir` (CWD changes to the frontend dir), so relative derived paths resolved against the wrong directory. Fix: `$StageDir` and `$FrontendDir` are `Resolve-Path`'d to ABSOLUTE before any sub-dir derivation / Push-Location; `$FrontendDir` honors an absolute override else anchors its relative default to `$PSScriptRoot`; `$UpdatePublicKey` also resolved. Works for both relative (`..\..\_stage`) and absolute StageDir.
+- **Windows PowerShell 5.1 encoding/parsing (FIXED):** removed em-dash (U+2014) non-ASCII chars from `stage.ps1` + `build.ps1` (were in throw strings + comments). All four build `.ps1` are now pure ASCII, so they parse identically under Windows PowerShell 5.1 (BOM-less/ANSI codepage) and PowerShell 7 — no manual encoding workaround.
+- **WiX v5 BAL extension resolution (already correct, CONFIRMED):** `build.ps1` resolves the BAL extension via NuGet ID `-ext WixToolset.BootstrapperApplications.wixext/5.0.2`; `bundle.wxs` references the BAFunctions DLL via `$(var.BaFunctionsDll)` supplied through `build.ps1 -d`, itself the `Resolve-Path` output of `build_bafunctions.ps1`. No hardcoded `C:\Users\<name>` / `.wix` path anywhere.
+- **Tests:** added `test_powershell_build_scripts_are_ascii_only` + `test_stage_script_resolves_stagedir_absolute_before_pushlocation` to `test_installer_static.py`. **windows suite 135/135 pass.** Native MSVC compile / MSI+Burn build / clean-PC install remain HUMAN REQUIRED. P1-4a NOT approved and P1-4b NOT started (per user).
+
+
+## Implemented (2026-06) — Login dual-entry: "Create your company account"
+- **P1-4a native-validated** by the user: clean-PC Windows install brings up RoofSpanBackend, RoofSpanPostgreSQL, RoofSpanRelayConnector, RoofSpanUpdateService (all Running/Automatic) and RoofSpan Office opens. Build-script fixes (WIX0144 BAL DLL dynamic resolution + fail-on-stale-output) confirmed working (commit 568b7fb).
+- **Login screen now supports both existing and new customers** (`frontend/src/pages/Login.jsx`): "Sign in" stays the PRIMARY action; added a clearly visible secondary action "New to RoofSpan? → Create your company account" (testid `login-register-link`) that routes to the EXISTING `/setup` onboarding wizard (Setup.jsx). No duplicate registration system — reuses the existing company+owner+subscription flow.
+- **Safe by design**: `/setup` bootstrap (`POST /api/setup/bootstrap`) only works on a genuinely uninitialized install (users==0 AND onboarding state UNINITIALIZED); once initialized it returns 409 "already set up, sign in instead", and Setup.jsx bounces initialized installs back to `/`. Ordinary employees/field users can never create a second company or paid seats. Web-only billing model unchanged.
+- **Tests**: new `frontend/src/pages/Login.test.jsx` (3/3 pass) — Sign in primary, Create Account visible, navigates to `/setup`. Existing SetupGate routing tests unaffected (7/7).
+- **Env note (post-fork recovery)**: `postgres` system user + PostgreSQL 15 binaries were missing after the fork (known recurrence). Reinstalled `postgresql-15`, chowned `/data/db/roofspan_pgdata` to the new `postgres` user, restarted supervisor. All data intact (44 users, state=initialized).
+
+
+## Implemented (2026-06) — Windows Desktop shortcut + Start Menu / app-search entry
+- **RoofSpan Office installs like a normal Windows app**: a Desktop icon AND a Start Menu entry so it appears in Windows Search / All Apps. (SUPERSEDED below: the launcher was first a tiny browser-opener, then evolved into a real WebView2 desktop window.)
+- **WiX** (`RoofSpan.wxs`): `App_Launcher` component packages `tools\RoofSpanOffice.exe` with two non-advertised shortcuts both named "RoofSpan Office" -> `DesktopFolder` (All-Users desktop, perMachine) + `StartMenuRoofSpan` (Start Menu -> Windows Search/All Apps). Shortcuts use the exe's embedded RoofSpan icon. Removed cleanly on uninstall. Branded icon `windows/installer/RoofSpanOffice.ico` (multi-res 16-256px).
+
+## Implemented (2026-06) — RoofSpanOffice.exe is now a WebView2 desktop shell (was a browser launcher)
+**Architecture (current, authoritative):**
+- `RoofSpanOffice.exe` = **Windows WebView2 desktop shell** (.NET 10 WinForms + `Microsoft.Web.WebView2`). A native app window titled "RoofSpan Office" that hosts the LOCAL Office web UI via Microsoft Edge WebView2. NOT a service; starts nothing; contains no backend/auth logic.
+- `RoofSpanBackend` = local FastAPI + packaged React host/API (serves the UI on 127.0.0.1:8001).
+- `RoofSpanPostgreSQL` = local data store. `RoofSpanRelayConnector` = separate outbound connector. `RoofSpanUpdateService` = separate updater.
+- The shell renders `http://127.0.0.1:8001/` (overridable via `ROOFSPAN_OFFICE_URL`). It navigates to the app ROOT so the existing React/backend setup-gate decides setup vs login vs Office (preserves first-run + "Create your company account").
+
+**Shell behavior** (`windows/desktop/RoofSpanOffice/`): single self-contained exe (`PublishSingleFile` + `WebView2LoaderPreference=Static`, one file, no separate loader DLL). Bounded backend-readiness polling of `/api/health` (~60s) with a branded Starting/Retry-Close error screen (no ERR_CONNECTION_REFUSED). External links (Stripe, roofspan.io, docs, mailto:) open in the system browser; internal 127.0.0.1 nav + new-window requests stay in-app (no popups). Single-instance (Mutex + foreground activation). Hardened: DevTools/status-bar/password-autosave/autofill OFF; context menus + accelerator keys (Ctrl+P print) + zoom ON for data entry. WebView2 profile per-user at `%LOCALAPPDATA%\RoofSpan\Office\WebView2` (never Program Files). Remembers window size/position. File `<input type=file>` uploads + downloads use native WebView2 UX.
+
+**Build/installer**: `windows/desktop/build_shell.ps1` runs `dotnet publish` (needs .NET 10 SDK) and stages `tools\RoofSpanOffice.exe`, invoked automatically by `stage.ps1` (fail-closed on non-zero exit / stale exe). The old PyInstaller `office_launcher.py` + `roofspan-office-launcher.spec` were DELETED and removed from `targets.py`/`build_exes.ps1`. `bundle.wxs` now detects the Edge WebView2 Evergreen Runtime (EdgeUpdate client GUID `{F3017226-...}`) and installs Microsoft's official bootstrapper if absent (embedded, `-d WebView2Bootstrapper=`; +~2 MB to setup, online-at-install unless the Evergreen standalone is supplied). `build.ps1` gains a mandatory `-WebView2Bootstrapper` param (validated) and still fail-fasts if `tools\RoofSpanOffice.exe` isn't staged. WiX `App_Launcher` shortcuts unchanged.
+- **Tests**: `windows/tests/test_installer_static.py` — **148/148 pass** (added shell project/host/readiness/external-nav/per-user-data/hardening/single-instance/pipeline/runtime tests; browser-launcher removal verified). C# + build_shell.ps1 verified ASCII-clean.
+
+## Implemented (2026-06) — P1-4b: Production initial-onboarding Stripe trust boundary
+**Trust boundary (authoritative):**
+```
+Customer RoofSpan Office (Windows)         Central RoofSpan Control Plane
+  - NEVER stores Stripe/RevenueCat/AWS       - owns STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+    secrets or CP DB/KMS credentials           STRIPE_SEAT_LOOKUP_KEY, BILLING_MODE=stripe
+  - asks CP for hosted checkout (reqsig)     - creates Stripe Checkout Sessions (company_id in metadata)
+  - opens checkout in the system browser     - processes Stripe webhooks (signature-verified)
+  - polls /api/setup/payment-status          - maintains normalized subscription state (ACTIVE/GRACE/
+  - refreshes the signed entitlement           SUSPENDED/CANCELLED) + signs entitlements (private key central)
+```
+The local Windows backend NO LONGER instantiates the Stripe provider and does NOT require STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET. It is no longer the production billing authority.
+
+**Changes:**
+- `backend/routers/setup.py`: `/checkout` now relays through the licensing Control Plane client (`create_initial_checkout`) instead of `control_plane.billing.get_provider().checkout_url()`. Idempotent (reuses an open PAYMENT_PENDING checkout). Customer-safe error ("Unable to start subscription checkout. Please try again in a moment.") with detail logged locally — no secret/exception leakage. `/payment-status` in production refreshes the signed entitlement from the CP (`lic_service.refresh(force=True)`) and flips onboarding ACTIVE only when effective state is ACTIVE/GRACE (never trusts a browser redirect). Dev mode preserved (`paid` + `set_dev_subscription`); `/dev/pay` stays DEV-only (403 in http mode).
+- `backend/licensing/control_plane.py`: `create_initial_checkout(company_id, installation_id, seats)` added to both clients. Http client POSTs to `{CONTROL_PLANE_URL}/billing/stripe/initial-checkout` with installation reqsig auth; dev client returns a mock URL (no secret).
+- `backend/control_plane/router.py`: new INSTALLATION-authenticated `POST /billing/stripe/initial-checkout` (reuses `_authed_installation` reqsig), resolves company from the installation, seats default to MIN_SEATS (5), calls central `service.stripe_create_checkout`, returns `{checkout_url, company_id, seats, monthly_price_usd}`. Existing admin checkout + central Stripe webhook + subscription reconciliation + entitlement signing all UNCHANGED and reused.
+- `windows/winbuild/config/roofspan.env.template`: removed `BILLING_MODE=stripe` (CENTRAL-only); added public `LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane` (safe client config, not localhost).
+
+**Config ownership:** STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / STRIPE_SEAT_LOOKUP_KEY / BILLING_MODE / REVENUECAT_SECRET_API_KEY / REVENUECAT_WEBHOOK_AUTH = **CENTRAL CONTROL PLANE ONLY**. Safe client config = LICENSING_MODE, LICENSING_CONTROL_PLANE_URL, CONTROL_PLANE_BASE_URL, RELAY/UPDATE public URLs, company/installation IDs, update PUBLIC key.
+
+**Pricing:** $49/seat/mo, min 5 seats, $245 initial. Stripe Price via lookup key `roofspan_seat_monthly` (central). No Price ID/pricing secret in the client.
+
+**Tests:** `backend/tests/test_setup_billing_boundary.py` (2 tests): production /checkout goes through the CP client with no local Stripe provider and no STRIPE_SECRET_KEY, idempotent, /dev/pay 403 in prod, customer-safe error with no secret text, and setup.py has no static Stripe import. Billing/licensing/CP suites (63) + onboarding (dev flow) still green; windows suite 157 green.
+
+**HUMAN REQUIRED (central infra, not the Windows installer):** set on the Control Plane deployment — `BILLING_MODE=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SEAT_LOOKUP_KEY=roofspan_seat_monthly`, `APP_BASE_URL=https://app.roofspan.io` (Stripe success/cancel return page); create the Stripe Price under lookup key `roofspan_seat_monthly`; configure the Stripe webhook to the central `POST {CP}/api/control-plane/billing/stripe/webhook`; ensure the CP public base URL matches the client's `LICENSING_CONTROL_PLANE_URL`. No secret values committed.
+
+## Implemented (2026-06) — Railway production deployment prep for the Central Control Plane
+**Scope:** deploy ONLY the central Control Plane to `cp.roofspan.io` on Railway. Marketing site stays on Vercel; Office local backend + customer PostgreSQL data are NOT moved to the cloud.
+- **App object:** new `backend/cp_asgi.py` → `app` — a CP-ONLY FastAPI that mounts just `control_plane.router` + `GET /health`. Does NOT expose the Office surface (leads/jobs/inventory/etc.). Reuses `require_production_config()` (fail-closed startup) and `init_control_plane()` (idempotent CP Alembic migrations + signing key + version policy) with a BOUNDED DB-readiness retry (no infinite loop). Binds `0.0.0.0:$PORT`. Health returns `{status, env, database}` best-effort, no secrets/stack traces.
+- **Schema:** CP owns its own PostgreSQL (separate from customer business DB); Alembic in `backend/control_plane/alembic/` run at startup via `control_plane.migrations_runner` (fresh DB → upgrade to head; deterministic, no manual table creation).
+- **DB URL:** `control_plane/config._normalize_async()` normalizes Railway's `postgres://` / `postgresql://` → `postgresql+asyncpg://` so the async engine, Alembic (`+psycopg`), and the psycopg migrations runner all work. Use Railway reference `CONTROL_PLANE_DATABASE_URL=${{Postgres.DATABASE_URL}}`.
+- **Config validation strengthened:** `require_production_config()` now also requires a non-empty, non-localhost `CONTROL_PLANE_DATABASE_URL` (in addition to Stripe, KMS signer, operator issuer/audience).
+- **Build/deploy:** `deploy/railway/Dockerfile` (python:3.11-slim, installs `backend/requirements.txt` only — no pywin32/PyInstaller/WiX/WebView2/.NET/Node; no frontend build), `railway.json` (Dockerfile builder, start `uvicorn cp_asgi:app --host 0.0.0.0 --port $PORT`, healthcheck `/health`), `deploy/railway/README.md` (full HUMAN-REQUIRED Railway/DNS/Stripe/KMS runbook — no secret values).
+- **Stripe boundary preserved (P1-4b):** central webhook `POST /api/control-plane/billing/stripe/webhook` + installation-authed `POST /api/control-plane/billing/stripe/initial-checkout`; Stripe secrets stay on Railway only.
+- **Entitlement signer:** production uses AWS KMS (`ENTITLEMENT_SIGNER=kms`, private key never leaves KMS). Railway needs a minimum-scoped IAM principal (`kms:Sign`,`kms:GetPublicKey`,`kms:DescribeKey` on the key ARN) — HUMAN REQUIRED, no AWS resources auto-created.
+- **Tests:** `backend/tests/test_railway_cp_deploy.py` (7) — CP-only routes, `$PORT` binding, fail-closed prod config, DB-URL-required + localhost rejection, async-URL normalization, no Windows/frontend deps in image, doc secret hygiene. Re-verified: boundary 2/2, control_plane 17/17, billing 13/13, stripe_billing 11/11, onboarding 1/1, windows 157/157.
+- **Central production vars (HUMAN REQUIRED on Railway, no values committed):** `CP_ENV=production`, `BILLING_MODE=stripe`, `STRIPE_SECRET_KEY`(secret), `STRIPE_WEBHOOK_SECRET`(secret), `STRIPE_SEAT_LOOKUP_KEY=roofspan_seat_monthly`, `APP_BASE_URL=https://roofspan.io`, `CONTROL_PLANE_DATABASE_URL=${{Postgres.DATABASE_URL}}`, `ENTITLEMENT_SIGNER=kms`, `CP_KMS_SIGNING_KEY_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`(secret), `AWS_SECRET_ACCESS_KEY`(secret), `CP_OPERATOR_ISSUER`, `CP_OPERATOR_AUDIENCE`.
+
+## Fixed (2026-06) — Railway CP startup hang (advisory lock + Alembic URL)
+- **Root cause A:** `control_plane/alembic/env.py._sync_url()` read the RAW `CONTROL_PLANE_DATABASE_URL`. Railway supplies a driverless `postgresql://...`, so SQLAlchemy fell back to psycopg2 (not installed) and hung on the Alembic engine connect. Fixed: normalize via `config._normalize_async()` (→ `+asyncpg`) then swap to `+psycopg`.
+- **Root cause B:** `run_cp_migrations` used blocking `pg_advisory_lock` with no deadline; a killed/unhealthy container's leftover lock blocked startup forever, missing the Railway healthcheck window. Fixed: `_acquire_migration_lock` polls `pg_try_advisory_lock` to a bounded deadline (`CP_MIGRATION_LOCK_TIMEOUT_S`, default 30s) and raises a clear `RuntimeError` on timeout; released in `finally`.
+- Added connect/statement/lock timeouts to the psycopg (`connect_timeout=10` + `-c lock_timeout/statement_timeout`), Alembic sync engine, and async engine (`control_plane/db.py`), plus safe staged logs ("CP DB init: checking database connectivity → reachable → acquiring/acquired lock → inspecting schema → running Alembic upgrade → complete → lock released → bootstrap complete"). No URL/creds/secrets logged.
+- Files: `control_plane/migrations_runner.py`, `control_plane/alembic/env.py`, `control_plane/db.py`, new `backend/tests/test_cp_migrations.py`.
+- Tests (testing_agent verified): test_cp_migrations 5/5 (URL parse incl. URL-encoded password + bounded/released lock behavior), test_railway_cp_deploy 7/7, test_control_plane 17/17; fresh-DB `init_control_plane()` completes with staged logs, no hang. Expected Railway boot now reaches "Control Plane schema ready (migrations applied)" + "Application startup complete".
+- HUMAN REQUIRED: no Railway variable changes required (`CONTROL_PLANE_DATABASE_URL=${{Postgres.DATABASE_URL}}` unchanged). Just redeploy the Control Plane service from GitHub.
+
+## Implemented (2026-06) — Operator (Cognito) auth callback for roofspan.io
+Internal RoofSpan operator/admin auth only (NOT customer/mobile; no self-registration). Vercel drop-in in `deploy/vercel/` (roofspan.io Vercel project is separate/not in this repo):
+- **Routes:** `GET /operator/login` (PKCE Authorization Code start → Cognito Hosted UI), `GET /operator/callback` (state+code validation, server-side token exchange, sets HttpOnly `op_token`), `GET /api/operator/whoami` (proof), `/operator` page.
+- **Flow:** Authorization Code + PKCE (S256). PKCE verifier + OAuth `state` in short-lived HttpOnly cookies; state verified (CSRF) and code required in callback; code exchanged **server-side** at `${COGNITO_DOMAIN}/oauth2/token` (public client = no secret; optional confidential secret server-only). The Cognito **id_token** (aud=app client id, iss=user-pool issuer — what `operator_auth.verify_operator` validates) is stored HttpOnly/Secure/SameSite=Lax; never in localStorage/JS. Safe generic error page; no token/secret/diagnostic leakage.
+- **Control Plane:** added `GET /api/control-plane/operator/me` guarded by existing `_require_admin` (prod: Cognito bearer via `operator_auth`; dev: `X-RoofSpan-Admin`). Returns `{"operator":true}`. `operator_auth.py` unchanged. Verified live: 401 without auth, 200 with valid admin.
+- **Files:** `deploy/vercel/api/operator/{_lib,login,callback,whoami}.js`, `deploy/vercel/public/operator/index.html`, `deploy/vercel/vercel.json`, `deploy/vercel/README.md`, `deploy/vercel/tests/operator_auth.test.mjs`, `backend/control_plane/router.py`, `backend/tests/test_operator_auth_vercel.py`.
+- **Tests:** node --test 7/7; pytest static 7/7; test_control_plane 17/17.
+- **Vercel env (HUMAN REQUIRED, no secrets committed):** `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET` (optional, server-only), `OPERATOR_REDIRECT_URI=https://roofspan.io/operator/callback`, `COGNITO_LOGOUT_URI` (opt), `CONTROL_PLANE_BASE_URL=https://cp.roofspan.io`.
+- **Railway env:** `CP_OPERATOR_ISSUER=https://cognito-idp.us-east-2.amazonaws.com/<USER_POOL_ID>`, `CP_OPERATOR_AUDIENCE=<COGNITO_APP_CLIENT_ID>` (== COGNITO_CLIENT_ID).
+- **HUMAN REQUIRED Cognito:** app client with Authorization code grant + PKCE, scopes openid/email/profile, allowed callback exactly `https://roofspan.io/operator/callback`, Hosted UI domain set; prefer a public (no-secret) client.
+- **HUMAN REQUIRED (cannot run in Linux container)**: native Windows build (`dotnet publish` via stage.ps1) + clean-PC install to verify the WebView2 window opens (no Edge/Chrome/console), backend-readiness wait, login/setup/Create-account, navigation/Map/modules, file upload/download, Stripe/external links open in the real browser, single-instance foregrounding, and clean uninstall. Rebuild: `stage.ps1 -StageDir ..\..\_stage -UpdatePublicKey <pub.pem>` then `build.ps1 -StageDir ..\..\_stage -PostgresInstaller <pg.exe> -WebView2Bootstrapper <MicrosoftEdgeWebview2Setup.exe>`.
+
+## Fixed (2026-06) — Operator auth integrated into the live Vercel project (was never deployed)
+Root cause: the operator functions lived under `deploy/vercel/`, which is NOT the deployed Vercel project, so prod served the marketing SPA for `/operator/*` and `/api/operator/*`. The real Vercel project root that serves roofspan.io/www.roofspan.io is **`/app/roofspan-website`** (CRA, `react-scripts build` → `build/`).
+- **Moved (git mv, no auth logic changed):** `deploy/vercel/api/operator/*.js` → `roofspan-website/api/operator/*.js`; `deploy/vercel/public/operator/index.html` → `roofspan-website/public/operator/index.html`; `deploy/vercel/vercel.json` → `roofspan-website/vercel.json`; `deploy/vercel/tests/operator_auth.test.mjs` → `roofspan-website/tests/operator_auth.test.mjs`. `deploy/vercel/README.md` rewritten as a pointer to the canonical location.
+- **Vercel routing:** CRA auto-detected; `api/*` deploy as Node serverless functions; `public/operator/index.html` copied to `build/operator/index.html`. `vercel.json` rewrites (login/callback→functions, `/operator`→page) merged into the marketing project; marketing SPA untouched. `/api/operator/whoami` resolves directly via the filesystem function (no SPA fallback).
+- **Canonical host → `www.roofspan.io`** (Vercel redirects apex→www): `_lib.js` defaults, docs, checklist, and tests updated to `https://www.roofspan.io/operator/callback` + `/operator/login`. `OPERATOR_REDIRECT_URI` and Cognito allowed-callback must use www.
+- **Tests:** `roofspan-website/tests/operator_auth.test.mjs` 7/7; new `roofspan-website/tests/deployment_wiring.test.mjs` 9/9 (routes resolve to functions not SPA, page present, rewrites correct, www host, marketing preserved); `backend/tests/test_operator_auth_vercel.py` 7/7 (path retargeted to roofspan-website, www assertion). CRA `yarn build` verified: emits both `build/index.html` (marketing) and `build/operator/index.html` (operator console).
+- **Post-deploy smoke (HUMAN):** `curl -I https://www.roofspan.io/operator/login` → 302 to Cognito; `curl https://www.roofspan.io/api/operator/whoami` → `{"authenticated":false}`.
+
+## Fixed (2026-06) — Operator apex/www session split (host-only cookie)
+Symptom: Cognito login succeeded and `op_token` was set host-only on `www.roofspan.io`, but the browser then landed on `https://roofspan.io/operator`, so `whoami` on apex returned `authenticated:false` (host-only www cookie not sent to apex).
+- **Fix (canonicalize to www, keep cookie host-only):** `roofspan-website/vercel.json` gained host-gated `redirects` (308) for `/operator`, `/operator/:path*`, `/api/operator/:path*` on `roofspan.io` → `https://www.roofspan.io/...` (query preserved; covers the static `/operator` page). Defense-in-depth: `_lib.js` added `canonicalRedirect()` + `redirectToCanonical()`; `login.js`/`callback.js`/`whoami.js` 308-redirect to www BEFORE any PKCE/state/token/cookie handling when hit on apex.
+- **Unchanged:** `op_token` stays host-only on www (no `Domain`; HttpOnly/Secure/SameSite=Lax/Path=/). PKCE/state and token exchange unchanged. No Cognito/Railway/Stripe/KMS/Windows changes.
+- **Files changed:** `roofspan-website/vercel.json`, `roofspan-website/api/operator/{_lib,login,callback,whoami}.js`, `roofspan-website/tests/canonical_host.test.mjs` (new), `deploy/vercel/README.md`.
+- **Tests:** canonical_host 11/11, operator_auth 7/7, deployment_wiring 9/9, pytest vercel-boundary 7/7 (34 total, all green). Proven: apex `/operator`, `/operator/login`, `/operator/callback?...` (query preserved), `/api/operator/whoami` all 308→www; www routes do not redirect; authenticated www whoami reads `op_token`.
+
+
+## Fixed (2026-06) — Production first-run activation (Office ⇄ Control Plane identity)
+Live failure: a fresh Office install used LOCALLY-generated installation_id/company_id for signed CP requests, so refresh/checkout got 404 "Unknown installation" (SUSPENDED, seats 0, blank license_id). Root cause: `get_installation()` pre-generated provisional UUIDs and `_ensure_installation_identity()` treated their mere presence as "activated", so CP `/activate` was never called.
+- **Activation marker:** `app_config["installation"]` now carries `activated: true` (set only after CP `/activate`). New `licensing.service.is_activated()` + `persist_activation()` adopt the CP-assigned installation_id/company_id/license_id (replacing provisional ids), cache CP verify keys, and verify+store the initial entitlement JWS into `license_cache`.
+- **Trigger + idempotency:** `routers/setup._ensure_installation_identity()` (called at first `/api/setup/checkout`) serializes on a new advisory lock, re-checks `is_activated` inside it, and activates exactly once using the REAL company name (from `company_profile`) + 5 seats. Retries reuse the server identity (no duplicate). Subsequent refresh + Stripe initial-checkout sign with the server-issued installation_id.
+- **CP-side idempotency:** `control_plane.service.activate()` now looks up an existing ACTIVE `Installation` by `public_key_pem`; a retry with the same installation key returns the same ids + a re-issued entitlement instead of creating a duplicate company/installation. No DB migration (reused existing models). No prod-DB seeding.
+- **Startup safety:** `licensing.service.bootstrap()`/`refresh()` no longer contact the CP in http mode until activated (avoids the provisional-id 404). Private key never leaves the machine — only the public key is sent (verified by capturing the outbound payload).
+- **Windows upgrade config (bootstrap_db.py):** upgrades now RECONCILE the deployed `roofspan.env` — add missing NON-SECRET template keys (e.g. `LICENSING_CONTROL_PLANE_URL=https://cp.roofspan.io/api/control-plane`) and update `ROOFSPAN_VERSION` to the installed version — while PRESERVING the generated DB password, secrets, installation keypair, and all machine-specific/customer config (new `reconcile_deployed_env`/`reconcile_upgrade_config`, `--roofspan-version`).
+- **Windows backend logging (backend_entry.py):** `roofspan.*` logs go to `C:\ProgramData\RoofSpan\logs\backend.log` (propagate=False, no dupes) AND a shared file handler on the root logger captures WARNING+ from everything else, so checkout/activation exceptions + unhandled request tracebacks always reach backend.log.
+- **Files changed:** `backend/licensing/service.py`, `backend/licensing/control_plane.py`, `backend/routers/setup.py`, `backend/control_plane/service.py`, `windows/winbuild/bootstrap_db.py`, `windows/winbuild/backend_entry.py`, `backend/tests/test_setup_billing_boundary.py`; new `backend/tests/test_setup_activation.py`, tests appended to `windows/tests/test_db_bootstrap.py`.
+- **Tests:** backend activation 2/2, billing boundary 3/3, licensing units 17, prod infra; windows db-bootstrap 43/43, service-host + prod-config 20 (84 total green) + in-process CP idempotency check (1 company/1 installation, stable ids). Pre-existing `test_control_plane.py` integration failures are environmental (hit the external preview URL → Cloudflare 502), unchanged, deferred to P1-6.
+
+
+## Changed (2026-06) — Stripe Checkout accepts customer promo codes
+- `backend/control_plane/billing.py` `StripeBillingProvider.create_checkout_session()`: added `allow_promotion_codes=True` to the `stripe.checkout.Session.create(...)` call so hosted Checkout shows the promo-code input (customer manually enters e.g. OWNERTEST). No coupon auto-applied, no code hard-coded. Pricing, seat minimums, price lookup, webhooks, entitlement/subscription logic, mode="subscription", line items, company metadata, automatic tax, billing-address + tax-id collection, success/cancel URLs all unchanged.
+- Test: new `backend/tests/test_stripe_checkout_promo.py` (2/2 pass) asserts `allow_promotion_codes=True` is passed + preserved fields intact + no hard-coded OWNERTEST/coupon. (`test_stripe_billing.py` is live-infra integration.)
+
+
+## Fixed (2026-06) — Activation must not grant paid access before Stripe payment
+Bug: `control_plane/service.activate()` created the Subscription with `state="ACTIVE", seats=<5>, current_period_end=now+period`, so a brand-new install got an ACTIVE 5-seat entitlement and Office unlocked BEFORE any Stripe Checkout/payment.
+- **State used before payment:** existing `SUSPENDED` state with `seats=0` and `current_period_end=None` (fail-closed; NO new state invented — SUSPENDED already means "no paid access" in the local state machine, so the subscription-lock blocks business routes). Activation still registers company+installation+license+subscription identity so the install can authenticate subsequent CP requests.
+- **Lifecycle (now correct):** activate → identity created, sub SUSPENDED/0 → installation-authenticated initial Stripe Checkout (defaults to 5-seat minimum) → customer pays → signature-verified webhook (`checkout.session.completed` / `customer.subscription.*` / `invoice.paid`) flips sub to ACTIVE with the PURCHASED seat quantity from Stripe → entitlement refresh returns ACTIVE + seats → Office unlocks.
+- **Idempotency preserved:** re-activation matched by installation public key reuses the same company/installation/subscription and re-issues an entitlement from the CURRENT sub state (a paid ACTIVE customer stays ACTIVE — never reset to SUSPENDED).
+- **Unchanged:** Stripe remains authoritative; request signing / installation auth / entitlement (KMS) signing / nonce replay protection untouched; `allow_promotion_codes=True` preserved; no coupon hard-coded.
+- **Files changed:** `backend/control_plane/service.py` (activation subscription now SUSPENDED/0); `backend/tests/test_kms_issuance.py` (updated stale assertion: activation entitlement is SUSPENDED/0, not ACTIVE/5 — KMS-signing intent preserved); new `backend/tests/test_activation_payment_gating.py`.
+- **Migration:** NONE (reused existing Subscription columns; seats=0 / current_period_end=NULL are valid).
+- **Tests:** `test_activation_payment_gating.py` 3/3 (activation → SUSPENDED/0 identity registered; unpaid install can authenticate + refresh + request initial checkout; verified webhook → ACTIVE; post-webhook refresh → ACTIVE/5 seats; idempotent retry no dup + paid customer unaffected; promo support enabled). Default-CP-DB group (kms+cp_migrations+prod_infra+licensing_unit+promo) 27/27; setup_activation 2/2; setup_billing_boundary 2/2. (Combined run shows the pre-existing cross-module env-leak isolation quirk — throwaway-DB test modules mutate CONTROL_PLANE_DATABASE_URL at import; each suite passes in its own invocation. `test_stripe_billing.py` is live-infra integration.)
+
+
+## Fixed (2026-06) — WiX v5 Burn WebView2 detection condition (0x8007000d "The data is invalid")
+Clean installs failed: Burn "Failed to parse condition ... Unexpected character at position 52. Detect failed for package: WebView2Runtime."
+- **Root cause:** Burn v5 condition string literals must be delimited by DOUBLE quotes; the WebView2 `InstallCondition`/`DetectCondition` used SINGLE-quoted `'0.0.0.0'`. The `'` sits at 0-based position 52 in the decoded expression → the Burn condition lexer rejects it (`<>` inequality itself is valid Burn syntax).
+- **Corrected condition (both InstallCondition & DetectCondition, WiX-encoded in `windows/installer/bundle.wxs`):**
+  - Detect: `(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;)`
+  - Install: `NOT (…same…)` — i.e. decoded literals are now `"0.0.0.0"`. Behavior preserved: skip the bundled WebView2 bootstrapper when a usable Evergreen runtime is in HKLM or HKCU; install it when neither registry value exists.
+- **Untouched:** PostgreSQL detection, BAFunctions, MSI sequencing, all other installer code.
+- **Files changed:** `windows/installer/bundle.wxs` (2 conditions); `windows/tests/test_installer_static.py` (regression guards).
+- **Migration:** none.
+- **Tests:** `windows/tests/test_installer_static.py` — 51 passed, incl. new: no single-quoted literals; Detect/Install are logical inverse with `"0.0.0.0"`; a faithful Burn-condition LEXER compiles the actual bundle.wxs conditions AND reproduces the OLD failure at exactly position 52; bundle.wxs well-formed XML. Full `windows/tests/` suite: 170 passed. (Real `wix build` Burn compile runs on Windows only — the documented mocked native env; the in-container Burn-lexer + XML parse are the deterministic compile validation.)
+
+
+## Added (2026-06) — Map Draw Territory: visible numbered points + ZIP search
+- **Bug (points invisible):** draw vertices were tiny 4px circles. Fixed: each corner now renders as a high-contrast numbered DOM marker (1,2,3…) with white halo + shadow (`.rs-vertex-marker` in `index.css`), plus the underlying vertex circle bumped to r=7; the connecting outline/fill is unchanged. User now sees exactly what was added and in what order.
+- **ZIP → territory:** new left-panel search box. Backend proxy `GET /api/geocode/zip?zip=&country=` in `backend/routers/settings.py` calls OSM Nominatim server-side (User-Agent set; only the ZIP leaves the machine) and returns `{center:[lng,lat], bbox:[[w,s],[e,n]], display_name}`. Frontend `searchZip` fits the map to the ZIP; `addZipAsTerritory` drops the ZIP bbox as an editable 4-corner rectangle into the existing draw flow (Finish → name & save). Config choice = "both" (center always + Add-as-territory button).
+- **Files changed:** `backend/routers/settings.py` (geocode endpoint); `frontend/src/pages/MapView.jsx` (numbered markers, ZIP box, handlers); `frontend/src/index.css` (marker style); new `backend/tests/test_geocode_zip.py`.
+- **Migration:** none.
+- **Verified:** geocode 4/4 tests pass (bbox transform, 404, 400, 502); live curl `78701` → correct center/bbox; screenshot shows numbered markers 1–4 with polygon outline, ZIP result "78701, Austin…", and the Add-as-territory button.
+
+
+## Fixed/Added (2026-06) — Map satellite rendering + real ZIP boundary snapping
+- **Satellite bug:** MapView's `baseStyle()` only ever rendered OSM; there was NO satellite rendering even when `satellite_enabled` + MapTiler key were configured (backend `/api/map/tiles/satellite/{z}/{x}/{y}` proxy existed but was unused). Fix: `MapView.jsx` now adds a `satellite` raster source (via the backend proxy, `tileSize:512`) + `satellite-layer` when `maptiler_configured`, plus a Street/Satellite toggle (`switchBase`) that flips layer visibility; default follows the saved `satellite_enabled`. Raster tile requests bypass the axios interceptor, so `transformRequest` attaches the Bearer token to the proxy tile URLs. (Wiring verified in preview; actual imagery needs the customer's MapTiler key — the toggle only appears when configured.)
+- **Real ZIP boundary:** US ZIPs aren't OSM admin boundaries (Nominatim returns only a centroid Point), so `backend/routers/settings.py` `geocode_zip` now queries the authoritative US Census ZCTA layer (`tigerweb.geo.census.gov/.../tigerWMS_Current/MapServer/2`, `where=ZCTA5='<zip>'`, `f=geojson`) for the real polygon (center/bbox derived from it), keeping Nominatim for the friendly display name + non-US/fallback. `MapView.addZipAsTerritory` now snaps to the real polygon outer ring (largest ring for MultiPolygon), falling back to a bbox rectangle only when no boundary exists; numbered vertex markers are capped (≤24) so a large ZIP ring shows a clean outline.
+- **Files changed:** `frontend/src/pages/MapView.jsx`, `backend/routers/settings.py` (+`import re`); test rewritten: `backend/tests/test_geocode_zip.py`.
+- **Migration:** none.
+- **Verified:** geocode 6/6 tests pass (Census polygon path, Nominatim fallback, non-US skips Census, 404/400/502); live `zip=78701` → real 264-vertex Polygon + tight bbox + "78701, Austin…" name; screenshot: snapping created a 263-point ZIP-boundary territory in draw mode; base toggle correctly hidden when MapTiler unconfigured.
+
+
+## Added (2026-06) — RentCast ("RestCast") direct ZIP pull → save to DB → map
+Clarified: "RestCast" = **RentCast** (app was already modeled for it: `properties.source` default "rentcast"). The pull→save→read-from-DB pipeline already existed (territory import via centroid+radius+point-in-polygon, dedup by `external_id`, `ImportJob` tracking, map reads `/properties/geojson`). Added the missing **direct ZIP pull** (option a: ZIP → territory → import).
+- **Territory remembers its ZIP:** new nullable `territories.zip_code` column (migration `a1b2c3d4e5f6`); `TerritoryIn`/`TerritoryOut` + create route carry it; `MapView.addZipAsTerritory` records the searched ZIP and `saveTerritory` posts `zip_code`.
+- **Exact ZIP pull:** `rentcast.fetch_rentcast_by_zip()` uses RentCast's native `GET /v1/properties?zipCode=` (paginated, `X-Api-Key`). `imports.py` (preview + `_run_import`) uses the ZIP query when `territory.zip_code` is set (cheaper/exact vs radius), still point-in-polygon filtered to the boundary; everything else (save/dedup/refresh/map) reused unchanged. Key entered under Settings → Integrations → RentCast (encrypted).
+- **Files changed:** `backend/models.py`, `backend/schemas_phase2.py`, `backend/routers/territories.py`, `backend/rentcast.py`, `backend/routers/imports.py`, new migration `alembic/versions/a1b2c3d4e5f6_*.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx` (exact-ZIP note); new `backend/tests/test_rentcast_zip.py`.
+- **Verified:** rentcast-zip 2/2 + geocode 6/6 tests pass; migration applied; live e2e (sample mode, no key in preview): ZIP territory created with `zip_code=78701` → preview → import saved 25 → `/properties/geojson` returns 25 → map shows "25 properties on map"; screenshot confirms the "Exact ZIP pull" note. Re-import refreshes via `external_id` upsert.
+- NOTE: preview DB has no RentCast key so imports fall back to SAMPLE data; with the customer's real key the ZIP territory pulls live RentCast addresses.
+
+
+## Refined (2026-06) — Occupancy (owned/rented/unknown), lead details, unlimited RentCast pull
+- **Occupancy simplified:** `rentcast.occupancy_status(owner_occupied)` → owned / rented / unknown. Exposed in `PropertyOut.occupancy` + `/properties/geojson` feature props. Map dots colored by it (owned=green #16A34A, rented=amber #D97706, unknown=gray #64748B; Do-Not-Knock=red overrides) with a legend in the map footer; PropertySheet shows an occupancy badge + city/state/zip.
+- **Lead details for sales:** geojson now includes `owner_name` per property (single batched query of owner PropertyContact); `convert-to-lead` prefills lead name from the owner and phone/email from the owner contact, address = property formatted address (incl. city/zip). PropertySheet already surfaces owner name + mailing address.
+- **No max — pull ALL:** `fetch_rentcast_properties` / `fetch_rentcast_by_zip` take `max_records: int | None = None` and page until RentCast is exhausted. `imports._run_import` calls them with `None` (real RentCast imports pull everything). ImportDialog dropped the "Max properties" selector for an "imports all …, saved locally so you won't re-pull" note; preview note updated (sample-only preview, full import pulls all). Sample mode (no key) still uses a fixed 250 for a populated demo.
+- **Files changed:** `backend/rentcast.py`, `backend/routers/imports.py`, `backend/routers/properties.py`, `backend/schemas_phase2.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx`, `frontend/src/components/PropertySheet.jsx`. Migration: none.
+- **Verified:** rentcast-zip 2/2 + geocode 6/6 pass; live e2e (sample): geojson returns 25 features with occupancy mix {owned:13, rented:12} + owner_name; property detail occupancy=rented; convert-to-lead prefilled "Maria Miller" + "102 Maple St, Field City, TX 78701"; map legend shows all four colors; import dialog shows "imports all".
+
+
+## Added (2026-06) — Occupancy filters + lead contact enrichment
+- **Occupancy map filters:** MapView "Show properties" panel with All / Owned / Rented / Unknown pills + a "Contactable leads only" toggle. Applied via maplibre `setFilter` on `prop-points`/`prop-hit` using feature props `occupancy` and `contactable` (no reload).
+- **Lead enrichment (phone/email):** `rentcast.normalize_rentcast` now extracts owner `phone`/`email` best-effort (owner.phone/phones/telephone/ownerPhone, owner.email/emails/ownerEmail). `imports.py` persists them on the owner `PropertyContact` (create + update). `/properties/geojson` adds a `contactable` boolean (owner has phone or email). PropertySheet shows a "Contactable" / "No contact info" badge plus the owner phone/email; `convert-to-lead` already prefills phone/email from the owner.
+- **Sample data:** `generate_sample_properties` now gives ~half the owners phone/email so the flag/filter are demonstrable without a RentCast key.
+- **Files changed:** `backend/rentcast.py`, `backend/routers/imports.py`, `backend/routers/properties.py`; `frontend/src/pages/MapView.jsx`, `frontend/src/components/PropertySheet.jsx`. Migration: none.
+- **Verified:** rentcast-zip 2/2 + geocode 6/6 pass; live e2e (sample): geojson 25 features → occupancy {owned:14, rented:11}, contactable {True:22, False:3}; re-import deduped; screenshot shows the filter panel (Owned + Contactable On) and legend. Real RentCast phone/email only populate when the provider returns them.
+
+
+## Added (2026-06) — Filtered count + walking-route builder (map, client-side)
+- **Live "Showing X of Y":** MapView stores the loaded geojson features in state; a `useMemo` filteredFeatures applies the occupancy + contactable filters and the panel shows "Showing N of M matching" that updates instantly with the toggles.
+- **Route Builder:** "Build walking route" button turns the currently filtered set (capped 200) into a nearest-neighbour walking order starting from the western-most stop; draws an indigo `route-line` LineString layer + numbered `.rs-route-marker` stop markers, fits bounds, and shows "Route: N stops · ~X mi walking" (haversine distance). "Clear" removes it; the route auto-clears when the selected territory changes. Purely client-side (no backend/API).
+- **Files changed:** `frontend/src/pages/MapView.jsx` (features state, filteredFeatures memo, buildRoute/clearRoute, route source/layer, count + route UI), `frontend/src/index.css` (`.rs-route-marker`). Backend/migration: none.
+- **Verified (screenshot):** All→"Showing 25 of 25"; Owned+Contactable→"Showing 11 of 25 matching"; Build route → toast "Route ready: 11 stops, ~3.9 mi", 11 numbered markers + route line on map, sidebar "Route: 11 stops · ~3.9 mi walking".
+
+
+## Added (2026-06) — P0: Assign Route + track knocked/skipped stops
+- **Persist + assign:** the client-built walking route (optimized order) can now be saved to Postgres and assigned to a sales rep. New tables `routes` (name, territory_id, assigned_user_id, status assigned|in_progress|completed, stop_count, est_miles, created_by) and `route_stops` (route_id CASCADE, property_id SET NULL, sort, address snapshot, lat/lng, status pending|knocked|skipped, note). Migration `c1d2e3f4a5b6`.
+- **API (`backend/routers/routes.py`, prefix `/api/routes`):** POST (managers) create from stops[] with address enriched from Property.formatted_address; GET list (sales see only their own, with knocked/skipped/pending counts); GET /{id} detail (sales must be assigned); PUT /{id}/assign (managers, reassign/unassign); PUT /{id}/stops/{stop_id} (assigned rep or manager) marks knocked/skipped/pending and auto-recomputes route status; DELETE /{id} (managers, cascades). RBAC via MANAGE_ROLES / FIELD_ROLES.
+- **UI:** MapView "Assign route to rep" button (managers, shown after Build) → dialog with name + rep picker → POST then navigate to detail. New sidebar "Routes" (`nav-routes`): list page (`Routes.jsx`) with inline rep reassign + progress + status; detail page (`RouteDetail.jsx`) with progress bar, rep reassign, and a per-stop Knocked/Skip/Reset checklist.
+- **Files:** `backend/models.py`, `backend/routers/routes.py` (new), `backend/server.py`, `backend/alembic/versions/c1d2e3f4a5b6_*`; `frontend/src/pages/MapView.jsx`, `frontend/src/pages/Routes.jsx` (new), `frontend/src/pages/RouteDetail.jsx` (new), `frontend/src/components/AppShell.jsx`, `frontend/src/App.js`.
+- **Verified:** testing_agent iteration_22 → 15/15 backend pytest (`backend/tests/test_routes_feature.py`) covering RBAC, CRUD, status transitions, cascade delete, address enrichment, sales visibility; frontend Playwright verified nav/list/detail/knock-skip-reset/live progress and sales-visibility gating. Zero bugs.
+
+
+
+## Fixed (2026-06) — P0: upgrade licensing-persistence hardening + automatic trusted-key recovery
+- **Root cause:** trusted Control Plane entitlement-verification PUBLIC keys were cached under a package-relative dir (`licensing/trusted_keys`, i.e. Program Files) when `LICENSING_TRUSTED_KEYS_DIR` was unset. An MSI major upgrade replaces Program Files → the cached CP public key was deleted → a valid ACTIVE signed entitlement in Postgres could no longer be verified → `load_cached_entitlement()` silently returned None → effective state SUSPENDED. A paying customer was locked out purely by upgrading.
+- **Persist keys outside Program Files:** Windows template `windows/winbuild/config/roofspan.env.template` now sets `LICENSING_TRUSTED_KEYS_DIR=C:\ProgramData\RoofSpan\licensing\trusted_keys` (preserved across upgrades). `licensing/config.py` adds a ProgramData default constant + `trusted_keys_dir_is_persistent()`; `service.bootstrap()` warns if an http install still points at the package dir. Existing deployed configs auto-gain the key via `bootstrap_db.reconcile_deployed_env` (adds new non-secret template keys; never touches DATABASE_URL/secrets).
+- **Automatic safe recovery:** `entitlement.verify_entitlement` now raises `EntitlementError(reason=...)` (unknown_kid / expired / bad_signature / malformed / invalid_claims). `service.load_cached_entitlement` distinguishes these; on `unknown_kid` for an activated http install it fetches the CP **public** keys via `GET /api/control-plane/signing-keys/public` (new `control_plane.*.fetch_public_signing_keys`), caches them under ProgramData, and re-verifies — throttled (300s) so a CP outage can't hammer the network. Never invents trust: keys come only from the configured HTTPS CP; tampered/expired tokens can never be validated by recovery. `bootstrap()` runs this at startup so an already-broken machine self-heals before the guard evaluates. Fail-closed preserved for genuine failures; network outage still honors valid cached entitlement within grace; no billing/subscription mutation on failure.
+- **Rotation-safe key cache:** `keys.cache_trusted_cp_keys` merges per-KID (never clobbers), validates PEM before writing, returns count; `load_trusted_cp_keys` skips malformed files (never crashes startup). Old + new KIDs both verify.
+- **Diagnostics:** structured `roofspan` logs for missing-KID, expired, tamper, recovery attempted/succeeded/failed, re-verify succeeded/failed — logging KID + safe identifiers only (never JWS/secrets).
+- **ROOFSPAN_VERSION reconciliation:** confirmed `bootstrap_db.set_env_version` updates the deployed version on upgrade (installer passes `windows\VERSION`); added regression tests against the REAL template proving version bump + trusted-key path added + DATABASE_URL/identity/secrets preserved + idempotent on repeat.
+- **"Generated 2 local installation secret(s)":** traced to `local_secrets.ensure_local_secrets` = JWT_SECRET + SECRETS_ENCRYPTION_KEY, generated once and persisted under `C:\ProgramData\RoofSpan\secrets\secrets.env` (preserved across upgrade). Fixed a template doc path mismatch (`config\` → `secrets\`). Added upgrade-idempotence tests (no regeneration when secrets.env present; only genuinely-missing secret generated).
+- **Files:** `backend/licensing/{config,keys,entitlement,control_plane,service}.py`, `windows/winbuild/config/roofspan.env.template`. Tests: `backend/tests/test_licensing_key_recovery.py` (new, 12), additions to `backend/tests/test_local_secrets.py` + `windows/tests/test_db_bootstrap.py`.
+- **Verified:** 28 backend (recovery+unit+secrets) + 46 windows bootstrap tests pass. Migration: NONE (no schema change; entitlement_jws/license_cache schema unchanged). Windows MSI/Burn execution remains HUMAN REQUIRED (Linux container). The 6 pre-existing activation-flow integration failures (activation→SUSPENDED payment-gating + dev-mode refresh) are unchanged by this work (confirmed via git stash) and remain deferred to P1-6.
+
+
+## Fixed (2026-06) — P1-6 regression: cleared the 6 pre-existing activation-flow test failures
+- **Cause A — stale assertions (payment gating):** 3 `test_control_plane.py` tests asserted the pre-gating behavior (activation → ACTIVE/seats). Post-gating, activation correctly issues a cryptographically-valid but **SUSPENDED/0-seat** entitlement until a Stripe payment webhook flips the subscription. Updated `test_activation_issues_verifiable_entitlement`, `test_activation_seat_bounds_clamped`, `test_http_client_fetch_entitlement_end_to_end` to assert SUSPENDED/0 post-activation and reach ACTIVE + (clamped 5..50) seats via the admin `PUT /subscriptions/{company_id}` + a signed refresh. Order-independent (live server).
+- **Cause B — cross-test contamination:** 3 in-process integration tests (`test_setup_activation.py`, `test_activation_payment_gating.py`) set module-level env (throwaway DB + `LICENSING_MODE=http`) at import and rely on being imported first; run together they contaminated each other via shared `sys.modules`/DB engine + leftover global monkeypatches. Fixed by **process isolation**: module-level env is now guarded behind an `RS_ISOLATED` flag, and each DB-provisioning test re-execs itself in a child `pytest` process (`_run_isolated`) so its import-time env truly takes effect and cannot contaminate the suite. Also made `test_activation_sends_public_key_only_never_private` self-contained (tmp `INSTALLATION_KEYS_DIR` + explicit CP URL). Applied the SAME isolation to `test_setup_billing_boundary.py`, `test_token_recovery.py`, `test_onboarding.py` (same anti-pattern) — cleared their in-suite failures too.
+- **Env:** granted `CREATEDB` to the local `roofspan` role (required by these throwaway-DB integration tests per OPERATIONS.md bootstrap); recreated the role/db after a fork-spin-up auth drop. `test_routes_feature.py` made data-independent (self-seeds the two sales accounts if missing).
+- **Result:** the 6 target failures now pass in the full suite. Full backend run (excluding env-gated `test_relay` [needs live tunnel] + `test_stripe_billing` [needs Stripe secret]): **311 passed, 18 skipped, 3 failed**. The 3 remaining are NOT activation-flow and NOT caused by this work: `test_billing.py` ×2 (stale local dev-billing state-machine assertions — separate subsystem; product-rule change, left untouched per "don't alter billing rules") and `phase2_test.py::test_delete_territory_preserves_properties` (intermittent 30s in-process licensing-snapshot / cross-suite ordering flakiness — passes in isolation).
+
+## Fixed (2026-06) — Map import-refresh bug (properties not shown after import completes)
+- **Root cause:** after a RentCast import reached `completed`, `MapView` only refreshed property GeoJSON on `selectTerritory()`. The dialog callback was `onComplete={() => loadProperties(selectedId)}` (fragile closure, and it never refreshed territory list/metadata or the territory source), so the open Map still showed "0 properties" until the user reselected/reloaded.
+- **Fix (frontend only):** added `handleImportComplete` in `MapView.jsx` that, on completion, awaits `loadTerritories()` (refreshes list/counts), then `setTerritorySource(list, selectedId)` and `await loadProperties(selectedId)` (updates `propCount`, `features`, and the visible MapLibre points) — no page reload / reselect. Wired via `ImportDialog onComplete`.
+- **ImportDialog copy:** completion now shows Processed / Added / Updated / Skipped (formatted) from `processed`/`created_count`/`updated_count`/`skipped_count` instead of the misleading "+0 new"; `onComplete` fires exactly once, only on `completed` (never during polling or on failed/in-progress).
+- **Backend:** no change — `/api/properties/geojson` already filters non-null lat/lng and returns a FeatureCollection; `ImportJobOut` already exposes all count fields.
+- **Files:** `frontend/src/pages/MapView.jsx`, `frontend/src/components/ImportDialog.jsx`; tests `frontend/src/components/ImportDialog.test.jsx` (new).
+- **Tests:** 4 new ImportDialog regression tests + full frontend suite 21/21 pass.
+
+## Enhanced (2026-06) — Auto-select a brand-new territory on creation
+- After drawing/creating a territory (hand-drawn OR snapped from a ZIP boundary), it is now reliably auto-selected: highlighted in the sidebar, fit into view, and its property GeoJSON loaded — so imported points appear instantly with no manual click.
+- Fix: `selectTerritory(t, list=territories)` now accepts the fresh territory list; `saveTerritory` passes the just-loaded `list` (previously it re-set the map source with a STALE `territories` closure that omitted the new territory, so selection/polygon could fail until a manual reselect).
+- File: `frontend/src/pages/MapView.jsx`. Verified via e2e draw→save: new territory renders selected with its Import panel, map fit to it, no manual click.
+
+## Fixed (2026-06) — Map renders ZERO property points (MapLibre v6 GeoJSON worker not started)
+- **Root cause (runtime-diagnosed, not guessed):** frontend was pinned to `maplibre-gl@^6.2.0`. MapLibre GL JS v6 is ESM-only and REQUIRES an explicit `maplibregl.setWorkerUrl(...)` for bundlers (CRA/webpack); the code used `import * as maplibregl` with no worker URL, so the GeoJSON tiling Web Worker never started. Result: raster (OSM) rendered on the main thread, but EVERY geojson source (properties, territories, draw, route) stayed permanently `source.loaded() === false` and produced 0 features — so no property circles, even though React held all 7,570 features and the sidebar said "Showing 7570 of 7570". Confirmed live via diagnostics: osm source loaded=true, properties source loaded=false, isStyleLoaded=false, querySourceFeatures=0, queryRenderedFeatures=0.
+- **Fix:** downgraded to `maplibre-gl@^5.24.0` (v5 auto-bundles its worker under CRA/webpack — no setWorkerUrl needed). Our API usage (Map/Marker/NavigationControl/LngLatBounds/addSource/addLayer/setData/setFilter/setLayoutProperty/fitBounds/jumpTo) is identical across v5/v6. Also added defensive coordinate normalization in `loadProperties` (coerce lng/lat to finite numbers, drop out-of-range points, force `prop-points` visibility=visible) so one bad row can never blank the layer. Backend `/api/properties/geojson` was verified correct (Point + float coords) — no backend change.
+- **Verification (visual acceptance met):** single hardcoded Blanchard point rendered (green owned circle); full 7,570-feature artifact rendered as thousands of colored circles (queryRenderedFeatures=7570, source loaded=true, styleLoaded=true); real app flow (select territory -> loadProperties) rendered 5 seeded points on the Street base map. Point rendering is base-map-independent (geojson layer sits above any raster), so Satellite shows identical points wherever MapTiler is configured.
+- **Files:** `frontend/package.json` (maplibre-gl ^5.24.0), `frontend/src/pages/MapView.jsx` (normalization + visibility; temp debug hook removed). Regression test: `frontend/src/pages/mapview.maplibre-version.test.js` (fails if maplibre-gl is bumped off v5 without a verified setWorkerUrl).
+- **Tests:** full frontend suite 22/22 pass (6 suites).

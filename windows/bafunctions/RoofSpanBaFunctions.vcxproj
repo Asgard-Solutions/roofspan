@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RoofSpanBaFunctions.vcxproj — reproducible MSVC build for the RoofSpan BAFunctions DLL (x64).
+  Pins the WiX v5 native SDK packages. Build via bafunctions\build_bafunctions.ps1 (restore + build);
+  installer\build.ps1 builds it automatically before the Burn bundle. HUMAN REQUIRED: run on Windows with
+  Visual Studio 2022 (Desktop C++ workload) + a WiX v5 toolset. Produces bin\x64\<Cfg>\RoofSpanBaFunctions.dll.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7D1E4C2A-9B3F-4E6D-8A21-6C5F0B9D4E77}</ProjectGuid>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <TargetName>RoofSpanBaFunctions</TargetName>
+    <ProjectName>RoofSpanBaFunctions</ProjectName>
+    <ProjectModuleDefinitionFile>RoofSpanBaFunctions.def</ProjectModuleDefinitionFile>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- Deterministic output so build_bafunctions.ps1 / build.ps1 know exactly where the DLL lands. -->
+  <PropertyGroup>
+    <OutDir>$(MSBuildProjectDirectory)\bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\obj\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <!-- Native NuGet PackageReference support. -->
+  <ItemGroup>
+    <ProjectCapability Include="PackageReferences" />
+  </ItemGroup>
+  <PropertyGroup>
+    <NuGetTargetMoniker Condition="'$(NuGetTargetMoniker)' == ''">native,Version=v0.0</NuGetTargetMoniker>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ClCompile Include="RoofSpanBaFunctions.cpp" />
+    <ClCompile Include="dllmain.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="pch.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="RoofSpanBaFunctions.def" />
+    <None Include="README.md" />
+  </ItemGroup>
+
+  <!-- PINNED WiX v5 native SDK. Keep both in lockstep with the installed `wix` toolset major version.
+       (The BAFunctions FunctionApi package line begins at 5.0.0 — there is no v4 equivalent.) -->
+  <ItemGroup>
+    <PackageReference Include="WixToolset.BootstrapperApplicationApi" Version="5.0.2" />
+    <PackageReference Include="WixToolset.WixStandardBootstrapperApplicationFunctionApi" Version="5.0.2" />
+  </ItemGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <!-- thmutil (pulled transitively by BootstrapperApplicationBase.h) references GDI+/common-controls,
+           so mirror the official WiX v5 BAFunctions link set; bcrypt.lib is the CSPRNG dependency.
+           The WiX DUtil/BAL/balutil static libs are auto-linked by the pinned NuGet packages' targets. -->
+      <AdditionalDependencies>comctl32.lib;gdiplus.lib;msimg32.lib;shlwapi.lib;wininet.lib;version.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>RoofSpanBaFunctions.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

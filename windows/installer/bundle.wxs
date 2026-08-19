@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  RoofSpan Office — WiX v4 Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
+  RoofSpan Office — WiX v5 Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
 
   Chain (in order):
     1) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
@@ -10,7 +10,8 @@
 
   Contains NO secrets and is NOT customer-specific. Building/signing is HUMAN REQUIRED on Windows.
   The EDB installer binary itself is NOT committed; supply its path via -d PostgresInstaller=... (build.ps1
-  validates it exists and fails fast otherwise).
+  validates it exists and fails fast otherwise). It is EMBEDDED (compressed) into RoofSpanSetup.exe at
+  build time, so the customer downloads and runs ONLY RoofSpanSetup.exe — no external prerequisite file.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
@@ -25,34 +26,96 @@
       <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
                                               SuppressOptionsUI="yes"
                                               LicenseUrl="https://roofspan.io/eula" />
+      <!-- Minimal BAFunctions native hook (windows\bafunctions\). Keeps the stock WixStdBA UI; its ONLY job
+           is to run BEFORE the chain (OnDetectComplete): if a NEW RoofSpan-managed PostgreSQL will be
+           installed (NOT RoofSpanPgPresent) AND no enterprise override was supplied, it CSPRNG-generates
+           the superuser/bootstrap password into the Hidden PgSuperPassword variable so the SAME value can
+           be handed to BOTH the EDB installer (the superpassword argument) and the RoofSpan MSI (PG_SUPERPASSWORD).
+           This is the smallest officially-supported WiX v5 mechanism to seed a random hidden Burn variable
+           before package execution (WixStandardBootstrapperApplication has no built-in RNG). HUMAN REQUIRED
+           to compile on Windows (see windows\bafunctions\README.md). -->
+      <Payload Id="RoofSpanBaFunctions" SourceFile="$(var.BaFunctionsDll)" bal:BAFunctions="yes" />
     </BootstrapperApplication>
 
-    <!-- Detect an existing (RoofSpan-managed or compatible) PostgreSQL install so we do NOT reinstall. -->
-    <util:RegistrySearch Id="PgPresentSearch" Root="HKLM"
-                         Key="SOFTWARE\PostgreSQL\Installations"
-                         Result="exists" Variable="PgPresent" />
+    <!-- Detect ONLY the DEDICATED RoofSpan-managed PostgreSQL service. An unrelated PostgreSQL install must
+         NOT suppress installing RoofSpan's own instance (we never silently attach to a foreign database).
+         The service registry key exists iff a prior RoofSpan install created the RoofSpanPostgreSQL service. -->
+    <util:RegistrySearch Id="RoofSpanPgServiceSearch" Root="HKLM"
+                         Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
+                         Result="exists" Variable="RoofSpanPgPresent" />
 
-    <!-- Overridable at build/runtime; no default binary is committed. -->
-    <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
-    <!-- EDB superpassword supplied at install time (Burn variable) — NEVER committed. RoofSpan first-run
-         creates its own least-privilege 'roofspan' role + database with generated credentials. -->
-    <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
+    <!-- Detect the Microsoft Edge WebView2 Evergreen Runtime (required by RoofSpanOffice.exe, the WebView2
+         desktop shell). Per Microsoft's WebView2 distribution guidance we read the 'pv' version value at BOTH
+         the per-machine (HKLM, under WOW6432Node because EdgeUpdate is a 32-bit component) AND per-user (HKCU)
+         locations for the Runtime client GUID {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}, and treat an unset/empty
+         value OR "0.0.0.0" as NOT installed. HKLM is authoritative for this per-machine (elevated) installer;
+         HKCU is also checked so we can skip installation when a usable per-user Runtime is visible. When
+         neither reports a usable version we fail closed by installing Microsoft's official bootstrapper below
+         (never install RoofSpan with a shell that cannot render). -->
+    <util:RegistrySearch Id="WebView2RuntimePvHklm" Root="HKLM"
+                         Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv" Result="value" Variable="WebView2RuntimePvHklm" />
+    <util:RegistrySearch Id="WebView2RuntimePvHkcu" Root="HKCU"
+                         Key="SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv" Result="value" Variable="WebView2RuntimePvHkcu" />
+
+    <!-- The EDB installer path is resolved at BUILD TIME via $(var.PostgresInstaller) on the ExePackage
+         SourceFile below (supplied by build.ps1 -d PostgresInstaller=...); no runtime Burn variable is
+         needed for it. -->
+    <!-- Compiled BAFunctions DLL (supplied by build.ps1 -d BaFunctionsDll=...). -->
+    <!-- Dedicated RoofSpan-owned localhost PostgreSQL port (avoids colliding with an unrelated PostgreSQL
+         that may already own 5432). Handed to the EDB install (the serverport argument) AND the MSI (PG_PORT) so the
+         deployed DATABASE_URL and the bootstrap connection all agree. -->
+    <Variable Name="PgPort" Type="string" Value="5442" bal:Overridable="yes" />
+    <!-- PostgreSQL superuser/bootstrap credential. INITIALLY UNSET (no Type/Value) so nothing is stored:
+         the BAFunctions hook seeds it at runtime via SetVariableString (CSPRNG) and an enterprise DBA may
+         override it. Hidden (Burn REDACTS it in logs, including on the EDB command line) and NOT persisted
+         by Burn. NEVER committed. RoofSpan first-run then creates its own least-privilege 'roofspan' role +
+         database with a SEPARATE generated application password. -->
+    <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
-      <!-- 1) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
-              uninstalled by RoofSpan (protects the customer's database service + data). -->
-      <ExePackage Id="PostgreSQLPrereq"
-                  DisplayName="PostgreSQL (RoofSpan prerequisite)"
-                  SourceFile="[PostgresInstaller]"
+      <!-- 0) Microsoft Edge WebView2 Evergreen Runtime - required by RoofSpanOffice.exe (the desktop shell).
+              Microsoft's OFFICIAL bootstrapper, supplied at BUILD TIME via -d WebView2Bootstrapper=... and
+              EMBEDDED (Compressed) so RoofSpanSetup.exe stays a single self-contained download. Installed
+              ONLY when the runtime is absent; Permanent so RoofSpan uninstall never removes the shared,
+              auto-updating Evergreen runtime. The ~2 MB Evergreen bootstrapper downloads the current runtime
+              from Microsoft at install time (needs internet on a machine that lacks it); for fully-offline
+              installs supply the Evergreen STANDALONE installer at the same path (same /silent /install
+              arguments). -->
+      <ExePackage Id="WebView2Runtime"
+                  DisplayName="Microsoft Edge WebView2 Runtime"
+                  SourceFile="$(var.WebView2Bootstrapper)"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT PgPresent"
-                  DetectCondition="PgPresent"
-                  InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL"
-                  Compressed="no" />
+                  InstallCondition="NOT ((WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;))"
+                  DetectCondition="(WebView2RuntimePvHklm AND WebView2RuntimePvHklm &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimePvHkcu AND WebView2RuntimePvHkcu &lt;&gt; &quot;0.0.0.0&quot;)"
+                  InstallArguments="/silent /install"
+                  Compressed="yes" />
 
-      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). -->
-      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
+      <!-- 1) RoofSpan-managed PostgreSQL prerequisite (silent, unattended, dedicated service + port).
+              Installed ONLY when RoofSpan's own instance is absent; an unrelated PostgreSQL never
+              suppresses it. Permanent = never uninstalled by RoofSpan (protects the DB service + data).
+              PgSuperPassword is Hidden so Burn REDACTS it in the log even here on the command line.
+              Compressed="yes" EMBEDS the EDB installer inside RoofSpanSetup.exe so customers download and
+              run ONLY RoofSpanSetup.exe (no external prerequisite file next to it). -->
+      <ExePackage Id="PostgreSQLPrereq"
+                  DisplayName="PostgreSQL (RoofSpan-managed prerequisite)"
+                  SourceFile="$(var.PostgresInstaller)"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallCondition="NOT RoofSpanPgPresent"
+                  DetectCondition="RoofSpanPgPresent"
+                  InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL --serverport [PgPort]"
+                  Compressed="yes" />
+
+      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). The superuser credential (Burn-generated for a
+              RoofSpan-managed install, or the enterprise override) is handed off to the MSI's Hidden+Secure
+              PG_SUPERPASSWORD property; the dedicated port is handed off via PG_PORT. -->
+      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes">
+        <MsiProperty Name="PG_SUPERPASSWORD" Value="[PgSuperPassword]" />
+        <MsiProperty Name="PG_PORT" Value="[PgPort]" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>

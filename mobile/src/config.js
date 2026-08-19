@@ -25,8 +25,8 @@ export function relayWsUrl() {
   return origin.replace(/\/+$/, "") + "/api/relay/mobile";
 }
 
-// RoofSpan web application (billing / account management lives on the web, never in-app purchasing).
-// The subscription-lock screen sends owners/admins here. Configurable per build.
-export const WEB_APP_URL =
-  process.env.EXPO_PUBLIC_WEB_APP_URL || extra.webAppUrl || "https://roofspan.io";
+// ARCHITECTURE (LOCKED): There is NO centrally hosted RoofSpan customer/billing web app.
+// Subscription, seats, and billing are managed only inside RoofSpan Office (the local
+// Windows-installed application). Mobile is a free companion app and never sells or manages
+// subscriptions. Do NOT reintroduce a WEB_APP_URL / EXPO_PUBLIC_WEB_APP_URL billing target.
 

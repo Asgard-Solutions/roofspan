@@ -15,5 +15,14 @@ SERVICE_TARGETS = {
 # Produced executables (Windows).
 SERVICE_EXES = [f"{name}.exe" for name in SERVICE_TARGETS]
 
+# Non-service operator tools (packaged with Office; NOT registered as services / not auto-started).
+# NOTE: RoofSpanOffice.exe (the WebView2 desktop shell) is intentionally NOT here - it is a .NET WinForms
+# build (windows\desktop\), produced by build_shell.ps1, not a PyInstaller target.
+TOOL_TARGETS = {
+    "RoofSpanOwnerRecovery": "owner_recovery.py",
+    "RoofSpanBootstrap": "bootstrap_db.py",
+}
+TOOL_EXES = [f"{name}.exe" for name in TOOL_TARGETS]
+
 # Windows service names authored in RoofSpan.wxs (for cross-checks / docs).
 WINDOWS_SERVICES = ["RoofSpanBackend", "RoofSpanRelayConnector", "RoofSpanUpdateService"]

@@ -29,6 +29,7 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RoofSpan Office">
         <Directory Id="ServicesDir" Name="services" />
+        <Directory Id="ToolsDir" Name="tools" />
         <Directory Id="FrontendDir" Name="frontend" />
         <Directory Id="RuntimeDir" Name="runtime" />
         <Directory Id="ConfigTemplatesDir" Name="config-templates" />
@@ -40,6 +41,7 @@
         <Directory Id="IdentityDir" Name="identity" />   <!-- installation identity keys (PRESERVED) -->
         <Directory Id="LogsDir" Name="logs" />
         <Directory Id="ConfigDir" Name="config" />
+        <Directory Id="SecretsDir" Name="secrets" />
       </Directory>
     </StandardDirectory>
 
@@ -72,7 +74,7 @@
         <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanRelay" Name="RoofSpanRelayConnector" DisplayName="RoofSpan Relay Connector"
                         Description="Outbound-only Secure Relay tunnel (no inbound ports)." Type="ownProcess"
-                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelay">
+                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelayConnector">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="15" />
         </ServiceInstall>
@@ -82,8 +84,50 @@
         <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
                         Description="Checks downloads.roofspan.io for signed updates every 12h; verifies + applies safely."
-                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdate" />
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdateService" />
         <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Operator recovery tool (NOT a service, NOT auto-started). Admin-only local Owner password reset.
+         Exposed via a Start Menu shortcut under a RoofSpan Maintenance folder, not in the Office UI. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuRoofSpan" Name="RoofSpan Office">
+        <Directory Id="StartMenuMaint" Name="Maintenance" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+    <ComponentGroup Id="Tools" Directory="ToolsDir">
+      <!-- RoofSpan Office launcher: opens the local browser UI. Provides the Desktop icon AND the Start
+           Menu entry so RoofSpan Office appears in Windows Search / All Apps like any installed program.
+           Non-advertised shortcuts point at the launcher exe (Windows uses its embedded RoofSpan icon). -->
+      <Component Id="App_Launcher" Guid="*">
+        <File Id="OfficeLauncherExe" Source="$(var.StageDir)\tools\RoofSpanOffice.exe" KeyPath="yes" />
+        <Shortcut Id="ScStartMenuOffice" Directory="StartMenuRoofSpan"
+                  Name="RoofSpan Office"
+                  Target="[ToolsDir]RoofSpanOffice.exe"
+                  Description="Open RoofSpan Office (your local roofing business application)."
+                  WorkingDirectory="ToolsDir" />
+        <Shortcut Id="ScDesktopOffice" Directory="DesktopFolder"
+                  Name="RoofSpan Office"
+                  Target="[ToolsDir]RoofSpanOffice.exe"
+                  Description="Open RoofSpan Office (your local roofing business application)."
+                  WorkingDirectory="ToolsDir" />
+      </Component>
+      <Component Id="Tool_OwnerRecovery" Guid="*">
+        <File Id="OwnerRecoveryExe" Source="$(var.StageDir)\tools\RoofSpanOwnerRecovery.exe" KeyPath="yes" />
+        <Shortcut Id="ScOwnerRecovery" Directory="StartMenuMaint"
+                  Name="RoofSpan Owner Recovery (Administrator)"
+                  Description="Reset the RoofSpan Owner password. Requires 'Run as administrator'."
+                  Advertise="yes" />
+      </Component>
+      <Component Id="Tool_Bootstrap" Guid="*">
+        <File Id="BootstrapExe" Source="$(var.StageDir)\tools\RoofSpanBootstrap.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="StartMenuCleanup" Directory="StartMenuMaint" Guid="*">
+        <RemoveFolder Id="RmStartMenuMaint" Directory="StartMenuMaint" On="uninstall" />
+        <RemoveFolder Id="RmStartMenuRoofSpan" Directory="StartMenuRoofSpan" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\RoofSpan\Office" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -94,19 +138,86 @@
                      Type="string" Value="[DataRoot]" KeyPath="yes" />
     </Component>
 
+    <!-- Least-privilege ACLs so the per-service virtual accounts (NT SERVICE\*) can read config,
+         read/create the installation identity, and write logs WITHOUT elevated rights. The folders are
+         created here and preserved across upgrade/uninstall.
+         HUMAN REQUIRED: validate on a real box that NT SERVICE\<name> resolves at ACL time (it is created
+         by ServiceInstall); if ordering is a problem, move these grants to a post-StartServices custom
+         action. -->
+    <ComponentGroup Id="DataAcls">
+      <Component Id="AclConfig" Directory="ConfigDir" Guid="72BB4997-F4EE-4837-B66C-076846B584EB" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanUpdateService" Domain="NT SERVICE" GenericRead="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+      <Component Id="AclIdentity" Directory="IdentityDir" Guid="B3F5A500-B1CE-4197-AFD5-23BD26569A78" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+      <Component Id="AclLogs" Directory="LogsDir" Guid="61C6F56D-8F48-4A46-BA02-CFD36BA07CFC" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+          <util:PermissionEx User="RoofSpanUpdateService" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+      <!-- Installation secrets (JWT + encryption key) live here, writable ONLY by the Backend account.
+           Relay/Updater get NO access. Persisted across upgrade/uninstall with customer data. -->
+      <Component Id="AclSecrets" Directory="SecretsDir" Guid="6F879EC8-339B-4941-9D08-AE6717D02DB3" Permanent="yes" NeverOverwrite="yes">
+        <CreateFolder>
+          <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        </CreateFolder>
+      </Component>
+    </ComponentGroup>
+
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
       <ComponentGroupRef Id="FrontendFiles" />
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="Services" />
+      <ComponentGroupRef Id="Tools" />
       <ComponentRef Id="DataDirs" />
+      <ComponentGroupRef Id="DataAcls" />
     </Feature>
 
+    <!-- PostgreSQL superuser credential, handed off securely from the Burn bundle (bundle.wxs
+         PgSuperPassword -> this MSI property). Hidden + Secure so Windows Installer never writes it to the
+         log or the property table dump. Non-empty at first install (Burn-generated for a RoofSpan-managed
+         instance, or an enterprise override); the deferred bootstrap uses it only to authenticate and fails
+         closed if it is missing. -->
+    <Property Id="PG_SUPERPASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- Dedicated RoofSpan-managed PostgreSQL port (handed off from Burn PG_PORT). Not secret. -->
+    <Property Id="PG_PORT" Value="5442" Secure="yes" />
+
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
-    <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;http://127.0.0.1:8001/&quot;"
+    <!-- First-install DB + deployed-config bootstrap. Runs BEFORE StartServices so RoofSpanBackend never
+         starts without its generated local DATABASE_URL. Upgrade/repair preserves existing creds. Native
+         psql/role/db execution is HUMAN REQUIRED. The superuser credential is ESTABLISHED BEFORE PostgreSQL
+         is installed (Burn BAFunctions for a RoofSpan-managed install, or an enterprise override) and only
+         handed here to authenticate + provision — the bootstrap never invents a new postgres credential.
+         Secure secret handoff: an immediate SetProperty (Id == the deferred CA Id) builds the command line
+         as this deferred action's CustomActionData; the superuser credential is passed as an argv value.
+         WixSilentExec (not WixQuietExec) suppresses command-line logging and HideTarget="yes" prevents the
+         CustomActionData from being written to the MSI log, so PG_SUPERPASSWORD never leaks. -->
+    <SetProperty Id="RoofSpanBootstrap"
+                 Value="&quot;[ToolsDir]RoofSpanBootstrap.exe&quot; --pg-superpassword &quot;[PG_SUPERPASSWORD]&quot; --pg-port &quot;[PG_PORT]&quot;"
+                 Before="RoofSpanBootstrap" Sequence="execute" />
+    <CustomAction Id="RoofSpanBootstrap" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixSilentExec"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+
+    <!-- First-run launch: open the installed RoofSpan Office WebView2 desktop shell (the SAME exe the
+         Desktop/Start Menu shortcuts target). FileRef resolves the installed file path in the deferred
+         phase; Impersonate=yes launches it in the installing user's interactive session. NOT a browser,
+         NOT cmd.exe, NOT a URL. -->
+    <CustomAction Id="LaunchFirstRun" FileRef="OfficeLauncherExe" ExeCommand=""
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
+      <Custom Action="RoofSpanBootstrap" Before="StartServices" Condition="NOT Installed" />
       <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed" />
     </InstallExecuteSequence>
 

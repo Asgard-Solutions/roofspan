@@ -38,7 +38,7 @@ const COPY = {
   [STATES.SERVER_UNAVAILABLE]: { title: "Company RoofSpan server unavailable", message: "RoofSpan can't currently reach your company's Office system. Check your connection or try again shortly." },
   [STATES.OFFLINE]: { title: "No internet connection", message: "You're offline. Your work is saved and will sync when you're back online." },
   [STATES.DEVICE_REVOKED]: { title: "Device disconnected", message: "This device is no longer paired. Please ask your RoofSpan administrator to pair it again." },
-  [STATES.SUBSCRIPTION_INACTIVE]: { title: "RoofSpan subscription needs attention", message: "Your company's RoofSpan subscription is inactive, so Mobile is paused. Account owners and administrators can restore access by updating billing in RoofSpan on the web." },
+  [STATES.SUBSCRIPTION_INACTIVE]: { title: "Subscription inactive", message: "Your company's RoofSpan subscription needs attention." },
   [STATES.UPDATE_REQUIRED]: { title: "RoofSpan must be updated", message: "A newer version is required to connect to your company's RoofSpan system." },
   [STATES.AUTH_REQUIRED]: { title: "Please sign in", message: "Sign in with your RoofSpan account to continue." },
 };

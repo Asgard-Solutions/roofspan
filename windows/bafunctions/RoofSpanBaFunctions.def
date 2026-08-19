@@ -1,0 +1,4 @@
+LIBRARY "RoofSpanBaFunctions"
+EXPORTS
+    BAFunctionsCreate
+    BAFunctionsDestroy

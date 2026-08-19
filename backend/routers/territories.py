@@ -22,7 +22,7 @@ async def _out(db: AsyncSession, t: Territory) -> TerritoryOut:
     count = (await db.execute(select(func.count(Property.id)).where(Property.territory_id == t.id))).scalar_one()
     return TerritoryOut(
         id=str(t.id), name=t.name, description=t.description, color=t.color,
-        geometry=t.geometry, active=t.active, property_count=count,
+        geometry=t.geometry, active=t.active, zip_code=t.zip_code, property_count=count,
         created_by=t.created_by, created_at=t.created_at,
     )
 
@@ -37,7 +37,8 @@ async def list_territories(user: User = Depends(get_current_user), db: AsyncSess
 async def create_territory(payload: TerritoryIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     _validate_polygon(payload.geometry)
     t = Territory(name=payload.name, description=payload.description, color=payload.color,
-                  geometry=payload.geometry, active=payload.active, created_by=user.email)
+                  geometry=payload.geometry, active=payload.active, zip_code=(payload.zip_code or None),
+                  created_by=user.email)
     db.add(t)
     await db.commit()
     await db.refresh(t)

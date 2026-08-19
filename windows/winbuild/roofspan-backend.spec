@@ -12,14 +12,20 @@ a = Analysis(
     pathex=[BACKEND, WINDOWS],
     binaries=[],
     datas=[
+        # migrations_runner.py loads alembic.ini + the alembic/ tree from its own directory (== the
+        # PyInstaller _MEIPASS root at runtime), so mirror that layout: alembic.ini at the root and the
+        # real backend/alembic package (env.py, script.py.mako, versions/*.py) under "alembic".
         (os.path.join(BACKEND, "alembic.ini"), "."),
-        (os.path.join(BACKEND, "migrations"), "migrations"),
+        (os.path.join(BACKEND, "alembic"), "alembic"),
     ],
     hiddenimports=[
         "server", "uvicorn", "uvicorn.logging", "uvicorn.protocols",
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
         "static_serve", "httpx", "websockets",
+        # Windows service host (pywin32 SCM integration) + reusable runner.
+        "winbuild.winservice", "winservice",
+        "win32serviceutil", "win32service", "win32event", "servicemanager", "win32timezone",
     ],
     excludes=[],
 )

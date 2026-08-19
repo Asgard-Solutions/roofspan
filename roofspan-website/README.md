@@ -33,3 +33,16 @@ CloudFront installer URL (never proxied). CloudFront/S3/DNS are managed outside 
 ## Deployment
 Build (`yarn build`) and deploy `build/` to the roofspan.io hosting target. The RoofSpan Office frontend
 (`/app/frontend`) must NOT be deployed to roofspan.io.
+
+## Operator (internal admin) auth — part of THIS Vercel project
+This project also ships the RoofSpan **operator** (Cognito) auth as Vercel serverless functions. These are
+internal admin-only routes and do NOT touch the marketing React app:
+- `api/operator/*.js` — serverless functions (`/operator/login`, `/operator/callback`, `/api/operator/whoami`)
+- `public/operator/index.html` — the operator console (served at `/operator`)
+- `vercel.json` — the operator route rewrites (merged into this project; marketing routing untouched)
+
+Canonical host is `https://www.roofspan.io` (Vercel redirects apex -> www). Set the Vercel env vars
+`COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET` (optional), `OPERATOR_REDIRECT_URI`,
+`COGNITO_LOGOUT_URI`, `CONTROL_PLANE_BASE_URL`. See `deploy/vercel/README.md` for the full runbook.
+Tests: `node --test tests/operator_auth.test.mjs` and `node --test tests/deployment_wiring.test.mjs`.
+

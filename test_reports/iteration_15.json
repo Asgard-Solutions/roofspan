@@ -1,32 +1,20 @@
 {
-  "summary": "RETEST of Map clustering (iteration 15) - DOM-marker supercluster approach: PASSED. Clusters render at low zoom with numeric counts (data-testid=map-cluster), individual pins render at high zoom (data-testid=map-property-pin), cluster clicks expand/zoom the map, pin clicks open PropertySheet. Zero '[MapLibre error]' and zero page/JS errors observed throughout.",
+  "summary": "Static source/test verification of Windows WiX installer fixes (Bug 1: shortcut Target; Bug 2: LaunchFirstRun via FileRef). Ran `python -m pytest windows/tests` -> 150 passed, 0 failed in 0.58s. Confirmed both fixes present in windows/installer/RoofSpan.wxs and file is well-formed XML. No app runtime testing performed (Windows-native codebase; not applicable in Linux container).",
   "backend_issues": {"critical": [], "minor": []},
-  "frontend_issues": {
-    "ui_bugs": [],
-    "integration_issues": [],
-    "design_issues": []
-  },
-  "test_scenarios_verified": [
-    "Login via form (login-email-input / login-password-input / login-submit-button) and SPA navigation via a[href='/map'] loads [data-testid=map-container] with OSM base map — no MapLibre errors.",
-    "Selecting TEST_Territory_f7843e (20 properties) at default fit renders 5 map-cluster badges (labels 2/3/2/2/2) + 9 map-property-pin markers; selected-summary shows '20 properties on map'.",
-    "Zooming out (zoom-out control x5) collapses everything into a single cluster labeled '20'.",
-    "Clicking the '20' cluster triggers easeTo/getClusterExpansionZoom — map zooms in and the single cluster breaks into 4 separate clusters (expansion behavior confirmed).",
-    "Zooming in (zoom-in control x8) removes all clusters (0) and individual property pins render (map-property-pin visible over the tiles).",
-    "Clicking a map-property-pin opens PropertySheet ([data-testid=property-sheet], role=dialog) with full property detail (address, beds/baths, coords, owner).",
-    "Console captured — 0 '[MapLibre error]' messages, 0 pageerrors, only benign WebGL GPU-stall warnings."
-  ],
-  "test_report_links": [],
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_installer_static.py"],
   "action_items": [],
   "critical_code_review_comments": [
-    "MapView.jsx renderClusters() correctly registers 'moveend' to reindex on pan/zoom and clearMarkers() cleans DOM markers — no leak observed across zoom/pan cycles.",
-    "clusterZoomMax=16 with map maxZoom=19 gives a healthy pin range; consider exposing radius (55) via config if territories need denser clustering."
+    "Bug 1 fix verified — RoofSpan.wxs lines 106-115: ScStartMenuOffice (Directory=\"StartMenuRoofSpan\") and ScDesktopOffice (Directory=\"DesktopFolder\") both include Target=\"[ToolsDir]RoofSpanOffice.exe\", Name=\"RoofSpan Office\", WorkingDirectory=\"ToolsDir\". Neither targets the tools directory only (no Target=\"[ToolsDir]\").",
+    "Bug 2 fix verified — RoofSpan.wxs line 217: CustomAction Id=\"LaunchFirstRun\" FileRef=\"OfficeLauncherExe\" ExeCommand=\"\" Execute=\"deferred\" Impersonate=\"yes\" Return=\"asyncNoWait\". grep confirms no 'http://127.0.0.1:8001' and no 'cmd.exe /c start' anywhere in the .wxs file. The only 'cmd.exe' occurrence is on line 216 inside an XML comment explicitly documenting what LaunchFirstRun is NOT.",
+    "XML well-formedness verified via xml.etree.ElementTree parse of windows/installer/RoofSpan.wxs — no parse errors.",
+    "All 150 pre-existing WebView2-shell static tests still pass unchanged (project config, local-UI host, readiness deadline, error separation, external navigation, per-user WebView2 data dir hardening, single-instance, shell build pipeline, WebView2 runtime HKLM+HKCU detection, python-launcher-removal)."
   ],
   "updated_files": [],
-  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (7/7 scenarios)"},
-  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
-  "seed_data_creation": "None — used existing seeded TEST_Territory_f7843e (20 properties).",
+  "success_rate": {"backend": "100% (150/150 static tests)", "frontend": "N/A"},
+  "seed_data_creation": "None",
   "retest_needed": false,
-  "main_agent_can_self_test": true,
-  "context_for_next_testing_agent": "DOM-marker clustering (supercluster main-thread) is now working end-to-end. Selectors: [data-testid=map-cluster] (badges with count text), [data-testid=map-property-pin] (individual). To reproduce: login → click a[href='/map'] (SPA nav, DO NOT hard reload) → wait ~3.5s → select the territory that displays '20 properties' → cluster/pin markers appear over [data-testid=map-container]. Use .maplibregl-ctrl-zoom-in / .maplibregl-ctrl-zoom-out to change zoom.",
-  "rca of the issue": "Iterations 13/14 failed because MapLibre's geojson WORKER never tiled the 'properties' source in this webpack build, so nothing rendered. Iteration 15 fix bypasses the worker entirely by building a Supercluster index on the main thread and rendering results as maplibregl.Marker HTML DOM elements re-computed on 'moveend'. Verified visually and via querySelector counts."
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Windows WiX/.NET codebase — static verification only. Command: `python -m pytest /app/windows/tests`. All 150 tests pass. Both installer bug fixes (shortcut Target + LaunchFirstRun FileRef) confirmed present.",
+  "rca of the issue": "Bug 1 RCA: The two <Shortcut> child elements under <Component Id=\"App_Launcher\"> had no explicit Target attribute, so their resolved TargetPath fell back to the containing ToolsDir directory — users got shortcuts that opened the tools folder in Explorer instead of launching RoofSpanOffice.exe. Fix: explicitly set Target=\"[ToolsDir]RoofSpanOffice.exe\" on both shortcuts. Bug 2 RCA: LaunchFirstRun previously ran `cmd.exe /c start http://127.0.0.1:8001/`, opening the local backend URL in the user's default browser rather than the installed WebView2 desktop shell — bypassing single-instance, WebView2 hardening, and per-user data-dir. Fix: use FileRef=\"OfficeLauncherExe\" with empty ExeCommand so MSI directly launches the installed RoofSpanOffice.exe in the deferred/impersonated phase."
 }

@@ -1,6 +1,8 @@
 import axios from "axios";
 
-export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Packaged RoofSpan Office is served same-origin by the local backend (127.0.0.1:8001), so when
+// REACT_APP_BACKEND_URL is unset the API base is relative ("/api"). The dev preview sets the env var.
+export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
 export const API_BASE = `${BACKEND_URL}/api`;
 export const TOKEN_KEY = "roofspan_token";
 

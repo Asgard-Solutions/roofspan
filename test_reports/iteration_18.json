@@ -1,0 +1,37 @@
+{
+  "summary": "Independently re-verified Railway CP deploy-boundary changes and all regression suites. All targeted backend suites pass with the exact expected counts. Confirms cp_asgi exposes ONLY Control Plane + /health (no Office routes), Railway Dockerfile/railway.json bind via $PORT with healthcheck /health, require_production_config fails closed (non-empty non-localhost CONTROL_PLANE_DATABASE_URL + Stripe + KMS + operator), _normalize_async handles postgres:// & postgresql:// -> postgresql+asyncpg://, and the Railway image excludes all Windows/frontend deps. P1-4b Stripe boundary intact.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_railway_cp_deploy.py",
+    "/app/backend/tests/test_setup_billing_boundary.py",
+    "/app/backend/tests/test_control_plane.py",
+    "/app/backend/tests/test_billing.py",
+    "/app/backend/tests/test_stripe_billing.py",
+    "/app/backend/tests/test_onboarding.py",
+    "/app/windows/tests"
+  ],
+  "per_suite_results": {
+    "test_railway_cp_deploy.py": "7 passed / 7 (0.50s)",
+    "test_setup_billing_boundary.py": "2 passed / 2 (1.92s)",
+    "test_control_plane.py": "17 passed / 17 (5.33s)",
+    "test_billing.py": "13 passed / 13 (6.18s)",
+    "test_stripe_billing.py": "11 passed / 11 (69.80s)",
+    "test_onboarding.py": "1 passed / 1 (3.21s)",
+    "windows/tests": "157 passed / 157 (0.58s)"
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "cp_asgi.py uses deprecated @app.on_event('startup'); non-blocking but consider migrating to FastAPI lifespan handlers to silence DeprecationWarning and future-proof.",
+    "Alembic config emits path_separator deprecation warning; add path_separator=os to alembic.ini when convenient."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "N/A - no auth flows exercised in this run",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend + Postgres running under supervisor; /api/health returns 200. Run CP-mutating tests ONE FILE PER pytest process with `-o addopts=''` (they mutate DATABASE_URL/LICENSING_MODE at import). Total verified pass: 7+2+17+13+11+1+157 = 208 tests. No regressions from cp_asgi.py / control_plane/config.py / deploy/railway/*.",
+  "rca of the issue": "N/A - no failures"
+}

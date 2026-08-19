@@ -11,7 +11,8 @@ from models import Territory, Property, PropertyContact, ImportJob, IntegrationS
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
 from geo import centroid, enclosing_radius_miles, point_in_polygon
-from rentcast import fetch_rentcast_properties, normalize_rentcast, generate_sample_properties
+from rentcast import (fetch_rentcast_properties, fetch_rentcast_by_zip, normalize_rentcast,
+                      generate_sample_properties)
 
 router = APIRouter(prefix="/api", tags=["imports"])
 
@@ -56,16 +57,19 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         clng, clat = centroid(t.geometry)
         key = decrypt_secret(setting.secret_ciphertext)
         try:
-            raws = await fetch_rentcast_properties(key, clat, clng, radius, min(payload.max_records, 50))
+            if t.zip_code:
+                raws = await fetch_rentcast_by_zip(key, t.zip_code, min(payload.max_records, 50))
+            else:
+                raws = await fetch_rentcast_properties(key, clat, clng, radius, min(payload.max_records, 50))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"RentCast preview failed: {e.__class__.__name__}")
         inside = [normalize_rentcast(r) for r in raws if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], t.geometry)]
         est_requests = math.ceil(payload.max_records / 500)
         return ImportPreviewOut(
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
-            estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
+            estimated_properties=len(inside) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)).",
+            note="Full import pulls ALL properties for this ZIP/territory from RentCast (paged automatically). The list below is a small preview sample.",
         )
 
     # sample mode
@@ -91,9 +95,12 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                 if not (setting and setting.enabled and setting.secret_ciphertext):
                     raise RuntimeError("RentCast is not configured")
                 key = decrypt_secret(setting.secret_ciphertext)
-                clng, clat = centroid(territory.geometry)
-                radius = enclosing_radius_miles(territory.geometry)
-                raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
+                if territory.zip_code:
+                    raws = await fetch_rentcast_by_zip(key, territory.zip_code, None)  # pull ALL in the ZIP
+                else:
+                    clng, clat = centroid(territory.geometry)
+                    radius = enclosing_radius_miles(territory.geometry)
+                    raws = await fetch_rentcast_properties(key, clat, clng, radius, None)  # pull ALL in the area
                 normalized = [normalize_rentcast(r) for r in raws
                               if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)]
             else:
@@ -133,8 +140,10 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                         oc.name = owner.get("name") or oc.name
                         oc.contact_type = owner.get("type") or oc.contact_type
                         oc.mailing_address = owner.get("mailing_address") or oc.mailing_address
+                        oc.phone = owner.get("phone") or oc.phone
+                        oc.email = owner.get("email") or oc.email
                     elif owner.get("name"):
-                        db.add(PropertyContact(property_id=existing.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address")))
+                        db.add(PropertyContact(property_id=existing.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address"), phone=owner.get("phone"), email=owner.get("email")))
                     job.updated_count += 1
                 else:
                     p = Property(
@@ -148,7 +157,7 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                     db.add(p)
                     await db.flush()
                     if owner.get("name"):
-                        db.add(PropertyContact(property_id=p.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address")))
+                        db.add(PropertyContact(property_id=p.id, kind="owner", name=owner["name"], contact_type=owner.get("type"), mailing_address=owner.get("mailing_address"), phone=owner.get("phone"), email=owner.get("email")))
                     job.created_count += 1
                 job.processed += 1
                 if job.processed % 10 == 0:

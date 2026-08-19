@@ -60,21 +60,38 @@ def _signed_refresh(installation_id, priv, *, ts=None, nonce=None, body=b"", tam
 # ---------------- activation + issuance + C0 verify ----------------
 
 def test_activation_issues_verifiable_entitlement():
-    data, _priv = _activate(seats=12)
+    data, priv = _activate(seats=12)
     assert data["installation_id"] and data["company_id"] and data["license_id"]
     e = ent.verify_entitlement(data["entitlement_jws"], _trusted(data["signing_public_keys"]))
-    assert e.subscription_state == "ACTIVE" and e.seats_licensed == 12
+    # Payment gating: a fresh activation issues a cryptographically-valid but SUSPENDED/0-seat
+    # entitlement (no paid access before Stripe payment). Business access is denied.
+    assert e.subscription_state == "SUSPENDED" and e.seats_licensed == 0
     assert e.installation_id == data["installation_id"]
-    status = state_mod.evaluate(e)
-    assert status.business_access is True
+    assert state_mod.evaluate(e).business_access is False
+    # After payment (subscription flipped ACTIVE by the CP), a signed refresh reflects ACTIVE + seats.
+    up = requests.put(f"{CP}/subscriptions/{data['company_id']}",
+                      json={"state": "ACTIVE", "seats": 12}, headers=ADMIN, timeout=15)
+    assert up.status_code == 200, up.text
+    r, _ = _signed_refresh(data["installation_id"], priv)
+    assert r.status_code == 200, r.text
+    e2 = ent.verify_entitlement(r.json()["entitlement_jws"], _trusted(r.json()["signing_public_keys"]))
+    assert e2.subscription_state == "ACTIVE" and e2.seats_licensed == 12
+    assert state_mod.evaluate(e2).business_access is True
 
 
 def test_activation_seat_bounds_clamped():
-    # below MIN clamps up to 5; above MAX clamps down to 50
-    lo, _ = _activate(seats=1)
-    assert ent.verify_entitlement(lo["entitlement_jws"], _trusted(lo["signing_public_keys"])).seats_licensed == 5
-    hi, _ = _activate(seats=999)
-    assert ent.verify_entitlement(hi["entitlement_jws"], _trusted(hi["signing_public_keys"])).seats_licensed == 50
+    # Seat counts are product-locked to [MIN=5, MAX=50]. Seats materialize in the entitlement once the
+    # subscription is ACTIVE (post-payment); the CP clamps out-of-range values.
+    lo, priv_lo = _activate(seats=1)
+    assert requests.put(f"{CP}/subscriptions/{lo['company_id']}", json={"state": "ACTIVE", "seats": 1},
+                        headers=ADMIN, timeout=15).status_code == 200
+    r_lo, _ = _signed_refresh(lo["installation_id"], priv_lo)
+    assert ent.verify_entitlement(r_lo.json()["entitlement_jws"], _trusted(r_lo.json()["signing_public_keys"])).seats_licensed == 5
+    hi, priv_hi = _activate(seats=999)
+    assert requests.put(f"{CP}/subscriptions/{hi['company_id']}", json={"state": "ACTIVE", "seats": 999},
+                        headers=ADMIN, timeout=15).status_code == 200
+    r_hi, _ = _signed_refresh(hi["installation_id"], priv_hi)
+    assert ent.verify_entitlement(r_hi.json()["entitlement_jws"], _trusted(r_hi.json()["signing_public_keys"])).seats_licensed == 50
 
 
 def test_activation_bad_credential_rejected():
@@ -219,7 +236,8 @@ def test_http_client_fetch_entitlement_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(lkeys.config, "TRUSTED_KEYS_DIR", str(trust_dir))
     monkeypatch.setattr(lcp.config, "CONTROL_PLANE_URL", CP)
 
-    # Generate the installation identity locally and register its PUBLIC key with the Control Plane.
+    # Register PUBLIC key with the CP, then mark the subscription ACTIVE (post-payment) so the signed
+    # refresh returns ACTIVE with the purchased seat quantity.
     _priv, pub_pem = identity.get_or_create_identity()
     reg = requests.post(f"{CP}/activate", json={
         "company_name": "HTTP Client Co", "requested_seats": 7, "installation_public_key": pub_pem,
@@ -227,6 +245,8 @@ def test_http_client_fetch_entitlement_end_to_end(tmp_path, monkeypatch):
     }, timeout=15)
     assert reg.status_code == 200, reg.text
     iid, cid = reg.json()["installation_id"], reg.json()["company_id"]
+    assert requests.put(f"{CP}/subscriptions/{cid}", json={"state": "ACTIVE", "seats": 7},
+                        headers=ADMIN, timeout=15).status_code == 200
 
     client = lcp.HttpControlPlaneClient()
     jws = asyncio.run(client.fetch_entitlement(None, installation_id=iid, company_id=cid))
