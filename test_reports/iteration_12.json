@@ -1,23 +1,26 @@
 {
-  "summary": "Verified MapView MapLibre source/layer timing bug fix. Logged in as Owner, navigated to Map, and confirmed the OSM base map renders inside [data-testid=map-container] with a valid canvas. Selected two existing territories (TEST_P4_Terr_8e66d2 with 1 property, TEST_Territory_f7843e with 20 properties) and confirmed blue property circle pins visibly render on the map after selection. selected-summary correctly reports property counts. Console captured: ZERO occurrences of '[MapLibre error]' and no React/JS pageerrors — only benign WebGL 'GPU stall due to ReadPixels' warnings. The 'properties' source and 'prop-points' circle layer are being added successfully after style load, no silent rejection.",
+  "summary": "Frontend-only P0 verification on the live/preview INITIALIZED install. All 6 requested scenarios PASSED: (1) Owner login lands on Dashboard, no 'Phase 1/4' wording; (2) nav-reports opens real /reports with pipeline/jobs/finance/inventory sections (no 'Coming soon'); (3) Owner sees report-finance; (4) /setup on initialized install redirects to Dashboard (no wizard shown); (5) /jobs page has no 'Phase 4' wording; (6) Sales user at /reports sees pipeline/jobs/inventory but report-finance is correctly hidden (RBAC enforced).",
   "backend_issues": {"critical": [], "minor": []},
   "frontend_issues": {
     "ui_bugs": [],
     "integration_issues": [],
     "design_issues": []
   },
-  "test_report_links": [],
+  "test_report_links": ["/app/test_reports/iteration_12.json"],
   "action_items": [],
-  "critical_code_review_comments": [
-    "MapView.jsx (~200 lines of logic) is manageable but the init useEffect is dense; consider extracting initMapLayers into a module for readability.",
-    "loadProperties/setTerritorySource silently no-op if source not yet added — fine, but a single console.debug could aid future debugging.",
-    "Property pin click uses two layers (prop-points + prop-hit); ensure no double-open of PropertySheet when both fire — currently both call openSheetRef with same id so effectively idempotent, OK."
-  ],
+  "critical_code_review_comments": [],
   "updated_files": [],
-  "success_rate": {"backend": "n/a", "frontend": "100%"},
-  "seed_data_creation": "None — used existing seeded territories (TEST_P4_Terr_8e66d2 with 1 property, TEST_Territory_f7843e with 20 properties).",
+  "success_rate": {"backend": "not tested (per request)", "frontend": "100% (6/6 scenarios passed)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 | Sales: sales1_38f545f9@example.com / Sales1#2026 (both worked as-is)",
+  "seed_data_creation": "None. Used existing seeded credentials.",
   "retest_needed": false,
-  "should_main_agent_self_test": false,
-  "context_for_next_testing_agent": "Owner login works. 12 territories already seeded (TEST_* prefix). Map page loads OSM raster tiles and property pins render as expected. PropertySheet-on-pin-click was not manually verified by click coordinates (pin positions were not deterministic from viewport center), but the click handlers are wired to both prop-points and prop-hit layers, and code path is correct. If deeper pin-click verification is needed, use maplibre queryRenderedFeatures via page.evaluate to get a pin's screen coord before clicking.",
-  "rca of the issue": "Fix in MapView.jsx correctly defers addSource('properties') + addLayer('prop-points') until map.on('load') (with idempotent getSource/getLayer guards) and attaches map.on('error') to surface MapLibre errors. Verified: no '[MapLibre error]' logged, pins render on territory selection, selected-summary property count matches. Bug fix confirmed."
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "P0 (Setup wizard gating on initialized install, real Reports page with RBAC for finance, removal of Phase 1/4 artifacts) is verified end-to-end on the preview URL. All data-testids referenced in the request are present: page-dashboard, nav-reports, page-reports, report-pipeline, report-jobs, report-finance (owner only), report-inventory. SetupGate correctly redirects /setup -> / when state==initialized. Sales user login also functions with the credentials in /app/memory/test_credentials.md.",
+  "detailed_results": {
+    "owner_dashboard": {"page_dashboard": true, "phase_wording_present": false, "final_url": "/"},
+    "reports_owner": {"page_reports": true, "pipeline": true, "jobs": true, "finance": true, "inventory": true, "coming_soon_present": false},
+    "setup_redirect_when_initialized": {"final_url": "/", "wizard_shown": false},
+    "jobs_page": {"phase4_text_present": false},
+    "reports_sales_rbac": {"page_reports": true, "pipeline": true, "jobs": true, "finance_hidden": true, "inventory": true}
+  }
 }

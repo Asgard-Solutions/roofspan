@@ -49,7 +49,24 @@ class Entitlement(BaseModel):
 
 
 class EntitlementError(Exception):
-    """Raised when an entitlement cannot be verified (bad signature, expired, unknown key)."""
+    """Raised when an entitlement cannot be verified (bad signature, expired, unknown key).
+
+    Carries a machine-readable `reason` so callers can distinguish a *recoverable* missing
+    trusted key ("unknown_kid") from a genuine failure (tamper/expiry). Never include secret
+    material or the raw token in the message.
+    """
+
+    def __init__(self, message: str, *, reason: str = "error"):
+        super().__init__(message)
+        self.reason = reason
+
+
+# Reason codes (see EntitlementError.reason).
+R_UNKNOWN_KID = "unknown_kid"      # signature key id not in the local trusted set -> may be recoverable
+R_EXPIRED = "expired"              # offline grace exhausted
+R_BAD_SIGNATURE = "bad_signature"  # signature/claims invalid -> possible tampering
+R_MALFORMED = "malformed"          # header/token not parseable
+R_INVALID_CLAIMS = "invalid_claims"
 
 
 def _build_payload(claims: dict) -> dict:
@@ -132,11 +149,11 @@ def verify_entitlement(token: str, trusted_keys: dict) -> Entitlement:
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as e:
-        raise EntitlementError(f"Malformed entitlement header: {e}") from e
+        raise EntitlementError(f"Malformed entitlement header: {e}", reason=R_MALFORMED) from e
     kid = header.get("kid")
     key = trusted_keys.get(kid)
     if key is None:
-        raise EntitlementError(f"Unknown signing key id: {kid!r}")
+        raise EntitlementError(f"Unknown signing key id: {kid!r}", reason=R_UNKNOWN_KID)
     try:
         payload = jwt.decode(
             token,
@@ -146,13 +163,13 @@ def verify_entitlement(token: str, trusted_keys: dict) -> Entitlement:
             options={"require": ["exp", "iat"]},
         )
     except jwt.ExpiredSignatureError as e:
-        raise EntitlementError("Entitlement expired (offline grace exhausted)") from e
+        raise EntitlementError("Entitlement expired (offline grace exhausted)", reason=R_EXPIRED) from e
     except jwt.PyJWTError as e:
-        raise EntitlementError(f"Invalid entitlement signature/claims: {e}") from e
+        raise EntitlementError(f"Invalid entitlement signature/claims: {e}", reason=R_BAD_SIGNATURE) from e
 
     state = payload.get("subscription_state")
     if state not in VALID_STATES:
-        raise EntitlementError(f"Invalid subscription_state: {state!r}")
+        raise EntitlementError(f"Invalid subscription_state: {state!r}", reason=R_INVALID_CLAIMS)
 
     def _dt(key):
         v = payload.get(key)

@@ -73,6 +73,25 @@ class DevControlPlaneClient:
         kid, priv = keys.get_dev_signing_key()
         return ent.sign_entitlement(private_key=priv, kid=kid, claims=claims)
 
+    async def fetch_public_signing_keys(self) -> dict:
+        """DEV: publish the local dev PUBLIC verify key (kid -> PEM) so trusted-key recovery is
+        exercised without a network Control Plane. Never returns any private material."""
+        from cryptography.hazmat.primitives import serialization
+        kid, priv = keys.get_dev_signing_key()
+        pub_pem = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        return {kid: pub_pem}
+
+    async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
+                                      installation_id: str | None = None, seats: int | None = None) -> dict:
+        """DEV: return a mock hosted-checkout URL (no external account, no Stripe secret)."""
+        from control_plane import billing as cp_billing
+        n = int(seats or config.MIN_SEATS)
+        url = cp_billing.get_provider().checkout_url(company_id)
+        return {"checkout_url": url, "company_id": company_id, "seats": n, "monthly_price_usd": n * 49}
+
 
 class HttpControlPlaneClient:
     mode = "http"
@@ -83,18 +102,20 @@ class HttpControlPlaneClient:
             raise ControlPlaneUnavailable("Control Plane URL not configured")
         return base.rstrip("/")
 
-    async def activate(self, db: AsyncSession) -> dict:
-        """First-run activation: register the installation public key and receive the first
-        entitlement. Stores the Control-Plane-assigned ids and caches its verification keys."""
-        import time
+    async def activate(self, db: AsyncSession, *, company_name: str | None = None,
+                       requested_seats: int | None = None) -> dict:
+        """First-run activation: register this installation's PUBLIC key and receive the CP-assigned
+        identity + first signed entitlement. ONLY the public key is sent — the private key never
+        leaves the machine. This method performs NO local persistence; the caller
+        (licensing.service.persist_activation) adopts the returned ids/entitlement so the operation is
+        idempotent and testable."""
         import httpx
-        from sqlalchemy import select as _select
-        from licensing import identity, keys as lkeys
+        from licensing import identity
 
-        _priv, pub_pem = identity.get_or_create_identity()
+        _priv, pub_pem = identity.get_or_create_identity()  # _priv stays local; only pub_pem is sent
         payload = {
-            "company_name": config.ACTIVATION_COMPANY_NAME,
-            "requested_seats": config.ACTIVATION_REQUESTED_SEATS,
+            "company_name": company_name or config.ACTIVATION_COMPANY_NAME,
+            "requested_seats": int(requested_seats if requested_seats is not None else config.ACTIVATION_REQUESTED_SEATS),
             "installation_public_key": pub_pem,
             "software_version": config.SOFTWARE_VERSION,
             "bootstrap_credential": config.ACTIVATION_BOOTSTRAP_CREDENTIAL,
@@ -106,18 +127,7 @@ class HttpControlPlaneClient:
             raise ControlPlaneUnavailable(f"Activation request failed: {e}") from e
         if resp.status_code != 200:
             raise ControlPlaneUnavailable(f"Activation rejected ({resp.status_code}): {resp.text[:200]}")
-        data = resp.json()
-        lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
-        # Adopt the Control-Plane-assigned identity ids.
-        row = (await db.execute(_select(AppConfig).where(AppConfig.key == "installation"))).scalar_one_or_none()
-        value = {"installation_id": data["installation_id"], "company_id": data["company_id"],
-                 "license_id": data["license_id"]}
-        if row is None:
-            db.add(AppConfig(key="installation", value=value))
-        else:
-            row.value = value
-        await db.commit()
-        return data
+        return resp.json()
 
     async def fetch_entitlement(self, db: AsyncSession, *, installation_id: str, company_id: str) -> str:
         import time
@@ -151,6 +161,57 @@ class HttpControlPlaneClient:
         data = resp.json()
         lkeys.cache_trusted_cp_keys(data.get("signing_public_keys", {}))
         return data["entitlement_jws"]
+
+    async def fetch_public_signing_keys(self) -> dict:
+        """Fetch the current Control Plane PUBLIC entitlement-verification keys (kid -> PEM) from the
+        configured HTTPS Control Plane. This is a PUBLIC, unauthenticated endpoint by design — it
+        returns verification (public) keys only; a private signing key never leaves the Control
+        Plane/KMS. Used by automatic trusted-key recovery after an upgrade removed the local cache.
+        The source is strictly the configured LICENSING_CONTROL_PLANE_URL (same trust anchor as
+        activation/refresh) — arbitrary URLs are never consulted."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"{self._base()}/signing-keys/public")
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Public signing-key fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Public signing-key fetch rejected ({resp.status_code})")
+        data = resp.json()
+        return data.get("keys", {}) or {}
+
+    async def create_initial_checkout(self, db: AsyncSession, *, company_id: str,
+                                      installation_id: str | None = None, seats: int | None = None) -> dict:
+        """PRODUCTION: ask the central Control Plane to create the hosted checkout, authenticated with
+        this installation's identity (reqsig). Stripe secrets stay central; only the hosted URL comes back."""
+        import time
+        import uuid as _uuid
+        import httpx
+        from licensing import identity, reqsig
+
+        if not installation_id:
+            raise ControlPlaneUnavailable("Installation not activated (no installation identity)")
+        priv = identity.load_private_key()
+        if priv is None:
+            raise ControlPlaneUnavailable("Installation not activated (no installation identity)")
+        timestamp = str(int(time.time()))
+        nonce = _uuid.uuid4().hex
+        body = b""
+        signature = reqsig.sign_request(priv, installation_id=installation_id, timestamp=timestamp, nonce=nonce, body=body)
+        headers = {
+            reqsig.H_INSTALLATION: installation_id,
+            reqsig.H_TIMESTAMP: timestamp,
+            reqsig.H_NONCE: nonce,
+            reqsig.H_SIGNATURE: signature,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(f"{self._base()}/billing/stripe/initial-checkout", content=body, headers=headers)
+        except httpx.HTTPError as e:
+            raise ControlPlaneUnavailable(f"Checkout request failed: {e}") from e
+        if resp.status_code != 200:
+            raise ControlPlaneUnavailable(f"Checkout rejected ({resp.status_code}): {resp.text[:200]}")
+        return resp.json()
 
 
 def get_client():

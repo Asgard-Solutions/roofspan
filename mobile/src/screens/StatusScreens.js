@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, StyleSheet, Linking, Platform } from "rea
 import { C } from "../theme";
 import { usePairing } from "../pairingContext";
 import { COPY, STATES } from "../connectionState";
-import { WEB_APP_URL } from "../config";
 
 function Screen({ title, message, actionLabel, onAction, secondaryLabel, onSecondary, helper, tone = C.brand, testID, secondaryTestID }) {
   return (
@@ -28,18 +27,14 @@ function Screen({ title, message, actionLabel, onAction, secondaryLabel, onSecon
 export function SubscriptionLock() {
   const { retry } = usePairing();
   const c = COPY[STATES.SUBSCRIPTION_INACTIVE];
-  const openWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
   return (
     <Screen
       title={c.title}
       message={c.message}
-      actionLabel="Manage Subscription on the Web"
-      onAction={openWeb}
-      secondaryLabel="Try Again"
-      onSecondary={retry}
-      helper="Billing is managed in RoofSpan on the web — not in the app. If you're not an owner or administrator, please contact your RoofSpan administrator."
-      testID="subscription-lock-manage-web"
-      secondaryTestID="subscription-lock-retry"
+      actionLabel="Try Again"
+      onAction={retry}
+      helper="Owners and administrators can manage the subscription from RoofSpan Office on the company's Windows computer. If you're a field user, contact your RoofSpan administrator."
+      testID="subscription-lock-retry"
     />
   );
 }

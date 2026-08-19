@@ -1,32 +1,28 @@
 {
-  "summary": "RETEST of clustering fix (iteration_14, main-thread Supercluster + osm maxzoom:19 + map maxZoom:19). Login OK, Map page renders, ZERO [MapLibre error] and zero JS errors this time (osm maxzoom cap works). HOWEVER the core clustering feature is STILL BROKEN with the SAME symptom as iteration_13: the 'properties' geojson source is populated correctly (verified: getStyle().sources.properties.data contains a 13-feature FeatureCollection with a mix of individual Point features and supercluster 'cluster' features carrying point_count/point_count_abbreviated/cluster_id — so main-thread supercluster is working and setData is being called), BUT MapLibre never actually loads/tiles these features: querySourceFeatures('properties')===0, queryRenderedFeatures over prop-clusters/prop-cluster-count/prop-points/prop-hit ===0 at every zoom tested (12, 15, 18). Nothing renders on the map canvas — no cluster bubbles, no numeric labels, no individual pins, no hit targets — despite the summary correctly showing '20 properties on map'. Root cause is the plain-geojson worker path itself, not the cluster:true path: even a NON-clustered geojson source with valid Point features fails to tile in this webpack build. Switching to main-thread clustering did not help because the resulting FeatureCollection still has to go through the same broken geojson worker.",
+  "summary": "Verified in-container parts of the Windows-native pywin32==306 crash fix. Ran full /app/windows pytest suite (133 tests) and confirmed the three targeted tests pass. Verified winservice.py imports cleanly on Linux and requirements-windows.txt pins pywin32==311.",
   "backend_issues": {"critical": [], "minor": []},
-  "frontend_issues": {
-    "ui_bugs": [
-      {"component": "MapView / properties geojson source", "issue": "Worker never processes setData: getStyle().sources.properties.data holds the correct FeatureCollection (13 features incl. cluster + point features from Supercluster), source._data === {geojson: <FC>}, but querySourceFeatures('properties') === 0 and queryRenderedFeatures for prop-* layers === 0 at zoom 12/15/18. No pins, no cluster bubbles, no numeric labels rendered on canvas. Iteration_13's assumption that the non-clustered path 'renders reliably' is FALSE in this build — the plain geojson source is silently broken too. Suspect: maplibre-gl geojson worker chunk not being served / mis-bundled by CRA/webpack, or a version mismatch between maplibre-gl main bundle and its worker.", "selector": "[data-testid='map-container'] layers prop-clusters/prop-points", "priority": "CRITICAL"}
-    ],
-    "integration_issues": [
-      {"flow": "Select TEST_Territory_f7843e (20 props) -> loadProperties -> Supercluster.index -> renderClusters -> setData", "issue": "Every step succeeds up to and including source.setData(FC) — verified _data holds the FC with 3 clusters + 10 individual points at zoom 15 — but the map never renders the features. selected-summary correctly shows '20 properties on map'.", "affected_selectors": ["[data-testid='territory-item-d076a49a-c8b4-4624-a9bc-11803d96d746']", "[data-testid='map-container']"]}
-    ],
-    "design_issues": []
-  },
-  "test_report_links": [],
-  "action_items": [
-    "The clustering fix is not effective because the underlying MapLibre geojson worker path is what's broken in this build (both cluster:true and non-clustered fail identically). Do NOT keep swapping clustering strategies — instead diagnose the worker: (1) In the browser Network tab, when the 'properties' source is added, confirm a maplibre-gl-*.worker.js chunk is loaded (status 200). Check for any 404/wrong-MIME on the worker. (2) Log source events: map.on('data', e => console.log(e.sourceId, e.dataType, e.sourceDataType, e.isSourceLoaded)) and map.on('error', ...) after setData — currently isSourceLoaded stays false forever with no error. (3) Verify maplibre-gl version in yarn.lock vs the imported worker. Try upgrading/downgrading maplibre-gl (known-good versions for CRA: 3.6.x / 4.x). (4) As a fallback, render the ~20 property points using HTML DOM markers (new maplibregl.Marker({...}).setLngLat(coords).addTo(map)) which bypasses the worker entirely — this will guarantee something renders, then investigate the worker separately.",
-    "Once features render, re-verify the 5 acceptance criteria: (a) cluster bubbles + count labels at zoom~13, (b) individual blue/red pins at zoom>=17, (c) cluster click zooms in via getClusterExpansionZoom, (d) pin click opens PropertySheet, (e) zero [MapLibre error]. Criterion (e) IS satisfied by this iteration — the osm maxzoom:19 + map maxZoom:19 cap eliminated the z20 tile CORS errors."
-  ],
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_service_host.py"],
+  "action_items": [],
   "critical_code_review_comments": [
-    "MapView.jsx: main-thread Supercluster implementation is correct — index built with radius:55/maxZoom:16, getClusters(bbox, round(zoom)) called on moveend and on load. The output FC contains proper cluster features (with cluster:true, cluster_id, point_count, point_count_abbreviated) and point features. Not the bug.",
-    "MapView.jsx line 25 + line 153: osm source maxzoom:19 and map maxZoom:19 are correctly set — this fully eliminates the previous [MapLibre error] CORS spam at z>=20. Verified zero MapLibre errors during this run.",
-    "MapView.jsx line 82-98 renderClusters: reads bbox from map.getBounds() and rounds zoom — correct. But no wait for source data loaded before subsequent operations; if the worker never finishes, no fallback exists.",
-    "Bigger architectural concern: the entire property-rendering pipeline depends on MapLibre's geojson worker succeeding. Given it fails silently in this environment, consider adding an explicit `map.once('sourcedata', ...)` check that asserts isSourceLoaded within N ms and surfaces a visible error/toast to the user (and to devs) instead of the current silent failure."
+    "pywin32 bumped 306 -> 311 in windows/winbuild/requirements-windows.txt.",
+    "_safe_log wrapper swallows exceptions from servicemanager.LogInfoMsg/LogErrorMsg; no bare inline calls remain.",
+    "Windows imports remain lazy so winservice imports on Linux CI."
   ],
   "updated_files": [],
-  "success_rate": {"backend": "n/a (skipped)", "frontend": "33% (2/6 acceptance checks pass: map+base OSM renders; ZERO [MapLibre error]. 4 clustering-specific checks fail: no cluster bubbles at low zoom, no individual pins at high zoom, cannot click a cluster to zoom in (none rendered), cannot click a pin to open PropertySheet (none rendered).)"},
-  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (Owner) — from /app/memory/test_credentials.md",
-  "seed_data_creation": "None. Used pre-seeded TEST_Territory_f7843e (20 properties, id d076a49a-c8b4-4624-a9bc-11803d96d746).",
-  "retest_needed": true,
+  "success_rate": {"backend": "100% (133/133)", "frontend": "N/A"},
+  "retest_needed": false,
   "should_main_agent_self_test": false,
-  "context_for_next_testing_agent": "Reproduction: login as Owner -> Map -> click TEST_Territory_f7843e. selected-summary shows '20 properties on map'. Fibre-walk the map container to grab the map ref: `document.querySelector('[data-testid=\"map-container\"]')[__reactFiber key]` -> walk fibers -> find hooks whose memoizedState.current has getZoom (that IS the mapRef). Then: `map.getStyle().sources.properties.data.features.length` returns 13 (correct); `map.querySourceFeatures('properties').length` returns 0; `map.queryRenderedFeatures(undefined,{layers:['prop-clusters','prop-points']}).length` returns 0 at zoom 12/15/18. No [MapLibre error] and no JS errors — the worker just never finishes. Suggest checking Network for the maplibre worker chunk and adding data-event logging.",
-  "rca of the issue": "The main-thread Supercluster clustering added in this iteration works correctly (verified — the FeatureCollection fed to source.setData contains both cluster features with point_count and individual Point features), and the osm/map maxzoom:19 fix successfully eliminated the previous [MapLibre error] CORS spam. HOWEVER the property rendering is still fully broken: MapLibre's plain geojson source worker never processes the setData call, so querySourceFeatures/queryRenderedFeatures return 0 across all zooms and NOTHING (clusters, count labels, pins, hit targets) renders on the canvas. Iteration_13 assumed the non-clustered geojson path rendered reliably (based on iteration_12), but this retest disproves that — the plain source is silently broken too. The bug is in the maplibre-gl geojson worker path itself (bundling / version / worker chunk load), not in the cluster:true option. Mitigations to try in order: (1) inspect Network for the maplibre-gl geojson-worker chunk load status when the source is added, (2) attach map.on('data'/'error') logging to see what the source actually reports after setData, (3) try a different maplibre-gl version pinned in package.json, (4) as a functional fallback for ~20 points, use maplibregl.Marker DOM markers which bypass the worker entirely."
+  "context_for_next_testing_agent": "Windows-native SCM behavior cannot be validated in Linux container. 133 passed in 0.55s. pywin32==311. `from winbuild import winservice` -> ok. Native clean-Windows install is HUMAN REQUIRED.",
+  "verification_details": {
+    "pytest_command": "cd /app/windows && python -m pytest tests -q",
+    "pytest_result": "133 passed in 0.55s",
+    "targeted_tests_passed": [
+      "test_pywin32_pinned_to_python312_safe_release",
+      "test_service_logging_is_crash_safe",
+      "test_safe_log_swallows_logger_exceptions"
+    ],
+    "pywin32_version_in_requirements": "pywin32==311",
+    "linux_import_check": "ok"
+  }
 }

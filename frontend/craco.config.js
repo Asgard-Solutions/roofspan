@@ -79,6 +79,19 @@ let webpackConfig = {
       },
     },
   },
+  jest: {
+    configure: (jestConfig) => {
+      jestConfig.moduleNameMapper = {
+        ...(jestConfig.moduleNameMapper || {}),
+        // react-router v7 declares main: ./dist/main.js which isn't shipped; point jest at the CJS builds.
+        "^react-router-dom$": "<rootDir>/node_modules/react-router-dom/dist/index.js",
+        "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+        "^react-router$": "<rootDir>/node_modules/react-router/dist/development/index.js",
+        "^@/(.*)$": "<rootDir>/src/$1",
+      };
+      return jestConfig;
+    },
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

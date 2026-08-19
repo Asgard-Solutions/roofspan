@@ -42,12 +42,13 @@ def _secret() -> str:
     return os.environ["JWT_SECRET"]
 
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+def create_access_token(user_id: str, email: str, role: str, token_version: int = 1) -> str:
     payload = {
         "sub": str(user_id),
         "email": email,
         "role": role,
         "type": "access",
+        "tv": token_version,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
@@ -93,6 +94,10 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
+    # Token-version check: a password change/reset/recovery bumps user.token_version, so any token
+    # issued before that (including tokens missing the claim) is rejected -> forces re-login.
+    if payload.get("tv") != user.token_version:
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     return user
 
 

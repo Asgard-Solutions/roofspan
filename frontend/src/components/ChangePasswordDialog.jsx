@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { api, apiError } from "@/lib/api";
+import { api, apiError, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +20,8 @@ export default function ChangePasswordDialog() {
     }
     setBusy(true);
     try {
-      await api.post("/auth/change-password", { current_password: cur, new_password: next });
+      const { data } = await api.post("/auth/change-password", { current_password: cur, new_password: next });
+      if (data?.access_token) setToken(data.access_token);  // keep current session valid (token_version bumped)
       toast.success("Password changed");
       setOpen(false);
       setCur("");

@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    RoofSpanOffice.exe - the RoofSpan Office Windows desktop shell.
+    A minimal .NET WinForms host that renders the LOCAL RoofSpan Office UI (served by the RoofSpanBackend
+    Windows service on 127.0.0.1) inside a Microsoft Edge WebView2 control. It is NOT a service, does NOT
+    start FastAPI/PostgreSQL/Relay/Update, and contains NO backend logic - it only presents the existing
+    web UI as a native window. Built as a single self-contained exe so WiX packages exactly one file
+    (tools\RoofSpanOffice.exe). HUMAN REQUIRED: build on Windows with the .NET 10 SDK (see build_shell.ps1).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>RoofSpanOffice</AssemblyName>
+    <RootNamespace>RoofSpanOffice</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>RoofSpan Office</Product>
+    <Company>RoofSpan</Company>
+    <AssemblyTitle>RoofSpan Office</AssemblyTitle>
+    <ApplicationIcon>..\..\installer\RoofSpanOffice.ico</ApplicationIcon>
+
+    <!-- One self-contained single-file exe (win-x64). WebView2LoaderPreference=Static links the WebView2
+         loader into the managed assembly so we never ship a separate WebView2Loader.dll; the WiX
+         App_Launcher component then packages exactly one file (tools\RoofSpanOffice.exe). -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <WebView2LoaderPreference>Static</WebView2LoaderPreference>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed the branded icon so the window/taskbar/splash use it without an external file. -->
+    <EmbeddedResource Include="..\..\installer\RoofSpanOffice.ico">
+      <LogicalName>RoofSpanOffice.ico</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

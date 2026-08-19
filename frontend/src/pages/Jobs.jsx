@@ -20,7 +20,7 @@ export default function Jobs() {
             <Hammer className="mt-0.5 h-6 w-6 text-orange-500" />
             <div>
               <h3 className="font-heading text-lg font-semibold text-slate-900">No jobs yet</h3>
-              <p className="mt-1 text-sm text-slate-500">Accept a quote from a lead to create a job. Full scheduling & operations arrive in Phase 4.</p>
+              <p className="mt-1 text-sm text-slate-500">Accept a quote from a lead to create a job. You can then schedule it, add materials, and track it to completion.</p>
             </div>
           </div>
         ) : (

@@ -37,7 +37,7 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title={`Welcome, ${firstName}`}
-        description={data?.phase || "Office Phase 1 — Foundation"}
+        description="Your RoofSpan Office overview"
         testid="page-dashboard"
       />
       <div className="space-y-6 p-6 sm:p-8">

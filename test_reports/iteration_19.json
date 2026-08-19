@@ -1,0 +1,15 @@
+{
+  "summary": "Static config + pytest verification for Railway CP deploy fix (removal of deploy.startCommand from railway.json so Dockerfile CMD becomes single startup source). Ran `cd /app/backend && python -m pytest tests/test_railway_cp_deploy.py -o addopts='' -q` -> 7 passed, 0 failed. Verified railway.json has no deploy.startCommand and preserves healthcheckPath '/health', healthcheckTimeout=120, restartPolicyType=ON_FAILURE, restartPolicyMaxRetries=5. Verified deploy/railway/Dockerfile CMD is [\"sh\",\"-c\",\"uvicorn cp_asgi:app --host 0.0.0.0 --port ${PORT:-8080}\"] with no hardcoded 8000/8001.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_railway_cp_deploy.py"],
+  "action_items": [],
+  "critical_code_review_comments": ["cp_asgi.py still uses deprecated @app.on_event('startup') - consider migrating to lifespan handlers (non-blocking, DeprecationWarning emitted during tests)."],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Railway CP deploy config verified. railway.json deploy block has NO startCommand (Dockerfile CMD is sole source, using ${PORT:-8080} via sh -c). All 7 tests in test_railway_cp_deploy.py pass. Only remaining minor code-quality nit: FastAPI on_event deprecation warning in cp_asgi.py.",
+  "rca of the issue": "Prior regression: railway.json set deploy.startCommand='uvicorn cp_asgi:app --host 0.0.0.0 --port $PORT'. Railway executes startCommand WITHOUT a shell, so $PORT wasn't expanded and uvicorn errored: 'Invalid value for --port: $PORT is not a valid integer'. Fix: removed startCommand entirely from railway.json; Dockerfile CMD uses `sh -c` with ${PORT:-8080} so shell expansion works. Verified via file inspection and updated pytest assertions."
+}

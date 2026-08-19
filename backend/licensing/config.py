@@ -53,8 +53,18 @@ ACTIVATION_COMPANY_NAME = os.environ.get("LICENSING_ACTIVATION_COMPANY", "RoofSp
 ACTIVATION_REQUESTED_SEATS = int(os.environ.get("LICENSING_ACTIVATION_SEATS", str(MIN_SEATS)))
 SOFTWARE_VERSION = os.environ.get("ROOFSPAN_VERSION", "1.0.0")
 
-# Trusted Control-Plane entitlement verification public keys are cached here (written by the http
-# client after activation/refresh). In production these are baked into the release + refreshable.
-TRUSTED_KEYS_DIR = os.environ.get(
-    "LICENSING_TRUSTED_KEYS_DIR", os.path.join(os.path.dirname(__file__), "trusted_keys")
-)
+# Trusted Control-Plane entitlement verification PUBLIC keys are cached here (written by the http
+# client after activation/refresh, and by automatic key recovery). These MUST live on a persistent
+# machine-data path that survives an MSI major upgrade (which replaces Program Files). On Windows the
+# deployed config sets this to a preserved ProgramData location; the package-relative default below is
+# a DEV/last-resort fallback only. PUBLIC keys only — a CP private signing key never lives here.
+TRUSTED_KEYS_PROGRAMDATA_DEFAULT = r"C:\ProgramData\RoofSpan\licensing\trusted_keys"
+_PACKAGE_TRUSTED_KEYS_DIR = os.path.join(os.path.dirname(__file__), "trusted_keys")
+TRUSTED_KEYS_DIR = os.environ.get("LICENSING_TRUSTED_KEYS_DIR", _PACKAGE_TRUSTED_KEYS_DIR)
+
+
+def trusted_keys_dir_is_persistent() -> bool:
+    """True when trusted CP keys live OUTSIDE the replaceable package tree (i.e. an explicit,
+    upgrade-preserved path was configured). Used to warn if a production (http) install would cache
+    trust material under Program Files, which a major upgrade would delete."""
+    return os.path.abspath(TRUSTED_KEYS_DIR) != os.path.abspath(_PACKAGE_TRUSTED_KEYS_DIR)

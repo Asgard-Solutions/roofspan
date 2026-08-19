@@ -1,0 +1,24 @@
+{
+  "summary": "Verified the Railway Control Plane startup-hang fix. Ran all three requested pytest suites in isolated processes with -o addopts=''. All passed with expected counts: test_cp_migrations 5/5, test_railway_cp_deploy 7/7, test_control_plane 17/17. Environment checked before running: Postgres listening on 5432, backend /api/health returned 200.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_cp_migrations.py",
+    "/app/backend/tests/test_railway_cp_deploy.py",
+    "/app/backend/tests/test_control_plane.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "cp_asgi.py still uses deprecated @app.on_event('startup') — FastAPI recommends lifespan handlers. Non-blocking but should be migrated.",
+    "Bounded advisory-lock via pg_try_advisory_lock + CP_MIGRATION_LOCK_TIMEOUT_S deadline is a solid, verifiable fix; behavioral test confirms contention raises RuntimeError('migration lock not acquired') within the deadline instead of hanging forever.",
+    "URL normalization in alembic/env.py (_sync_url via _normalize_async then swap to +psycopg) correctly prevents the psycopg2 fallback that caused the original Railway hang."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (29/29 across 3 suites)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "n/a — tests use local Postgres postgresql://roofspan:roofspan_local_pwd@127.0.0.1:5432/roofspan",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Env quirk: this pod's supervisord is not persistent — if 5432 or 8001 aren't listening, re-chown /data/db/roofspan_pgdata to postgres:postgres (700) and run `sudo /usr/bin/supervisord -c /etc/supervisor/supervisord.conf`, wait ~8s. Each CP test file MUST be run in its own pytest process with -o addopts='' since they set env vars at import time. test_control_plane.py hits live backend on 127.0.0.1:8001. The Railway deploy itself cannot be tested from this pod — requires human deploy.",
+  "rca of the issue": "Original hang: (a) alembic env.py._sync_url() read RAW CONTROL_PLANE_DATABASE_URL (Railway supplies driverless 'postgresql://...') which caused SQLAlchemy to attempt psycopg2 (not installed) and hang; (b) migration used blocking pg_advisory_lock with no deadline, so any leftover lock blocked startup forever, missing Railway healthcheck window. Fix (verified by tests): normalize to +asyncpg then swap to +psycopg for Alembic sync engine; replace pg_advisory_lock with pg_try_advisory_lock polling to CP_MIGRATION_LOCK_TIMEOUT_S deadline (raises RuntimeError on timeout, releases cleanly); add connect_timeout=10 plus statement_timeout/lock_timeout on both alembic and raw psycopg connect_args. Behavioral test proved contention exits within ~3s deadline instead of blocking indefinitely."
+}

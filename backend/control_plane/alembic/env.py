@@ -16,7 +16,7 @@ load_dotenv(os.path.join(BACKEND_ROOT, ".env"))
 
 from control_plane.db import CPBase  # noqa: E402
 import control_plane.models  # noqa: E402,F401  (registers CP tables on CPBase.metadata)
-from control_plane.config import CONTROL_PLANE_DATABASE_URL  # noqa: E402
+from control_plane.config import CONTROL_PLANE_DATABASE_URL, _normalize_async  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:
@@ -26,9 +26,12 @@ target_metadata = CPBase.metadata
 
 
 def _sync_url() -> str:
-    # Alembic runs synchronously; convert the asyncpg URL to a psycopg (sync) URL.
-    url = os.environ.get("CONTROL_PLANE_DATABASE_URL") or CONTROL_PLANE_DATABASE_URL
-    return url.replace("+asyncpg", "+psycopg")
+    # Alembic runs synchronously. Normalize whatever form the env provides (Railway hands out
+    # 'postgresql://' / 'postgres://' with NO driver) to the async form first, THEN swap the driver to
+    # psycopg. Reading the raw env without normalizing previously left a driver-less URL that SQLAlchemy
+    # routed to the (uninstalled) psycopg2 driver and hung/failed on connect.
+    raw = os.environ.get("CONTROL_PLANE_DATABASE_URL") or CONTROL_PLANE_DATABASE_URL
+    return _normalize_async(raw).replace("+asyncpg", "+psycopg")
 
 
 def run_migrations_offline() -> None:
@@ -41,7 +44,13 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _sync_url()
-    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    # Bound connect + guard statement/lock time so `command.upgrade` can't hang forever on Railway; the
+    # cp_asgi startup retry loop can then actually receive an exception and retry.
+    connectable = engine_from_config(
+        section, prefix="sqlalchemy.", poolclass=pool.NullPool,
+        connect_args={"connect_timeout": 10,
+                      "options": "-c lock_timeout=30000 -c statement_timeout=120000"},
+    )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
         with context.begin_transaction():

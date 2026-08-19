@@ -90,7 +90,11 @@ def test_live_issuance_uses_kms_and_verifies(monkeypatch):
     assert _jwt.get_unverified_header(token)["kid"] == kid    # JWS kid matches the (published) record
     got = ent.verify_entitlement(token, {kid: transient.public_pem})  # verifies with KMS-exported key
     assert got.installation_id == res["installation_id"]
-    assert got.seats_licensed == 5
+    # Activation registers identity only and does NOT grant paid seats (payment gating); the KMS-signed
+    # activation entitlement is SUSPENDED with 0 seats until Stripe confirms payment. This test's intent
+    # is to prove KMS signing + verification, not to grant seats.
+    assert got.subscription_state == "SUSPENDED"
+    assert got.seats_licensed == 0
 
 
 def test_validate_active_key_mismatch_fails(monkeypatch):

@@ -1,0 +1,48 @@
+{
+  "summary": "Verified Cognito OPERATOR (RoofSpan admin) login callback implementation on the Vercel serverless drop-in plus the CP proof endpoint. All 3 test suites pass exactly as expected and the live CP /operator/me endpoint returns 401 unauth and 200 {operator:true} with the dev admin header.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "node_behavioral_suite": "7/7 pass (deploy/vercel/tests/operator_auth.test.mjs) - PKCE S256, state/code validation (CSRF, missing), exchangeCode PKCE body + no Authorization header for public client + generic error without leakage",
+    "pytest_static_security_suite": "7/7 pass (backend/tests/test_operator_auth_vercel.py) - callback route mapped to /operator/callback, HttpOnly/Secure/SameSite cookie usage, no localStorage/sessionStorage token storage, no COGNITO_CLIENT_SECRET in browser assets, exact production callback URL https://roofspan.io/operator/callback, id_token used as bearer to /api/control-plane/operator/me, safe callback errors",
+    "test_control_plane": "17/17 pass (backend/tests/test_control_plane.py) - new GET /operator/me did not break existing CP suite; _require_admin / operator_auth unchanged",
+    "live_cp_proof": "GET /api/control-plane/operator/me: 401 without auth; 200 {\"operator\":true} with X-RoofSpan-Admin: <DEV_ADMIN_SECRET>"
+  },
+  "security_properties_confirmed": [
+    "No Cognito client secret shipped to browser (server-only exchange in deploy/vercel/api/operator/*.js)",
+    "No token stored in localStorage/sessionStorage (id_token stored in HttpOnly op_token cookie)",
+    "HttpOnly + Secure + SameSite cookies used",
+    "OAuth state validated (rejects missing + mismatched -> CSRF protection)",
+    "Authorization code validated (rejects missing)",
+    "Server-side PKCE code_verifier -> /oauth2/token; public client (no Authorization header)",
+    "Production callback URL is exactly https://roofspan.io/operator/callback",
+    "id_token used as Bearer to CP /api/control-plane/operator/me",
+    "operator_auth.py NOT weakened; new /operator/me only adds a read-only guarded endpoint"
+  ],
+  "test_report_links": [
+    "/app/deploy/vercel/tests/operator_auth.test.mjs",
+    "/app/backend/tests/test_operator_auth_vercel.py",
+    "/app/backend/tests/test_control_plane.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Implementation cleanly isolates the Cognito PKCE exchange to Vercel serverless functions; browser never sees the client secret and never touches raw tokens.",
+    "CP change is minimally invasive: single new GET /operator/me guarded by existing _require_admin - no changes to operator_auth.py JWT validation surface.",
+    "Node behavioral tests cover both happy path and negative paths (CSRF, missing code, upstream failure without leakage) - good coverage for the auth boundary.",
+    "Static-string pytest suite is a reasonable belt-and-suspenders check to prevent regressions that leak secrets to the browser or move tokens to localStorage."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend only per request)"},
+  "test_credentials": "Dev CP admin header: X-RoofSpan-Admin = value of control_plane.config.DEV_ADMIN_SECRET (retrieved dynamically in test).",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Real Cognito Hosted UI + live Vercel deployment on roofspan.io cannot be exercised from this pod - that requires a human with real pool/client/domain. All local verifiable properties (behavioral, static security, CP endpoint) are green. If the CP dies again, restore per env note (chown/chmod /data/db/roofspan_pgdata then start supervisord)."
+}
