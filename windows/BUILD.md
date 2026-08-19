@@ -5,7 +5,10 @@ do NOT need to activate `.venv`, manually run `pip`/`yarn`, or change PowerShell
 
 ## Prerequisites (one-time, on the Windows build host)
 - Windows 10/11 x64, Visual Studio 2022 Developer PowerShell (or plain PowerShell 5.1 / 7).
-- WiX Toolset v4: `dotnet tool install --global wix`
+- WiX Toolset v5.0.2: `dotnet tool install --global wix --version 5.0.2`
+  (build.ps1 auto-restores the required CLI extensions pinned to 5.0.2:
+  `WixToolset.BootstrapperApplications.wixext`, `WixToolset.Util.wixext`, `WixToolset.Firewall.wixext`.
+  Note: WiX 5 renamed `WixToolset.Bal.wixext` -> `WixToolset.BootstrapperApplications.wixext` for CLI use.)
 - Node.js LTS + Yarn (`corepack enable`).
 - Repo virtualenv with PyInstaller + backend deps (created once):
   ```powershell

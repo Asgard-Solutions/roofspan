@@ -1,5 +1,5 @@
 # Builds RoofSpanOffice-{VERSION}.msi + RoofSpanSetup-{VERSION}.exe (Burn bundle) + RoofSpanSetup.exe.
-# HUMAN REQUIRED: run on Windows 10/11 x64 with WiX Toolset v4 (`dotnet tool install --global wix`),
+# HUMAN REQUIRED: run on Windows 10/11 x64 with the WiX Toolset 5.0.2 (`dotnet tool install --global wix --version 5.0.2`),
 # the staged tree (installer\stage.ps1), the EDB PostgreSQL installer, and (for release) an Authenticode
 # certificate + the offline update-signing private key. Do NOT commit certificates or private keys.
 #
@@ -20,7 +20,30 @@ if (-not $Version) { $Version = (Get-Content (Join-Path $PSScriptRoot "..\VERSIO
 
 # ---- FAIL-FAST: required tooling, staged payload, and prerequisites must all exist. No partial builds.
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-  throw "WiX v4 not found. Install: dotnet tool install --global wix"
+  throw "WiX not found. Install: dotnet tool install --global wix --version 5.0.2"
+}
+
+# ---- Deterministically restore the EXACT WiX 5.0.2 CLI extensions this build requires.
+# WiX 5 renamed WixToolset.Bal.wixext -> WixToolset.BootstrapperApplications.wixext for CLI use;
+# the old 'Bal' package is retained only for MSBuild PackageReference back-compat and installs as
+# 'damaged' via the CLI. We standardize on the renamed package, pinned to the WiX tool version 5.0.2.
+$WixExtVersion = "5.0.2"
+$RequiredWixExtensions = @(
+  "WixToolset.BootstrapperApplications.wixext",
+  "WixToolset.Util.wixext",
+  "WixToolset.Firewall.wixext"
+)
+$installedExtensions = (& wix extension list -g 2>$null)
+foreach ($ext in $RequiredWixExtensions) {
+  $wanted = "$ext/$WixExtVersion"
+  $present = $installedExtensions | Where-Object { $_ -match [regex]::Escape($ext) -and $_ -match [regex]::Escape($WixExtVersion) }
+  if (-not $present) {
+    Write-Host "==> Restoring WiX extension $wanted"
+    & wix extension add -g $wanted
+    if ($LASTEXITCODE -ne 0) { throw "Failed to restore required WiX extension '$wanted'. Aborting build." }
+  } else {
+    Write-Host "==> WiX extension present: $wanted"
+  }
 }
 $required = @(
   (Join-Path $StageDir "services\roofspan-backend.exe"),
@@ -54,7 +77,7 @@ if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" `
   -d "WebView2Bootstrapper=$WebView2Bootstrapper" `
-  -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -o $setup
+  -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 
 # 3) Authenticode signing (HUMAN REQUIRED for production; SmartScreen reputation needs a real EV/OV cert).

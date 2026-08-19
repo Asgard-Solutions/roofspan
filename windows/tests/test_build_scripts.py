@@ -138,3 +138,41 @@ def test_bundle_prereqs_match_build_params():
     # WebView2 must be detected (skip if present) and installed before the Office MSI.
     assert "WebView2Present" in bundle and "WebView2Runtime" in bundle
     assert bundle.index("WebView2Runtime") < bundle.index("RoofSpanOfficeMsi")
+
+
+def test_build_uses_renamed_wix5_bootstrapper_extension():
+    """WiX 5 renamed WixToolset.Bal.wixext -> WixToolset.BootstrapperApplications.wixext for CLI builds.
+    The old 'Bal' CLI package installs as 'damaged'; it must never be used on the command line again."""
+    build = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+    assert "-ext WixToolset.Bal.wixext" not in build, \
+        "build.ps1 must NOT use the deprecated WixToolset.Bal.wixext CLI extension"
+    assert "-ext WixToolset.BootstrapperApplications.wixext" in build, \
+        "build.ps1 must use the renamed WixToolset.BootstrapperApplications.wixext CLI extension"
+
+
+def test_every_wix_ext_flag_is_restored_by_bootstrap():
+    """Determinism: every '-ext <Name>' the build passes to `wix build` must also be covered by the
+    extension-restore block, so a fresh host builds without manual `wix extension add`, and no new -ext
+    can be added without wiring its restore."""
+    build = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+
+    # Extensions restored via `wix extension add -g <Name>/<Version>` (declared in $RequiredWixExtensions).
+    required_block = build[build.index("$RequiredWixExtensions"):build.index("$installedExtensions")]
+    restored = set(re.findall(r'"(WixToolset\.[A-Za-z0-9.]+\.wixext)"', required_block))
+
+    # Extensions actually consumed by the two `wix build` invocations.
+    used = set(re.findall(r'-ext\s+(WixToolset\.[A-Za-z0-9.]+\.wixext)', build))
+
+    assert used, "no '-ext' flags found in build.ps1"
+    missing = used - restored
+    assert not missing, f"these -ext extensions are not restored by the bootstrap block: {sorted(missing)}"
+
+    # The exact WiX 5.0.2 extension set the build pipeline depends on.
+    assert restored == {
+        "WixToolset.BootstrapperApplications.wixext",
+        "WixToolset.Util.wixext",
+        "WixToolset.Firewall.wixext",
+    }, f"unexpected restore set: {sorted(restored)}"
+    # Pinned to match the WiX tool version.
+    assert '$WixExtVersion = "5.0.2"' in build, "WiX extensions must be pinned to 5.0.2"
+    assert "wix extension add -g" in build, "restore must use the global CLI extension cache"

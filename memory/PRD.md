@@ -481,3 +481,11 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Verified testing_agent iteration_21 (backend 100%, retest_needed=false): 9/9 pytest, pwsh parse 0 errors on stage/build/build_exes, all 6 static invariants confirmed.
 - Files changed: windows/installer/stage.ps1, windows/tests/test_build_scripts.py.
 - PENDING USER: normal Save to Github (fast-forward, NO force) to main; report commit SHA after push.
+
+## WiX 5 Bootstrapper extension rename + deterministic restore (2026-06)
+- Root cause: WixToolset.Bal.wixext CLI package installs as "damaged" under wix 5.0.2. WiX 5 renamed it to WixToolset.BootstrapperApplications.wixext for CLI use (old package retained only for MSBuild PackageReference back-compat).
+- Fix (build.ps1): bundle build now uses -ext WixToolset.BootstrapperApplications.wixext (was Bal). Added deterministic restore block: $RequiredWixExtensions (BootstrapperApplications, Util, Firewall) pinned to $WixExtVersion=5.0.2, checks `wix extension list -g` and runs `wix extension add -g <name>/5.0.2` for any missing, throws on failure. Canonical build commands unchanged.
+- Regression: +2 tests (reject -ext WixToolset.Bal.wixext / require BootstrapperApplications; assert every -ext flag is covered by the restore block and set == the 3 pinned exts). Suite now 11 tests, all pass. pwsh parse OK.
+- Docs: BUILD.md prereq updated to WiX 5.0.2 + auto-restored extensions note.
+- Files changed: windows/installer/build.ps1, windows/tests/test_build_scripts.py, windows/BUILD.md.
+- PENDING USER: Save to Github (normal, NO force) to main; report commit SHA after push.
