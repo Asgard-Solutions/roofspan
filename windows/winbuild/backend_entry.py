@@ -2,8 +2,9 @@ r"""roofspan-backend.exe - RoofSpanBackend Windows service (local Office API + O
 
 Real SCM service. Runs the existing FastAPI app (server:app) via a CONTROLLABLE uvicorn.Server bound to
 127.0.0.1:8001 only, serving the installed Office frontend from ROOFSPAN_STATIC_DIR. SERVICE_RUNNING is
-reported only after uvicorn has actually started (lifespan startup - migrations, seed, bootstrap - done);
-if initialization fails the service reports a nonzero error instead of a false "running".
+reported only after uvicorn has actually started. Database bootstrap + Alembic migrations are completed
+before uvicorn starts so migration failures surface directly in backend-service.log instead of being
+hidden inside FastAPI lifespan handling.
 """
 import os
 import threading
@@ -28,8 +29,7 @@ class BackendWorker:
         self._error = None
 
     def _provision_database(self):
-        """First-install local PostgreSQL bootstrap. MUST complete (setting DATABASE_URL) BEFORE
-        server/backend.db import. Raises on failure so the service never falsely reports RUNNING."""
+        """First-install local PostgreSQL bootstrap. MUST complete (setting DATABASE_URL) before app import."""
         template = os.path.join(install_root(), "config-templates", "roofspan.env.template")
         db_bootstrap.bootstrap(
             self.log,
@@ -38,41 +38,47 @@ class BackendWorker:
             identity_dir=os.environ["INSTALLATION_KEYS_DIR"],
         )
 
-    def start(self, on_ready=None):
+    def _wire_app_logging(self):
+        """Route app/uvicorn/alembic records to the service-owned handlers exactly once."""
         import logging
-        import uvicorn
-
-        # Route uvicorn/alembic/app logging - INCLUDING any FastAPI lifespan-startup traceback (uvicorn
-        # logs it via 'uvicorn.error' and then exits WITHOUT re-raising) - into backend-service.log so a
-        # failed startup is diagnosable instead of the generic "not started". Secrets are never logged
-        # by these components; we only attach handlers, we do not print env/DATABASE_URL.
-        for h in self.log.handlers:
-            for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access", "alembic", "roofspan"):
-                lg = logging.getLogger(name)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "alembic", "roofspan"):
+            lg = logging.getLogger(name)
+            for h in self.log.handlers:
                 if h not in lg.handlers:
                     lg.addHandler(h)
-                if lg.level == logging.NOTSET or lg.level > logging.INFO:
-                    lg.setLevel(logging.INFO)
+            lg.setLevel(logging.INFO)
+            lg.propagate = False
 
-        # Provision + load DATABASE_URL synchronously before importing the app (server:app -> db.py).
+    def start(self, on_ready=None):
+        import uvicorn
+
+        self._wire_app_logging()
+
+        # 1) Provision/reuse the local DB credentials.
         self._provision_database()
 
+        # 2) Run migrations BEFORE uvicorn. This is deliberate: Alembic failures now propagate directly
+        # through the worker/service wrapper with their original traceback instead of being swallowed by
+        # uvicorn's lifespan machinery and reduced to "server.started == False".
+        from migrations_runner import run_migrations
+        self.log.info("backend: applying Alembic migrations before uvicorn startup")
+        run_migrations()
+        os.environ["ROOFSPAN_MIGRATIONS_PREAPPLIED"] = "1"
+
+        # 3) Start the existing app. log_config=None prevents uvicorn from replacing the service's logging
+        # configuration; use_colors=False keeps the no-console SCM path safe.
         config = uvicorn.Config("server:app", host="127.0.0.1", port=8001,
                                 log_level="info", loop="asyncio", lifespan="on",
-                                use_colors=False)
+                                use_colors=False, log_config=None)
         self._server = uvicorn.Server(config)
 
         def _run():
             try:
                 self.log.info("backend: uvicorn serving on 127.0.0.1:8001")
-                self._server.run()  # blocks; runs lifespan startup (migrations/seed/bootstrap)
-                # uvicorn catches a FastAPI lifespan-startup failure, LOGS it (uvicorn.error, now routed
-                # to backend-service.log) and returns WITHOUT re-raising. Detect that here so wait_ready
-                # surfaces a real failure instead of a false success.
+                self._server.run()
                 if not getattr(self._server, "started", False) and self._error is None:
                     self._error = RuntimeError(
-                        "FastAPI application/lifespan startup failed before uvicorn reported started; "
-                        "see the 'Application startup failed' traceback above in backend-service.log")
+                        "FastAPI application/lifespan startup failed before uvicorn reported started")
                     self.log.error("backend: %s", self._error)
             except Exception as e:  # noqa: BLE001
                 self._error = e
