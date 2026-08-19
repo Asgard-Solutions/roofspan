@@ -10,13 +10,15 @@ do NOT need to activate `.venv`, manually run `pip`/`yarn`, or change PowerShell
   `WixToolset.BootstrapperApplications.wixext`, `WixToolset.Util.wixext`, `WixToolset.Firewall.wixext`.
   Note: WiX 5 renamed `WixToolset.Bal.wixext` -> `WixToolset.BootstrapperApplications.wixext` for CLI use.)
 - Node.js LTS + Yarn (`corepack enable`).
-- Repo virtualenv with PyInstaller + backend deps (created once):
+- Repo virtualenv with PyInstaller + backend deps + pywin32 (created once):
   ```powershell
   cd D:\AsgardSolutions\RoofSpan
   py -m venv .venv
-  .\.venv\Scripts\pip install -r backend\requirements.txt pyinstaller
+  .\.venv\Scripts\pip install -r backend\requirements.txt pyinstaller pywin32
   ```
   The build scripts automatically use `.\.venv\Scripts\pyinstaller.exe` - do NOT activate `.venv`.
+  build_exes.ps1 also auto-installs pywin32 into that env if missing (the three services are real
+  pywin32-hosted Windows SCM services, built ONEDIR: services\<name>\<name>.exe + \_internal\).
 - Prerequisite installers (not committed):
   - PostgreSQL: `D:\AsgardSolutions\Prerequisites\PostgreSQL\postgresql-16.14-2-windows-x64.exe`
   - WebView2:   `D:\AsgardSolutions\Prerequisites\WebView2\MicrosoftEdgeWebview2Setup.exe`

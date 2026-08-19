@@ -121,11 +121,15 @@ MSI = INSTALLER / "RoofSpan.wxs"
 
 
 def _build_fake_stage(stage: Path):
-    """Minimal staged tree so RoofSpan.wxs <Files> harvesting + service <File> sources resolve."""
-    for sub in ("services", "frontend", "runtime", "config-templates"):
+    """Minimal staged tree so RoofSpan.wxs Files harvesting + service File sources resolve.
+    Mirrors the PyInstaller ONEDIR layout: services/<name>/<name>.exe + services/<name>/_internal/."""
+    for sub in ("frontend", "runtime", "config-templates"):
         (stage / sub).mkdir(parents=True, exist_ok=True)
-    for exe in ("roofspan-backend.exe", "roofspan-relay-connector.exe", "roofspan-update-service.exe"):
-        (stage / "services" / exe).write_bytes(b"MZ" + b"\0" * 4096)
+    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service"):
+        svc = stage / "services" / name
+        (svc / "_internal").mkdir(parents=True, exist_ok=True)
+        (svc / f"{name}.exe").write_bytes(b"MZ" + b"\0" * 4096)
+        (svc / "_internal" / "base_library.zip").write_bytes(b"PK\0\0")
     (stage / "frontend" / "index.html").write_text("<html></html>", encoding="utf-8")
     (stage / "runtime" / "placeholder.txt").write_text("x", encoding="utf-8")
     (stage / "config-templates" / "roofspan.env.template").write_text("x", encoding="utf-8")

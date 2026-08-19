@@ -68,9 +68,9 @@ Set-Content -Path (Join-Path $runtime "README.txt") -Value "RoofSpan Office runt
 
 # ---- FAIL-FAST: the COMPLETE stage tree that build.ps1 consumes must exist before declaring success.
 $requiredStage = @(
-  (Join-Path $services "roofspan-backend.exe"),
-  (Join-Path $services "roofspan-relay-connector.exe"),
-  (Join-Path $services "roofspan-update-service.exe"),
+  (Join-Path $services "roofspan-backend\roofspan-backend.exe"),
+  (Join-Path $services "roofspan-relay-connector\roofspan-relay-connector.exe"),
+  (Join-Path $services "roofspan-update-service\roofspan-update-service.exe"),
   (Join-Path $frontend "index.html"),
   $runtime,
   $config

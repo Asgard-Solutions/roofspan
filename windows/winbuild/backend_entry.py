@@ -1,25 +1,85 @@
-"""PyInstaller entry: roofspan-backend.exe — runs the local RoofSpan Office API + serves the Office UI.
+r"""roofspan-backend.exe - RoofSpanBackend Windows service (local Office API + Office UI).
 
-Binds 127.0.0.1:8001 only (never public). Serves the packaged production frontend build from the
-`frontend` folder installed next to this exe (via ROOFSPAN_STATIC_DIR). Native execution HUMAN REQUIRED.
+Real SCM service. Runs the existing FastAPI app (server:app) via a CONTROLLABLE uvicorn.Server bound to
+127.0.0.1:8001 only, serving the installed Office frontend from ROOFSPAN_STATIC_DIR. SERVICE_RUNNING is
+reported only after uvicorn has actually started (lifespan startup - migrations, seed, bootstrap - done);
+if initialization fails the service reports a nonzero error instead of a false "running".
 """
-import os
-import sys
+import threading
+
+from roofspan_service import dispatch, load_runtime_config, make_service_class
+
+SVC_NAME = "RoofSpanBackend"
+SVC_DISPLAY = "RoofSpan Backend"
+LOG_FILE = "backend-service.log"
 
 
-def _install_root() -> str:
-    # When frozen, sys.executable is <INSTALLFOLDER>\services\roofspan-backend.exe
-    exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
-    return os.path.dirname(exe_dir)  # -> <INSTALLFOLDER>
+class BackendWorker:
+    """Hosts uvicorn.Server in a background thread with a clean, signalable shutdown."""
+
+    def __init__(self, logger):
+        self.log = logger
+        self._server = None
+        self._thread = None
+        self._ready = threading.Event()
+        self._error = None
+
+    def start(self, on_ready=None):
+        import uvicorn
+
+        config = uvicorn.Config("server:app", host="127.0.0.1", port=8001,
+                                log_level="info", loop="asyncio", lifespan="on")
+        self._server = uvicorn.Server(config)
+
+        def _run():
+            try:
+                self.log.info("backend: uvicorn serving on 127.0.0.1:8001")
+                self._server.run()  # blocks; runs lifespan startup (migrations/seed/bootstrap)
+            except Exception as e:  # noqa: BLE001
+                self._error = e
+                self.log.exception("backend: server crashed")
+            finally:
+                self._ready.set()
+
+        self._thread = threading.Thread(target=_run, name="roofspan-backend", daemon=True)
+        self._thread.start()
+
+        def _poll():
+            while not self._ready.is_set():
+                if getattr(self._server, "started", False):
+                    self._ready.set()
+                    break
+                import time
+                time.sleep(0.25)
+            if on_ready and self._error is None:
+                on_ready()
+
+        threading.Thread(target=_poll, name="roofspan-backend-ready", daemon=True).start()
+
+    def wait_ready(self, timeout):
+        if not self._ready.wait(timeout):
+            raise TimeoutError("backend did not reach RUNNING within timeout")
+        if self._error is not None:
+            raise self._error
+        if not getattr(self._server, "started", False):
+            raise RuntimeError("backend uvicorn reported not started")
+
+    def stop(self):
+        if self._server is not None:
+            self._server.should_exit = True
+
+    def wait(self, timeout=30):
+        if self._thread is not None:
+            self._thread.join(timeout)
 
 
-def main() -> None:
-    root = _install_root()
-    os.environ.setdefault("ROOFSPAN_STATIC_DIR", os.path.join(root, "frontend"))
-    os.environ.setdefault("INSTALLATION_KEYS_DIR", r"C:\ProgramData\RoofSpan\identity")
-    import uvicorn
+def _worker_factory(logger):
+    return BackendWorker(logger)
 
-    uvicorn.run("server:app", host="127.0.0.1", port=8001, log_level="info")
+
+def main():
+    load_runtime_config()
+    dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))
 
 
 if __name__ == "__main__":

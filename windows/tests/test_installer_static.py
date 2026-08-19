@@ -57,7 +57,8 @@ def test_payload_is_harvested_not_empty_scaffold():
 
 def test_service_exes_match_build_outputs():
     wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
-    referenced = set(re.findall(r"services\\([\w.-]+\.exe)", wxs))
+    # ONEDIR: exes live at services\<name>\<name>.exe
+    referenced = set(re.findall(r"services\\[\w.-]+\\([\w.-]+\.exe)", wxs))
     assert referenced == set(SERVICE_EXES), f"WiX exes {referenced} != build outputs {set(SERVICE_EXES)}"
     # every referenced exe has an entry script + a PyInstaller spec that produces it
     for name, entry in SERVICE_TARGETS.items():

@@ -25,6 +25,21 @@ if (Test-Path $venvPyi) {
 }
 Write-Host "==> Using PyInstaller: $pyinstaller"
 
+# ---- Ensure pywin32 is present in the SAME environment PyInstaller freezes from (required so the
+# frozen service exes can host the Windows Service Control dispatcher). pywin32 is Windows-only and is
+# intentionally NOT in backend/requirements.txt (that installs on Linux/CI too).
+if (Test-Path $venvPyi) {
+  $pip = Join-Path $repoRoot ".venv\Scripts\pip.exe"
+} else {
+  $pip = "pip"
+}
+& $pip show pywin32 *> $null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "==> Installing pywin32 (Windows service runtime) into the build environment"
+  & $pip install pywin32
+  if ($LASTEXITCODE -ne 0) { throw "Failed to install pywin32; the Windows services cannot be built." }
+}
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
@@ -35,8 +50,14 @@ foreach ($spec in $specs) {
   & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
   $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
-  $exe = Join-Path $PSScriptRoot "dist\$name.exe"
+  # ONEDIR: PyInstaller emits dist\<name>\<name>.exe + dist\<name>\_internal\. Stage the WHOLE folder
+  # so the SCM-launched exe finds its dependencies regardless of the working directory.
+  $distDir = Join-Path $PSScriptRoot "dist\$name"
+  $exe = Join-Path $distDir "$name.exe"
   if (-not (Test-Path $exe)) { throw "PyInstaller did not produce $exe" }
-  Copy-Item $exe (Join-Path $OutDir "$name.exe") -Force
+  $destDir = Join-Path $OutDir $name
+  if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
+  Copy-Item $distDir $destDir -Recurse -Force
+  if (-not (Test-Path (Join-Path $destDir "$name.exe"))) { throw "Staging did not place $name.exe under $destDir" }
 }
-Write-Host "==> Service executables staged in $OutDir"
+Write-Host "==> Service executables (onedir) staged in $OutDir"

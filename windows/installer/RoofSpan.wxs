@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  RoofSpan Office — WiX v4 MSI definition.
+  RoofSpan Office - WiX 5 (Toolset 5.0.2) MSI definition.
   Target: Windows 10/11 x64. Produces RoofSpanOffice-{VERSION}.msi (wrapped by bundle.wxs -> RoofSpanSetup.exe).
 
   Per-machine install with three restricted Windows services, a preserved local data directory under
@@ -25,10 +25,22 @@
                   Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Directory layout: binaries under Program Files; MUTABLE customer data under ProgramData. -->
+    <!-- Directory layout: binaries under Program Files; MUTABLE customer data under ProgramData.
+         Each service is a PyInstaller ONEDIR tree (exe + _internal) so the SCM-launched exe finds its
+         dependencies regardless of the working directory. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RoofSpan Office">
-        <Directory Id="ServicesDir" Name="services" />
+        <Directory Id="ServicesDir" Name="services">
+          <Directory Id="BackendSvcDir" Name="roofspan-backend">
+            <Directory Id="BackendInternalDir" Name="_internal" />
+          </Directory>
+          <Directory Id="RelaySvcDir" Name="roofspan-relay-connector">
+            <Directory Id="RelayInternalDir" Name="_internal" />
+          </Directory>
+          <Directory Id="UpdateSvcDir" Name="roofspan-update-service">
+            <Directory Id="UpdateInternalDir" Name="_internal" />
+          </Directory>
+        </Directory>
         <Directory Id="FrontendDir" Name="frontend" />
         <Directory Id="RuntimeDir" Name="runtime" />
         <Directory Id="ConfigTemplatesDir" Name="config-templates" />
@@ -54,44 +66,105 @@
       <Files Include="$(var.StageDir)\config-templates\**" />
     </ComponentGroup>
 
-    <!-- Windows services (minimal set, auto-start, restart-on-failure, restricted identity).
-         KeyPath exes are the PyInstaller outputs produced by packaging\build_exes.ps1 into services\. -->
-    <ComponentGroup Id="Services" Directory="ServicesDir">
-      <Component Id="Svc_Backend" Guid="*">
-        <File Id="BackendExe" Source="$(var.StageDir)\services\roofspan-backend.exe" KeyPath="yes" />
+    <!-- Windows services: REAL native SCM services (pywin32-hosted). Auto-start, restart-on-failure,
+         restricted per-service virtual accounts, and real SCM dependencies so ordering survives reboot:
+         RoofSpanPostgreSQL -> RoofSpanBackend -> RoofSpanRelayConnector. The KeyPath exe of each service
+         is the PyInstaller onedir launcher; its _internal payload is harvested alongside it. -->
+    <ComponentGroup Id="Services">
+      <Component Id="Svc_Backend" Directory="BackendSvcDir" Guid="*">
+        <File Id="BackendExe" Source="$(var.StageDir)\services\roofspan-backend\roofspan-backend.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanBackend" Name="RoofSpanBackend" DisplayName="RoofSpan Backend"
                         Description="RoofSpan local API + local browser UI (binds 127.0.0.1 only)."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
                         Account="NT SERVICE\RoofSpanBackend" Vital="yes">
+          <!-- Backend must not start before the local PostgreSQL service is available. -->
+          <ServiceDependency Id="RoofSpanPostgreSQL" />
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="10" />
         </ServiceInstall>
         <ServiceControl Id="CtlBackend" Name="RoofSpanBackend" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
-      <Component Id="Svc_Relay" Guid="*">
-        <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector.exe" KeyPath="yes" />
+
+      <Component Id="Svc_Relay" Directory="RelaySvcDir" Guid="*">
+        <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector\roofspan-relay-connector.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanRelay" Name="RoofSpanRelayConnector" DisplayName="RoofSpan Relay Connector"
                         Description="Outbound-only Secure Relay tunnel (no inbound ports)." Type="ownProcess"
                         Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelayConnector">
+          <!-- Relay forwards to the local backend, so it must start after RoofSpanBackend. -->
+          <ServiceDependency Id="RoofSpanBackend" />
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="15" />
         </ServiceInstall>
         <ServiceControl Id="CtlRelay" Name="RoofSpanRelayConnector" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
-      <Component Id="Svc_Updater" Guid="*">
-        <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service.exe" KeyPath="yes" />
+
+      <Component Id="Svc_Updater" Directory="UpdateSvcDir" Guid="*">
+        <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
                         Description="Checks downloads.roofspan.io for signed updates every 12h; verifies + applies safely."
-                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdateService" />
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdateService">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart" RestartServiceDelayInSeconds="30" />
+        </ServiceInstall>
         <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </ComponentGroup>
 
-    <!-- Persisted data marker: created if absent, NEVER removed on uninstall/upgrade. -->
+    <!-- PyInstaller onedir dependency payload (harvested), placed next to each service exe. -->
+    <ComponentGroup Id="ServiceInternals">
+      <Files Include="$(var.StageDir)\services\roofspan-backend\_internal\**" Directory="BackendInternalDir" />
+      <Files Include="$(var.StageDir)\services\roofspan-relay-connector\_internal\**" Directory="RelayInternalDir" />
+      <Files Include="$(var.StageDir)\services\roofspan-update-service\_internal\**" Directory="UpdateInternalDir" />
+    </ComponentGroup>
+
+    <!-- Persisted data dirs: created if absent, NEVER removed on uninstall/upgrade, and ACL'd so the
+         restricted per-service virtual accounts get ONLY the access they need (least privilege - no
+         broad principals, no full-control grants). util:PermissionEx ADDS explicit ACEs; it does not
+         strip SYSTEM/Administrators. -->
     <Component Id="DataDirs" Directory="DataRoot" Guid="*" Permanent="yes" NeverOverwrite="yes">
       <CreateFolder />
       <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="DataRoot"
                      Type="string" Value="[DataRoot]" KeyPath="yes" />
+    </Component>
+
+    <!-- logs: all three services WRITE their own <name>-service.log here. -->
+    <Component Id="LogsDirAcl" Directory="LogsDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="LogsDir"
+                     Type="string" Value="[LogsDir]" KeyPath="yes" />
+      <CreateFolder>
+        <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        <util:PermissionEx User="RoofSpanUpdateService" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+      </CreateFolder>
+    </Component>
+
+    <!-- identity: backend + relay READ/WRITE the shared installation identity keypair. -->
+    <Component Id="IdentityDirAcl" Directory="IdentityDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="IdentityDir"
+                     Type="string" Value="[IdentityDir]" KeyPath="yes" />
+      <CreateFolder>
+        <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+      </CreateFolder>
+    </Component>
+
+    <!-- config: backend READS + fills first-run credentials (write); relay/update READ only. -->
+    <Component Id="ConfigDirAcl" Directory="ConfigDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="ConfigDir"
+                     Type="string" Value="[ConfigDir]" KeyPath="yes" />
+      <CreateFolder>
+        <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE"
+                           GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+        <util:PermissionEx User="RoofSpanRelayConnector" Domain="NT SERVICE"
+                           GenericRead="yes" GenericExecute="yes" />
+        <util:PermissionEx User="RoofSpanUpdateService" Domain="NT SERVICE"
+                           GenericRead="yes" GenericExecute="yes" />
+      </CreateFolder>
     </Component>
 
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
@@ -99,7 +172,11 @@
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="Services" />
+      <ComponentGroupRef Id="ServiceInternals" />
       <ComponentRef Id="DataDirs" />
+      <ComponentRef Id="LogsDirAcl" />
+      <ComponentRef Id="IdentityDirAcl" />
+      <ComponentRef Id="ConfigDirAcl" />
     </Feature>
 
     <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
