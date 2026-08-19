@@ -16,6 +16,85 @@ WINBUILD = Path(__file__).resolve().parents[1] / "winbuild"
 sys.path.insert(0, str(WINBUILD))
 
 import roofspan_service as rs  # noqa: E402
+import db_bootstrap as boot  # noqa: E402
+
+
+# ---- First-install DB bootstrap (pure logic; asyncpg/DPAPI/PG proven in the clean-install CI job) ---
+
+def test_generated_db_password_is_strong_and_differs_from_superuser():
+    su = "SuperSecret123"
+    pw = boot.generate_db_password(exclude=su)
+    assert pw != su
+    assert len(pw) >= 24
+    assert pw.isalnum() and any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw)
+    # two calls must not collide
+    assert boot.generate_db_password() != boot.generate_db_password()
+
+
+def test_render_env_replaces_placeholder_only():
+    template = (
+        "DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n"
+        "ROOFSPAN_VERSION=0.2.0\n"
+    )
+    out = boot.render_env_from_template(template, "AbC123xyz")
+    assert "__GENERATED_AT_FIRST_RUN__" not in out
+    assert "postgresql+asyncpg://roofspan:AbC123xyz@127.0.0.1:5432/roofspan" in out
+    assert "ROOFSPAN_VERSION=0.2.0" in out
+
+
+def test_config_provisioned_detection(tmp_path):
+    cfg = tmp_path / "roofspan.env"
+    # placeholder -> NOT provisioned
+    cfg.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n")
+    assert boot.config_is_provisioned(str(cfg)) is False
+    # real generated password -> provisioned
+    cfg.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:Ab12Cd34@127.0.0.1:5432/roofspan\n")
+    assert boot.config_is_provisioned(str(cfg)) is True
+    assert boot.parse_generated_password(cfg.read_text()) == "Ab12Cd34"
+    # missing file -> NOT provisioned
+    assert boot.config_is_provisioned(str(tmp_path / "nope.env")) is False
+
+
+def test_bootstrap_reuses_existing_credentials_without_touching_postgres(tmp_path, monkeypatch):
+    """Idempotency: a valid provisioned config is reused verbatim (no DPAPI, no PG, no rotation)."""
+    cfg = tmp_path / "config" / "roofspan.env"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("DATABASE_URL=postgresql+asyncpg://roofspan:KeepMe9999@127.0.0.1:5432/roofspan\n"
+                   "ROOFSPAN_VERSION=0.2.0\n")
+
+    def _boom(*a, **k):
+        raise AssertionError("must NOT contact PostgreSQL/DPAPI when already provisioned")
+
+    monkeypatch.setattr(boot, "decrypt_super_password", _boom)
+    url = boot.bootstrap(_Logger(), template_path=str(tmp_path / "tpl"), config_path=str(cfg),
+                         identity_dir=str(tmp_path / "identity"))
+    assert url == "postgresql+asyncpg://roofspan:KeepMe9999@127.0.0.1:5432/roofspan"
+    assert os.environ["DATABASE_URL"] == url
+    assert os.environ["ROOFSPAN_VERSION"] == "0.2.0"
+
+
+def test_backend_provisions_db_before_importing_app():
+    src = (WINBUILD / "backend_entry.py").read_text(encoding="utf-8")
+    assert "_provision_database" in src and "db_bootstrap.bootstrap" in src
+    # provisioning must happen before the app (server:app) is constructed/imported
+    assert src.index("self._provision_database()") < src.index('uvicorn.Config("server:app"')
+
+
+def test_shipped_template_still_carries_placeholder():
+    tpl = (WINBUILD / "config" / "roofspan.env.template").read_text(encoding="utf-8")
+    assert "__GENERATED_AT_FIRST_RUN__" in tpl, "template must NOT ship a real DB password"
+
+
+def test_ci_service_job_is_a_clean_install():
+    """The Windows service CI must NOT pre-provision the DB - it must exercise RoofSpan's own bootstrap."""
+    wf = (Path(rs.__file__).resolve().parents[2] / ".github" / "workflows" / "windows-build-scripts.yml").read_text(encoding="utf-8")
+    job = wf.split("services-install-smoke:", 1)[1]
+    assert "CREATE ROLE roofspan" not in job, "CI must not manually create the roofspan role"
+    assert "CREATE DATABASE roofspan" not in job, "CI must not manually create the roofspan database"
+    assert "DATABASE_URL=postgresql" not in job, "CI must not hand-write roofspan.env before install"
+    # It must reproduce only the clean-machine state (DPAPI superuser secret) and let bootstrap run.
+    assert "pg_super.bin" in job and "ProtectedData" in job
+    assert "__GENERATED_AT_FIRST_RUN__" in job, "CI must assert the placeholder is gone post-install"
 
 
 # ---- Deterministic config (never a user-shell env var) ----------------------------------------------

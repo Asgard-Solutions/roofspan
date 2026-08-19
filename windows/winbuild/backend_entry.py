@@ -5,9 +5,12 @@ Real SCM service. Runs the existing FastAPI app (server:app) via a CONTROLLABLE 
 reported only after uvicorn has actually started (lifespan startup - migrations, seed, bootstrap - done);
 if initialization fails the service reports a nonzero error instead of a false "running".
 """
+import os
 import threading
 
-from roofspan_service import dispatch, load_runtime_config, make_service_class
+import db_bootstrap
+from roofspan_service import (config_path, dispatch, install_root, load_runtime_config,
+                              make_service_class)
 
 SVC_NAME = "RoofSpanBackend"
 SVC_DISPLAY = "RoofSpan Backend"
@@ -24,8 +27,22 @@ class BackendWorker:
         self._ready = threading.Event()
         self._error = None
 
+    def _provision_database(self):
+        """First-install local PostgreSQL bootstrap. MUST complete (setting DATABASE_URL) BEFORE
+        server/backend.db import. Raises on failure so the service never falsely reports RUNNING."""
+        template = os.path.join(install_root(), "config-templates", "roofspan.env.template")
+        db_bootstrap.bootstrap(
+            self.log,
+            template_path=template,
+            config_path=config_path(),
+            identity_dir=os.environ["INSTALLATION_KEYS_DIR"],
+        )
+
     def start(self, on_ready=None):
         import uvicorn
+
+        # Provision + load DATABASE_URL synchronously before importing the app (server:app -> db.py).
+        self._provision_database()
 
         config = uvicorn.Config("server:app", host="127.0.0.1", port=8001,
                                 log_level="info", loop="asyncio", lifespan="on")

@@ -69,12 +69,17 @@ def _parse_env_file(path: str) -> dict:
     return out
 
 
+def config_path() -> str:
+    """Path to the installed local config file the services read (written by first-install bootstrap)."""
+    return os.path.join(data_root(), "config", "roofspan.env")
+
+
 def load_runtime_config() -> None:
     """Populate os.environ from the installed config file + deterministic defaults (idempotent)."""
     root = install_root()
     droot = data_root()
 
-    cfg_file = os.path.join(droot, "config", "roofspan.env")
+    cfg_file = config_path()
     if os.path.isfile(cfg_file):
         for k, v in _parse_env_file(cfg_file).items():
             os.environ.setdefault(k, v)
@@ -171,12 +176,32 @@ def make_service_class(svc_name: str, svc_display: str, worker_factory, log_file
             win32event.SetEvent(self._stop_evt)
 
         def SvcDoRun(self):
+            import threading as _t
             try:
-                self.ReportServiceStatus(win32service.SERVICE_START_PENDING)
+                self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=180000)
                 load_runtime_config()
                 self._worker = worker_factory(self._log)
-                self._worker.start(on_ready=lambda: None)
-                self._worker.wait_ready(DEFAULT_READY_TIMEOUT)
+                # Initialization (first-install DB bootstrap + migrations) can legitimately exceed SCM's
+                # default start timeout, so run it in a thread and keep sending START_PENDING heartbeats
+                # until the worker is genuinely ready (or fails).
+                ready = _t.Event()
+                err = {}
+
+                def _init():
+                    try:
+                        self._worker.start(on_ready=lambda: None)
+                        self._worker.wait_ready(DEFAULT_READY_TIMEOUT)
+                    except Exception as e:  # noqa: BLE001
+                        err["e"] = e
+                    finally:
+                        ready.set()
+
+                _t.Thread(target=_init, name=f"{svc_name}-init", daemon=True).start()
+                while not ready.wait(5):
+                    self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=20000)
+                if "e" in err:
+                    raise err["e"]
+
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 servicemanager.LogInfoMsg(f"{svc_name} is running")
                 self._log.info("%s RUNNING", svc_name)

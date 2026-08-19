@@ -130,26 +130,22 @@ jobs:
           if (-not (Test-Path $msi)) { throw "MSI did not compile" }
           "MSI=$msi" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Provision RoofSpan DB role + deterministic service config + Postgres dependency stub
+      - name: Prepare a CLEAN customer machine (Postgres superuser secret + SCM dependency stub only)
         shell: pwsh
-        env:
-          PGPASSWORD: postgres
         run: |
           $ErrorActionPreference = "Stop"
-          # RoofSpan-owned least-privilege role + database (backend connects as 'roofspan').
-          & psql -h 127.0.0.1 -U postgres -c "CREATE ROLE roofspan LOGIN PASSWORD 'roofspan';"
-          & psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE roofspan OWNER roofspan;"
-          # Deterministic install-owned config the RoofSpanBackend service reads (NO user-shell env vars).
-          $cfgDir = "C:\ProgramData\RoofSpan\config"
-          New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-          @(
-            "DATABASE_URL=postgresql+asyncpg://roofspan:roofspan@127.0.0.1:5432/roofspan",
-            "ROOFSPAN_VERSION=0.2.0",
-            "ROOFSPAN_RELAY_WS_URL=wss://127.0.0.1:9/api/relay/tunnel",
-            "ROOFSPAN_LOCAL_API_URL=http://127.0.0.1:8001",
-            "ROOFSPAN_WINDOWS_UPDATE_MANIFEST_URL=http://127.0.0.1:9/latest.json"
-          ) -join "`n" | Set-Content -Encoding ASCII (Join-Path $cfgDir "roofspan.env")
-          # A minimal REAL service named RoofSpanPostgreSQL to satisfy the backend's SCM dependency.
+          # DO NOT create the roofspan role/db and DO NOT write roofspan.env here - RoofSpan's own
+          # first-install bootstrap must do all of that. We only reproduce the two things a real clean
+          # machine has after the Burn PostgreSQL prerequisite runs:
+          #   1) the DPAPI-protected superuser secret at identity\pg_super.bin, and
+          #   2) a running Windows service named RoofSpanPostgreSQL (SCM start dependency).
+          $id = "C:\ProgramData\RoofSpan\identity"
+          New-Item -ItemType Directory -Force -Path $id | Out-Null
+          Add-Type -AssemblyName System.Security
+          $bytes = [Text.Encoding]::UTF8.GetBytes("postgres")   # == the superuser password set above
+          $enc = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+          [IO.File]::WriteAllBytes((Join-Path $id "pg_super.bin"), $enc)
+
           $cs = @(
             'using System.ServiceProcess;',
             'public class RsStub : ServiceBase {',
@@ -190,6 +186,17 @@ jobs:
           if (-not $ok) { throw "backend did not answer on 127.0.0.1:8001" }
           Write-Host "OK: backend is serving on 127.0.0.1:8001"
 
+          # First-install bootstrap must have CREATED roofspan.env with a REAL generated credential.
+          $cfg = "C:\ProgramData\RoofSpan\config\roofspan.env"
+          if (-not (Test-Path $cfg)) { throw "first-install bootstrap did not create $cfg" }
+          $cfgText = Get-Content $cfg -Raw
+          if ($cfgText -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still contains the placeholder" }
+          # Record a HASH of DATABASE_URL (never the secret) so restart/upgrade can prove non-rotation.
+          $dbline = (($cfgText -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
+          "DBURL_HASH=$hash" | Out-File -Append $env:GITHUB_ENV
+          Write-Host "OK: roofspan.env created by first-install bootstrap (no placeholder, credential generated)"
+
           # Relay + Update must also be able to enter Running (resilient even with an unreachable relay).
           foreach ($s in @("RoofSpanRelayConnector","RoofSpanUpdateService")) {
             if ((Get-Service $s).Status -ne "Running") { Start-Service $s }
@@ -206,6 +213,41 @@ jobs:
             if ((Get-Service $s).Status -ne "Stopped") { throw "$s did not stop cleanly" }
           }
           Write-Host "OK: all three services stopped cleanly"
+
+      - name: Restart services and prove credentials/data are PRESERVED (idempotent bootstrap)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Start-Service RoofSpanBackend
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Service RoofSpanBackend).Status -ne "Running" -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+          if ((Get-Service RoofSpanBackend).Status -ne "Running") { throw "RoofSpanBackend did not restart" }
+          # The generated DB credential must be REUSED verbatim (no rotation on restart).
+          $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
+          if ($hash -ne $env:DBURL_HASH) { throw "DB credential was rotated on restart (must be preserved)" }
+          $ok = $false; $deadline = (Get-Date).AddSeconds(60)
+          while (-not $ok -and (Get-Date) -lt $deadline) { try { if ((Invoke-WebRequest "http://127.0.0.1:8001/api/health" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { $ok = $true } } catch { Start-Sleep 3 } }
+          if (-not $ok) { throw "backend did not serve after restart" }
+          Write-Host "OK: restart preserved credentials + backend healthy"
+
+      - name: MSI reinstall/upgrade path preserves the local DB + config (no data destruction)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path $env:RUNNER_TEMP "reinstall.log"
+          # Maintenance reinstall of all features/files - must NOT drop the persisted DB dirs or config.
+          $p = Start-Process msiexec -ArgumentList @("/i","`"$env:MSI`"","/qn","REINSTALL=ALL","REINSTALLMODE=vomus","/l*v","`"$log`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 80; throw "MSI reinstall failed ($($p.ExitCode))" }
+          $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
+          if ($hash -ne $env:DBURL_HASH) { throw "upgrade/reinstall rotated or destroyed the DB credential" }
+          foreach ($s in @("RoofSpanBackend","RoofSpanRelayConnector","RoofSpanUpdateService")) {
+            $d = (Get-Date).AddSeconds(90)
+            while ((Get-Service $s).Status -ne "Running" -and (Get-Date) -lt $d) { Start-Sleep 2 }
+            if ((Get-Service $s).Status -ne "Running") { throw "$s not Running after reinstall" }
+          }
+          Write-Host "OK: reinstall/upgrade preserved DB credentials + config; all services Running"
 
       - name: Dump service + install logs (on failure)
         if: failure()
