@@ -72,5 +72,57 @@ jobs:
           wix extension add -g WixToolset.Util.wixext/5.0.2
           wix extension add -g WixToolset.Firewall.wixext/5.0.2
 
-      - name: Real WiX 5 Burn-bundle compile smoke test (produces RoofSpanSetup.exe from dummy payloads)
+      - name: Real WiX 5 Burn-bundle + MSI compile smoke test
         run: pytest -q windows/tests/test_bundle_compile.py
+
+      - name: MSI silent-install smoke (verifies the 3 Windows services are actually CREATED)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = Join-Path $env:RUNNER_TEMP "msismoke"
+          $stage = Join-Path $work "stage"
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "services") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "frontend") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "runtime") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "config-templates") | Out-Null
+          "<html></html>" | Set-Content (Join-Path $stage "frontend\index.html")
+          "x" | Set-Content (Join-Path $stage "runtime\placeholder.txt")
+          "x" | Set-Content (Join-Path $stage "config-templates\roofspan.env.template")
+
+          # A minimal REAL Windows service so ServiceControl Start="install" succeeds and we can observe
+          # the services (a dummy exe would fail SCM start and roll the install back before we could look).
+          $src = Join-Path $work "stub.cs"
+          $cs = @(
+            'using System.ServiceProcess;',
+            'public class RsStub : ServiceBase {',
+            '  public static void Main() { ServiceBase.Run(new RsStub()); }',
+            '  protected override void OnStart(string[] args) { }',
+            '  protected override void OnStop() { }',
+            '}'
+          ) -join "`n"
+          Set-Content -Encoding ASCII -Path $src -Value $cs
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:exe /out:(Join-Path $work "stub.exe") /r:System.ServiceProcess.dll $src
+          foreach ($e in @("roofspan-backend.exe","roofspan-relay-connector.exe","roofspan-update-service.exe")) {
+            Copy-Item (Join-Path $work "stub.exe") (Join-Path $stage "services\$e") -Force
+          }
+
+          $msi = Join-Path $work "RoofSpanOffice.msi"
+          wix build .\windows\installer\RoofSpan.wxs -arch x64 -d "Version=0.2.0" -d "StageDir=$stage" `
+            -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
+          if (-not (Test-Path $msi)) { throw "MSI did not compile" }
+
+          $log = Join-Path $work "install.log"
+          $p = Start-Process msiexec -ArgumentList @("/i", "`"$msi`"", "/qn", "/l*v", "`"$log`"") -Wait -PassThru
+          if (Test-Path $log) { Get-Content $log | Select-String -Pattern "could not be installed","InstallServices","StartServices" }
+          if ($p.ExitCode -ne 0) { throw "msiexec install failed with exit code $($p.ExitCode); see log above" }
+
+          $expected = @("RoofSpanBackend","RoofSpanRelayConnector","RoofSpanUpdateService")
+          $missing = @()
+          foreach ($svc in $expected) {
+            if (-not (Get-Service -Name $svc -ErrorAction SilentlyContinue)) { $missing += $svc }
+          }
+          # Always attempt cleanup regardless of assertion outcome.
+          Start-Process msiexec -ArgumentList @("/x", "`"$msi`"", "/qn") -Wait | Out-Null
+          if ($missing.Count -gt 0) { throw "Services NOT created by the MSI: $($missing -join ', ')" }
+          Write-Host "OK: all three RoofSpan services were created (RoofSpanBackend, RoofSpanRelayConnector, RoofSpanUpdateService)"

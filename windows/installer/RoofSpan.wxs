@@ -72,7 +72,7 @@
         <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanRelay" Name="RoofSpanRelayConnector" DisplayName="RoofSpan Relay Connector"
                         Description="Outbound-only Secure Relay tunnel (no inbound ports)." Type="ownProcess"
-                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelay">
+                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelayConnector">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="15" />
         </ServiceInstall>
@@ -82,7 +82,7 @@
         <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
                         Description="Checks downloads.roofspan.io for signed updates every 12h; verifies + applies safely."
-                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdate" />
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdateService" />
         <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </ComponentGroup>

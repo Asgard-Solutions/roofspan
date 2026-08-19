@@ -498,3 +498,13 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Tests: NEW windows/tests/test_bundle_compile.py runs a REAL `wix build` (skips if wix absent). Windows CI = authoritative (must emit RoofSpanSetup.exe); off-Windows guards the compile-stage regressions (no WIX0010, no [Var] SourceFile). Plus static wiring guards. Updated stale test_installer_static test (website installer now AVAILABLE=true per GA URL wiring). Added bundle-compile job (windows-latest, wix 5.0.2 + extensions) to .github/workflows/windows-build-scripts.yml. Full suite: 58 passed.
 - Files changed: windows/installer/bundle.wxs, windows/tests/test_bundle_compile.py (new), windows/tests/test_installer_static.py, .github/workflows/windows-build-scripts.yml.
 - PENDING USER: Save to Github (normal, NO force) to main; report commit SHA after push.
+
+## Windows service virtual-account name fix (2026-06)
+- Bug: real install failed "Service 'RoofSpan Relay Connector' could not be installed" because per-service virtual accounts did not match service Names. A virtual account MUST be NT SERVICE\<exact ServiceInstall Name>.
+- FIX (RoofSpan.wxs): RoofSpanRelayConnector account NT SERVICE\RoofSpanRelay -> NT SERVICE\RoofSpanRelayConnector; RoofSpanUpdateService account NT SERVICE\RoofSpanUpdate -> NT SERVICE\RoofSpanUpdateService. Backend already correct.
+- Regression test (test_installer_static.py::test_service_virtual_accounts_match_service_names): parses every ServiceInstall with an NT SERVICE\ account and asserts the suffix == Name; requires exactly 3 such services. Verified it fails on the buggy input.
+- MSI compile test added (test_bundle_compile.py::test_roofspan_msi_compiles, Windows-authoritative; skips off-Windows since WiX harvesting/cab is undefined there).
+- Windows CI: added an MSI silent-install smoke to .github/workflows/windows-build-scripts.yml -> compiles a real .NET service stub, stages it as the 3 service exes, builds the MSI, msiexec /i /qn, asserts Get-Service finds RoofSpanBackend/RoofSpanRelayConnector/RoofSpanUpdateService, then uninstalls. This verifies actual service CREATION (not merely compilation).
+- Full suite: 59 passed, 1 skipped (MSI compile skipped on Linux). YAML validated.
+- Files changed: windows/installer/RoofSpan.wxs, windows/tests/test_installer_static.py, windows/tests/test_bundle_compile.py, .github/workflows/windows-build-scripts.yml.
+- PENDING USER: Save to Github (normal fast-forward, NO force) to main; report commit SHA after push.

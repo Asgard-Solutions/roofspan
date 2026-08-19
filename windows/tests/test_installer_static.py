@@ -67,6 +67,27 @@ def test_service_exes_match_build_outputs():
         assert f'name="{name}"' in _read(spec)
 
 
+def test_service_virtual_accounts_match_service_names():
+    """A per-service virtual account MUST be 'NT SERVICE\\<exact ServiceInstall Name>'. A mismatch makes
+    Windows fail the install ('service could not be installed'). Regression for RoofSpanRelayConnector /
+    RoofSpanUpdateService, whose accounts were NT SERVICE\\RoofSpanRelay / RoofSpanUpdate."""
+    wxs = _read(os.path.join(INSTALLER, "RoofSpan.wxs"))
+    installs = re.findall(r"<ServiceInstall\b[^>]*?/?>", wxs, re.DOTALL)
+    checked = 0
+    for tag in installs:
+        acct = re.search(r'Account="NT SERVICE\\([^"]+)"', tag)
+        if not acct:
+            continue
+        name = re.search(r'Name="([^"]+)"', tag)
+        assert name, f"ServiceInstall with a virtual account has no Name: {tag}"
+        assert acct.group(1) == name.group(1), (
+            f"virtual account 'NT SERVICE\\{acct.group(1)}' must equal service Name '{name.group(1)}'"
+        )
+        checked += 1
+    assert checked == 3, f"expected 3 NT SERVICE virtual-account services, found {checked}"
+
+
+
 def test_bundle_chains_postgres_prereq_and_msi():
     b = _read(os.path.join(INSTALLER, "bundle.wxs"))
     assert 'UpgradeCode="$(var.BundleUpgradeCode)"' in b

@@ -117,6 +117,40 @@ def test_burn_bundle_compiles():
             assert "WIX0150" not in out, f"preprocessor aborted the compile; WIX0010 guard would be missed:\n{out}"
 
 
+MSI = INSTALLER / "RoofSpan.wxs"
+
+
+def _build_fake_stage(stage: Path):
+    """Minimal staged tree so RoofSpan.wxs <Files> harvesting + service <File> sources resolve."""
+    for sub in ("services", "frontend", "runtime", "config-templates"):
+        (stage / sub).mkdir(parents=True, exist_ok=True)
+    for exe in ("roofspan-backend.exe", "roofspan-relay-connector.exe", "roofspan-update-service.exe"):
+        (stage / "services" / exe).write_bytes(b"MZ" + b"\0" * 4096)
+    (stage / "frontend" / "index.html").write_text("<html></html>", encoding="utf-8")
+    (stage / "runtime" / "placeholder.txt").write_text("x", encoding="utf-8")
+    (stage / "config-templates" / "roofspan.env.template").write_text("x", encoding="utf-8")
+
+
+@pytest.mark.skipif(WIX is None, reason="wix CLI not installed; authoritative MSI compile runs in the windows-build CI job")
+@pytest.mark.skipif(platform.system() != "Windows", reason="WiX MSI harvesting/cab is only defined on Windows")
+def test_roofspan_msi_compiles():
+    with tempfile.TemporaryDirectory() as td:
+        outdir = Path(td)
+        stage = outdir / "stage"
+        _build_fake_stage(stage)
+        msi = outdir / "RoofSpanOffice.msi"
+        cmd = [
+            WIX, "build", str(MSI), "-arch", "x64",
+            "-d", "Version=0.2.0", "-d", f"StageDir={stage}",
+            "-ext", "WixToolset.Util.wixext", "-ext", "WixToolset.Firewall.wixext",
+            "-o", str(msi),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = (r.stdout or "") + (r.stderr or "")
+        assert r.returncode == 0 and msi.exists(), f"RoofSpan.wxs MSI failed to compile:\n{out}"
+
+
+
 # ---- Static wiring guards (run everywhere, no wix required) -----------------------------------------
 
 def _bundle_text():
