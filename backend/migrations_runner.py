@@ -7,6 +7,7 @@ import psycopg
 from psycopg import sql
 from alembic.config import Config
 from alembic import command
+from alembic.script import ScriptDirectory
 
 logger = logging.getLogger("roofspan")
 
@@ -61,6 +62,13 @@ def ensure_database() -> None:
         ) from e
 
 
+def _alembic_root() -> str:
+    """Return the directory containing alembic.ini + alembic/ in source or PyInstaller ONEDIR."""
+    if getattr(sys, "frozen", False):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def run_migrations() -> None:
     """Bring the database schema to the latest Alembic revision.
 
@@ -69,13 +77,30 @@ def run_migrations() -> None:
     Fails loudly if a migration cannot be applied.
     """
     ensure_database()
-    # In the PyInstaller frozen service, alembic.ini + alembic/ are bundled datas under sys._MEIPASS
-    # (the ONEDIR _internal dir), NOT relative to the source checkout / current working directory.
-    if getattr(sys, "frozen", False):
-        root = sys._MEIPASS
-    else:
-        root = os.path.dirname(os.path.abspath(__file__))
-    cfg = Config(os.path.join(root, "alembic.ini"))
-    cfg.set_main_option("script_location", os.path.join(root, "alembic"))
-    command.upgrade(cfg, "head")
-    logger.info("Alembic migrations applied (head)")
+    root = _alembic_root()
+    ini = os.path.join(root, "alembic.ini")
+    script_location = os.path.join(root, "alembic")
+    if not os.path.isfile(ini):
+        raise RuntimeError(f"Alembic config is missing from the runtime bundle: {ini}")
+    if not os.path.isdir(script_location):
+        raise RuntimeError(f"Alembic migration directory is missing from the runtime bundle: {script_location}")
+
+    cfg = Config(ini)
+    cfg.set_main_option("script_location", script_location)
+    # Programmatic startup owns process logging. alembic/env.py must not call fileConfig() and replace
+    # the Windows service handlers while a migration is running.
+    cfg.attributes["configure_logger"] = False
+
+    # Force Alembic to load/validate the revision graph before upgrade and log only revision ids.
+    # This turns stale/missing packaged migration files into a direct, actionable startup exception.
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
+    if not heads:
+        raise RuntimeError("Alembic migration graph has no head revision")
+    logger.info("Alembic migration starting; head=%s", ",".join(heads))
+    try:
+        command.upgrade(cfg, "head")
+    except Exception:
+        logger.exception("Alembic migration failed")
+        raise
+    logger.info("Alembic migrations applied (head=%s)", ",".join(heads))
