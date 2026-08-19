@@ -29,6 +29,7 @@ from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
 from control_plane.service import init_control_plane
+from version import ROOFSPAN_VERSION, DISPLAY_VERSION, CHANNEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -38,7 +39,13 @@ app = FastAPI(title="RoofSpan Office API", version="1.0.0")
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "roofspan-office", "database": "postgresql"}
+    return {"status": "ok", "service": "roofspan-office", "database": "postgresql", "version": DISPLAY_VERSION}
+
+
+@app.get("/api/version")
+async def version():
+    """RoofSpan Office software version (support/diagnostics)."""
+    return {"version": ROOFSPAN_VERSION, "display_version": DISPLAY_VERSION, "channel": CHANNEL, "service": "roofspan-office"}
 
 
 app.include_router(auth.router)

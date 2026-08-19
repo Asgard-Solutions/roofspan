@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import * as maplibregl from "maplibre-gl";
+import Supercluster from "supercluster";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";
 import { api, apiError, getToken, API_BASE } from "@/lib/api";
@@ -20,7 +21,7 @@ const COLORS = ["#2563EB", "#EA580C", "#16A34A", "#9333EA", "#DC2626", "#0891B2"
 function baseStyle() {
   return {
     version: 8,
-    sources: { osm: { type: "raster", tiles: [OSM], tileSize: 256, attribution: "© OpenStreetMap contributors" } },
+    sources: { osm: { type: "raster", tiles: [OSM], tileSize: 256, maxzoom: 19, attribution: "© OpenStreetMap contributors" } },
     layers: [{ id: "osm", type: "raster", source: "osm" }],
   };
 }
@@ -39,6 +40,9 @@ export default function MapView() {
   const routeMarkers = useRef([]);
   const zipForTerritory = useRef(null);
   const openSheetRef = useRef(null);
+  const superRef = useRef(null);
+  const markersRef = useRef([]);
+  const clusterZoomMax = 16;
 
   const [territories, setTerritories] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -94,11 +98,62 @@ export default function MapView() {
     });
   }, []);
 
+  const clearMarkers = useCallback(() => {
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = [];
+  }, []);
+
+  // Main-thread clustering (supercluster) rendered with HTML DOM markers. We do NOT use a MapLibre
+  // geojson source/layer for property pins because the geojson worker does not reliably tile the
+  // 'properties' source in this webpack build. DOM markers (maplibregl.Marker) always render.
+  const renderClusters = useCallback(() => {
+    const map = mapRef.current;
+    const index = superRef.current;
+    clearMarkers();
+    if (!map || !index) return;
+    const b = map.getBounds();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const zoom = Math.round(map.getZoom());
+    const features = index.getClusters(bbox, zoom);
+    for (const f of features) {
+      const [lng, lat] = f.geometry.coordinates;
+      const el = document.createElement("div");
+      if (f.properties.cluster) {
+        const count = f.properties.point_count;
+        const size = count >= 50 ? 46 : count >= 10 ? 38 : 30;
+        const color = count >= 50 ? "#1D4ED8" : count >= 10 ? "#3B82F6" : "#60A5FA";
+        el.setAttribute("data-testid", "map-cluster");
+        el.style.cssText = `width:${size}px;height:${size}px;background:${color};color:#fff;border:2px solid #fff;border-radius:9999px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35)`;
+        el.textContent = f.properties.point_count_abbreviated;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          try {
+            const z = Math.min(index.getClusterExpansionZoom(f.properties.cluster_id), 19);
+            map.easeTo({ center: [lng, lat], zoom: z, duration: 500 });
+          } catch (err) { /* noop */ }
+        });
+      } else {
+        const dnk = !!f.properties.do_not_knock;
+        el.setAttribute("data-testid", "map-property-pin");
+        el.style.cssText = `width:16px;height:16px;background:${dnk ? "#DC2626" : "#2563EB"};border:2px solid #fff;border-radius:9999px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.35)`;
+        const id = f.properties.id;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (drawing.current) return;
+          if (id && openSheetRef.current) openSheetRef.current(id);
+        });
+      }
+      const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map);
+      markersRef.current.push(marker);
+    }
+  }, [clearMarkers]);
+
   const loadProperties = useCallback(async (territoryId) => {
     const map = mapRef.current;
-    if (!map || !map.getSource("properties")) return;
+    if (!map) return;
     if (!territoryId) {
-      map.getSource("properties").setData({ type: "FeatureCollection", features: [] });
+      superRef.current = null;
+      clearMarkers();
       setPropCount(0);
       setFeatures([]);
       return;
@@ -127,7 +182,7 @@ export default function MapView() {
     } catch (e) {
       toast.error(apiError(e));
     }
-  }, []);
+  }, [renderClusters, clearMarkers]);
 
   const fitToTerritory = useCallback((t) => {
     const map = mapRef.current;
@@ -259,21 +314,17 @@ export default function MapView() {
             setDrawCount(drawPts.current.length);
           }
         });
-        map.on("click", "prop-points", (e) => {
-          if (drawing.current) return;
-          const id = e.features?.[0]?.properties?.id;
-          if (id && openSheetRef.current) openSheetRef.current(id);
-        });
-        map.on("click", "prop-hit", (e) => {
-          if (drawing.current) return;
-          const id = e.features?.[0]?.properties?.id;
-          if (id && openSheetRef.current) openSheetRef.current(id);
-        });
-        map.on("mouseenter", "prop-hit", () => { map.getCanvas().style.cursor = "pointer"; });
-        map.on("mouseleave", "prop-hit", () => { map.getCanvas().style.cursor = ""; });
+
+        // Re-cluster (and re-place DOM markers) for the new viewport whenever the map settles.
+        map.on("moveend", () => renderClusters());
 
         loadTerritories().then((list) => setTerritorySource(list, null));
-      });
+      };
+
+      // Only add sources/layers once the style is ready: use the load event, or run
+      // immediately if the style is already loaded (e.g. cached/fast init).
+      if (map.isStyleLoaded()) initMapLayers();
+      else map.on("load", initMapLayers);
     });
     return () => {
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
