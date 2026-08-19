@@ -49,8 +49,8 @@
     <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
-      <!-- 1) WebView2 Evergreen Runtime (silent). Skipped when already present. Permanent = shared runtime
-              never uninstalled by RoofSpan. Installed BEFORE the Office MSI since the UI depends on it. -->
+      <!-- 1) WebView2 Evergreen Runtime (silent), EMBEDDED in RoofSpanSetup.exe. Skipped when present.
+              Permanent = shared runtime never uninstalled by RoofSpan. Installed BEFORE the Office MSI. -->
       <ExePackage Id="WebView2Runtime"
                   DisplayName="Microsoft Edge WebView2 Runtime (RoofSpan prerequisite)"
                   SourceFile="$(var.WebView2Bootstrapper)"
@@ -59,26 +59,47 @@
                   InstallCondition="NOT WebView2Present"
                   DetectCondition="WebView2Present"
                   InstallArguments="/silent /install"
-                  Compressed="no" />
+                  Compressed="yes" />
 
-      <!-- 2) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
-              uninstalled by RoofSpan (protects the customer's database service + data).
-              Launched via the OS PowerShell so the EDB superuser password can be GENERATED securely at
-              runtime (never committed, never persisted in Burn) when PgSuperPassword was not supplied.
-              The generated secret is DPAPI-protected (LocalMachine) under ProgramData\RoofSpan\identity so
-              RoofSpan first-run can provision its least-privilege 'roofspan' role, then the EDB installer
-              runs unattended against the preserved RoofSpanPostgreSQL service. -->
-      <ExePackage Id="PostgreSQLPrereq"
-                  DisplayName="PostgreSQL (RoofSpan prerequisite)"
+      <!-- 2a) PostgreSQL password PREP (RoofSpan-owned helper, runs BEFORE the EDB installer). Generates a
+               strong superuser password at runtime (or honors an admin-supplied PgSuperPassword),
+               DPAPI-protects it (LocalMachine) to identity\pg_super.bin for RoofSpan first-run, and writes
+               a transient EDB option file the real installer reads (so the secret is never on a command
+               line and never committed). Uses the OS PowerShell as a small helper payload - it does NOT
+               replace the PostgreSQL package. -->
+      <ExePackage Id="PostgreSQLPasswordPrep"
+                  DisplayName="RoofSpan PostgreSQL preparation"
                   SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
                   Permanent="yes"
                   Vital="yes"
                   InstallCondition="NOT PgPresent"
-                  DetectCondition="PgPresent"
-                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='Stop'; $p='[PgSuperPassword]'; if([string]::IsNullOrWhiteSpace($p)){$b=New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $p='Rs1!'+([Convert]::ToBase64String($b) -replace '[+/=]','X')}; $d='C:\ProgramData\RoofSpan\identity'; New-Item -ItemType Directory -Force -Path $d | Out-Null; Add-Type -AssemblyName System.Security; $e=[Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($p),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine); [IO.File]::WriteAllBytes((Join-Path $d 'pg_super.bin'),$e); $pr=Start-Process -FilePath '[PostgresInstaller]' -ArgumentList '--mode','unattended','--unattendedmodeui','minimal','--superpassword',$p,'--servicename','RoofSpanPostgreSQL' -Wait -PassThru; exit $pr.ExitCode&quot;"
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='Stop'; $p='[PgSuperPassword]'; if([string]::IsNullOrWhiteSpace($p)){$b=New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $p='Rs1!'+([Convert]::ToBase64String($b) -replace '[+/=]','X')}; $d='C:\ProgramData\RoofSpan\identity'; New-Item -ItemType Directory -Force -Path $d | Out-Null; Add-Type -AssemblyName System.Security; $e=[Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($p),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine); [IO.File]::WriteAllBytes((Join-Path $d 'pg_super.bin'),$e); Set-Content -Encoding ASCII -Path (Join-Path $d 'pg_install.optionfile') -Value ('superpassword=' + $p)&quot;"
                   Compressed="yes" />
 
-      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs). -->
+      <!-- 2b) PostgreSQL prerequisite = the REAL EDB installer, EMBEDDED in RoofSpanSetup.exe. Reads the
+               generated superuser password from the option file; unattended flags + service name preserved.
+               Permanent = never uninstalled by RoofSpan (protects the customer's database + data). -->
+      <ExePackage Id="PostgreSQLPrereq"
+                  DisplayName="PostgreSQL (RoofSpan prerequisite)"
+                  SourceFile="$(var.PostgresInstaller)"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallCondition="NOT PgPresent"
+                  DetectCondition="PgPresent"
+                  InstallArguments="--optionfile &quot;C:\ProgramData\RoofSpan\identity\pg_install.optionfile&quot; --mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL"
+                  Compressed="yes" />
+
+      <!-- 2c) Remove the transient option file (the DPAPI-protected pg_super.bin remains for first-run). -->
+      <ExePackage Id="PostgreSQLPasswordCleanup"
+                  DisplayName="RoofSpan PostgreSQL cleanup"
+                  SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
+                  Permanent="yes"
+                  Vital="no"
+                  InstallCondition="NOT PgPresent"
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$f='C:\ProgramData\RoofSpan\identity\pg_install.optionfile'; if(Test-Path $f){Remove-Item -Force $f}&quot;"
+                  Compressed="yes" />
+
+      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. -->
       <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
     </Chain>
   </Bundle>

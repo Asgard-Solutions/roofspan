@@ -11,6 +11,31 @@ on:
       - "windows/**"
 
 jobs:
+  db-bootstrap-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: superpw123
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install pytest asyncpg
+      - name: REAL PostgreSQL bootstrap test (CREATE + ALTER branches against a live server)
+        env:
+          ROOFSPAN_TEST_PG_DSN: postgresql://postgres:superpw123@127.0.0.1:5432/postgres
+        run: pytest -q windows/tests/test_db_bootstrap_integration.py
+
   validate:
     runs-on: ubuntu-latest  # pwsh (PowerShell 7) is preinstalled on GitHub-hosted runners
     steps:
@@ -74,6 +99,54 @@ jobs:
 
       - name: Real WiX 5 Burn-bundle + MSI compile smoke test
         run: pytest -q windows/tests/test_bundle_compile.py
+
+      - name: Prerequisites are EMBEDDED + RoofSpanSetup.exe is self-contained (isolated extract)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = Join-Path $env:RUNNER_TEMP "bundlepayload"
+          $src  = Join-Path $work "src"
+          New-Item -ItemType Directory -Force -Path $src | Out-Null
+          # Distinctive dummy prerequisites (real files so Burn embeds them).
+          $edb = Join-Path $src "postgres-edb.exe"
+          $wv  = Join-Path $src "webview2setup.exe"
+          # Build a real minimal MSI for the MsiPackage.
+          $wxs = Join-Path $work "dummy.wxs"
+          $xml = '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package Name="RoofSpan Dummy" Manufacturer="RoofSpan" Version="0.2.0" UpgradeCode="11111111-1111-1111-1111-111111111111" Scope="perMachine" Compressed="yes"><MediaTemplate EmbedCab="yes" /><StandardDirectory Id="ProgramFiles64Folder"><Directory Id="APPDIR" Name="RoofSpanDummy"><Component Id="C1" Guid="22222222-2222-2222-2222-222222222222"><RegistryValue Root="HKLM" Key="Software\RoofSpanDummy" Name="v" Type="string" Value="1" KeyPath="yes" /></Component></Directory></StandardDirectory><Feature Id="F"><ComponentRef Id="C1" /></Feature></Package></Wix>'
+          Set-Content -Encoding UTF8 -Path $wxs -Value $xml
+          $msi = Join-Path $src "RoofSpanOffice.msi"
+          wix build $wxs -arch x64 -o $msi
+          # ~5 MB dummy prereqs so we can also sanity-check the setup carries real payload bytes.
+          $buf = New-Object byte[] (5MB); (New-Object Random).NextBytes($buf)
+          [IO.File]::WriteAllBytes($edb, $buf); [IO.File]::WriteAllBytes($wv, $buf)
+
+          $setup = Join-Path $work "RoofSpanSetup.exe"
+          wix build .\windows\installer\bundle.wxs -arch x64 -d "Version=0.2.0" `
+            -d "MsiPath=$msi" -d "PostgresInstaller=$edb" -d "WebView2Bootstrapper=$wv" `
+            -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
+          if (-not (Test-Path $setup)) { throw "RoofSpanSetup.exe did not build" }
+
+          # Payload sanity guard: embedded prereqs must make the setup substantially larger than the MSI
+          # alone (guards against the 0.2.0 regression where the setup was ~= the MSI only).
+          $setupMB = [math]::Round((Get-Item $setup).Length/1MB, 1)
+          $msiMB   = [math]::Round((Get-Item $msi).Length/1MB, 1)
+          Write-Host "setup=$setupMB MB  msi=$msiMB MB"
+          if (($setupMB - $msiMB) -lt 9) { throw "setup does not appear to carry the embedded prerequisites (delta $($setupMB-$msiMB) MB)" }
+
+          # Prove self-containment: copy ONLY the setup to an empty dir, delete the source prereqs, extract.
+          $iso = Join-Path $work "isolated"; New-Item -ItemType Directory -Force -Path $iso | Out-Null
+          Copy-Item $setup (Join-Path $iso "RoofSpanSetup.exe")
+          Remove-Item $edb, $wv, $msi -Force
+          $ba = Join-Path $work "ba"; $ac = Join-Path $work "ac"
+          wix burn extract (Join-Path $iso "RoofSpanSetup.exe") -out $ac -outba $ba
+          $manifest = Get-ChildItem $ba -Recurse -Filter *.xml | Select-Object -First 1
+          if (-not $manifest) { throw "burn manifest not found after extract" }
+          $m = Get-Content $manifest.FullName -Raw
+          foreach ($name in @("postgres-edb.exe","webview2setup.exe","RoofSpanOffice.msi")) {
+            if ($m -notmatch [regex]::Escape($name)) { throw "payload $name missing from the embedded bundle manifest" }
+          }
+          if ($m -match 'Packaging="external"') { throw "a prerequisite is an EXTERNAL payload (must be embedded)" }
+          Write-Host "OK: PostgreSQL + WebView2 + MSI are EMBEDDED; RoofSpanSetup.exe is self-contained"
 
   # END-TO-END proof that the three RoofSpan-owned executables are REAL Windows SCM services: build the
   # onedir service exes, build the MSI, install it elevated/silently, then assert the services exist,

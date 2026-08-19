@@ -101,13 +101,17 @@ async def _ensure_role_and_db(super_password: str, app_password: str, logger) ->
     conn = await asyncpg.connect(user=SUPERUSER, password=super_password,
                                  host=PG_HOST, port=PG_PORT, database="postgres")
     try:
+        # CREATE/ALTER ROLE are utility statements and CANNOT take bind parameters. Quote the password
+        # SAFELY server-side via quote_literal() (proper escaping) - never string-concatenate the secret.
+        # APP_ROLE is a fixed, code-owned identifier (never user input).
+        quoted_pw = await conn.fetchval("SELECT quote_literal($1)", app_password)
         role_exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", APP_ROLE)
         if role_exists:
             logger.info("bootstrap: role '%s' already exists (kept)", APP_ROLE)
             # No valid config existed (else we would not be here), so align the password we will persist.
-            await conn.execute(f"ALTER ROLE {APP_ROLE} WITH LOGIN PASSWORD $1", app_password)
+            await conn.execute(f"ALTER ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
         else:
-            await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN PASSWORD $1", app_password)
+            await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
             logger.info("bootstrap: created least-privilege role '%s'", APP_ROLE)
         # Least privilege: the role is a normal LOGIN role (NOT superuser) and simply OWNS its own db.
         db_exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", APP_DB)

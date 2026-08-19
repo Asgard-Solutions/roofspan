@@ -181,19 +181,34 @@ def test_no_exepackage_sourcefile_uses_burn_variable():
             f"ExePackage/MsiPackage SourceFile must not be a Burn runtime variable: {val}"
 
 
-def test_postgres_step_generates_secure_password_at_runtime():
+def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
     b = _bundle_text()
-    # Runtime generation when no password supplied, using a CSPRNG (not committed / not hardcoded).
-    assert "RandomNumberGenerator" in b, "postgres step must generate the superpassword with a CSPRNG"
+    # Password generated at runtime (CSPRNG), or an admin-supplied PgSuperPassword; never committed.
+    assert "RandomNumberGenerator" in b, "prep step must generate the superpassword with a CSPRNG"
     assert "IsNullOrWhiteSpace($p)" in b, "must only generate when PgSuperPassword was not supplied"
-    assert "[PgSuperPassword]" in b, "the admin-overridable Burn variable must feed the step"
-    # DPAPI-protected so RoofSpan first-run can later provision its least-privilege role.
+    assert "[PgSuperPassword]" in b, "the admin-overridable Burn variable must feed the prep step"
     assert "ProtectedData" in b and "LocalMachine" in b, "generated secret must be DPAPI-protected (machine scope)"
-    # EDB unattended install contract preserved.
-    assert "--mode','unattended'" in b and "--superpassword'," in b
-    assert "'--servicename','RoofSpanPostgreSQL'" in b, "the RoofSpanPostgreSQL service name must be preserved"
-    # Failure of the EDB installer must fail the package (exit code propagated).
-    assert "exit $pr.ExitCode" in b
+    assert "pg_install.optionfile" in b and "superpassword=" in b, "prep must hand the EDB installer an option file"
+    # The REAL EDB installer is its own ExePackage (NOT powershell) and reads the option file.
+    assert 'SourceFile="$(var.PostgresInstaller)"' in b, "the PostgreSQL package must be the real EDB installer"
+    assert "--optionfile" in b
+    assert "--mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL" in b, \
+        "EDB unattended flags + RoofSpanPostgreSQL service name must be preserved"
+
+
+def test_all_bundle_prerequisites_are_embedded():
+    """RoofSpanSetup.exe must be self-contained: EDB, WebView2 and the MSI are embedded (Compressed=yes),
+    never left as unshipped external files that depend on a build-host path."""
+    import re
+    b = _bundle_text()
+    # No ExePackage/MsiPackage may be Compressed="no".
+    assert 'Compressed="no"' not in b, "no prerequisite payload may be external (Compressed=no)"
+    # The EDB installer, WebView2 bootstrapper and the MSI each come from a build-time source and embed.
+    assert 'SourceFile="$(var.PostgresInstaller)"' in b
+    assert 'SourceFile="$(var.WebView2Bootstrapper)"' in b
+    assert 'SourceFile="$(var.MsiPath)"' in b
+    # Every package that carries a payload must be Compressed="yes".
+    assert b.count('Compressed="yes"') >= 4
 
 
 def test_no_committed_or_hardcoded_password():
