@@ -1,0 +1,32 @@
+{
+  "summary": "Verified Windows PyInstaller spec datas-path fix. Spec now references backend/alembic (not the non-existent backend/migrations). Ran PyInstaller against the spec on Linux; datas collection stage passed, alembic tree + alembic.ini were packaged, and the full freeze produced /tmp/pyi_dist/roofspan-backend. The previously reported 'Unable to find ...backend/migrations' error is gone.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "static_checks": {
+    "spec_no_migrations_string": true,
+    "spec_references_alembic": "(BACKEND, 'alembic') -> 'alembic' at line 16; (BACKEND, 'alembic.ini') -> '.' at line 15",
+    "backend_alembic_dir_exists": true,
+    "backend_alembic_ini_exists": true,
+    "alembic_versions_count": 5,
+    "no_fake_backend_migrations_dir": true
+  },
+  "build_verification": {
+    "pyinstaller_version": "6.22.2",
+    "command": "cd /app/windows/winbuild && pyinstaller --noconfirm --distpath /tmp/pyi_dist --workpath /tmp/pyi_build roofspan-backend.spec",
+    "exit_code": 0,
+    "datas_stage_passed": true,
+    "migrations_error_present": false,
+    "alembic_collected_evidence": "Analysis-00.toc contains ('alembic.ini','/app/backend/alembic.ini','DATA'), ('alembic/env.py',...), ('alembic/script.py.mako',...), and all 5 alembic/versions/*.py entries",
+    "artifact_produced": "/tmp/pyi_dist/roofspan-backend (86MB ELF; Linux-only artifact, Windows .exe production is out of scope per request)"
+  },
+  "test_report_links": ["/tmp/pyi.log", "/tmp/pyi_build/roofspan-backend/Analysis-00.toc"],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Windows PyInstaller spec fix verified end-to-end on Linux. Actual Windows .exe production + windows/installer/stage.ps1 remain out-of-scope for this container.",
+  "rca of the issue": "Spec had a stale datas entry referencing backend/migrations which never existed in this repo (Alembic dir is backend/alembic). PyInstaller's Analysis stage validates datas paths OS-independently, so the missing path caused build abort on Windows. Fix: changed the datas tuple to (BACKEND,'alembic')->'alembic'. Verified by static grep + successful PyInstaller run with alembic tree collected in Analysis-00.toc."
+}

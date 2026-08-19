@@ -450,3 +450,14 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Action: pulled the EXACT main file into /app/frontend/src/pages/MapView.jsx via curl (no transcription), applied the single-line fix line 252 `map.on("load", () => {` -> `const initMapLayers = () => {` (kept `};` + `if (map.isStyleLoaded()) initMapLayers(); else map.on("load", initMapLayers);`).
 - Verified: `diff` vs main = exactly 1 line changed; `yarn build` => Compiled with warnings, BUILD_EXIT=0, build/index.html produced; testing_agent iteration_18 => no SyntaxError/undefined-initMapLayers, /map renders (only expected 403 paywall). retest_needed=false.
 - PENDING USER: push to GitHub main via "Save to Github" (cannot push from workspace). After push, re-fetch raw main to confirm `const initMapLayers` + report the GitHub commit SHA.
+
+## Windows PyInstaller spec datas fix (2026-06)
+- Bug: windows/winbuild/roofspan-backend.spec datas referenced non-existent backend/migrations -> PyInstaller "Unable to find ...backend/migrations". Real dir is backend/alembic.
+- Fix (one line, spec identical to GitHub main): `(os.path.join(BACKEND, "migrations"), "migrations")` -> `(os.path.join(BACKEND, "alembic"), "alembic")`. Kept alembic.ini datas. No fake migrations dir created; alembic not renamed.
+- Exact diff vs main:
+    16c16
+    <         (os.path.join(BACKEND, "migrations"), "migrations"),
+    ---
+    >         (os.path.join(BACKEND, "alembic"), "alembic"),
+- Verified testing_agent iteration_19 (backend 100%, retest_needed=false): PyInstaller run on Linux -> datas stage passes, alembic tree + alembic.ini packaged, produced dist/roofspan-backend; migrations error gone. (Windows .exe + stage.ps1 are Windows/PowerShell-only = HUMAN REQUIRED, not runnable in this Linux container; datas-resolution error is OS-independent so the fix is proven.)
+- PENDING USER: "Save to Github" -> branch main to land the fix; then re-fetch raw main to confirm backend/alembic + report GitHub commit SHA (cannot push from workspace).

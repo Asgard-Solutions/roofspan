@@ -13,7 +13,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(BACKEND, "alembic.ini"), "."),
-        (os.path.join(BACKEND, "migrations"), "migrations"),
+        (os.path.join(BACKEND, "alembic"), "alembic"),
     ],
     hiddenimports=[
         "server", "uvicorn", "uvicorn.logging", "uvicorn.protocols",
