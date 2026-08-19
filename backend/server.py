@@ -105,8 +105,10 @@ async def seed_owner():
 @app.on_event("startup")
 async def on_startup():
     # Migration-driven schema: Alembic is the single authoritative schema path (no create_all,
-    # no manual SQL). Fresh DB builds from full history; existing DB migrates forward non-destructively.
-    await asyncio.to_thread(run_migrations)
+    # no manual SQL). The Windows SCM host pre-applies migrations so failures propagate directly
+    # before uvicorn starts; normal/dev execution still runs them here.
+    if os.environ.get("ROOFSPAN_MIGRATIONS_PREAPPLIED") != "1":
+        await asyncio.to_thread(run_migrations)
     await seed_owner()
     async with SessionLocal() as db:
         await licensing_service.bootstrap(db)
