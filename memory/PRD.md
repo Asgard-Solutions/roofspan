@@ -545,3 +545,10 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Regression: test_build_scripts.py::test_build_stage_and_wxs_agree_on_onedir_service_paths asserts build.ps1/stage.ps1/RoofSpan.wxs all use the same <name>\<name>.exe ONEDIR token and that no obsolete ONEFILE path remains. Static suite: 42 passed, 1 skipped (pwsh parser enforced by CI validate job).
 - Files: windows/installer/build.ps1, windows/tests/test_build_scripts.py.
 - PENDING USER: Save to Github (fast-forward, NO force).
+
+## Burn duplicate CacheId fix (2026-06)
+- WIX8000: PostgreSQLPasswordPrep + PostgreSQLPasswordCleanup both use powershell.exe as SourceFile, so Burn derived the SAME CacheId -> duplicate.
+- Fix: added explicit CacheId="RoofSpanPostgreSQLPasswordPrep" and CacheId="RoofSpanPostgreSQLPasswordCleanup" to the two helper ExePackages only. Chain order, Compressed=yes, Permanent=yes, InstallCondition="NOT PgPresent" preserved.
+- Regression: test_bundle_compile.py::test_burn_package_cache_ids_are_unique asserts every package effective cache identity (explicit CacheId else SourceFile) is unique and that powershell-helper packages carry explicit CacheIds.
+- Burn compile: no WIX8000/schema errors (Linux shows only path artifacts). Windows CI bundle-compile is authoritative.
+- Files: windows/installer/bundle.wxs, windows/tests/test_bundle_compile.py.

@@ -68,6 +68,7 @@
                line and never committed). Uses the OS PowerShell as a small helper payload - it does NOT
                replace the PostgreSQL package. -->
       <ExePackage Id="PostgreSQLPasswordPrep"
+                  CacheId="RoofSpanPostgreSQLPasswordPrep"
                   DisplayName="RoofSpan PostgreSQL preparation"
                   SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
                   Permanent="yes"
@@ -91,6 +92,7 @@
 
       <!-- 2c) Remove the transient option file (the DPAPI-protected pg_super.bin remains for first-run). -->
       <ExePackage Id="PostgreSQLPasswordCleanup"
+                  CacheId="RoofSpanPostgreSQLPasswordCleanup"
                   DisplayName="RoofSpan PostgreSQL cleanup"
                   SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
                   Permanent="yes"

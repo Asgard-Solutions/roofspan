@@ -181,6 +181,40 @@ def test_no_exepackage_sourcefile_uses_burn_variable():
             f"ExePackage/MsiPackage SourceFile must not be a Burn runtime variable: {val}"
 
 
+def test_burn_package_cache_ids_are_unique():
+    """WIX8000 guard: Burn derives a package's CacheId from its primary payload, so two ExePackages that
+    share the SAME SourceFile (e.g. both launching powershell.exe) collide unless each declares a unique
+    CacheId. Assert every package's effective cache identity (explicit CacheId, else its SourceFile) is
+    unique - and specifically that PowerShell-helper packages carry explicit unique CacheIds."""
+    import re
+    b = _bundle_text()
+    identities = []
+    powershell_helpers = 0
+    for tag in re.findall(r"<(?:ExePackage|MsiPackage)\b[^>]*?/?>", b, re.DOTALL):
+        cache = re.search(r'CacheId="([^"]+)"', tag)
+        source = re.search(r'SourceFile="([^"]+)"', tag)
+        pkg_id = re.search(r'\bId="([^"]+)"', tag)
+        assert source, f"package has no SourceFile: {tag}"
+        if cache:
+            identity = ("cacheid", cache.group(1))
+        else:
+            identity = ("source", source.group(1))
+        identities.append((pkg_id.group(1) if pkg_id else "?", identity))
+        if "powershell.exe" in source.group(1):
+            powershell_helpers += 1
+            assert cache, f"package {pkg_id.group(1) if pkg_id else tag} shares powershell.exe but has NO explicit CacheId (WIX8000)"
+
+    assert powershell_helpers >= 2, "expected the two PowerShell helper packages"
+    seen = {}
+    for pkg_id, identity in identities:
+        assert identity not in seen, (
+            f"duplicate Burn cache identity {identity} shared by '{seen.get(identity)}' and '{pkg_id}' (WIX8000)")
+        seen[identity] = pkg_id
+    # The two required explicit CacheIds must be present and distinct.
+    assert 'CacheId="RoofSpanPostgreSQLPasswordPrep"' in b
+    assert 'CacheId="RoofSpanPostgreSQLPasswordCleanup"' in b
+
+
 def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
     b = _bundle_text()
     # Password generated at runtime (CSPRNG), or an admin-supplied PgSuperPassword; never committed.
