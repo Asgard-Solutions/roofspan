@@ -21,7 +21,7 @@ a = Analysis(
         (os.path.join(BACKEND, "alembic"), "alembic"),
     ],
     hiddenimports=[
-        "roofspan_service", "db_bootstrap", "win32crypt",
+        "roofspan_service", "db_bootstrap", "migrations_runner", "win32crypt",
         "server", "uvicorn", "uvicorn.logging", "uvicorn.protocols",
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
