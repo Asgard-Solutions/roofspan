@@ -32,14 +32,33 @@
                          Key="SOFTWARE\PostgreSQL\Installations"
                          Result="exists" Variable="PgPresent" />
 
+    <!-- Detect the Evergreen WebView2 Runtime (machine-wide) so we do NOT reinstall it. RoofSpan Office
+         requires WebView2. The 'pv' value exists once the runtime is installed. -->
+    <util:RegistrySearch Id="WebView2Search" Root="HKLM"
+                         Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv" Result="exists" Variable="WebView2Present" />
+
     <!-- Overridable at build/runtime; no default binary is committed. -->
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
+    <Variable Name="WebView2Bootstrapper" Type="string" Value="$(var.WebView2Bootstrapper)" bal:Overridable="yes" />
     <!-- EDB superpassword supplied at install time (Burn variable) — NEVER committed. RoofSpan first-run
          creates its own least-privilege 'roofspan' role + database with generated credentials. -->
     <Variable Name="PgSuperPassword" Type="string" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
-      <!-- 1) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
+      <!-- 1) WebView2 Evergreen Runtime (silent). Skipped when already present. Permanent = shared runtime
+              never uninstalled by RoofSpan. Installed BEFORE the Office MSI since the UI depends on it. -->
+      <ExePackage Id="WebView2Runtime"
+                  DisplayName="Microsoft Edge WebView2 Runtime (RoofSpan prerequisite)"
+                  SourceFile="[WebView2Bootstrapper]"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallCondition="NOT WebView2Present"
+                  DetectCondition="WebView2Present"
+                  InstallArguments="/silent /install"
+                  Compressed="no" />
+
+      <!-- 2) PostgreSQL prerequisite (silent, unattended). Skipped when PgPresent. Permanent = never
               uninstalled by RoofSpan (protects the customer's database service + data). -->
       <ExePackage Id="PostgreSQLPrereq"
                   DisplayName="PostgreSQL (RoofSpan prerequisite)"
@@ -51,7 +70,7 @@
                   InstallArguments="--mode unattended --unattendedmodeui minimal --superpassword [PgSuperPassword] --servicename RoofSpanPostgreSQL"
                   Compressed="no" />
 
-      <!-- 2) RoofSpan Office MSI (built by RoofSpan.wxs). -->
+      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs). -->
       <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
     </Chain>
   </Bundle>

@@ -4,7 +4,7 @@
 #
 # Produces:
 #   _stage\services\{roofspan-backend,roofspan-relay-connector,roofspan-update-service}.exe
-#   _stage\frontend\**            (production build of /app/frontend — the Office UI ONLY)
+#   _stage\frontend\**            (production build of /app/frontend - the Office UI ONLY)
 #   _stage\runtime\**             (extra runtime assets, e.g. pg_dump for backups)
 #   _stage\config-templates\**    (config templates + update_public_key.pem)
 param(
@@ -13,6 +13,14 @@ param(
   [string]$UpdatePublicKey = ""      # path to the update-verification PUBLIC key (HUMAN provides)
 )
 $ErrorActionPreference = "Stop"
+
+# ---- FAIL-FAST: frontend toolchain + lockfiles must exist before any expensive work.
+if (-not (Get-Command yarn -ErrorAction SilentlyContinue)) {
+  throw "yarn not found. Install Node.js LTS + 'corepack enable' (or npm i -g yarn)."
+}
+$feDirResolved = Join-Path $PSScriptRoot $FrontendDir
+if (-not (Test-Path (Join-Path $feDirResolved "package.json"))) { throw "frontend package.json not found at '$feDirResolved'." }
+if (-not (Test-Path (Join-Path $feDirResolved "yarn.lock")))    { throw "frontend yarn.lock not found at '$feDirResolved'." }
 
 $services = Join-Path $StageDir "services"
 $frontend = Join-Path $StageDir "frontend"
@@ -23,10 +31,12 @@ $null = New-Item -ItemType Directory -Force -Path $StageDir,$services,$frontend,
 # 1) Service executables (PyInstaller).
 & (Join-Path $PSScriptRoot "..\winbuild\build_exes.ps1") -OutDir $services
 
-# 2) Office frontend production build (Office UI ONLY — never roofspan-website).
-Push-Location $FrontendDir
+# 2) Office frontend production build (Office UI ONLY - never roofspan-website).
+Push-Location $feDirResolved
 try {
-  if (-not (Test-Path ".\node_modules")) { yarn install --frozen-lockfile }
+  # Always synchronize deps against the committed lockfile so a git pull that changed
+  # dependencies is buildable immediately (do NOT rely on node_modules existing).
+  yarn install --frozen-lockfile
   yarn build
   if (-not (Test-Path ".\build\index.html")) { throw "frontend build did not produce build\index.html" }
   Copy-Item ".\build\*" $frontend -Recurse -Force

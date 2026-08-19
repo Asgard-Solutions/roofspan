@@ -10,6 +10,7 @@ param(
   [string]$Version = "",                                       # defaults to windows/VERSION
   [Parameter(Mandatory=$true)][string]$StageDir,               # from stage.ps1
   [Parameter(Mandatory=$true)][string]$PostgresInstaller,      # EDB PostgreSQL silent installer (.exe)
+  [Parameter(Mandatory=$true)][string]$WebView2Bootstrapper,   # Evergreen WebView2 runtime bootstrapper (.exe)
   [string]$SignCertThumbprint = "",                            # HUMAN REQUIRED for production
   [string]$UpdateSigningPrivateKey = "",                       # SEPARATE from entitlement keys; OFFLINE
   [string]$OutDir = ".\dist"
@@ -30,10 +31,13 @@ $required = @(
   (Join-Path $StageDir "config-templates")
 )
 foreach ($p in $required) {
-  if (-not (Test-Path $p)) { throw "Staging incomplete — missing '$p'. Run installer\stage.ps1 first." }
+  if (-not (Test-Path $p)) { throw "Staging incomplete - missing '$p'. Run installer\stage.ps1 first." }
 }
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."
+}
+if (-not (Test-Path $WebView2Bootstrapper)) {
+  throw "WebView2 bootstrapper not found at '$WebView2Bootstrapper'. Download MicrosoftEdgeWebview2Setup.exe."
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $msi = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
@@ -46,9 +50,10 @@ wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir"
   -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
 if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 
-# 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains PostgreSQL prereq + MSI).
+# 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains WebView2 + PostgreSQL prereqs + MSI).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" `
+  -d "WebView2Bootstrapper=$WebView2Bootstrapper" `
   -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -o $setup
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 

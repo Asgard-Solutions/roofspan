@@ -1,0 +1,15 @@
+{
+  "summary": "Windows build-script hardening verified on Linux. All 8 pytest checks in windows/tests/test_build_scripts.py pass. pwsh 7.4.6 parses all three .ps1 files with 0 parse errors each. No non-ASCII bytes in any windows/**/*.ps1. bundle.wxs is well-formed XML with WebView2Runtime chained BEFORE RoofSpanOfficeMsi and WebView2Present detection present (skip-if-installed). roofspan-backend.spec references backend/alembic (and alembic.ini) - no 'migrations' path references.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/windows/tests/test_build_scripts.py"],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Verification-only run on Linux. Evidence: pytest 8/8 passed in 0.58s; pwsh ParseFile returned 0 errors for build.ps1, stage.ps1, build_exes.ps1; grep -P '[^\\x00-\\x7F]' returned no matches; bundle.wxs parses via ElementTree; WebView2Runtime idx=3021 < RoofSpanOfficeMsi idx=4231, WebView2Present idx=2135; roofspan-backend.spec line 16: (os.path.join(BACKEND, \"alembic\"), \"alembic\") with no 'migrations' path. Actual MSI/PowerShell E2E run is out of scope (needs Windows + WiX + installers).",
+  "rca of the issue": "N/A - all invariants hold."
+}

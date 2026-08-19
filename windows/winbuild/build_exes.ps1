@@ -6,9 +6,25 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
-  throw "pyinstaller not found. Run: pip install pyinstaller (and install backend requirements)."
+# Repo root is two levels up from windows\winbuild.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$backend = Join-Path $repoRoot "backend"
+
+# ---- FAIL-FAST: backend Alembic assets that the spec packages must exist.
+if (-not (Test-Path (Join-Path $backend "alembic")))     { throw "backend\alembic directory not found at '$backend'." }
+if (-not (Test-Path (Join-Path $backend "alembic.ini"))) { throw "backend\alembic.ini not found at '$backend'." }
+
+# Prefer the repository-local virtualenv PyInstaller so the user does NOT have to activate .venv.
+$venvPyi = Join-Path $repoRoot ".venv\Scripts\pyinstaller.exe"
+if (Test-Path $venvPyi) {
+  $pyinstaller = $venvPyi
+} elseif (Get-Command pyinstaller -ErrorAction SilentlyContinue) {
+  $pyinstaller = "pyinstaller"
+} else {
+  throw "PyInstaller not found. Create the repo venv (py -m venv .venv; .\.venv\Scripts\pip install -r backend\requirements.txt pyinstaller) or 'pip install pyinstaller'."
 }
+Write-Host "==> Using PyInstaller: $pyinstaller"
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
@@ -16,7 +32,7 @@ foreach ($spec in $specs) {
   $specPath = Join-Path $PSScriptRoot $spec
   if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
   Write-Host "==> PyInstaller $spec"
-  pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
+  & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
               --workpath (Join-Path $PSScriptRoot "build") $specPath
   $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
   $exe = Join-Path $PSScriptRoot "dist\$name.exe"

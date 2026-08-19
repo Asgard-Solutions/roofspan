@@ -1,0 +1,48 @@
+name: windows-build-scripts
+
+# Guards the Windows release-engineering scripts so changes cannot silently break the build.
+on:
+  push:
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows-build-scripts.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest  # pwsh (PowerShell 7) is preinstalled on GitHub-hosted runners
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Python regression checks (ASCII, spec datas, venv, yarn sync, param contract)
+        run: pytest -q windows/tests/test_build_scripts.py
+
+      - name: PowerShell parser validation (real parse of every .ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $failed = $false
+          Get-ChildItem -Path windows -Recurse -Filter *.ps1 |
+            Where-Object { $_.FullName -notmatch "node_modules" } |
+            ForEach-Object {
+              $tokens = $null; $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors) {
+                $failed = $true
+                Write-Host "PARSE ERRORS in $($_.FullName):"
+                $errors | ForEach-Object { Write-Host "  $($_.Message)" }
+              } else {
+                Write-Host "OK  $($_.FullName)"
+              }
+            }
+          if ($failed) { throw "One or more PowerShell scripts failed to parse." }

@@ -461,3 +461,15 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
     >         (os.path.join(BACKEND, "alembic"), "alembic"),
 - Verified testing_agent iteration_19 (backend 100%, retest_needed=false): PyInstaller run on Linux -> datas stage passes, alembic tree + alembic.ini packaged, produced dist/roofspan-backend; migrations error gone. (Windows .exe + stage.ps1 are Windows/PowerShell-only = HUMAN REQUIRED, not runnable in this Linux container; datas-resolution error is OS-independent so the fix is proven.)
 - PENDING USER: "Save to Github" -> branch main to land the fix; then re-fetch raw main to confirm backend/alembic + report GitHub commit SHA (cannot push from workspace).
+
+## Windows build pipeline hardening (2026-06)
+- Goal: deterministic Windows clean-build from a fresh VS2022 Dev PowerShell (no .venv activation, no manual pip/yarn, no encoding fixes).
+- build.ps1: ASCII-only (removed em dash); added mandatory -WebView2Bootstrapper param; fail-fast validates WiX + full staged payload + PostgreSQL + WebView2; passes -d WebView2Bootstrapper to bundle.
+- stage.ps1: ASCII-only; ALWAYS `yarn install --frozen-lockfile` then yarn build (no node_modules gate); fail-fast on yarn/package.json/yarn.lock; path resolved via $PSScriptRoot.
+- build_exes.ps1: auto-prefers repo `.venv\Scripts\pyinstaller.exe` (repo root via $PSScriptRoot\..\..), fallback PATH pyinstaller, else clear error; fail-fast on backend/alembic + alembic.ini. No activation needed.
+- bundle.wxs: added WebView2 Evergreen detection (HKLM EdgeUpdate client GUID pv) + ExePackage (/silent /install, Permanent, skip-if-present) chained BEFORE the Office MSI; PostgreSQL behavior intact.
+- Kept spec datas backend/alembic (not migrations).
+- Regression: windows/tests/test_build_scripts.py (8 tests: ASCII-only, real pwsh parse, spec datas, venv resolution, yarn sync, build.ps1 param contract, bundle<->build prereq match). CI: .github/workflows/windows-build-scripts.yml (pytest + pwsh ParseFile over every .ps1). Canonical doc: windows/BUILD.md.
+- Verified testing_agent iteration_20 (backend 100%, retest_needed=false): 8/8 pytest, pwsh 0 parse errors, no non-ASCII, bundle.wxs well-formed WebView2-before-MSI. Windows MSI build + stage.ps1 e2e = Windows-only (HUMAN REQUIRED on build host).
+- Files changed: windows/installer/build.ps1, windows/installer/stage.ps1, windows/winbuild/build_exes.ps1, windows/installer/bundle.wxs, windows/tests/test_build_scripts.py (new), .github/workflows/windows-build-scripts.yml (new), windows/BUILD.md (new).
+- PENDING USER: normal Save to Github (fast-forward, NO force-push) to main; report GitHub commit SHA after push.
