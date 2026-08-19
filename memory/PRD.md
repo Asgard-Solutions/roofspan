@@ -489,3 +489,12 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Docs: BUILD.md prereq updated to WiX 5.0.2 + auto-restored extensions note.
 - Files changed: windows/installer/build.ps1, windows/tests/test_build_scripts.py, windows/BUILD.md.
 - PENDING USER: Save to Github (normal, NO force) to main; report commit SHA after push.
+
+## Burn bundle PostgreSQL/PgSuperPassword wiring + real compile smoke test (2026-06)
+- Reproduced WIX0010 (bundle.wxs:46) by installing wix 5.0.2 and running `wix build bundle.wxs` in-container.
+- Root cause: WiX 5 requires a typed Variable to also declare Value; PgSuperPassword had Type="string" and no Value. FIX: made it untyped/valueless, kept Hidden="yes" Persisted="no" bal:Overridable="yes".
+- Found + fixed a SECOND pre-existing blocker (WIX0103) that only surfaced once WIX0010 was gone: WebView2 (and old Postgres) ExePackage used a Burn RUNTIME variable [Var] as SourceFile, which is invalid. WebView2 SourceFile -> $(var.WebView2Bootstrapper) (build-time).
+- Secure runtime password: PostgreSQL step now launches OS powershell.exe; if PgSuperPassword empty it generates a 36-char CSPRNG password (RandomNumberGenerator, 'Rs1!' complexity prefix, safe chars only), DPAPI-protects it (LocalMachine) at ProgramData\RoofSpan\identity\pg_super.bin for first-run role provisioning, then runs the EDB installer unattended (--servicename RoofSpanPostgreSQL preserved) and propagates its exit code. Admin may still override via RoofSpanSetup.exe PgSuperPassword=... Nothing committed/hardcoded.
+- Tests: NEW windows/tests/test_bundle_compile.py runs a REAL `wix build` (skips if wix absent). Windows CI = authoritative (must emit RoofSpanSetup.exe); off-Windows guards the compile-stage regressions (no WIX0010, no [Var] SourceFile). Plus static wiring guards. Updated stale test_installer_static test (website installer now AVAILABLE=true per GA URL wiring). Added bundle-compile job (windows-latest, wix 5.0.2 + extensions) to .github/workflows/windows-build-scripts.yml. Full suite: 58 passed.
+- Files changed: windows/installer/bundle.wxs, windows/tests/test_bundle_compile.py (new), windows/tests/test_installer_static.py, .github/workflows/windows-build-scripts.yml.
+- PENDING USER: Save to Github (normal, NO force) to main; report commit SHA after push.

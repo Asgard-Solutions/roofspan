@@ -46,3 +46,31 @@ jobs:
               }
             }
           if ($failed) { throw "One or more PowerShell scripts failed to parse." }
+
+  # Authoritative Burn-bundle compile: actually runs `wix build bundle.wxs` on Windows with WiX 5.0.2 so
+  # schema/compiler regressions (e.g. WIX0010 typed-Variable-without-Value, or a Burn [variable] used as
+  # an ExePackage SourceFile) fail CI BEFORE anyone runs the real Windows build.
+  bundle-compile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Install WiX Toolset 5.0.2
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Restore pinned WiX 5.0.2 CLI extensions
+        run: |
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
+
+      - name: Real WiX 5 Burn-bundle compile smoke test (produces RoofSpanSetup.exe from dummy payloads)
+        run: pytest -q windows/tests/test_bundle_compile.py

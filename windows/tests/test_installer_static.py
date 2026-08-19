@@ -109,6 +109,8 @@ def test_update_cadence_is_12h():
     assert CHECK_INTERVAL_SECONDS == 12 * 60 * 60
 
 
-def test_public_website_download_remains_disabled():
+def test_public_website_download_wired_to_cloudfront():
+    """Live download URLs were intentionally wired for RoofSpan Office GA (downloads.roofspan.io)."""
     env = _read(os.path.join(os.path.dirname(HERE), "roofspan-website", ".env"))
-    assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=false" in env
+    assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true" in env
+    assert "downloads.roofspan.io/latest/RoofSpanSetup.exe" in env
