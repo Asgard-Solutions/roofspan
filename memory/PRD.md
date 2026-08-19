@@ -538,3 +538,10 @@ RoofSpan is a **local roofing-company operating application** for ONE roofing co
 - Local: 78 passed / 2 skipped (Windows-only + pwsh env). Real Postgres bootstrap test PASS.
 - Files: windows/winbuild/db_bootstrap.py, windows/installer/bundle.wxs, windows/tests/{test_db_bootstrap_integration.py(new),test_bundle_compile.py}, .github/workflows/windows-build-scripts.yml.
 - PENDING USER: Save to Github (fast-forward, NO force). NOT run on GH Actions/real Windows from this container.
+
+## build.ps1 stale ONEDIR validation fix (2026-06)
+- Bug: build.ps1 $required still checked obsolete ONEFILE paths services\<name>.exe; stage.ps1/RoofSpan.wxs already use ONEDIR services\<name>\<name>.exe -> build.ps1 would falsely fail "Staging incomplete" on a correctly staged tree.
+- Fix: updated the $required staged-payload validation to the ONEDIR paths (services\<name>\<name>.exe) + frontend\index.html + runtime + config-templates. No other changes.
+- Regression: test_build_scripts.py::test_build_stage_and_wxs_agree_on_onedir_service_paths asserts build.ps1/stage.ps1/RoofSpan.wxs all use the same <name>\<name>.exe ONEDIR token and that no obsolete ONEFILE path remains. Static suite: 42 passed, 1 skipped (pwsh parser enforced by CI validate job).
+- Files: windows/installer/build.ps1, windows/tests/test_build_scripts.py.
+- PENDING USER: Save to Github (fast-forward, NO force).

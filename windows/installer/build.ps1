@@ -46,9 +46,9 @@ foreach ($ext in $RequiredWixExtensions) {
   }
 }
 $required = @(
-  (Join-Path $StageDir "services\roofspan-backend.exe"),
-  (Join-Path $StageDir "services\roofspan-relay-connector.exe"),
-  (Join-Path $StageDir "services\roofspan-update-service.exe"),
+  (Join-Path $StageDir "services\roofspan-backend\roofspan-backend.exe"),
+  (Join-Path $StageDir "services\roofspan-relay-connector\roofspan-relay-connector.exe"),
+  (Join-Path $StageDir "services\roofspan-update-service\roofspan-update-service.exe"),
   (Join-Path $StageDir "frontend\index.html"),
   (Join-Path $StageDir "runtime"),
   (Join-Path $StageDir "config-templates")

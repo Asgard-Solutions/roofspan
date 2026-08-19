@@ -176,3 +176,36 @@ def test_every_wix_ext_flag_is_restored_by_bootstrap():
     # Pinned to match the WiX tool version.
     assert '$WixExtVersion = "5.0.2"' in build, "WiX extensions must be pinned to 5.0.2"
     assert "wix extension add -g" in build, "restore must use the global CLI extension cache"
+
+
+ONEDIR_SERVICE_PATHS = [
+    r"roofspan-backend\roofspan-backend.exe",
+    r"roofspan-relay-connector\roofspan-relay-connector.exe",
+    r"roofspan-update-service\roofspan-update-service.exe",
+]
+
+
+def test_build_stage_and_wxs_agree_on_onedir_service_paths():
+    """build.ps1 validation, stage.ps1 validation, and RoofSpan.wxs must all reference the SAME
+    PyInstaller ONEDIR service layout (services\\<name>\\<name>.exe) - never the obsolete ONEFILE paths.
+    (stage.ps1 builds the 'services' segment via a variable, so we match the ONEDIR-distinguishing
+    per-service subfolder+exe token that must appear identically in all three.)"""
+    build = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+    stage = (INSTALLER / "stage.ps1").read_text(encoding="utf-8")
+    wxs = (INSTALLER / "RoofSpan.wxs").read_text(encoding="utf-8")
+
+    for onedir in ONEDIR_SERVICE_PATHS:
+        assert onedir in build, f"build.ps1 must validate ONEDIR path ...\\{onedir}"
+        assert onedir in stage, f"stage.ps1 must validate ONEDIR path ...\\{onedir}"
+        assert onedir in wxs, f"RoofSpan.wxs must reference ONEDIR path ...\\{onedir}"
+
+    # build.ps1 and RoofSpan.wxs use the full 'services\<name>\<name>.exe' form.
+    for onedir in ONEDIR_SERVICE_PATHS:
+        assert f"services\\{onedir}" in build
+        assert f"services\\{onedir}" in wxs
+
+    # The obsolete ONEFILE paths (services\<name>.exe with no per-service subfolder) must be gone.
+    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service"):
+        onefile = f"services\\{name}.exe"
+        for label, text in (("build.ps1", build), ("RoofSpan.wxs", wxs)):
+            assert onefile not in text, f"{label} still references obsolete ONEFILE path {onefile}"
