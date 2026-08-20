@@ -29,11 +29,11 @@ def _valid_coordinate_pair(coords) -> bool:
 
 
 def best_address_feature(result: dict | None, min_relevance: float = 0.80) -> dict | None:
-    """Return a high-confidence address feature from one MapTiler result.
+    """Return a high-confidence, house-number-level address feature.
 
-    We explicitly request address-only results from MapTiler. If a relevance
-    value is present, require a strong match. Missing relevance is tolerated
-    because some address datasets do not populate it consistently.
+    MapTiler documents the ``address`` field as the address number when applicable.
+    Requiring it keeps RoofSpan from replacing a RentCast coordinate with a broader
+    residential-street match that MapTiler also classifies as type ``address``.
     """
     if not isinstance(result, dict):
         return None
@@ -51,9 +51,9 @@ def best_address_feature(result: dict | None, min_relevance: float = 0.80) -> di
     place_types = feature.get("place_type") or []
     if isinstance(place_types, str):
         place_types = [place_types]
-    props = feature.get("properties") or {}
-    feature_type = props.get("type") or props.get("kind")
-    if "address" not in place_types and feature_type != "address":
+    if "address" not in place_types:
+        return None
+    if not str(feature.get("address") or "").strip():
         return None
 
     relevance = feature.get("relevance")
@@ -89,7 +89,13 @@ async def geocode_addresses_batch(
             chunk = addresses[start:start + MAPTILER_BATCH_SIZE]
             encoded_queries = ";".join(quote(address, safe=",") for address in chunk)
             url = f"{MAPTILER_GEOCODING_BASE}/{encoded_queries}.json"
-            params = {"key": key, "types": "address", "limit": 1, "country": country}
+            params = {
+                "key": key,
+                "types": "address",
+                "limit": 1,
+                "country": country,
+                "autocomplete": "false",
+            }
             if bbox:
                 params["bbox"] = ",".join(str(v) for v in bbox)
             try:
