@@ -1,8 +1,9 @@
-"""MapTiler geocoding helpers used by RoofSpan property imports.
+"""MapTiler location helpers used by RoofSpan property imports.
 
-The MapTiler key remains server-side in IntegrationSetting. Property imports use
-forward address geocoding only as a location resolver; RentCast remains the
-source for property/ownership attributes.
+RentCast remains the source for property and ownership attributes. MapTiler is
+used to resolve the RentCast address, and when possible RoofSpan then refines
+that accepted address to the matching MapTiler building-number/building feature.
+All provider credentials stay server-side.
 """
 from __future__ import annotations
 
@@ -11,9 +12,15 @@ import re
 from urllib.parse import quote
 
 import httpx
+from mapbox_vector_tile import decode as decode_vector_tile
+from shapely.geometry import Point, shape
 
 MAPTILER_GEOCODING_BASE = "https://api.maptiler.com/geocoding"
+MAPTILER_TILES_BASE = "https://api.maptiler.com/tiles"
 MAPTILER_BATCH_SIZE = 50
+MAPTILER_BUILDING_ZOOM = 15
+MAPTILER_BUILDING_SEARCH_FEET = 2000.0
+MAPTILER_BUILDING_AMBIGUITY_FEET = 150.0
 
 _STREET_SUFFIXES = {
     "avenue": "ave", "ave": "ave", "av": "ave",
@@ -207,6 +214,17 @@ def _empty_diagnostic(status="rejected", reason="no_result") -> dict:
         "identity_expected": None,
         "identity_returned": None,
         "identity_checks": None,
+        "building_status": "not_attempted",
+        "building_reason": "not_attempted",
+        "building_number": None,
+        "building_number_latitude": None,
+        "building_number_longitude": None,
+        "building_distance_feet": None,
+        "building_class": None,
+        "building_subclass": None,
+        "building_feature_id": None,
+        "building_latitude": None,
+        "building_longitude": None,
     }
 
 
@@ -278,7 +296,6 @@ def evaluate_address_result(result: dict | None, min_relevance: float = 0.80, qu
             candidate["identity_checks"] = checks
             if not matched:
                 candidate["reason"] = reason
-                # Prefer the most relevant rejected candidate for diagnostics.
                 if best_rejection is None or float(relevance or 0) > float(best_rejection.get("relevance") or 0):
                     best_rejection = candidate
                 continue
@@ -300,6 +317,255 @@ def best_address_feature(result: dict | None, min_relevance: float = 0.80, query
     return evaluate_address_result(result, min_relevance, query_address).get("feature")
 
 
+def _tile_xy(lng: float, lat: float, z: int) -> tuple[int, int]:
+    n = 2 ** z
+    x = int((lng + 180.0) / 360.0 * n)
+    lat_rad = math.radians(max(min(lat, 85.05112878), -85.05112878))
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return max(0, min(n - 1, x)), max(0, min(n - 1, y))
+
+
+def _tile_neighborhood(lng: float, lat: float, z: int) -> list[tuple[int, int]]:
+    x, y = _tile_xy(lng, lat, z)
+    n = 2 ** z
+    return [
+        (tx, ty)
+        for tx in range(max(0, x - 1), min(n - 1, x + 1) + 1)
+        for ty in range(max(0, y - 1), min(n - 1, y + 1) + 1)
+    ]
+
+
+def _tile_coord_to_lonlat(px: float, py: float, *, z: int, x: int, y: int, extent: int) -> tuple[float, float]:
+    n = 2 ** z
+    gx = x + (px / extent)
+    gy = y + (1.0 - (py / extent))
+    lng = gx / n * 360.0 - 180.0
+    merc_y = math.pi * (1.0 - 2.0 * gy / n)
+    lat = math.degrees(math.atan(math.sinh(merc_y)))
+    return lng, lat
+
+
+def _transform_geometry_coordinates(value, *, z: int, x: int, y: int, extent: int):
+    if isinstance(value, (list, tuple)) and len(value) >= 2 and all(isinstance(v, (int, float)) for v in value[:2]):
+        lng, lat = _tile_coord_to_lonlat(value[0], value[1], z=z, x=x, y=y, extent=extent)
+        if len(value) > 2:
+            return [lng, lat, *value[2:]]
+        return [lng, lat]
+    if isinstance(value, (list, tuple)):
+        return [_transform_geometry_coordinates(v, z=z, x=x, y=y, extent=extent) for v in value]
+    return value
+
+
+def _decode_layer(raw: bytes, layer_name: str, *, z: int, x: int, y: int) -> list[dict]:
+    decoded = decode_vector_tile(raw, default_options={"geojson": True})
+    layer = decoded.get(layer_name) or {}
+    extent = int(layer.get("extent") or 4096)
+    features = []
+    for feature in layer.get("features") or []:
+        if not isinstance(feature, dict):
+            continue
+        copied = dict(feature)
+        geometry = dict(copied.get("geometry") or {})
+        geometry["coordinates"] = _transform_geometry_coordinates(
+            geometry.get("coordinates"), z=z, x=x, y=y, extent=extent
+        )
+        copied["geometry"] = geometry
+        features.append(copied)
+    return features
+
+
+async def _tile_layer_features(
+    client: httpx.AsyncClient,
+    key: str,
+    tileset: str,
+    layer: str,
+    z: int,
+    tiles: list[tuple[int, int]],
+    cache: dict,
+) -> list[dict]:
+    collected: list[dict] = []
+    for x, y in tiles:
+        cache_key = (tileset, layer, z, x, y)
+        if cache_key in cache:
+            collected.extend(cache[cache_key])
+            continue
+        url = f"{MAPTILER_TILES_BASE}/{tileset}/{z}/{x}/{y}"
+        try:
+            response = await client.get(url, params={"key": key})
+            if response.status_code == 204:
+                features = []
+            else:
+                response.raise_for_status()
+                features = _decode_layer(response.content, layer, z=z, x=x, y=y)
+        except (httpx.HTTPError, ValueError, TypeError, KeyError):
+            features = []
+        cache[cache_key] = features
+        collected.extend(features)
+    return collected
+
+
+def _distance_feet(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
+    radius_miles = 3958.7613
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    miles = 2 * radius_miles * math.asin(min(1.0, math.sqrt(a)))
+    return miles * 5280.0
+
+
+def _number_point(feature: dict) -> tuple[float, float] | None:
+    geometry = feature.get("geometry") or {}
+    coords = geometry.get("coordinates")
+    if geometry.get("type") != "Point" or not _valid_coordinate_pair(coords):
+        return None
+    return float(coords[0]), float(coords[1])
+
+
+def _choose_number_feature(features: list[dict], house_number: str, geocode_lng: float, geocode_lat: float) -> tuple[dict | None, float | None, str]:
+    matches = []
+    expected = _clean(house_number)
+    for feature in features:
+        props = feature.get("properties") or {}
+        if _clean(props.get("number")) != expected:
+            continue
+        point = _number_point(feature)
+        if not point:
+            continue
+        lng, lat = point
+        distance = _distance_feet(geocode_lng, geocode_lat, lng, lat)
+        if distance <= MAPTILER_BUILDING_SEARCH_FEET:
+            matches.append((distance, feature))
+
+    if not matches:
+        return None, None, "building_number_not_found"
+    matches.sort(key=lambda item: item[0])
+    if len(matches) > 1:
+        nearest, second = matches[0][0], matches[1][0]
+        if nearest > 750.0 or (second - nearest) < MAPTILER_BUILDING_AMBIGUITY_FEET:
+            return None, nearest, "building_number_ambiguous"
+    return matches[0][1], matches[0][0], "building_number_matched"
+
+
+def _choose_building_polygon(features: list[dict], point_lng: float, point_lat: float) -> tuple[dict | None, object | None]:
+    point = Point(point_lng, point_lat)
+    containing = []
+    nearby = []
+    for feature in features:
+        geometry = feature.get("geometry") or {}
+        if geometry.get("type") not in ("Polygon", "MultiPolygon"):
+            continue
+        try:
+            polygon = shape(geometry)
+            if polygon.is_empty:
+                continue
+        except Exception:
+            continue
+        props = feature.get("properties") or {}
+        residential = props.get("class") == "residential" or props.get("subclass") in {
+            "house", "detached", "dwelling_house", "bungalow", "residential", "semi", "semidetached_house"
+        }
+        if polygon.contains(point) or polygon.touches(point):
+            containing.append((0 if residential else 1, polygon.area, feature, polygon))
+        else:
+            centroid = polygon.centroid
+            distance = _distance_feet(point_lng, point_lat, centroid.x, centroid.y)
+            if distance <= 100.0:
+                nearby.append((distance, 0 if residential else 1, feature, polygon))
+
+    if containing:
+        containing.sort(key=lambda item: (item[0], item[1]))
+        return containing[0][2], containing[0][3]
+    if nearby:
+        nearby.sort(key=lambda item: (item[0], item[1]))
+        return nearby[0][2], nearby[0][3]
+    return None, None
+
+
+async def _refine_to_numbered_building(
+    client: httpx.AsyncClient,
+    key: str,
+    query_address: str,
+    diagnostic: dict,
+    tile_cache: dict,
+) -> dict:
+    """Move an exact geocoder match onto the matching mapped building when safely identifiable."""
+    if diagnostic.get("status") != "accepted":
+        return diagnostic
+    geocode_lng = diagnostic.get("longitude")
+    geocode_lat = diagnostic.get("latitude")
+    if geocode_lng is None or geocode_lat is None:
+        return diagnostic
+
+    expected = _parse_query_address(query_address)
+    house_number = expected.get("house_number")
+    if not house_number:
+        diagnostic["building_status"] = "rejected"
+        diagnostic["building_reason"] = "query_house_number_missing"
+        return diagnostic
+
+    tiles = _tile_neighborhood(geocode_lng, geocode_lat, MAPTILER_BUILDING_ZOOM)
+    number_features = await _tile_layer_features(
+        client, key, "v4", "building_number", MAPTILER_BUILDING_ZOOM, tiles, tile_cache
+    )
+    number_feature, number_distance, number_reason = _choose_number_feature(
+        number_features, house_number, geocode_lng, geocode_lat
+    )
+    diagnostic["building_reason"] = number_reason
+    diagnostic["building_distance_feet"] = round(number_distance, 1) if number_distance is not None else None
+    if not number_feature:
+        diagnostic["building_status"] = "unresolved"
+        return diagnostic
+
+    number_lng, number_lat = _number_point(number_feature)
+    diagnostic.update({
+        "building_status": "matched_number",
+        "building_number": (number_feature.get("properties") or {}).get("number"),
+        "building_number_latitude": number_lat,
+        "building_number_longitude": number_lng,
+    })
+
+    building_tiles = _tile_neighborhood(number_lng, number_lat, MAPTILER_BUILDING_ZOOM)
+    building_features = await _tile_layer_features(
+        client, key, "buildings", "building", MAPTILER_BUILDING_ZOOM, building_tiles, tile_cache
+    )
+    building_feature, polygon = _choose_building_polygon(building_features, number_lng, number_lat)
+
+    # Buildings is an enhanced add-on. If it is unavailable/empty at this location,
+    # fall back to Planet v4's ordinary building footprints before using the number point itself.
+    if not building_feature:
+        v4_buildings = await _tile_layer_features(
+            client, key, "v4", "building", MAPTILER_BUILDING_ZOOM, building_tiles, tile_cache
+        )
+        building_feature, polygon = _choose_building_polygon(v4_buildings, number_lng, number_lat)
+
+    if building_feature and polygon is not None:
+        centroid = polygon.representative_point()
+        props = building_feature.get("properties") or {}
+        diagnostic.update({
+            "latitude": float(centroid.y),
+            "longitude": float(centroid.x),
+            "building_status": "resolved",
+            "building_reason": "numbered_building_footprint",
+            "building_class": props.get("class"),
+            "building_subclass": props.get("subclass"),
+            "building_feature_id": building_feature.get("id"),
+            "building_latitude": float(centroid.y),
+            "building_longitude": float(centroid.x),
+        })
+    else:
+        diagnostic.update({
+            "latitude": number_lat,
+            "longitude": number_lng,
+            "building_status": "resolved",
+            "building_reason": "building_number_point",
+            "building_latitude": number_lat,
+            "building_longitude": number_lng,
+        })
+    return diagnostic
+
+
 async def geocode_addresses_batch(
     key: str,
     addresses: list[str],
@@ -308,11 +574,12 @@ async def geocode_addresses_batch(
     country: str = "us",
     min_relevance: float = 0.80,
 ) -> list[dict]:
-    """Forward-geocode addresses and return one strict diagnostic record per input address."""
+    """Resolve addresses and, when safe, refine them to numbered MapTiler buildings."""
     if not addresses:
         return []
 
     resolved: list[dict] = []
+    tile_cache: dict = {}
     async with httpx.AsyncClient(timeout=30) as client:
         for start in range(0, len(addresses), MAPTILER_BATCH_SIZE):
             chunk = addresses[start:start + MAPTILER_BATCH_SIZE]
@@ -344,6 +611,15 @@ async def geocode_addresses_batch(
                 for query_address, item in zip(chunk, batch_results):
                     diagnostic = evaluate_address_result(item, min_relevance, query_address=query_address)
                     diagnostic["http_status"] = http_status
+                    if diagnostic.get("status") == "accepted":
+                        try:
+                            diagnostic = await _refine_to_numbered_building(
+                                client, key, query_address, diagnostic, tile_cache
+                            )
+                        except Exception:
+                            # Building refinement is a confidence enhancer, never a reason to fail imports.
+                            diagnostic["building_status"] = "error"
+                            diagnostic["building_reason"] = "building_resolution_error"
                     resolved.append(diagnostic)
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else None
