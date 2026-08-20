@@ -25,9 +25,7 @@ from licensing import state as state_mod
 logger = logging.getLogger("roofspan")
 
 INSTALLATION_KEY = "installation"
-SEAT_ADVISORY_LOCK_KEY = 748419  # arbitrary constant; serializes concurrent seat activations
-
-# In-process effective-state snapshot for the guard middleware (avoids per-request DB/CP work).
+SEAT_ADVISORY_LOCK_KEY = 748419
 _snapshot: dict = {"state": None, "at": 0.0}
 
 
@@ -37,7 +35,6 @@ def invalidate_snapshot() -> None:
 
 
 async def get_installation(db: AsyncSession) -> tuple[str, str]:
-    """Return (installation_id, company_id); generate a stable identity on first use."""
     row = (await db.execute(select(AppConfig).where(AppConfig.key == INSTALLATION_KEY))).scalar_one_or_none()
     if row and isinstance(row.value, dict) and row.value.get("installation_id"):
         return row.value["installation_id"], row.value["company_id"]
@@ -60,16 +57,10 @@ async def _get_cache_row(db: AsyncSession) -> Optional[LicenseCache]:
 
 
 def _to_naive_utc(dt: datetime) -> datetime:
-    """Store timezone-aware UTC as naive-UTC-aware consistently (columns are timezone=True)."""
     return dt
 
 
 async def refresh(db: AsyncSession, *, force: bool = False) -> dict:
-    """Fetch a fresh signed entitlement from the Control Plane, verify it, and cache it.
-
-    On a Control Plane/network outage, the existing cache is preserved (offline tolerance) and the
-    failure is recorded — the installation is NOT suspended by an outage.
-    """
     installation_id, company_id = await get_installation(db)
     client = control_plane.get_client()
     now = datetime.now(timezone.utc)
@@ -103,7 +94,6 @@ async def refresh(db: AsyncSession, *, force: bool = False) -> dict:
         invalidate_snapshot()
         return {"ok": True, "state": entitlement.subscription_state, "offline": False}
     except (control_plane.ControlPlaneUnavailable, Exception) as e:
-        # Preserve existing cache; record the failed attempt. Do not suspend on an outage.
         is_unavailable = isinstance(e, control_plane.ControlPlaneUnavailable)
         row.last_check_at = now
         row.last_check_ok = False
@@ -115,14 +105,13 @@ async def refresh(db: AsyncSession, *, force: bool = False) -> dict:
 
 
 async def load_cached_entitlement(db: AsyncSession) -> Optional[ent.Entitlement]:
-    """Load and cryptographically re-verify the cached entitlement. Returns None if absent/invalid."""
     row = await _get_cache_row(db)
     if row is None or not row.entitlement_jws:
         return None
     try:
         return ent.verify_entitlement(row.entitlement_jws, keys.get_trusted_verify_keys())
     except ent.EntitlementError:
-        return None  # expired (offline grace exhausted) or tampered -> treated as no entitlement
+        return None
 
 
 async def get_effective(db: AsyncSession) -> state_mod.EffectiveStatus:
@@ -140,11 +129,6 @@ async def seats_licensed(db: AsyncSession) -> int:
 
 
 async def ensure_seat_available(db: AsyncSession) -> None:
-    """Race-safe active-seat guard. MUST be called inside the same transaction that activates a user.
-
-    Uses a transaction-scoped Postgres advisory lock so concurrent activations are serialized and can
-    never exceed the licensed seat count. Owner counts as a seat; disabled users do not.
-    """
     await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SEAT_ADVISORY_LOCK_KEY})
     limit = await seats_licensed(db)
     active = await count_active_users(db)
@@ -156,7 +140,6 @@ async def ensure_seat_available(db: AsyncSession) -> None:
 
 
 async def effective_state_cached() -> str:
-    """Return the effective state string using a short-lived in-process snapshot (for middleware)."""
     now = time.monotonic()
     if _snapshot["state"] is not None and (now - _snapshot["at"]) < config.STATE_SNAPSHOT_TTL_SECONDS:
         return _snapshot["state"]
@@ -168,8 +151,19 @@ async def effective_state_cached() -> str:
 
 
 async def bootstrap(db: AsyncSession) -> None:
-    """Startup: ensure installation identity and a cached entitlement exist."""
+    """Startup: ensure installation identity and a *verifiable* cached entitlement exist.
+
+    A cache row merely being present is not enough. Upgrades can invalidate an old dev-signed token
+    if an earlier build stored its signing key under the install directory. If the token cannot be
+    verified, refresh it immediately instead of silently treating a valid-looking ACTIVE cache row as
+    UNLICENSED and hiding all business data behind the subscription guard.
+    """
     await get_installation(db)
     row = await _get_cache_row(db)
-    if row is None or not row.entitlement_jws:
-        await refresh(db, force=True)
+    cached = await load_cached_entitlement(db) if row and row.entitlement_jws else None
+    if row is None or not row.entitlement_jws or cached is None:
+        result = await refresh(db, force=True)
+        if result.get("ok"):
+            logger.info("Licensing bootstrap refreshed a missing or unverifiable cached entitlement")
+        else:
+            logger.warning("Licensing bootstrap could not refresh cached entitlement: %s", result.get("error"))
