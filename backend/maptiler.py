@@ -28,26 +28,31 @@ def _valid_coordinate_pair(coords) -> bool:
     )
 
 
-def evaluate_address_result(result: dict | None, min_relevance: float = 0.80) -> dict:
-    """Evaluate one MapTiler result and return safe diagnostics plus accepted feature."""
-    diagnostic = {
-        "status": "rejected",
-        "reason": "no_result",
+def _empty_diagnostic(status="rejected", reason="no_result") -> dict:
+    return {
+        "status": status,
+        "reason": reason,
         "feature": None,
         "returned_address": None,
+        "returned_label": None,
         "relevance": None,
         "place_type": None,
         "latitude": None,
         "longitude": None,
         "feature_id": None,
+        "http_status": None,
     }
+
+
+def evaluate_address_result(result: dict | None, min_relevance: float = 0.80) -> dict:
+    """Evaluate one MapTiler result and return safe diagnostics plus accepted feature."""
+    diagnostic = _empty_diagnostic()
     if not isinstance(result, dict):
         diagnostic["reason"] = "invalid_response"
         return diagnostic
 
     features = result.get("features") or []
     if not features:
-        diagnostic["reason"] = "no_result"
         return diagnostic
 
     feature = features[0]
@@ -62,9 +67,11 @@ def evaluate_address_result(result: dict | None, min_relevance: float = 0.80) ->
         place_types = [place_types]
     relevance = feature.get("relevance")
     returned_address = str(feature.get("address") or "").strip() or None
+    returned_label = feature.get("place_name") or feature.get("matching_place_name") or feature.get("text")
 
     diagnostic.update({
         "returned_address": returned_address,
+        "returned_label": returned_label,
         "relevance": relevance,
         "place_type": place_types,
         "feature_id": feature.get("id"),
@@ -110,11 +117,7 @@ async def geocode_addresses_batch(
     country: str = "us",
     min_relevance: float = 0.80,
 ) -> list[dict]:
-    """Forward-geocode addresses and return one diagnostic record per input address.
-
-    Provider/network failures fail open so imports can retain RentCast coordinates,
-    while recording why MapTiler was not used.
-    """
+    """Forward-geocode addresses and return one diagnostic record per input address."""
     if not addresses:
         return []
 
@@ -140,21 +143,10 @@ async def geocode_addresses_batch(
                 payload = response.json()
                 batch_results = payload if isinstance(payload, list) else [payload]
                 if len(batch_results) != len(chunk):
-                    resolved.extend([
-                        {
-                            "status": "error",
-                            "reason": "batch_result_count_mismatch",
-                            "http_status": http_status,
-                            "feature": None,
-                            "returned_address": None,
-                            "relevance": None,
-                            "place_type": None,
-                            "latitude": None,
-                            "longitude": None,
-                            "feature_id": None,
-                        }
-                        for _ in chunk
-                    ])
+                    for _ in chunk:
+                        diagnostic = _empty_diagnostic("error", "batch_result_count_mismatch")
+                        diagnostic["http_status"] = http_status
+                        resolved.append(diagnostic)
                     continue
                 for item in batch_results:
                     diagnostic = evaluate_address_result(item, min_relevance)
@@ -162,35 +154,11 @@ async def geocode_addresses_batch(
                     resolved.append(diagnostic)
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else None
-                resolved.extend([
-                    {
-                        "status": "error",
-                        "reason": "provider_http_error",
-                        "http_status": status,
-                        "feature": None,
-                        "returned_address": None,
-                        "relevance": None,
-                        "place_type": None,
-                        "latitude": None,
-                        "longitude": None,
-                        "feature_id": None,
-                    }
-                    for _ in chunk
-                ])
+                for _ in chunk:
+                    diagnostic = _empty_diagnostic("error", "provider_http_error")
+                    diagnostic["http_status"] = status
+                    resolved.append(diagnostic)
             except (httpx.HTTPError, ValueError, TypeError):
-                resolved.extend([
-                    {
-                        "status": "error",
-                        "reason": "provider_request_error",
-                        "http_status": None,
-                        "feature": None,
-                        "returned_address": None,
-                        "relevance": None,
-                        "place_type": None,
-                        "latitude": None,
-                        "longitude": None,
-                        "feature_id": None,
-                    }
-                    for _ in chunk
-                ])
+                for _ in chunk:
+                    resolved.append(_empty_diagnostic("error", "provider_request_error"))
     return resolved
