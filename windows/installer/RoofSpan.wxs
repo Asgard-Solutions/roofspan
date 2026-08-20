@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  RoofSpan Office - WiX 5 (Toolset 5.0.2) MSI definition.
-  Target: Windows 10/11 x64. Produces RoofSpanOffice-{VERSION}.msi (wrapped by bundle.wxs -> RoofSpanSetup.exe).
-
-  Per-machine install with three restricted Windows services, Windows shell integration, a preserved local
-  data directory under ProgramData, clean data-preserving major-upgrade, and data-preserving uninstall.
-  Contains NO secrets (no AWS/Stripe/RevenueCat/entitlement/update private keys, no per-customer license).
--->
+<!-- RoofSpan Office - WiX 5 MSI. Local backend + PostgreSQL + native WebView2 desktop shell. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -17,16 +10,13 @@
            Version="$(var.Version)" UpgradeCode="$(var.RoofSpanUpgradeCode)"
            Scope="perMachine" Compressed="yes">
 
-    <!-- Upgrade in place; never install a second conflicting instance; preserve data across upgrades. -->
     <MajorUpgrade DowngradeErrorMessage="A newer version of RoofSpan Office is already installed."
                   Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Canonical RoofSpan icon used by Windows Apps/Installed Apps plus desktop/Start-menu shortcuts. -->
     <Icon Id="RoofSpanIcon" SourceFile="$(var.StageDir)\runtime\RoofSpan.ico" />
     <Property Id="ARPPRODUCTICON" Value="RoofSpanIcon" />
 
-    <!-- Directory layout: binaries under Program Files; MUTABLE customer data under ProgramData. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RoofSpan Office">
         <Directory Id="ServicesDir" Name="services">
@@ -40,11 +30,13 @@
             <Directory Id="UpdateInternalDir" Name="_internal" />
           </Directory>
         </Directory>
+        <Directory Id="ShellDir" Name="shell" />
         <Directory Id="FrontendDir" Name="frontend" />
         <Directory Id="RuntimeDir" Name="runtime" />
         <Directory Id="ConfigTemplatesDir" Name="config-templates" />
       </Directory>
     </StandardDirectory>
+
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="DataRoot" Name="RoofSpan">
         <Directory Id="DbDataDir" Name="pgdata" />
@@ -54,7 +46,6 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- Application payload harvested at build time from the staged trees. -->
     <ComponentGroup Id="FrontendFiles" Directory="FrontendDir">
       <Files Include="$(var.StageDir)\frontend\**" />
     </ComponentGroup>
@@ -65,12 +56,37 @@
       <Files Include="$(var.StageDir)\config-templates\**" />
     </ComponentGroup>
 
-    <!-- Windows services: REAL native SCM services (pywin32-hosted). -->
+    <!-- Native desktop shell dependencies. The launcher exe is authored explicitly below so shortcuts
+         and first-run launch always target the installed application host, never the default browser. -->
+    <ComponentGroup Id="ShellFiles" Directory="ShellDir">
+      <Files Include="$(var.StageDir)\shell\**" Exclude="$(var.StageDir)\shell\RoofSpanOffice.exe" />
+    </ComponentGroup>
+
+    <Component Id="ShellLauncher" Directory="ShellDir" Guid="*">
+      <File Id="ShellExe" Source="$(var.StageDir)\shell\RoofSpanOffice.exe" KeyPath="yes" />
+      <Shortcut Id="RoofSpanDesktopShortcut"
+                Directory="DesktopFolder"
+                Name="RoofSpan Office"
+                Description="Open RoofSpan Office"
+                Target="[#ShellExe]"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="RoofSpanIcon"
+                IconIndex="0" />
+      <Shortcut Id="RoofSpanStartMenuShortcut"
+                Directory="ProgramMenuFolder"
+                Name="RoofSpan Office"
+                Description="Open RoofSpan Office"
+                Target="[#ShellExe]"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="RoofSpanIcon"
+                IconIndex="0" />
+    </Component>
+
     <ComponentGroup Id="Services">
       <Component Id="Svc_Backend" Directory="BackendSvcDir" Guid="*">
         <File Id="BackendExe" Source="$(var.StageDir)\services\roofspan-backend\roofspan-backend.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanBackend" Name="RoofSpanBackend" DisplayName="RoofSpan Backend"
-                        Description="RoofSpan local API + local browser UI (binds 127.0.0.1 only)."
+                        Description="RoofSpan local API and Office UI service (127.0.0.1 only)."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
                         Account="NT SERVICE\RoofSpanBackend" Vital="yes">
           <ServiceDependency Id="RoofSpanPostgreSQL" />
@@ -83,8 +99,9 @@
       <Component Id="Svc_Relay" Directory="RelaySvcDir" Guid="*">
         <File Id="RelayExe" Source="$(var.StageDir)\services\roofspan-relay-connector\roofspan-relay-connector.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanRelay" Name="RoofSpanRelayConnector" DisplayName="RoofSpan Relay Connector"
-                        Description="Outbound-only Secure Relay tunnel (no inbound ports)." Type="ownProcess"
-                        Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanRelayConnector">
+                        Description="Outbound-only Secure Relay tunnel (no inbound ports)."
+                        Type="ownProcess" Start="auto" ErrorControl="normal"
+                        Account="NT SERVICE\RoofSpanRelayConnector">
           <ServiceDependency Id="RoofSpanBackend" />
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="15" />
@@ -95,8 +112,9 @@
       <Component Id="Svc_Updater" Directory="UpdateSvcDir" Guid="*">
         <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
-                        Description="Checks downloads.roofspan.io for signed updates every 12h; verifies + applies safely."
-                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT SERVICE\RoofSpanUpdateService">
+                        Description="Checks downloads.roofspan.io for signed updates every 12h; verifies and applies safely."
+                        Type="ownProcess" Start="auto" ErrorControl="normal"
+                        Account="NT SERVICE\RoofSpanUpdateService">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="30" />
         </ServiceInstall>
@@ -104,40 +122,12 @@
       </Component>
     </ComponentGroup>
 
-    <!-- PyInstaller onedir dependency payload. -->
     <ComponentGroup Id="ServiceInternals">
       <Files Include="$(var.StageDir)\services\roofspan-backend\_internal\**" Directory="BackendInternalDir" />
       <Files Include="$(var.StageDir)\services\roofspan-relay-connector\_internal\**" Directory="RelayInternalDir" />
       <Files Include="$(var.StageDir)\services\roofspan-update-service\_internal\**" Directory="UpdateInternalDir" />
     </ComponentGroup>
 
-    <!-- Windows shell integration. The actual application is the local Office UI served at 127.0.0.1;
-         Explorer opens that URL with the user's default browser. These shortcuts are MSI-owned so upgrades
-         repair them and uninstall removes them automatically. -->
-    <Component Id="ShellShortcuts" Directory="INSTALLFOLDER" Guid="*">
-      <Shortcut Id="RoofSpanDesktopShortcut"
-                Directory="DesktopFolder"
-                Name="RoofSpan Office"
-                Description="Open RoofSpan Office"
-                Target="[WindowsFolder]explorer.exe"
-                Arguments="http://127.0.0.1:8001/"
-                WorkingDirectory="INSTALLFOLDER"
-                Icon="RoofSpanIcon"
-                IconIndex="0" />
-      <Shortcut Id="RoofSpanStartMenuShortcut"
-                Directory="ProgramMenuFolder"
-                Name="RoofSpan Office"
-                Description="Open RoofSpan Office"
-                Target="[WindowsFolder]explorer.exe"
-                Arguments="http://127.0.0.1:8001/"
-                WorkingDirectory="INSTALLFOLDER"
-                Icon="RoofSpanIcon"
-                IconIndex="0" />
-      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="ShellShortcuts"
-                     Type="integer" Value="1" KeyPath="yes" />
-    </Component>
-
-    <!-- Persisted data dirs + ACLs. -->
     <Component Id="DataDirs" Directory="DataRoot" Guid="*" Permanent="yes" NeverOverwrite="yes">
       <CreateFolder />
       <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="DataRoot"
@@ -177,18 +167,19 @@
       <ComponentGroupRef Id="FrontendFiles" />
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
+      <ComponentGroupRef Id="ShellFiles" />
+      <ComponentRef Id="ShellLauncher" />
       <ComponentGroupRef Id="Services" />
       <ComponentGroupRef Id="ServiceInternals" />
-      <ComponentRef Id="ShellShortcuts" />
       <ComponentRef Id="DataDirs" />
       <ComponentRef Id="LogsDirAcl" />
       <ComponentRef Id="IdentityDirAcl" />
       <ComponentRef Id="ConfigDirAcl" />
     </Feature>
 
-    <!-- First-run: open the local setup/login UI so the customer runs the existing activation flow. -->
+    <!-- First run opens the native RoofSpan application window. The local URL remains internal to it. -->
     <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;http://127.0.0.1:8001/&quot;"
+                  ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;[#ShellExe]&quot;"
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
       <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed" />
