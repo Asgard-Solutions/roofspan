@@ -51,13 +51,14 @@ iniconfig==2.3.0
 isort==8.0.1
 Jinja2==3.1.6
 jiter==0.16.0
-jmespath==1.1.0
+jmespath==1.0.1
 jq==1.12.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 librt==0.15.0
 litellm @ https://customer-assets.emergentagent.com/internal-asset/library/litellm-1.80.0-py3-none-any.whl#sha256=adf398c513273de9341f61822296c6b2145f7f2dc4a69daf3ac04829f5bde3f8
 Mako==1.4.1
+mapbox-vector-tile==2.2.0
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mccabe==0.7.0
@@ -84,7 +85,7 @@ psycopg-binary==3.3.4
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycodestyle==2.14.0
-pycparser==3.0
+pycparser==3.1
 pydantic==2.13.4
 pydantic_core==2.46.4
 pyflakes==3.4.0
