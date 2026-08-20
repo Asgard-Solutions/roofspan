@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, MapPinned } from "lucide-react";
 
 function IntegrationCard({ provider, label, help, keyLabel }) {
   const [data, setData] = useState(null);
@@ -147,6 +147,8 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
 
 function MapSettings() {
   const [cfg, setCfg] = useState(null);
+  const [cadastre, setCadastre] = useState(null);
+  const [checkingCadastre, setCheckingCadastre] = useState(false);
   const load = () => api.get("/map-config").then((r) => setCfg(r.data));
   useEffect(() => {
     load();
@@ -159,6 +161,19 @@ function MapSettings() {
       toast.success("Map configuration updated");
     } catch (e) {
       toast.error(apiError(e));
+    }
+  };
+
+  const checkCadastre = async () => {
+    setCheckingCadastre(true);
+    setCadastre(null);
+    try {
+      const { data } = await api.get("/map/cadastre-capability");
+      setCadastre(data);
+    } catch (e) {
+      setCadastre({ configured: true, tileset_accessible: false, reason: apiError(e) });
+    } finally {
+      setCheckingCadastre(false);
     }
   };
 
@@ -190,6 +205,26 @@ function MapSettings() {
             data-testid="toggle-satellite"
           />
         </div>
+      </div>
+      <div className="border-t border-border pt-5" data-testid="cadastre-capability">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-lg font-semibold text-slate-900">Parcel / Cadastre access</h3>
+            <p className="mt-0.5 text-sm text-slate-500">Uses the same MapTiler API key. This checks whether the Cadastre tileset is available to RoofSpan.</p>
+          </div>
+          <Button variant="outline" onClick={checkCadastre} disabled={checkingCadastre || !cfg.maptiler_configured} data-testid="check-cadastre">
+            {checkingCadastre ? <Loader2 className="h-4 w-4 animate-spin" /> : <><MapPinned className="h-4 w-4" /> Check parcel access</>}
+          </Button>
+        </div>
+        {cadastre && (
+          <div className={`mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${cadastre.tileset_accessible ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-800"}`} data-testid="cadastre-result">
+            {cadastre.tileset_accessible ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
+            <div>
+              <div className="font-medium">{cadastre.tileset_accessible ? "Cadastre tileset is accessible" : "Cadastre tileset is not accessible"}</div>
+              <div className="mt-0.5 text-xs opacity-80">Status: {cadastre.reason || "unknown"}{cadastre.tileset_http_status != null ? ` · HTTP ${cadastre.tileset_http_status}` : ""}</div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -259,7 +294,7 @@ export default function Settings() {
               provider="maptiler"
               label="MapTiler"
               keyLabel="MapTiler API key"
-              help="Bring-your-own-key satellite imagery. Tiles are proxied through the RoofSpan backend."
+              help="One server-side MapTiler key for satellite imagery, address geocoding, and parcel/cadastre capability checks."
             />
           </TabsContent>
           <TabsContent value="map" className="mt-6">
