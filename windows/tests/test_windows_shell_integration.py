@@ -38,18 +38,18 @@ def test_msi_shortcuts_and_first_run_target_native_shell_not_browser():
     wxs = _read_installer("RoofSpan.wxs")
     assert '<Icon Id="RoofSpanIcon"' in wxs
     assert '<Property Id="ARPPRODUCTICON" Value="RoofSpanIcon" />' in wxs
-    assert 'Id="ShellExe"' in wxs
-    assert 'Source="$(var.StageDir)\\shell\\RoofSpanOffice.exe"' in wxs
+    assert '<Files Include="$(var.StageDir)\\shell\\**" />' in wxs
+    assert 'Exclude=' not in wxs
     assert 'Id="RoofSpanDesktopShortcut"' in wxs
     assert 'Directory="DesktopFolder"' in wxs
     assert 'Id="RoofSpanStartMenuShortcut"' in wxs
     assert 'Directory="ProgramMenuFolder"' in wxs
-    assert wxs.count('Target="[#ShellExe]"') == 2
+    assert wxs.count('Target="[ShellDir]RoofSpanOffice.exe"') == 2
     assert '<ComponentGroupRef Id="ShellFiles" />' in wxs
-    assert '<ComponentRef Id="ShellLauncher" />' in wxs
+    assert '<ComponentRef Id="ShellShortcuts" />' in wxs
     assert 'explorer.exe' not in wxs
     assert 'Arguments="http://127.0.0.1:8001/"' not in wxs
-    assert 'start &quot;&quot; &quot;[#ShellExe]&quot;' in wxs
+    assert 'ExeCommand="&quot;[ShellDir]RoofSpanOffice.exe&quot;"' in wxs
 
 
 def test_build_refuses_stage_without_native_shell():
