@@ -103,9 +103,9 @@ export default function MapView() {
     markersRef.current = [];
   }, []);
 
-  // Main-thread clustering (supercluster) rendered with HTML DOM markers. We do NOT use a MapLibre
-  // geojson source/layer for property pins because the geojson worker does not reliably tile the
-  // 'properties' source in this webpack build. DOM markers (maplibregl.Marker) always render.
+  // Main-thread clustering rendered with DOM markers is the authoritative packaged-Windows path.
+  // The MapLibre GeoJSON worker can fail to tile a large property source under WebView2, so marker
+  // visibility must never depend on that worker.
   const renderClusters = useCallback(() => {
     const map = mapRef.current;
     const index = superRef.current;
@@ -114,8 +114,8 @@ export default function MapView() {
     const b = map.getBounds();
     const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
     const zoom = Math.round(map.getZoom());
-    const features = index.getClusters(bbox, zoom);
-    for (const f of features) {
+    const clustered = index.getClusters(bbox, zoom);
+    for (const f of clustered) {
       const [lng, lat] = f.geometry.coordinates;
       const el = document.createElement("div");
       if (f.properties.cluster) {
@@ -134,8 +134,10 @@ export default function MapView() {
         });
       } else {
         const dnk = !!f.properties.do_not_knock;
+        const occupancy = f.properties.occupancy;
+        const color = dnk ? "#DC2626" : occupancy === "owned" ? "#16A34A" : occupancy === "rented" ? "#D97706" : "#64748B";
         el.setAttribute("data-testid", "map-property-pin");
-        el.style.cssText = `width:16px;height:16px;background:${dnk ? "#DC2626" : "#2563EB"};border:2px solid #fff;border-radius:9999px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.35)`;
+        el.style.cssText = `width:16px;height:16px;background:${color};border:2px solid #fff;border-radius:9999px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.35)`;
         const id = f.properties.id;
         el.addEventListener("click", (ev) => {
           ev.stopPropagation();
@@ -160,8 +162,6 @@ export default function MapView() {
     }
     try {
       const { data } = await api.get(`/properties/geojson?territory_id=${territoryId}`);
-      // Defensive: coerce coordinates to finite numbers and drop any out-of-range/invalid points so a
-      // single bad row can never stop MapLibre from rendering the rest.
       const feats = (data.features || []).filter((f) => {
         const c = f?.geometry?.coordinates;
         return (
@@ -174,15 +174,21 @@ export default function MapView() {
         ...f,
         geometry: { ...f.geometry, coordinates: [Number(f.geometry.coordinates[0]), Number(f.geometry.coordinates[1])] },
       }));
+
+      // Keep the GeoJSON source populated for existing hit/route integrations, but hide MapLibre's
+      // direct property layers so the DOM/Supercluster renderer remains the single visible path.
       const normalized = { type: "FeatureCollection", features: feats };
-      map.getSource("properties").setData(normalized);
-      if (map.getLayer("prop-points")) map.setLayoutProperty("prop-points", "visibility", "visible");
+      const source = map.getSource("properties");
+      if (source) source.setData(normalized);
+      if (map.getLayer("prop-points")) map.setLayoutProperty("prop-points", "visibility", "none");
+      if (map.getLayer("prop-hit")) map.setLayoutProperty("prop-hit", "visibility", "none");
+
       setPropCount(feats.length);
       setFeatures(feats);
     } catch (e) {
       toast.error(apiError(e));
     }
-  }, [renderClusters, clearMarkers]);
+  }, [clearMarkers]);
 
   const fitToTerritory = useCallback((t) => {
     const map = mapRef.current;
@@ -197,8 +203,6 @@ export default function MapView() {
     if (!map) return;
     vertexMarkers.current.forEach((m) => m.remove());
     vertexMarkers.current = [];
-    // Numbered corner markers are for hand-drawn territories. A snapped ZIP boundary can have hundreds
-    // of vertices, so past a small count we show only the outline (the draw-line/fill layers).
     if (pts.length > 24) return;
     pts.forEach((c, i) => {
       const el = document.createElement("div");
@@ -225,7 +229,6 @@ export default function MapView() {
     renderVertexMarkers(pts);
   }, [renderVertexMarkers]);
 
-  // init map once
   useEffect(() => {
     api.get("/map-config").then(({ data }) => {
       if (mapRef.current || !containerRef.current) return;
@@ -237,8 +240,6 @@ export default function MapView() {
         style: baseStyle(),
         center: data.default_center,
         zoom: data.default_zoom,
-        // Satellite tiles are proxied through the local backend (key stays server-side) and require the
-        // auth token; map raster requests bypass our axios interceptor, so attach the Bearer here.
         transformRequest: (url) => {
           if (url.includes("/map/tiles/satellite/")) {
             return { url, headers: { Authorization: `Bearer ${getToken()}` } };
@@ -250,8 +251,6 @@ export default function MapView() {
       mapRef.current = map;
 
       const initMapLayers = () => {
-        // Satellite base (MapTiler via backend proxy), added first so territory/property/draw layers
-        // stack on top. Visibility follows the saved default; the on-map toggle switches osm <-> satellite.
         if (data.maptiler_configured) {
           map.addSource("satellite", {
             type: "raster",
@@ -272,24 +271,11 @@ export default function MapView() {
 
         map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({
-          id: "prop-points", type: "circle", source: "properties",
-          paint: {
-            "circle-radius": 8,
-            // Do-not-knock always shows red; otherwise color by occupancy so sales can read the map:
-            // owned = green (talk to the homeowner), rented = amber, unknown = gray.
-            "circle-color": [
-              "case",
-              ["get", "do_not_knock"], "#DC2626",
-              ["==", ["get", "occupancy"], "owned"], "#16A34A",
-              ["==", ["get", "occupancy"], "rented"], "#D97706",
-              "#64748B",
-            ],
-            "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
-          },
+          id: "prop-points", type: "circle", source: "properties", layout: { visibility: "none" },
+          paint: { "circle-radius": 8, "circle-color": "#64748B", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 },
         });
-        // Larger invisible hit target for easier clicking / touch (accessibility)
         map.addLayer({
-          id: "prop-hit", type: "circle", source: "properties",
+          id: "prop-hit", type: "circle", source: "properties", layout: { visibility: "none" },
           paint: { "circle-radius": 16, "circle-color": "#000000", "circle-opacity": 0 },
         });
 
@@ -299,7 +285,6 @@ export default function MapView() {
         map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 7, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
 
-        // Walking-route line (built from the filtered contactable/owner set)
         map.addSource("route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "route-line", type: "line", source: "route",
           layout: { "line-cap": "round", "line-join": "round" },
@@ -315,21 +300,18 @@ export default function MapView() {
           }
         });
 
-        // Re-cluster (and re-place DOM markers) for the new viewport whenever the map settles.
         map.on("moveend", () => renderClusters());
-
         loadTerritories().then((list) => setTerritorySource(list, null));
       };
 
-      // Only add sources/layers once the style is ready: use the load event, or run
-      // immediately if the style is already loaded (e.g. cached/fast init).
       if (map.isStyleLoaded()) initMapLayers();
       else map.on("load", initMapLayers);
     });
     return () => {
+      clearMarkers();
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
     };
-  }, [loadTerritories, setTerritorySource, updateDrawSource]);
+  }, [loadTerritories, setTerritorySource, updateDrawSource, renderClusters, clearMarkers]);
 
   openSheetRef.current = (id) => { setSheetId(id); setSheetOpen(true); };
 
@@ -341,9 +323,6 @@ export default function MapView() {
   };
 
   const handleImportComplete = useCallback(async () => {
-    // After an import reaches `completed`, refresh in place — NO page reload / reselect required:
-    // territory list/count metadata, the selected territory source, and the property GeoJSON (which
-    // updates propCount, features, and the visible MapLibre points).
     const list = await loadTerritories();
     if (selectedId) {
       setTerritorySource(list, selectedId);
@@ -351,25 +330,27 @@ export default function MapView() {
     }
   }, [loadTerritories, setTerritorySource, loadProperties, selectedId]);
 
-  const applyPropFilter = useCallback(() => {
-    const map = mapRef.current;
-    if (!map || !map.getLayer("prop-points")) return;
-    const clauses = ["all"];
-    if (occFilter !== "all") clauses.push(["==", ["get", "occupancy"], occFilter]);
-    if (contactableOnly) clauses.push(["==", ["get", "contactable"], true]);
-    const f = clauses.length > 1 ? clauses : null;
-    map.setFilter("prop-points", f);
-    if (map.getLayer("prop-hit")) map.setFilter("prop-hit", f);
-  }, [occFilter, contactableOnly]);
-
-  useEffect(() => { applyPropFilter(); }, [applyPropFilter]);
-
   const filteredFeatures = useMemo(() => features.filter((f) => {
     const p = f.properties || {};
     if (occFilter !== "all" && p.occupancy !== occFilter) return false;
     if (contactableOnly && !p.contactable) return false;
     return true;
   }), [features, occFilter, contactableOnly]);
+
+  // Rebuild the main-thread cluster index whenever the loaded property set or user filter changes.
+  // This is the missing link that previously left superRef empty while the UI reported thousands of
+  // loaded properties.
+  useEffect(() => {
+    if (!filteredFeatures.length) {
+      superRef.current = null;
+      clearMarkers();
+      return;
+    }
+    const index = new Supercluster({ radius: 55, maxZoom: clusterZoomMax, minPoints: 2 });
+    index.load(filteredFeatures);
+    superRef.current = index;
+    renderClusters();
+  }, [filteredFeatures, renderClusters, clearMarkers]);
 
   const clearRoute = useCallback(() => {
     const map = mapRef.current;
@@ -392,7 +373,6 @@ export default function MapView() {
     if (!map) return;
     const pts = filteredFeatures.slice(0, 200).map((f) => ({ id: f.properties.id, c: f.geometry.coordinates, address: f.properties.address }));
     if (pts.length < 2) { toast.error("Need at least 2 matching stops to build a route"); return; }
-    // Nearest-neighbour walking order starting from the western-most stop.
     const remaining = [...pts].sort((a, b) => a.c[0] - b.c[0]);
     const order = [remaining.shift()];
     let miles = 0;
@@ -442,11 +422,8 @@ export default function MapView() {
     setSavingRoute(true);
     try {
       const { data } = await api.post("/routes", {
-        name: routeName.trim(),
-        territory_id: selectedId || null,
-        assigned_user_id: routeRepId || null,
-        est_miles: routeInfo ? Number(routeInfo.miles) : 0,
-        stops: builtRoute,
+        name: routeName.trim(), territory_id: selectedId || null, assigned_user_id: routeRepId || null,
+        est_miles: routeInfo ? Number(routeInfo.miles) : 0, stops: builtRoute,
       });
       toast.success(routeRepId ? "Route assigned" : "Route saved");
       setAssignOpen(false);
@@ -458,19 +435,13 @@ export default function MapView() {
     }
   }, [routeName, builtRoute, selectedId, routeRepId, routeInfo, navigate]);
 
-
-
   const switchBase = (layer) => {
     const map = mapRef.current;
     if (!map || layer === baseLayer) return;
     if (layer === "satellite" && !map.getLayer("satellite-layer")) return;
     setBaseLayer(layer);
-    if (map.getLayer("satellite-layer")) {
-      map.setLayoutProperty("satellite-layer", "visibility", layer === "satellite" ? "visible" : "none");
-    }
-    if (map.getLayer("osm")) {
-      map.setLayoutProperty("osm", "visibility", layer === "satellite" ? "none" : "visible");
-    }
+    if (map.getLayer("satellite-layer")) map.setLayoutProperty("satellite-layer", "visibility", layer === "satellite" ? "visible" : "none");
+    if (map.getLayer("osm")) map.setLayoutProperty("osm", "visibility", layer === "satellite" ? "none" : "visible");
   };
 
   const searchZip = async (e) => {
@@ -500,23 +471,18 @@ export default function MapView() {
     const [[w, s], [e2, n]] = zipHit.bbox;
     let ring = null;
     const geom = zipHit.geometry;
-    if (geom && geom.type === "Polygon" && geom.coordinates?.[0]?.length >= 3) {
-      ring = geom.coordinates[0];
-    } else if (geom && geom.type === "MultiPolygon" && geom.coordinates?.length) {
-      ring = geom.coordinates.map((poly) => poly[0]).sort((a, b) => b.length - a.length)[0];  // largest ring
-    }
+    if (geom && geom.type === "Polygon" && geom.coordinates?.[0]?.length >= 3) ring = geom.coordinates[0];
+    else if (geom && geom.type === "MultiPolygon" && geom.coordinates?.length) ring = geom.coordinates.map((poly) => poly[0]).sort((a, b) => b.length - a.length)[0];
     if (!ring || ring.length < 3) {
-      ring = [[w, s], [e2, s], [e2, n], [w, n]];  // fallback: bbox rectangle when no boundary available
+      ring = [[w, s], [e2, s], [e2, n], [w, n]];
       toast.info("No exact boundary for this ZIP — added its area as an editable rectangle.");
-    } else {
-      toast.info("Snapped the ZIP boundary. Review and click Finish to name & save.");
-    }
-    if (ring.length > 1) {  // drop the closing duplicate vertex (save re-closes the ring)
+    } else toast.info("Snapped the ZIP boundary. Review and click Finish to name & save.");
+    if (ring.length > 1) {
       const a = ring[0], b = ring[ring.length - 1];
       if (a[0] === b[0] && a[1] === b[1]) ring = ring.slice(0, -1);
     }
     drawPts.current = ring.map((c) => [c[0], c[1]]);
-    zipForTerritory.current = (zip || "").trim() || null;  // remember the ZIP for an exact RentCast pull
+    zipForTerritory.current = (zip || "").trim() || null;
     drawing.current = true;
     setIsDrawing(true);
     setDrawCount(drawPts.current.length);
@@ -531,7 +497,7 @@ export default function MapView() {
   const startDraw = () => {
     drawing.current = true;
     drawPts.current = [];
-    zipForTerritory.current = null;  // a hand-drawn territory is not tied to a ZIP
+    zipForTerritory.current = null;
     setIsDrawing(true);
     setDrawCount(0);
     updateDrawSource();
@@ -549,10 +515,7 @@ export default function MapView() {
   };
 
   const finishDraw = () => {
-    if (drawPts.current.length < 3) {
-      toast.error("Add at least 3 points to form a territory");
-      return;
-    }
+    if (drawPts.current.length < 3) { toast.error("Add at least 3 points to form a territory"); return; }
     drawing.current = false;
     setIsDrawing(false);
     if (mapRef.current) mapRef.current.getCanvas().style.cursor = "";
@@ -577,8 +540,6 @@ export default function MapView() {
       updateDrawSource();
       const list = await loadTerritories();
       const created = list.find((t) => t.id === data.id);
-      // Auto-select the brand-new territory (fresh list) so it highlights, fits into view, and its
-      // points load instantly — no manual click needed.
       if (created) selectTerritory(created, list);
       else setTerritorySource(list, data.id);
     } catch (e) {
@@ -604,7 +565,6 @@ export default function MapView() {
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col md:h-screen">
       <div className="flex flex-1 overflow-hidden">
-        {/* Left panel */}
         <div className="hidden w-80 shrink-0 flex-col border-r border-border bg-white md:flex" data-testid="territory-panel">
           <div className="border-b border-border px-5 py-4">
             <h1 className="font-heading text-lg font-bold text-slate-900">Property Acquisition</h1>
@@ -612,32 +572,20 @@ export default function MapView() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {/* Base layer toggle (only when MapTiler satellite is configured) */}
             {mapConfig?.maptiler_configured && (
               <div className="space-y-2 border-b border-border p-4" data-testid="basemap-panel">
                 <Label className="text-xs font-semibold text-slate-600">Base map</Label>
                 <div className="flex gap-1 rounded-md bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => switchBase("map")}
+                  <button type="button" onClick={() => switchBase("map")}
                     className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "map" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                    data-testid="basemap-map-button"
-                  >
-                    Street
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchBase("satellite")}
+                    data-testid="basemap-map-button">Street</button>
+                  <button type="button" onClick={() => switchBase("satellite")}
                     className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "satellite" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                    data-testid="basemap-satellite-button"
-                  >
-                    Satellite
-                  </button>
+                    data-testid="basemap-satellite-button">Satellite</button>
                 </div>
               </div>
             )}
 
-            {/* ZIP / postal code search */}
             <div className="space-y-2 border-b border-border p-4" data-testid="zip-search-panel">
               <Label className="text-xs font-semibold text-slate-600">Find a ZIP / postal code</Label>
               <form onSubmit={searchZip} className="flex gap-2">
@@ -646,216 +594,54 @@ export default function MapView() {
                   {geoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
                 </Button>
               </form>
-              {zipHit && (
-                <>
-                  <p className="truncate text-xs text-slate-500" title={zipHit.display_name} data-testid="zip-result-name">{zipHit.display_name}</p>
-                  {canManage && !isDrawing && (
-                    <Button onClick={addZipAsTerritory} variant="secondary" className="w-full" data-testid="add-zip-territory-button">
-                      <Plus className="h-4 w-4" /> Add ZIP area as territory
-                    </Button>
-                  )}
-                </>
-              )}
+              {zipHit && <><p className="truncate text-xs text-slate-500" title={zipHit.display_name} data-testid="zip-result-name">{zipHit.display_name}</p>{canManage && !isDrawing && <Button onClick={addZipAsTerritory} variant="secondary" className="w-full" data-testid="add-zip-territory-button"><Plus className="h-4 w-4" /> Add ZIP area as territory</Button>}</>}
             </div>
 
-            {/* Property filters — focus reps on homeowners / contactable leads */}
             <div className="space-y-2 border-b border-border p-4" data-testid="property-filters">
               <Label className="text-xs font-semibold text-slate-600">Show properties</Label>
               <div className="flex flex-wrap gap-1">
                 {[["all", "All"], ["owned", "Owned"], ["rented", "Rented"], ["unknown", "Unknown"]].map(([v, label]) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setOccFilter(v)}
+                  <button key={v} type="button" onClick={() => setOccFilter(v)}
                     className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${occFilter === v ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
-                    data-testid={`occ-filter-${v}`}
-                  >
-                    {label}
-                  </button>
+                    data-testid={`occ-filter-${v}`}>{label}</button>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={() => setContactableOnly((v) => !v)}
+              <button type="button" onClick={() => setContactableOnly((v) => !v)}
                 className={`flex w-full items-center justify-between rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${contactableOnly ? "border-green-600 bg-green-50 text-green-800" : "border-border bg-white text-slate-600 hover:bg-slate-50"}`}
-                data-testid="contactable-toggle"
-              >
-                <span>Contactable leads only</span>
-                <span>{contactableOnly ? "On" : "Off"}</span>
-              </button>
-              <div className="pt-1 text-xs text-slate-500" data-testid="filtered-count">
-                Showing <span className="font-semibold text-slate-800">{filteredFeatures.length}</span> of {features.length}
-                {(occFilter !== "all" || contactableOnly) && <span> matching</span>}
-              </div>
-              <div className="flex gap-2 pt-1">
-                <Button size="sm" variant="secondary" className="flex-1" onClick={buildRoute}
-                  disabled={filteredFeatures.length < 2} data-testid="build-route-button">
-                  Build walking route
-                </Button>
-                {routeInfo && (
-                  <Button size="sm" variant="ghost" onClick={clearRoute} data-testid="clear-route-button">Clear</Button>
-                )}
-              </div>
-              {routeInfo && (
-                <div className="rounded-md bg-indigo-50 px-3 py-1.5 text-xs text-indigo-800" data-testid="route-info">
-                  Route: <strong>{routeInfo.stops}</strong> stops · ~<strong>{routeInfo.miles}</strong> mi walking
-                </div>
-              )}
-              {routeInfo && canManage && (
-                <Button size="sm" className="w-full" onClick={openAssign} data-testid="assign-route-button">
-                  <UserPlus className="h-4 w-4" /> Assign route to rep
-                </Button>
-              )}
+                data-testid="contactable-toggle"><span>Contactable leads only</span><span>{contactableOnly ? "On" : "Off"}</span></button>
+              <div className="pt-1 text-xs text-slate-500" data-testid="filtered-count">Showing <span className="font-semibold text-slate-800">{filteredFeatures.length}</span> of {features.length}{(occFilter !== "all" || contactableOnly) && <span> matching</span>}</div>
+              <div className="flex gap-2 pt-1"><Button size="sm" variant="secondary" className="flex-1" onClick={buildRoute} disabled={filteredFeatures.length < 2} data-testid="build-route-button">Build walking route</Button>{routeInfo && <Button size="sm" variant="ghost" onClick={clearRoute} data-testid="clear-route-button">Clear</Button>}</div>
+              {routeInfo && <div className="rounded-md bg-indigo-50 px-3 py-1.5 text-xs text-indigo-800" data-testid="route-info">Route: <strong>{routeInfo.stops}</strong> stops · ~<strong>{routeInfo.miles}</strong> mi walking</div>}
+              {routeInfo && canManage && <Button size="sm" className="w-full" onClick={openAssign} data-testid="assign-route-button"><UserPlus className="h-4 w-4" /> Assign route to rep</Button>}
             </div>
 
+            {canManage && <div className="border-b border-border p-4">{!isDrawing ? <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button"><PencilRuler className="h-4 w-4" /> Draw new territory</Button> : <div className="space-y-2"><div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div><div className="flex gap-2"><Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button><Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button></div></div>}</div>}
 
-            {/* Draw controls */}
-            {canManage && (
-              <div className="border-b border-border p-4">
-                {!isDrawing ? (
-                  <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button">
-                    <PencilRuler className="h-4 w-4" /> Draw new territory
-                  </Button>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div>
-                    <div className="flex gap-2">
-                      <Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button>
-                      <Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Territory list */}
             <div className="p-2">
-              {territories.length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>
-              )}
+              {territories.length === 0 && <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>}
               {territories.map((t) => (
-                <div
-                  key={t.id}
-                  onClick={() => selectTerritory(t)}
+                <div key={t.id} onClick={() => selectTerritory(t)}
                   className={`mb-1 cursor-pointer rounded-md border p-3 transition-colors ${selectedId === t.id ? "border-slate-900 bg-slate-50" : "border-transparent hover:bg-slate-50"}`}
-                  data-testid={`territory-item-${t.id}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: t.color }} />
-                      <span className="font-medium text-slate-900">{t.name}</span>
-                    </div>
-                    {canManage && (
-                      <button onClick={(e) => { e.stopPropagation(); deleteTerritory(t); }} className="text-slate-300 hover:text-red-500" data-testid={`delete-territory-${t.id}`}>
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {t.property_count} properties</span>
-                  </div>
-                  {selectedId === t.id && canManage && (
-                    <Button size="sm" variant="outline" className="mt-2 w-full" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }} data-testid="import-button">
-                      <Download className="h-4 w-4" /> Import properties
-                    </Button>
-                  )}
+                  data-testid={`territory-item-${t.id}`}>
+                  <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm" style={{ backgroundColor: t.color }} /><span className="font-medium text-slate-900">{t.name}</span></div>{canManage && <button onClick={(e) => { e.stopPropagation(); deleteTerritory(t); }} className="text-slate-300 hover:text-red-500" data-testid={`delete-territory-${t.id}`}><Trash2 className="h-4 w-4" /></button>}</div>
+                  <div className="mt-1 flex items-center gap-3 text-xs text-slate-500"><span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {t.property_count} properties</span></div>
+                  {selectedId === t.id && canManage && <Button size="sm" variant="outline" className="mt-2 w-full" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }} data-testid="import-button"><Download className="h-4 w-4" /> Import properties</Button>}
                 </div>
               ))}
             </div>
           </div>
 
-          {selected && (
-            <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary">
-              <span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-600" /> Owned</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Rented</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> Unknown</span>
-                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Do Not Knock</span>
-              </div>
-            </div>
-          )}
+          {selected && <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary"><span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1"><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-600" /> Owned</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Rented</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> Unknown</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Do Not Knock</span></div></div>}
         </div>
 
-        {/* Map */}
-        <div className="relative flex-1">
-          <div ref={containerRef} className="h-full w-full" data-testid="map-container" />
-          {isDrawing && (
-            <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-1.5 text-sm text-white shadow">
-              Click to place corners · Finish when done
-            </div>
-          )}
-        </div>
+        <div className="relative flex-1"><div ref={containerRef} className="h-full w-full" data-testid="map-container" />{isDrawing && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-1.5 text-sm text-white shadow">Click to place corners · Finish when done</div>}</div>
       </div>
 
-      {/* Save territory dialog */}
-      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
-        <DialogContent data-testid="save-territory-dialog">
-          <DialogHeader><DialogTitle>Name this territory</DialogTitle><DialogDescription>Give the drawn territory a name and color.</DialogDescription></DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Territory name</Label>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. North Austin" data-testid="territory-name-input" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Color</Label>
-              <div className="flex gap-2">
-                {COLORS.map((c) => (
-                  <button key={c} onClick={() => setNewColor(c)} className={`h-7 w-7 rounded-md border-2 ${newColor === c ? "border-slate-900" : "border-transparent"}`} style={{ backgroundColor: c }} data-testid={`color-${c}`} />
-                ))}
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setSaveOpen(false); cancelDraw(); }}>Cancel</Button>
-            <Button onClick={saveTerritory} disabled={saving} data-testid="save-territory-button">
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create territory</>}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Dialog open={saveOpen} onOpenChange={setSaveOpen}><DialogContent data-testid="save-territory-dialog"><DialogHeader><DialogTitle>Name this territory</DialogTitle><DialogDescription>Give the drawn territory a name and color.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Territory name</Label><Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. North Austin" data-testid="territory-name-input" /></div><div className="space-y-1.5"><Label>Color</Label><div className="flex gap-2">{COLORS.map((c) => <button key={c} onClick={() => setNewColor(c)} className={`h-7 w-7 rounded-md border-2 ${newColor === c ? "border-slate-900" : "border-transparent"}`} style={{ backgroundColor: c }} data-testid={`color-${c}`} />)}</div></div></div><DialogFooter><Button variant="outline" onClick={() => { setSaveOpen(false); cancelDraw(); }}>Cancel</Button><Button onClick={saveTerritory} disabled={saving} data-testid="save-territory-button">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create territory</>}</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
-        <DialogContent data-testid="assign-route-dialog">
-          <DialogHeader>
-            <DialogTitle>Assign this route</DialogTitle>
-            <DialogDescription>Save the {builtRoute.length}-stop walking route and assign it to a sales rep for canvassing.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Route name</Label>
-              <Input value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="e.g. North Austin route" data-testid="route-name-input" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Assign to rep</Label>
-              <select
-                value={routeRepId}
-                onChange={(e) => setRouteRepId(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
-                data-testid="route-rep-select"
-              >
-                <option value="">Unassigned (assign later)</option>
-                {reps.map((u) => (
-                  <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>
-                ))}
-              </select>
-            </div>
-            <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
-              {builtRoute.length} stops{routeInfo ? ` · ~${routeInfo.miles} mi walking` : ""}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
-            <Button onClick={saveRoute} disabled={savingRoute} data-testid="save-route-button">
-              {savingRoute ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UserPlus className="h-4 w-4" /> {routeRepId ? "Assign route" : "Save route"}</>}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Dialog open={assignOpen} onOpenChange={setAssignOpen}><DialogContent data-testid="assign-route-dialog"><DialogHeader><DialogTitle>Assign this route</DialogTitle><DialogDescription>Save the {builtRoute.length}-stop walking route and assign it to a sales rep for canvassing.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Route name</Label><Input value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="e.g. North Austin route" data-testid="route-name-input" /></div><div className="space-y-1.5"><Label>Assign to rep</Label><select value={routeRepId} onChange={(e) => setRouteRepId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm" data-testid="route-rep-select"><option value="">Unassigned (assign later)</option>{reps.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>)}</select></div><div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">{builtRoute.length} stops{routeInfo ? ` · ~${routeInfo.miles} mi walking` : ""}</div></div><DialogFooter><Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button><Button onClick={saveRoute} disabled={savingRoute} data-testid="save-route-button">{savingRoute ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UserPlus className="h-4 w-4" /> {routeRepId ? "Assign route" : "Save route"}</>}</Button></DialogFooter></DialogContent></Dialog>
 
-      {selected && (
-        <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={handleImportComplete} />
-      )}
+      {selected && <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={handleImportComplete} />}
       <PropertySheet propertyId={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} onChanged={() => loadProperties(selectedId)} />
     </div>
   );
