@@ -37,6 +37,13 @@ def _occupancy_status(owner_occupied: bool | None) -> str:
     return "unknown"
 
 
+def _location_diagnostics(p: Property) -> dict | None:
+    """Expose only RoofSpan's safe geocoding provenance, never the full provider raw payload."""
+    raw = p.raw if isinstance(p.raw, dict) else {}
+    loc = raw.get("roofspan_location")
+    return dict(loc) if isinstance(loc, dict) else None
+
+
 @router.get("", response_model=list[PropertyOut])
 async def list_properties(
     territory_id: str | None = Query(None),
@@ -119,6 +126,7 @@ async def get_property(property_id: str, user: User = Depends(get_current_user),
         contacts=[ContactOut(id=str(c.id), kind=c.kind, name=c.name, contact_type=c.contact_type, mailing_address=c.mailing_address, phone=c.phone, email=c.email) for c in contacts],
         visits=[VisitOut(id=str(v.id), visited_at=v.visited_at, user_email=v.user_email, outcome=v.outcome, notes=v.notes, created_at=v.created_at) for v in visits],
         lead_id=str(lead.id) if lead else None,
+        location_diagnostics=_location_diagnostics(p),
     )
 
 
