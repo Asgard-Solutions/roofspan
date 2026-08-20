@@ -53,3 +53,16 @@ def test_freeze_cleans_stale_alembic_bytecode_and_old_outputs():
 def test_backend_spec_pins_migration_runner():
     src = _read(WINBUILD / "roofspan-backend.spec")
     assert '"migrations_runner"' in src
+
+
+def test_released_orphaned_revision_is_explicitly_reconciled():
+    src = _read(BACKEND / "migrations_runner.py")
+    assert 'LEGACY_ORPHANED_REVISIONS = {"c1d2e3f4a5b6"}' in src
+    assert "_infer_legacy_revision_from_schema" in src
+    assert "_reconcile_orphaned_released_revision" in src
+    assert "BASELINE_SCHEMA_TABLES" in src
+    assert "UPDATE alembic_version SET version_num=%s WHERE version_num=%s" in src
+    # Never silently accept arbitrary unknown migration ids.
+    assert "will not guess or rewrite migration history for an unrecognized database" in src
+    # Reconciliation must happen before Alembic attempts the normal upgrade.
+    assert src.index("_reconcile_orphaned_released_revision(script)") < src.index('command.upgrade(cfg, "head")')
