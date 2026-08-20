@@ -56,19 +56,19 @@
       <Files Include="$(var.StageDir)\config-templates\**" />
     </ComponentGroup>
 
-    <!-- Native desktop shell dependencies. The launcher exe is authored explicitly below so shortcuts
-         and first-run launch always target the installed application host, never the default browser. -->
+    <!-- Harvest the COMPLETE native shell publish output, including RoofSpanOffice.exe and all of its
+         self-contained .NET/WebView2 dependencies. WiX 5 Files does not support an Exclude attribute. -->
     <ComponentGroup Id="ShellFiles" Directory="ShellDir">
-      <Files Include="$(var.StageDir)\shell\**" Exclude="$(var.StageDir)\shell\RoofSpanOffice.exe" />
+      <Files Include="$(var.StageDir)\shell\**" />
     </ComponentGroup>
 
-    <Component Id="ShellLauncher" Directory="ShellDir" Guid="*">
-      <File Id="ShellExe" Source="$(var.StageDir)\shell\RoofSpanOffice.exe" KeyPath="yes" />
+    <!-- Shell shortcuts are separate from the harvested files so the launcher exe is not authored twice. -->
+    <Component Id="ShellShortcuts" Directory="ShellDir" Guid="*">
       <Shortcut Id="RoofSpanDesktopShortcut"
                 Directory="DesktopFolder"
                 Name="RoofSpan Office"
                 Description="Open RoofSpan Office"
-                Target="[#ShellExe]"
+                Target="[ShellDir]RoofSpanOffice.exe"
                 WorkingDirectory="INSTALLFOLDER"
                 Icon="RoofSpanIcon"
                 IconIndex="0" />
@@ -76,10 +76,12 @@
                 Directory="ProgramMenuFolder"
                 Name="RoofSpan Office"
                 Description="Open RoofSpan Office"
-                Target="[#ShellExe]"
+                Target="[ShellDir]RoofSpanOffice.exe"
                 WorkingDirectory="INSTALLFOLDER"
                 Icon="RoofSpanIcon"
                 IconIndex="0" />
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="NativeShellShortcuts"
+                     Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
     <ComponentGroup Id="Services">
@@ -168,7 +170,7 @@
       <ComponentGroupRef Id="RuntimeFiles" />
       <ComponentGroupRef Id="ConfigTemplateFiles" />
       <ComponentGroupRef Id="ShellFiles" />
-      <ComponentRef Id="ShellLauncher" />
+      <ComponentRef Id="ShellShortcuts" />
       <ComponentGroupRef Id="Services" />
       <ComponentGroupRef Id="ServiceInternals" />
       <ComponentRef Id="DataDirs" />
@@ -178,8 +180,8 @@
     </Feature>
 
     <!-- First run opens the native RoofSpan application window. The local URL remains internal to it. -->
-    <CustomAction Id="LaunchFirstRun" Directory="INSTALLFOLDER"
-                  ExeCommand="[SystemFolder]cmd.exe /c start &quot;&quot; &quot;[#ShellExe]&quot;"
+    <CustomAction Id="LaunchFirstRun" Directory="ShellDir"
+                  ExeCommand="&quot;[ShellDir]RoofSpanOffice.exe&quot;"
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
       <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed" />
