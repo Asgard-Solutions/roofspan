@@ -5,7 +5,7 @@
 # Produces:
 #   _stage\services\{roofspan-backend,roofspan-relay-connector,roofspan-update-service}.exe
 #   _stage\frontend\**            (production build of /app/frontend - the Office UI ONLY)
-#   _stage\runtime\**             (extra runtime assets, e.g. pg_dump for backups)
+#   _stage\runtime\**             (launcher/icon/runtime assets)
 #   _stage\config-templates\**    (config templates + update_public_key.pem)
 param(
   [Parameter(Mandatory=$true)][string]$StageDir,
@@ -55,7 +55,41 @@ try {
   Copy-Item ".\build\*" $frontend -Recurse -Force
 } finally { Pop-Location }
 
-# 3) Config templates + update PUBLIC key (public only).
+# 3) Build the Windows shell icon from the canonical RoofSpan app icon. The MSI uses this for the
+# Start-menu shortcut, desktop shortcut, and Add/Remove Programs entry. Keep this deterministic so
+# upgrades cannot silently remove RoofSpan from Windows shell surfaces.
+$brandPng = Join-Path $feDirResolved "public\brand\roofspan-appicon.png"
+$roofspanIco = Join-Path $runtime "RoofSpan.ico"
+if (-not (Test-Path $brandPng)) { throw "RoofSpan app icon not found at '$brandPng'." }
+Add-Type -AssemblyName System.Drawing
+$srcImage = [System.Drawing.Image]::FromFile($brandPng)
+try {
+  $bitmap = New-Object System.Drawing.Bitmap 256,256
+  try {
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    try {
+      $graphics.DrawImage($srcImage, 0, 0, 256, 256)
+    } finally {
+      $graphics.Dispose()
+    }
+    $iconHandle = $bitmap.GetHicon()
+    $icon = [System.Drawing.Icon]::FromHandle($iconHandle)
+    $stream = [System.IO.File]::Create($roofspanIco)
+    try {
+      $icon.Save($stream)
+    } finally {
+      $stream.Dispose()
+      $icon.Dispose()
+    }
+  } finally {
+    $bitmap.Dispose()
+  }
+} finally {
+  $srcImage.Dispose()
+}
+if (-not (Test-Path $roofspanIco)) { throw "Failed to generate RoofSpan.ico for Windows shell integration." }
+
+# 4) Config templates + update PUBLIC key (public only).
 Copy-Item (Join-Path $PSScriptRoot "..\winbuild\config\*") $config -Recurse -Force
 if ($UpdatePublicKey) {
   Copy-Item $UpdatePublicKey (Join-Path $config "update_public_key.pem") -Force
@@ -63,8 +97,8 @@ if ($UpdatePublicKey) {
   Write-Warning "No -UpdatePublicKey supplied; update verification key must be staged before release."
 }
 
-# 4) Runtime marker (bundle pg client tools here if needed for pg_dump-based backups).
-Set-Content -Path (Join-Path $runtime "README.txt") -Value "RoofSpan Office runtime assets (e.g. pg_dump for pre-update backups)."
+# 5) Runtime marker (bundle pg client tools here if needed for pg_dump-based backups).
+Set-Content -Path (Join-Path $runtime "README.txt") -Value "RoofSpan Office runtime assets (shell icon and future pg_dump backup tools)."
 
 # ---- FAIL-FAST: the COMPLETE stage tree that build.ps1 consumes must exist before declaring success.
 $requiredStage = @(
@@ -72,7 +106,7 @@ $requiredStage = @(
   (Join-Path $services "roofspan-relay-connector\roofspan-relay-connector.exe"),
   (Join-Path $services "roofspan-update-service\roofspan-update-service.exe"),
   (Join-Path $frontend "index.html"),
-  $runtime,
+  (Join-Path $runtime "RoofSpan.ico"),
   $config
 )
 foreach ($p in $requiredStage) {
