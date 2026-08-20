@@ -10,8 +10,9 @@ from db import get_db, SessionLocal
 from models import Territory, Property, PropertyContact, ImportJob, IntegrationSetting, User
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
-from geo import centroid, enclosing_radius_miles, point_in_polygon
+from geo import bbox, centroid, enclosing_radius_miles, point_in_polygon
 from rentcast import fetch_rentcast_properties, normalize_rentcast, generate_sample_properties
+from maptiler import geocode_addresses_batch
 
 router = APIRouter(prefix="/api", tags=["imports"])
 
@@ -30,8 +31,25 @@ def _job_out(j: ImportJob) -> ImportJobOut:
     )
 
 
+async def _integration_setting(db: AsyncSession, provider: str) -> IntegrationSetting | None:
+    return (await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == provider))).scalar_one_or_none()
+
+
 async def _rentcast_setting(db: AsyncSession) -> IntegrationSetting | None:
-    return (await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "rentcast"))).scalar_one_or_none()
+    return await _integration_setting(db, "rentcast")
+
+
+async def _maptiler_setting(db: AsyncSession) -> IntegrationSetting | None:
+    return await _integration_setting(db, "maptiler")
+
+
+def _usable_secret(row: IntegrationSetting | None) -> str | None:
+    if not (row and row.enabled and row.secret_ciphertext):
+        return None
+    try:
+        return decrypt_secret(row.secret_ciphertext)
+    except Exception:
+        return None
 
 
 def _resolve_mode(requested: str | None, configured: bool) -> str:
@@ -40,13 +58,75 @@ def _resolve_mode(requested: str | None, configured: bool) -> str:
     return "rentcast" if configured else "sample"
 
 
+def _apply_maptiler_locations(normalized: list[dict], features: list[dict | None], territory_geometry: dict) -> None:
+    """Prefer accepted MapTiler address coordinates while preserving RentCast source coordinates."""
+    for nd, feature in zip(normalized, features):
+        source_lat = nd.get("latitude")
+        source_lng = nd.get("longitude")
+        raw = dict(nd.get("raw") or {})
+        raw["roofspan_location"] = {
+            "rentcast_latitude": source_lat,
+            "rentcast_longitude": source_lng,
+            "coordinate_source": "rentcast",
+            "maptiler_relevance": None,
+            "maptiler_place_type": None,
+            "maptiler_feature_id": None,
+        }
+
+        if feature:
+            coords = (feature.get("geometry") or {}).get("coordinates") or []
+            if len(coords) >= 2:
+                lng, lat = coords[0], coords[1]
+                # BBOX filtering happens at the provider too; keep this local geometry check so a
+                # bad/ambiguous provider result can never move a pin outside the selected territory.
+                if point_in_polygon(lng, lat, territory_geometry):
+                    nd["longitude"] = lng
+                    nd["latitude"] = lat
+                    props = feature.get("properties") or {}
+                    place_type = feature.get("place_type") or props.get("type") or props.get("kind")
+                    raw["roofspan_location"].update({
+                        "coordinate_source": "maptiler_address",
+                        "maptiler_latitude": lat,
+                        "maptiler_longitude": lng,
+                        "maptiler_relevance": feature.get("relevance"),
+                        "maptiler_place_type": place_type,
+                        "maptiler_feature_id": feature.get("id"),
+                    })
+        nd["raw"] = raw
+
+
+async def _geocode_rentcast_locations(db: AsyncSession, normalized: list[dict], territory_geometry: dict) -> None:
+    """Resolve RentCast addresses through the configured MapTiler geocoder.
+
+    Fail-open behavior is intentional: unavailable/ambiguous MapTiler results retain the original
+    RentCast coordinate so a mapping-provider outage does not fail a property import.
+    """
+    maptiler = await _maptiler_setting(db)
+    key = _usable_secret(maptiler)
+    if not key or not normalized:
+        return
+
+    addresses = [nd.get("formatted_address") or "" for nd in normalized]
+    try:
+        features = await geocode_addresses_batch(
+            key,
+            addresses,
+            bbox=bbox(territory_geometry),
+            country="us",
+            min_relevance=0.80,
+        )
+    except Exception:
+        return
+    _apply_maptiler_locations(normalized, features, territory_geometry)
+
+
 @router.post("/territories/{territory_id}/import/preview", response_model=ImportPreviewOut)
 async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     t = await db.get(Territory, territory_id)
     if not t:
         raise HTTPException(status_code=404, detail="Territory not found")
     setting = await _rentcast_setting(db)
-    configured = bool(setting and setting.enabled and setting.secret_ciphertext)
+    configured = bool(_usable_secret(setting))
     mode = _resolve_mode(payload.mode, configured)
     radius = round(enclosing_radius_miles(t.geometry), 2)
 
@@ -54,21 +134,21 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         if not configured:
             raise HTTPException(status_code=400, detail="RentCast is not configured. Enable it and add a key in Settings, or use sample data.")
         clng, clat = centroid(t.geometry)
-        key = decrypt_secret(setting.secret_ciphertext)
+        key = _usable_secret(setting)
         try:
             raws = await fetch_rentcast_properties(key, clat, clng, radius, min(payload.max_records, 50))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"RentCast preview failed: {e.__class__.__name__}")
         inside = [normalize_rentcast(r) for r in raws if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], t.geometry)]
+        await _geocode_rentcast_locations(db, inside, t.geometry)
         est_requests = math.ceil(payload.max_records / 500)
         return ImportPreviewOut(
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)).",
+            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)); configured MapTiler address geocoding is used for pin placement when a high-confidence address match is available.",
         )
 
-    # sample mode
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
     return ImportPreviewOut(
         mode="sample", rentcast_configured=configured, estimated_requests=0,
@@ -88,14 +168,15 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
         try:
             if mode == "rentcast":
                 setting = await _rentcast_setting(db)
-                if not (setting and setting.enabled and setting.secret_ciphertext):
+                key = _usable_secret(setting)
+                if not key:
                     raise RuntimeError("RentCast is not configured")
-                key = decrypt_secret(setting.secret_ciphertext)
                 clng, clat = centroid(territory.geometry)
                 radius = enclosing_radius_miles(territory.geometry)
                 raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
                 normalized = [normalize_rentcast(r) for r in raws
                               if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)]
+                await _geocode_rentcast_locations(db, normalized, territory.geometry)
             else:
                 normalized = generate_sample_properties(str(territory.id), territory.geometry, max_records)
 
@@ -111,7 +192,6 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                 existing = (await db.execute(select(Property).where(Property.external_id == ext))).scalar_one_or_none()
                 owner = nd.get("owner") or {}
                 if existing:
-                    # Idempotent update: refresh source fields, preserve do_not_knock/notes/territory link.
                     existing.formatted_address = nd["formatted_address"]
                     existing.address_line1 = nd["address_line1"]
                     existing.city = nd["city"]
@@ -171,7 +251,7 @@ async def start_import(territory_id: str, payload: ImportStartIn, request: Reque
     if not t:
         raise HTTPException(status_code=404, detail="Territory not found")
     setting = await _rentcast_setting(db)
-    configured = bool(setting and setting.enabled and setting.secret_ciphertext)
+    configured = bool(_usable_secret(setting))
     mode = _resolve_mode(payload.mode, configured)
     if mode == "rentcast" and not configured:
         raise HTTPException(status_code=400, detail="RentCast is not configured")
