@@ -7,26 +7,21 @@
 #   .\build.ps1  -StageDir ..\..\_stage -PostgresInstaller C:\prereq\postgresql-16-windows-x64.exe `
 #                [-Version 0.1.0] [-SignCertThumbprint <thumb>] [-UpdateSigningPrivateKey <priv.pem>]
 param(
-  [string]$Version = "",                                       # defaults to windows/VERSION
-  [Parameter(Mandatory=$true)][string]$StageDir,               # from stage.ps1
-  [Parameter(Mandatory=$true)][string]$PostgresInstaller,      # EDB PostgreSQL silent installer (.exe)
-  [Parameter(Mandatory=$true)][string]$WebView2Bootstrapper,   # Evergreen WebView2 runtime bootstrapper (.exe)
-  [string]$SignCertThumbprint = "",                            # HUMAN REQUIRED for production
-  [string]$UpdateSigningPrivateKey = "",                       # SEPARATE from entitlement keys; OFFLINE
+  [string]$Version = "",
+  [Parameter(Mandatory=$true)][string]$StageDir,
+  [Parameter(Mandatory=$true)][string]$PostgresInstaller,
+  [Parameter(Mandatory=$true)][string]$WebView2Bootstrapper,
+  [string]$SignCertThumbprint = "",
+  [string]$UpdateSigningPrivateKey = "",
   [string]$OutDir = ".\dist"
 )
 $ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = (Get-Content (Join-Path $PSScriptRoot "..\VERSION") -Raw).Trim() }
 
-# ---- FAIL-FAST: required tooling, staged payload, and prerequisites must all exist. No partial builds.
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
   throw "WiX not found. Install: dotnet tool install --global wix --version 5.0.2"
 }
 
-# ---- Deterministically restore the EXACT WiX 5.0.2 CLI extensions this build requires.
-# WiX 5 renamed WixToolset.Bal.wixext -> WixToolset.BootstrapperApplications.wixext for CLI use;
-# the old 'Bal' package is retained only for MSBuild PackageReference back-compat and installs as
-# 'damaged' via the CLI. We standardize on the renamed package, pinned to the WiX tool version 5.0.2.
 $WixExtVersion = "5.0.2"
 $RequiredWixExtensions = @(
   "WixToolset.BootstrapperApplications.wixext",
@@ -45,12 +40,14 @@ foreach ($ext in $RequiredWixExtensions) {
     Write-Host "==> WiX extension present: $wanted"
   }
 }
+
 $required = @(
   (Join-Path $StageDir "services\roofspan-backend\roofspan-backend.exe"),
   (Join-Path $StageDir "services\roofspan-relay-connector\roofspan-relay-connector.exe"),
   (Join-Path $StageDir "services\roofspan-update-service\roofspan-update-service.exe"),
   (Join-Path $StageDir "frontend\index.html"),
-  (Join-Path $StageDir "runtime"),
+  (Join-Path $StageDir "shell\RoofSpanOffice.exe"),
+  (Join-Path $StageDir "runtime\RoofSpan.ico"),
   (Join-Path $StageDir "config-templates")
 )
 foreach ($p in $required) {
@@ -62,25 +59,26 @@ if (-not (Test-Path $PostgresInstaller)) {
 if (-not (Test-Path $WebView2Bootstrapper)) {
   throw "WebView2 bootstrapper not found at '$WebView2Bootstrapper'. Download MicrosoftEdgeWebview2Setup.exe."
 }
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $msi = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
 $setup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
 
 Write-Host "==> Building RoofSpan Office $Version"
 
-# 1) MSI (payload harvested from $StageDir).
+# 1) MSI (payload harvested from $StageDir, including the native application shell).
 wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir" `
   -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
 if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 
-# 2) Burn bundle -> customer-facing RoofSpanSetup.exe (chains WebView2 + PostgreSQL prereqs + MSI).
+# 2) Burn bundle -> customer-facing RoofSpanSetup.exe (WebView2 + PostgreSQL + Office MSI).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" `
   -d "WebView2Bootstrapper=$WebView2Bootstrapper" `
   -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 
-# 3) Authenticode signing (HUMAN REQUIRED for production; SmartScreen reputation needs a real EV/OV cert).
+# 3) Authenticode signing.
 if ($SignCertThumbprint) {
   Write-Host "==> Signing $setup"
   signtool sign /sha1 $SignCertThumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 $setup
@@ -88,7 +86,7 @@ if ($SignCertThumbprint) {
   Write-Warning "UNSIGNED build (dev/test only). Production release MUST be Authenticode-signed."
 }
 
-# 4) Signed UPDATE manifest (latest.json) for the CloudFront /update path.
+# 4) Signed UPDATE manifest.
 if ($UpdateSigningPrivateKey) {
   python ..\release\make_manifest.py --version $Version --installer $setup `
     --min-supported $Version --signing-key $UpdateSigningPrivateKey --out (Join-Path $OutDir "latest.json")
