@@ -1,5 +1,7 @@
+import math
+
 import httpx
-from fastapi import APIRouter, Depends, Request, HTTPException, Response
+from fastapi import APIRouter, Depends, Request, HTTPException, Response, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,18 @@ DEFAULT_MAP = {
     "default_center": [-97.7431, 30.2672],  # Austin, TX [lng, lat]
     "default_zoom": 11.0,
 }
+
+
+def _xyz_tile(lng: float, lat: float, zoom: int) -> tuple[int, int, int]:
+    """Convert WGS84 lon/lat to a Web Mercator XYZ tile."""
+    lat = max(min(lat, 85.05112878), -85.05112878)
+    n = 2 ** zoom
+    x = int((lng + 180.0) / 360.0 * n)
+    lat_rad = math.radians(lat)
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    x = max(0, min(n - 1, x))
+    y = max(0, min(n - 1, y))
+    return zoom, x, y
 
 
 async def _get_config(db: AsyncSession, key: str, default: dict) -> dict:
@@ -55,6 +69,19 @@ def _integration_secret_usable(row: IntegrationSetting | None) -> bool:
         return False
 
 
+async def _maptiler_key(db: AsyncSession) -> str | None:
+    """Return the one configured MapTiler API key for all MapTiler services."""
+    from core import decrypt_secret
+
+    row = (await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "maptiler"))).scalar_one_or_none()
+    if not (row and row.enabled and row.secret_ciphertext):
+        return None
+    try:
+        return decrypt_secret(row.secret_ciphertext)
+    except Exception:
+        return None
+
+
 # ---- Map configuration ----
 @router.get("/map-config", response_model=MapConfigOut)
 async def get_map_config(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -87,6 +114,96 @@ async def update_map_config(payload: MapConfigUpdate, request: Request, user: Us
     return await get_map_config(user=user, db=db)
 
 
+@router.get("/map/cadastre-capability")
+async def cadastre_capability(
+    lat: float | None = Query(None, ge=-85.05112878, le=85.05112878),
+    lng: float | None = Query(None, ge=-180.0, le=180.0),
+    zoom: int = Query(16, ge=12, le=18),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check whether the existing MapTiler key can access Cadastre and optionally has tile coverage.
+
+    No API key or provider payload is returned to the client. A coordinate check requests only the
+    single Cadastre vector tile covering that point. HTTP 204 means the tileset is accessible but the
+    requested tile has no data; 403/404 distinguish key access from an unavailable tileset.
+    """
+    if (lat is None) != (lng is None):
+        raise HTTPException(status_code=422, detail="lat and lng must be supplied together")
+
+    key = await _maptiler_key(db)
+    if not key:
+        return {
+            "configured": False,
+            "tileset_accessible": False,
+            "tileset_http_status": None,
+            "coverage_checked": False,
+            "coverage_available": None,
+            "coverage_http_status": None,
+            "tile": None,
+            "reason": "maptiler_not_configured",
+        }
+
+    tilejson_url = "https://api.maptiler.com/tiles/cadastre/tiles.json"
+    result = {
+        "configured": True,
+        "tileset_accessible": False,
+        "tileset_http_status": None,
+        "coverage_checked": lat is not None,
+        "coverage_available": None,
+        "coverage_http_status": None,
+        "tile": None,
+        "reason": "unknown",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            meta = await client.get(tilejson_url, params={"key": key})
+            result["tileset_http_status"] = meta.status_code
+            result["tileset_accessible"] = meta.status_code == 200
+            if meta.status_code == 403:
+                result["reason"] = "cadastre_not_authorized"
+                return result
+            if meta.status_code == 404:
+                result["reason"] = "cadastre_tileset_unavailable"
+                return result
+            if meta.status_code != 200:
+                result["reason"] = "cadastre_metadata_error"
+                return result
+
+            if lat is None:
+                result["reason"] = "cadastre_tileset_accessible"
+                return result
+
+            z, x, y = _xyz_tile(lng, lat, zoom)
+            result["tile"] = {"z": z, "x": x, "y": y}
+            tile_url = f"https://api.maptiler.com/tiles/cadastre/{z}/{x}/{y}"
+            tile = await client.get(tile_url, params={"key": key})
+            result["coverage_http_status"] = tile.status_code
+
+            if tile.status_code == 200:
+                # A non-empty vector tile means Cadastre has data at this location. We intentionally
+                # do not expose or persist the raw tile here; parcel parsing belongs in the resolver.
+                result["coverage_available"] = len(tile.content) > 0
+                result["reason"] = "cadastre_coverage_available" if result["coverage_available"] else "cadastre_tile_empty"
+            elif tile.status_code == 204:
+                result["coverage_available"] = False
+                result["reason"] = "cadastre_no_coverage"
+            elif tile.status_code == 403:
+                result["coverage_available"] = False
+                result["reason"] = "cadastre_not_authorized"
+            elif tile.status_code == 404:
+                result["coverage_available"] = False
+                result["reason"] = "cadastre_tile_unavailable"
+            else:
+                result["coverage_available"] = False
+                result["reason"] = "cadastre_tile_error"
+            return result
+    except httpx.HTTPError:
+        result["reason"] = "cadastre_request_error"
+        return result
+
+
 # ---- Company profile ----
 @router.get("/company", response_model=CompanyProfile)
 async def get_company(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -104,19 +221,12 @@ async def update_company(payload: CompanyProfile, request: Request, user: User =
 # ---- MapTiler satellite tile proxy (keeps provider key server-side) ----
 @router.get("/map/tiles/satellite/{z}/{x}/{y}")
 async def satellite_tile(z: int, x: int, y: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    from core import decrypt_secret
-    row = (await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "maptiler"))).scalar_one_or_none()
-    if not (row and row.enabled and row.secret_ciphertext):
+    key = await _maptiler_key(db)
+    if not key:
         raise HTTPException(status_code=404, detail="Satellite imagery is not configured")
-    try:
-        key = decrypt_secret(row.secret_ciphertext)
-    except Exception:
-        # A persisted ciphertext from an older encryption key is recoverable only by re-entering the
-        # provider key. Report it as unconfigured so clients can fall back to Street instead of a 500.
-        raise HTTPException(status_code=404, detail="Satellite imagery key must be re-entered")
-    url = f"https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key={key}"
+    url = f"https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg"
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(url)
+        r = await client.get(url, params={"key": key})
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail="Tile provider error")
     return Response(content=r.content, media_type=r.headers.get("content-type", "image/jpeg"))
