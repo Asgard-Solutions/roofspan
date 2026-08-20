@@ -87,6 +87,7 @@ class PropertyDetail(PropertyOut):
     contacts: List[ContactOut] = []
     visits: List[VisitOut] = []
     lead_id: Optional[str] = None
+    location_diagnostics: Optional[dict] = None
 
 
 class PropertyCreate(BaseModel):
