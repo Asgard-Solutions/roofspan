@@ -118,6 +118,13 @@ async def on_startup():
         logger.warning("Control Plane init skipped/failed (non-fatal for the local installation): %s", e)
     from relay.hub import hub as relay_hub
     await relay_hub.startup()
+
+    # Existing RentCast properties are upgraded in place after a software update. This is a
+    # background, idempotent data migration: users do not need to delete/re-import territories.
+    # Starting it after core services keeps normal startup responsive even for large territories.
+    from location_upgrade import refresh_existing_property_locations
+    asyncio.create_task(refresh_existing_property_locations())
+
     logger.info("RoofSpan Office backend ready")
 
 
