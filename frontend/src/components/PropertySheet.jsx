@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PhotoGallery from "@/components/PhotoGallery";
-import { Ban, User, Home, MapPin, Loader2, UserPlus, Bed, Bath, Ruler, CalendarClock } from "lucide-react";
+import { Ban, User, Home, MapPin, Loader2, UserPlus, Bed, Bath, Ruler, CalendarClock, Crosshair, CheckCircle2, AlertTriangle } from "lucide-react";
 
 const OUTCOMES = [
   { value: "no_answer", label: "No answer" },
@@ -29,6 +29,33 @@ function Stat({ icon: Icon, label, value }) {
       <span className="text-slate-400">{label}:</span> {value}
     </div>
   );
+}
+
+function formatCoords(lat, lng) {
+  if (lat == null || lng == null) return "—";
+  return `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
+}
+
+function humanReason(reason) {
+  const labels = {
+    accepted: "Accepted address match",
+    no_result: "No MapTiler result",
+    invalid_response: "Invalid provider response",
+    invalid_feature: "Invalid provider feature",
+    invalid_coordinates: "Invalid returned coordinates",
+    not_address_result: "Returned result was not an address",
+    no_house_number: "No house-number-level match",
+    low_relevance: "MapTiler match relevance was too low",
+    invalid_relevance: "Invalid relevance value",
+    outside_territory: "Returned point was outside the territory",
+    provider_http_error: "MapTiler returned an HTTP error",
+    provider_request_error: "MapTiler request failed",
+    batch_result_count_mismatch: "MapTiler batch response did not match the request",
+    maptiler_not_configured: "MapTiler geocoding is not configured",
+    unexpected_geocoder_error: "Unexpected geocoder error",
+    not_attempted: "MapTiler geocoding was not attempted",
+  };
+  return labels[reason] || reason || "Unknown";
 }
 
 export default function PropertySheet({ propertyId, open, onOpenChange, onChanged }) {
@@ -93,6 +120,8 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
   };
 
   const owner = p?.contacts?.find((c) => c.kind === "owner");
+  const loc = p?.location_diagnostics;
+  const maptilerUsed = loc?.coordinate_source === "maptiler_address";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -120,7 +149,33 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               <Stat icon={MapPin} label="Coordinates" value={p.latitude ? `${p.latitude.toFixed(4)}, ${p.longitude.toFixed(4)}` : null} />
             </div>
 
-            {/* Owner / Renter */}
+            <div className="mt-5">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pin location diagnostics</div>
+              {loc ? (
+                <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="pin-location-diagnostics">
+                  <div className="flex items-center gap-2 font-medium text-slate-900">
+                    {maptilerUsed ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+                    Pin source: {maptilerUsed ? "MapTiler address" : "RentCast"}
+                  </div>
+                  <div className="mt-2 space-y-1 text-xs text-slate-600">
+                    <div><span className="font-medium text-slate-700">RentCast:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
+                    <div><span className="font-medium text-slate-700">MapTiler:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
+                    {loc.distance_feet != null && <div><span className="font-medium text-slate-700">Difference:</span> {Number(loc.distance_feet).toLocaleString()} ft</div>}
+                    <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.maptiler_reason)}</div>
+                    {loc.maptiler_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.maptiler_http_status}</div>}
+                    {loc.maptiler_returned_address && <div><span className="font-medium text-slate-700">Returned number:</span> {loc.maptiler_returned_address}</div>}
+                    {loc.maptiler_returned_label && <div><span className="font-medium text-slate-700">Returned place:</span> {loc.maptiler_returned_label}</div>}
+                    {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
+                    <div><span className="font-medium text-slate-700">Query:</span> {loc.query_address || p.formatted_address}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex items-center gap-2 text-sm text-slate-400">
+                  <Crosshair className="h-4 w-4" /> Re-import this territory to generate pin diagnostics.
+                </div>
+              )}
+            </div>
+
             <div className="mt-5">
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner / Renter</div>
               {owner ? (
@@ -134,7 +189,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               )}
             </div>
 
-            {/* Do Not Knock toggle */}
             <div className="mt-5 flex items-center justify-between rounded-md border border-border p-3">
               <div className="flex items-center gap-2">
                 <Ban className="h-4 w-4 text-red-500" />
@@ -143,7 +197,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               <Switch checked={p.do_not_knock} onCheckedChange={toggleDNK} data-testid="dnk-toggle" />
             </div>
 
-            {/* Record visit */}
             <div className="mt-5">
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Record a visit</div>
               <div className="mt-2 space-y-2">
@@ -160,7 +213,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               </div>
             </div>
 
-            {/* Visit history */}
             {p.visits?.length > 0 && (
               <div className="mt-5">
                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">History</div>
@@ -175,7 +227,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               </div>
             )}
 
-            {/* Field photos */}
             <div className="mt-5">
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Field photos</div>
               <div className="mt-2">
@@ -183,7 +234,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               </div>
             </div>
 
-            {/* Convert to lead */}
             <div className="mt-6">
               {p.lead_id ? (
                 <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700" data-testid="lead-exists">Lead created for this property.</div>
