@@ -1,23 +1,21 @@
 r"""First-install local PostgreSQL bootstrap for the RoofSpanBackend Windows service.
 
-Runs INSIDE the backend service, BEFORE `server`/`backend.db` are imported (db.py reads DATABASE_URL at
-import time). On a brand-new machine it:
+Runs INSIDE the backend service, BEFORE `server`/`backend.db` are imported. On a brand-new machine it:
 
-  1. waits until PostgreSQL is accepting local connections (the RoofSpanPostgreSQL SCM dependency has
-     already started the service; "started" != "accepting connections", so we poll);
-  2. decrypts C:\ProgramData\RoofSpan\identity\pg_super.bin with Windows DPAPI (LocalMachine) to recover
-     the EDB superuser password the Burn prerequisite generated;
-  3. generates a SEPARATE strong password for the least-privilege application role `roofspan`;
-  4. idempotently ensures role `roofspan` (LOGIN, NOT superuser) + database `roofspan` (owner roofspan);
-  5. writes C:\ProgramData\RoofSpan\config\roofspan.env from the installed template, substituting the
-     generated app password into DATABASE_URL;
-  6. loads that config into the process environment so db.py/server import cleanly.
+  1. waits until PostgreSQL accepts local connections;
+  2. decrypts the EDB superuser secret from DPAPI;
+  3. provisions the least-privilege `roofspan` role + database;
+  4. writes C:\ProgramData\RoofSpan\config\roofspan.env from the installed template;
+  5. generates and persists the local JWT + application-secret encryption keys;
+  6. loads the installed config before the backend app imports.
 
-Idempotency: if roofspan.env already holds a valid generated credential it is REUSED as-is (no rotation
-on restart, no superuser access needed, no data touched). Secrets are NEVER logged.
+Existing provisioned configs are preserved. If an older installed roofspan.env is missing the runtime
+secrets introduced later, bootstrap repairs only those missing keys atomically without rotating the DB
+credential or touching customer data. Secrets are never logged.
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
 import secrets
@@ -25,17 +23,16 @@ import string
 import time
 
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
-SUPERUSER = "postgres"          # EDB default super account (bundle sets its password via --superpassword)
+JWT_PLACEHOLDER = "__GENERATED_JWT_SECRET__"
+SECRETS_KEY_PLACEHOLDER = "__GENERATED_SECRETS_ENCRYPTION_KEY__"
+SUPERUSER = "postgres"
 APP_ROLE = "roofspan"
 APP_DB = "roofspan"
 PG_HOST = "127.0.0.1"
 PG_PORT = 5432
 
 
-# ---- pure helpers (unit-tested on any platform) -----------------------------------------------------
-
 def generate_db_password(exclude: str = "") -> str:
-    """Strong URL-safe (alphanumeric) app-role password; guaranteed != `exclude`."""
     alphabet = string.ascii_letters + string.digits
     while True:
         pw = "".join(secrets.choice(alphabet) for _ in range(32))
@@ -43,8 +40,23 @@ def generate_db_password(exclude: str = "") -> str:
             return pw
 
 
+def generate_jwt_secret() -> str:
+    # URL-safe high-entropy signing secret; persisted locally so existing sessions/tokens survive restarts.
+    return secrets.token_urlsafe(48)
+
+
+def generate_secrets_encryption_key() -> str:
+    # core._enc_key expects urlsafe-base64-decoded AES-256 material.
+    return base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+
+
 def render_env_from_template(template_text: str, app_password: str) -> str:
-    return template_text.replace(PLACEHOLDER, app_password)
+    return (
+        template_text
+        .replace(PLACEHOLDER, app_password)
+        .replace(JWT_PLACEHOLDER, generate_jwt_secret())
+        .replace(SECRETS_KEY_PLACEHOLDER, generate_secrets_encryption_key())
+    )
 
 
 def _database_url(password: str) -> str:
@@ -52,7 +64,6 @@ def _database_url(password: str) -> str:
 
 
 def parse_generated_password(config_text: str):
-    """Return the app password from a roofspan.env DATABASE_URL, or None if unset/placeholder."""
     m = re.search(r"DATABASE_URL=postgresql\+asyncpg://roofspan:([^@]+)@", config_text)
     if not m:
         return None
@@ -73,8 +84,45 @@ def _read(path: str) -> str:
         return f.read()
 
 
+def _parse_env_text(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _write_atomic(path: str, text: str) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def ensure_required_runtime_secrets(config_path: str, logger) -> None:
+    """Backfill missing per-installation app secrets without rotating anything that already exists."""
+    text = _read(config_path)
+    values = _parse_env_text(text)
+    additions: list[str] = []
+
+    jwt_secret = values.get("JWT_SECRET", "")
+    if not jwt_secret or jwt_secret == JWT_PLACEHOLDER:
+        additions.append(f"JWT_SECRET={generate_jwt_secret()}")
+
+    encryption_key = values.get("SECRETS_ENCRYPTION_KEY", "")
+    if not encryption_key or encryption_key == SECRETS_KEY_PLACEHOLDER:
+        additions.append(f"SECRETS_ENCRYPTION_KEY={generate_secrets_encryption_key()}")
+
+    if additions:
+        repaired = text.rstrip("\r\n") + "\n\n# Per-installation application secrets (generated locally; never shipped).\n" + "\n".join(additions) + "\n"
+        _write_atomic(config_path, repaired)
+        logger.info("bootstrap: repaired missing local application secrets in roofspan.env")
+
+
 def _load_env_file_into_process(config_path: str) -> None:
-    """Authoritatively load the installed config into os.environ (override) before server import."""
     for line in _read(config_path).splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -83,14 +131,10 @@ def _load_env_file_into_process(config_path: str) -> None:
         os.environ[k.strip()] = v.strip()
 
 
-# ---- Windows-only pieces (DPAPI + PostgreSQL) -------------------------------------------------------
-
 def decrypt_super_password(pg_super_bin: str) -> str:
-    """Decrypt the DPAPI LocalMachine blob written by the Burn PostgreSQL prerequisite."""
-    import win32crypt  # pywin32; Windows-only
+    import win32crypt
     with open(pg_super_bin, "rb") as f:
         blob = f.read()
-    # CryptUnprotectData returns (description, data). LocalMachine scope is implicit in the blob.
     _desc, data = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
     return data.decode("utf-8")
 
@@ -101,19 +145,14 @@ async def _ensure_role_and_db(super_password: str, app_password: str, logger) ->
     conn = await asyncpg.connect(user=SUPERUSER, password=super_password,
                                  host=PG_HOST, port=PG_PORT, database="postgres")
     try:
-        # CREATE/ALTER ROLE are utility statements and CANNOT take bind parameters. Quote the password
-        # SAFELY server-side via quote_literal() (proper escaping) - never string-concatenate the secret.
-        # APP_ROLE is a fixed, code-owned identifier (never user input).
         quoted_pw = await conn.fetchval("SELECT quote_literal($1)", app_password)
         role_exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", APP_ROLE)
         if role_exists:
             logger.info("bootstrap: role '%s' already exists (kept)", APP_ROLE)
-            # No valid config existed (else we would not be here), so align the password we will persist.
             await conn.execute(f"ALTER ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
         else:
             await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
             logger.info("bootstrap: created least-privilege role '%s'", APP_ROLE)
-        # Least privilege: the role is a normal LOGIN role (NOT superuser) and simply OWNS its own db.
         db_exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", APP_DB)
         if not db_exists:
             await conn.execute(f'CREATE DATABASE {APP_DB} OWNER {APP_ROLE}')
@@ -123,7 +162,6 @@ async def _ensure_role_and_db(super_password: str, app_password: str, logger) ->
     finally:
         await conn.close()
 
-    # Ensure the app role fully controls its own schema (owner-level, still not a superuser).
     conn2 = await asyncpg.connect(user=SUPERUSER, password=super_password,
                                   host=PG_HOST, port=PG_PORT, database=APP_DB)
     try:
@@ -153,13 +191,11 @@ async def _wait_for_postgres(super_password: str, logger, timeout: float) -> Non
 
 def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
               wait_timeout: float = 120.0) -> str:
-    """Idempotently ensure the local application DB + config exist; returns the DATABASE_URL and loads
-    the full config into os.environ. Raises (clearly) on failure so the service never falsely runs."""
     import asyncio
 
-    # Fast, credential-preserving path: a valid generated config already exists -> reuse verbatim.
     if config_is_provisioned(config_path):
         logger.info("bootstrap: existing provisioned roofspan.env found; reusing credentials")
+        ensure_required_runtime_secrets(config_path, logger)
         _load_env_file_into_process(config_path)
         return os.environ["DATABASE_URL"]
 
@@ -175,16 +211,13 @@ def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
 
     asyncio.run(_wait_for_postgres(super_password, logger, wait_timeout))
     asyncio.run(_ensure_role_and_db(super_password, app_password, logger))
-    # Drop the superuser secret from memory promptly.
     super_password = None  # noqa: F841
 
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     rendered = render_env_from_template(_read(template_path), app_password)
-    tmp = config_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(rendered)
-    os.replace(tmp, config_path)
-    logger.info("bootstrap: wrote %s (DB credentials generated; not logged)", config_path)
+    _write_atomic(config_path, rendered)
+    ensure_required_runtime_secrets(config_path, logger)
+    logger.info("bootstrap: wrote %s (local credentials/secrets generated; not logged)", config_path)
 
     _load_env_file_into_process(config_path)
     return os.environ["DATABASE_URL"]
