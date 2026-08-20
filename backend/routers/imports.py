@@ -10,7 +10,7 @@ from db import get_db, SessionLocal
 from models import Territory, Property, PropertyContact, ImportJob, IntegrationSetting, User
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
-from geo import bbox, centroid, enclosing_radius_miles, point_in_polygon
+from geo import bbox, centroid, enclosing_radius_miles, point_in_polygon, haversine_miles
 from rentcast import fetch_rentcast_properties, normalize_rentcast, generate_sample_properties
 from maptiler import geocode_addresses_batch
 
@@ -58,57 +58,94 @@ def _resolve_mode(requested: str | None, configured: bool) -> str:
     return "rentcast" if configured else "sample"
 
 
-def _apply_maptiler_locations(normalized: list[dict], features: list[dict | None], territory_geometry: dict) -> None:
-    """Prefer accepted MapTiler address coordinates while preserving RentCast source coordinates."""
-    for nd, feature in zip(normalized, features):
+def _base_location_diag(nd: dict) -> dict:
+    return {
+        "query_address": nd.get("formatted_address") or "",
+        "rentcast_latitude": nd.get("latitude"),
+        "rentcast_longitude": nd.get("longitude"),
+        "coordinate_source": "rentcast",
+        "maptiler_status": "not_attempted",
+        "maptiler_reason": "not_attempted",
+        "maptiler_http_status": None,
+        "maptiler_returned_address": None,
+        "maptiler_returned_label": None,
+        "maptiler_latitude": None,
+        "maptiler_longitude": None,
+        "maptiler_relevance": None,
+        "maptiler_place_type": None,
+        "maptiler_feature_id": None,
+        "distance_feet": None,
+        "checked_at": _now().isoformat(),
+    }
+
+
+def _apply_maptiler_locations(normalized: list[dict], diagnostics: list[dict], territory_geometry: dict) -> None:
+    """Apply accepted MapTiler locations and persist safe provenance diagnostics."""
+    for nd, result in zip(normalized, diagnostics):
         source_lat = nd.get("latitude")
         source_lng = nd.get("longitude")
         raw = dict(nd.get("raw") or {})
-        raw["roofspan_location"] = {
-            "rentcast_latitude": source_lat,
-            "rentcast_longitude": source_lng,
-            "coordinate_source": "rentcast",
-            "maptiler_relevance": None,
-            "maptiler_place_type": None,
-            "maptiler_feature_id": None,
-        }
+        loc = _base_location_diag(nd)
+        loc.update({
+            "maptiler_status": result.get("status"),
+            "maptiler_reason": result.get("reason"),
+            "maptiler_http_status": result.get("http_status"),
+            "maptiler_returned_address": result.get("returned_address"),
+            "maptiler_returned_label": result.get("returned_label"),
+            "maptiler_latitude": result.get("latitude"),
+            "maptiler_longitude": result.get("longitude"),
+            "maptiler_relevance": result.get("relevance"),
+            "maptiler_place_type": result.get("place_type"),
+            "maptiler_feature_id": result.get("feature_id"),
+        })
 
-        if feature:
-            coords = (feature.get("geometry") or {}).get("coordinates") or []
-            if len(coords) >= 2:
-                lng, lat = coords[0], coords[1]
-                # BBOX filtering happens at the provider too; keep this local geometry check so a
-                # bad/ambiguous provider result can never move a pin outside the selected territory.
-                if point_in_polygon(lng, lat, territory_geometry):
-                    nd["longitude"] = lng
-                    nd["latitude"] = lat
-                    props = feature.get("properties") or {}
-                    place_type = feature.get("place_type") or props.get("type") or props.get("kind")
-                    raw["roofspan_location"].update({
-                        "coordinate_source": "maptiler_address",
-                        "maptiler_latitude": lat,
-                        "maptiler_longitude": lng,
-                        "maptiler_relevance": feature.get("relevance"),
-                        "maptiler_place_type": place_type,
-                        "maptiler_feature_id": feature.get("id"),
-                    })
+        candidate_lat = result.get("latitude")
+        candidate_lng = result.get("longitude")
+        if (
+            source_lat is not None and source_lng is not None
+            and candidate_lat is not None and candidate_lng is not None
+        ):
+            loc["distance_feet"] = round(
+                haversine_miles(source_lng, source_lat, candidate_lng, candidate_lat) * 5280,
+                1,
+            )
+
+        feature = result.get("feature")
+        if feature and candidate_lat is not None and candidate_lng is not None:
+            if point_in_polygon(candidate_lng, candidate_lat, territory_geometry):
+                nd["longitude"] = candidate_lng
+                nd["latitude"] = candidate_lat
+                loc["coordinate_source"] = "maptiler_address"
+                loc["maptiler_status"] = "accepted"
+                loc["maptiler_reason"] = "accepted"
+            else:
+                loc["maptiler_status"] = "rejected"
+                loc["maptiler_reason"] = "outside_territory"
+
+        raw["roofspan_location"] = loc
         nd["raw"] = raw
 
 
 async def _geocode_rentcast_locations(db: AsyncSession, normalized: list[dict], territory_geometry: dict) -> None:
-    """Resolve RentCast addresses through the configured MapTiler geocoder.
+    """Resolve RentCast addresses through MapTiler and always record provenance."""
+    if not normalized:
+        return
 
-    Fail-open behavior is intentional: unavailable/ambiguous MapTiler results retain the original
-    RentCast coordinate so a mapping-provider outage does not fail a property import.
-    """
     maptiler = await _maptiler_setting(db)
     key = _usable_secret(maptiler)
-    if not key or not normalized:
+    if not key:
+        for nd in normalized:
+            raw = dict(nd.get("raw") or {})
+            loc = _base_location_diag(nd)
+            loc["maptiler_status"] = "unavailable"
+            loc["maptiler_reason"] = "maptiler_not_configured"
+            raw["roofspan_location"] = loc
+            nd["raw"] = raw
         return
 
     addresses = [nd.get("formatted_address") or "" for nd in normalized]
     try:
-        features = await geocode_addresses_batch(
+        diagnostics = await geocode_addresses_batch(
             key,
             addresses,
             bbox=bbox(territory_geometry),
@@ -116,8 +153,23 @@ async def _geocode_rentcast_locations(db: AsyncSession, normalized: list[dict], 
             min_relevance=0.80,
         )
     except Exception:
-        return
-    _apply_maptiler_locations(normalized, features, territory_geometry)
+        diagnostics = [
+            {
+                "status": "error",
+                "reason": "unexpected_geocoder_error",
+                "http_status": None,
+                "feature": None,
+                "returned_address": None,
+                "returned_label": None,
+                "relevance": None,
+                "place_type": None,
+                "latitude": None,
+                "longitude": None,
+                "feature_id": None,
+            }
+            for _ in normalized
+        ]
+    _apply_maptiler_locations(normalized, diagnostics, territory_geometry)
 
 
 @router.post("/territories/{territory_id}/import/preview", response_model=ImportPreviewOut)
@@ -146,7 +198,7 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)); configured MapTiler address geocoding is used for pin placement when a high-confidence address match is available.",
+            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)); MapTiler pin diagnostics are recorded for every imported property.",
         )
 
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
