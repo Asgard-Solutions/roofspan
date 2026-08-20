@@ -39,12 +39,28 @@ async def _set_config(db: AsyncSession, key: str, value: dict):
     await db.commit()
 
 
+def _integration_secret_usable(row: IntegrationSetting | None) -> bool:
+    """Return True only when an enabled stored integration secret can actually be decrypted.
+
+    Old RoofSpan installs may retain ciphertext after the installation encryption key changes. Treat
+    that as unconfigured instead of advertising a provider that will only fail at runtime.
+    """
+    if not (row and row.enabled and row.secret_ciphertext):
+        return False
+    try:
+        from core import decrypt_secret
+        decrypt_secret(row.secret_ciphertext)
+        return True
+    except Exception:
+        return False
+
+
 # ---- Map configuration ----
 @router.get("/map-config", response_model=MapConfigOut)
 async def get_map_config(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cfg = await _get_config(db, "map_config", DEFAULT_MAP)
     maptiler = (await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "maptiler"))).scalar_one_or_none()
-    maptiler_configured = bool(maptiler and maptiler.secret_ciphertext and maptiler.enabled)
+    maptiler_configured = _integration_secret_usable(maptiler)
     return MapConfigOut(
         base_provider="openstreetmap",
         base_style_url="",
@@ -95,7 +111,9 @@ async def satellite_tile(z: int, x: int, y: int, user: User = Depends(get_curren
     try:
         key = decrypt_secret(row.secret_ciphertext)
     except Exception:
-        raise HTTPException(status_code=500, detail="Could not read MapTiler key")
+        # A persisted ciphertext from an older encryption key is recoverable only by re-entering the
+        # provider key. Report it as unconfigured so clients can fall back to Street instead of a 500.
+        raise HTTPException(status_code=404, detail="Satellite imagery key must be re-entered")
     url = f"https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key={key}"
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(url)
