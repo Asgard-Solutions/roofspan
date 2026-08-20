@@ -26,6 +26,9 @@ a = Analysis(
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
         "static_serve", "httpx", "websockets",
+        # Property-location upgrade/runtime dependencies. Keep explicit because the upgrade module is
+        # imported during FastAPI startup and PyInstaller must freeze these packages into ONEDIR.
+        "location_upgrade", "maptiler", "mapbox_vector_tile", "shapely", "shapely.geometry",
     ] + PYWIN32,
     excludes=[],
 )
