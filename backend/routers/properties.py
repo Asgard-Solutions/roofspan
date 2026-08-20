@@ -29,6 +29,14 @@ def _prop_out(p: Property) -> PropertyOut:
     )
 
 
+def _occupancy_status(owner_occupied: bool | None) -> str:
+    if owner_occupied is True:
+        return "owned"
+    if owner_occupied is False:
+        return "rented"
+    return "unknown"
+
+
 @router.get("", response_model=list[PropertyOut])
 async def list_properties(
     territory_id: str | None = Query(None),
@@ -70,6 +78,8 @@ async def properties_geojson(
                 "address": p.formatted_address,
                 "do_not_knock": p.do_not_knock,
                 "property_type": p.property_type,
+                "owner_occupied": p.owner_occupied,
+                "occupancy": _occupancy_status(p.owner_occupied),
             },
         }
         for p in rows
