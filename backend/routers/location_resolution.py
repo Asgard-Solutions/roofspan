@@ -1,3 +1,5 @@
+from collections import Counter
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,17 +25,20 @@ async def location_resolution_progress(
 ):
     props = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
     counts = {"total": len(props), "pending": 0, "resolved": 0, "address_only": 0, "unresolved": 0, "retry_pending": 0}
+    reasons = Counter()
 
     for prop in props:
         loc = _loc(prop)
         current = loc.get("auto_resolution_version") == RESOLUTION_VERSION
         status = loc.get("maptiler_status")
+        reason = loc.get("maptiler_reason") or "unknown"
         building_status = loc.get("building_status")
         source = loc.get("coordinate_source")
 
         if not current:
             if status == "error" or loc.get("resolution_state") == "retry_pending":
                 counts["retry_pending"] += 1
+                reasons[reason] += 1
             else:
                 counts["pending"] += 1
             continue
@@ -43,6 +48,7 @@ async def location_resolution_progress(
             counts["address_only"] += 1
         else:
             counts["unresolved"] += 1
+            reasons[reason] += 1
 
     attempted = counts["total"] - counts["pending"]
     percent = round((attempted / counts["total"]) * 100, 1) if counts["total"] else 100.0
@@ -56,4 +62,17 @@ async def location_resolution_progress(
     else:
         state = "complete"
 
-    return {**counts, "attempted": attempted, "percent": percent, "pass_complete": complete, "state": state, "resolver_version": RESOLUTION_VERSION}
+    rejection_breakdown = [
+        {"reason": reason, "count": count}
+        for reason, count in reasons.most_common()
+    ]
+
+    return {
+        **counts,
+        "attempted": attempted,
+        "percent": percent,
+        "pass_complete": complete,
+        "state": state,
+        "resolver_version": RESOLUTION_VERSION,
+        "rejection_breakdown": rejection_breakdown,
+    }
