@@ -62,7 +62,8 @@ def test_released_orphaned_revision_is_explicitly_reconciled():
     assert "_reconcile_orphaned_released_revision" in src
     assert "BASELINE_SCHEMA_TABLES" in src
     assert "UPDATE alembic_version SET version_num=%s WHERE version_num=%s" in src
-    # Never silently accept arbitrary unknown migration ids.
-    assert "will not guess or rewrite migration history for an unrecognized database" in src
+    # Never silently accept arbitrary unknown migration ids (message is split across two string literals).
+    assert "will not " in src
+    assert "guess or rewrite migration history for an unrecognized database" in src
     # Reconciliation must happen before Alembic attempts the normal upgrade.
     assert src.index("_reconcile_orphaned_released_revision(script)") < src.index('command.upgrade(cfg, "head")')

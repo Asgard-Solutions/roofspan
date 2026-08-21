@@ -56,7 +56,9 @@ def test_spec_datas_reference_real_backend_alembic():
     """PyInstaller spec must package the REAL backend/alembic (not the removed backend/migrations)."""
     spec = (WINBUILD / "roofspan-backend.spec").read_text(encoding="utf-8")
     assert '"alembic"), "alembic"' in spec, "spec must package backend/alembic"
-    assert "migrations" not in spec, "spec must NOT reference backend/migrations"
+    # Must NOT package the removed backend/migrations DIRECTORY. The migrations_runner MODULE
+    # (packaged as a hiddenimport) is legitimate and intentionally allowed.
+    assert 'BACKEND, "migrations")' not in spec, "spec must NOT reference the removed backend/migrations dir"
     assert (REPO / "backend" / "alembic").is_dir(), "backend/alembic dir must exist"
     assert (REPO / "backend" / "alembic.ini").is_file(), "backend/alembic.ini must exist"
 
