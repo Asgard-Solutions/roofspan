@@ -82,16 +82,10 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
     status = result.get("status")
     candidate_lat = result.get("latitude")
     candidate_lng = result.get("longitude")
-    inside = (
-        status == "located"
-        and candidate_lat is not None
-        and candidate_lng is not None
-        and point_in_polygon(candidate_lng, candidate_lat, territory.geometry)
-    )
-    resolved = bool(inside)
-    reason = result.get("reason")
-    if status == "located" and not inside:
-        reason = "outside_territory"
+    resolved = bool(status == "located" and candidate_lat is not None and candidate_lng is not None)
+    inside_territory = None
+    if candidate_lat is not None and candidate_lng is not None:
+        inside_territory = point_in_polygon(candidate_lng, candidate_lat, territory.geometry)
 
     loc = dict(previous)
     loc.update({
@@ -100,7 +94,7 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "rentcast_longitude": rentcast_lng,
         "location_provider": "geocodio",
         "geocoder_status": status,
-        "geocoder_reason": reason,
+        "geocoder_reason": result.get("reason"),
         "geocoder_http_status": result.get("http_status"),
         "geocodio_formatted_address": result.get("formatted_address"),
         "geocodio_latitude": candidate_lat if resolved else None,
@@ -117,11 +111,15 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "location_quality": result.get("location_quality"),
         "location_resolved": resolved,
         "location_method": "geocodio_forward_geocode" if resolved else None,
+        "inside_territory": inside_territory,
         "address_verified": False,
         "auto_resolution_checked_at": _now_iso(),
     })
 
     if resolved:
+        # The RentCast address is authoritative. A precise Geocodio result that matches all stored
+        # address components remains valid even if the corrected coordinate falls just outside the
+        # acquisition polygon that was originally populated using RentCast coordinates.
         prop.latitude = candidate_lat
         prop.longitude = candidate_lng
         loc["coordinate_source"] = _coordinate_source(result)
