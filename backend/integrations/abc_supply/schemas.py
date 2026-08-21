@@ -75,3 +75,43 @@ class AbcBranchOut(BaseModel):
     distance: Optional[float] = None
     address: Optional[dict] = None
     home_branch: Optional[bool] = None
+
+
+# ---- Product & Pricing (Phase 2) ----
+class AbcProductSearchIn(BaseModel):
+    query: Optional[str] = None
+    by: str = "itemDescription"  # itemDescription | itemNumber
+    branch_number: Optional[str] = None
+    family_id: Optional[str] = None
+    page: int = 1
+
+
+class AbcProductOut(BaseModel):
+    item_number: str
+    description: Optional[str] = None
+    family_id: Optional[str] = None
+    family_name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    is_dimensional: bool = False
+    uoms: List[dict] = []
+    color: Optional[str] = None
+    product_family: Optional[str] = None
+    image_url: Optional[str] = None
+    available_at_branch: Optional[bool] = None
+    branch_number: Optional[str] = None
+
+
+class AbcPriceLineIn(BaseModel):
+    id: str
+    item_number: str
+    quantity: float = Field(gt=0)
+    uom: Optional[str] = None
+    length_value: Optional[float] = None
+    length_uom: Optional[str] = None
+
+
+class AbcPriceIn(BaseModel):
+    ship_to_number: str
+    branch_number: str
+    purpose: str = "ordering"
+    lines: List[AbcPriceLineIn] = []

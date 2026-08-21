@@ -136,9 +136,47 @@ ABC_MOCK_ENABLED=1 uvicorn integrations.abc_supply.mock_server:mock_app --port 8
 
 ## NEEDS ABC DOC / SANDBOX VERIFICATION
 
-- Pricing/Order/Notification service path **prefixes** (`/api/pricing/v1`, `/api/order/v1`,
-  `/api/notification/v1`) are inferred from the Account/Location/Product prefix pattern; the public docs
-  list only resource names (`/prices`, `/orders`, `/webhooks`). Isolated in `config.py` for one-line
-  reconciliation once verified against Sandbox.
+- **Order/Notification** service path **prefixes** (`/api/order/v1`, `/api/notification/v1`) are inferred
+  from the Account/Location/Product pattern; the public docs list only resource names (`/orders`,
+  `/webhooks`). Isolated in `config.py`. (Pricing verified as `/api/pricing/v2/prices`; Product verified
+  as `/api/product/v1/search/items`.)
+- Product **image URLs**: ABC docs state image URLs are "available in a future release" — RoofSpan renders
+  a placeholder and lazily proxies images through `GET /products/{item}/image` when a href is present.
+- Product **recent/frequent/favorite** and **all-items/hierarchy** endpoints exist in the docs but were
+  not implemented in P2 (kept to search + details + availability + pricing per scope); revisit if needed.
 - Real Sandbox `client_id`/`client_secret`, the exact registered redirect URI, and the webhook public
   URL + webhook secret require ABC Developer Portal provisioning and are pending.
+
+## Phase 2 — Product & Pricing (implemented)
+
+**Product API** (`integrations/abc_supply/products.py`): `POST /api/product/v1/search/items`
+(filters: `contains` itemDescription/itemNumber, `equals` itemNumber/productFamilyId/branchNumber;
+`embed:["branches"]`; `?familyItems=true`). Item details via search-by-itemNumber. Branch availability
+derived from embedded `branches[]` — presented as **Available / Not Available at Branch**, never a stock
+quantity (ABC does not expose quantity-on-hand here).
+
+**Pricing API** (`integrations/abc_supply/pricing.py`): `POST /api/pricing/v2/prices` with a **user token**
+(`pricing.read`), body `{shipToNumber, branchNumber, purpose, lines:[{id,itemNumber,quantity,uom,length}]}`,
+up to 50 lines. HTTP 200 is returned even with per-line errors, so each line's `status` is inspected.
+**$0.00 rule**: `status.code == OK` + `unitPrice == 0.00` ⇒ `price_status="unavailable"` (branch has not
+entered pricing — NOT free). Per-line `status.code != OK` ⇒ `unavailable` with the ABC message.
+
+**PO integration**: `PurchaseOrder` gains `integration_provider`, `abc_ship_to_number`, `abc_branch_number`;
+`POLineItem` gains `integration_provider, abc_item_number, abc_branch_number, abc_ship_to_number, abc_uom,
+abc_variation, abc_price, abc_price_status, abc_price_timestamp, abc_product_description, abc_product_family,
+abc_product_image_url, pricing_source` (migration `b2d5e7c9a1f3`, all nullable — generic POs unaffected).
+`POOut.pricing_warning` surfaces unresolved-pricing lines. `POST /api/purchase-orders/{id}/refresh-price`
+re-prices one ABC line (using its current Ship-To/branch/qty/UOM/variation) and optionally applies it,
+recomputing the PO total; manual prices are only overwritten when the user explicitly applies. Changing
+Ship-To/branch in the PO dialog clears gathered ABC pricing.
+
+**RoofSpan API**: `POST /integrations/abc/products/search`, `GET /integrations/abc/products/{item}`,
+`GET /integrations/abc/products/{item}/image`, `POST /integrations/abc/pricing`. Audit: `abc.product.search`,
+`abc.product.view`, `abc.price.lookup`, `abc.price.refresh`, `abc.price.apply`.
+
+**UI**: `frontend/src/components/AbcProductSearch.jsx` (debounced search, availability badges, qty/length,
+get-price-and-add) integrated into `PODialog.jsx` when supplier is "ABC Supply" (Ship-To/branch context +
+unresolved-pricing warning). Product search is debounced (450ms) — no request per keystroke.
+
+**Mock**: search (description/itemNumber/family, branch availability), 1×1 PNG image endpoint, and
+`/api/pricing/v2/prices` covering priced / $0-unavailable / dimensional-requires-length / unknown-item.

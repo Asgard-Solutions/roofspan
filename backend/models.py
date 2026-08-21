@@ -411,6 +411,10 @@ class PurchaseOrder(Base):
     expected_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ABC Supply linkage (nullable; only set for ABC-supplied POs). Does not affect generic POs.
+    integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply"
+    abc_ship_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -428,6 +432,20 @@ class POLineItem(Base):
     line_total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     received_quantity: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     sort: Mapped[int] = mapped_column(Integer, default=0)
+    # ABC Supply line metadata (nullable; retained for Phase 3 ordering + traceability).
+    integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply"
+    abc_item_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_ship_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_uom: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    abc_variation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    abc_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    abc_price_status: Mapped[str | None] = mapped_column(String(24), nullable=True)  # priced | unavailable
+    abc_price_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    abc_product_description: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    abc_product_family: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    abc_product_image_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    pricing_source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # abc | manual
 
 
 

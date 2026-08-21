@@ -28,10 +28,9 @@ DEFAULT_BASES = {
 ACCOUNT_PREFIX = "/api/account/v1"
 LOCATION_PREFIX = "/api/location/v1"
 PRODUCT_PREFIX = "/api/product/v1"
-# NEEDS ABC DOC/SANDBOX VERIFICATION: pricing/order/notification service path prefixes are not
-# explicitly stated on the public docs (only the resource names /prices, /orders, /webhooks).
-# They are isolated here so a single change reconciles them once verified against Sandbox.
-PRICING_PREFIX = "/api/pricing/v1"
+PRICING_PREFIX = "/api/pricing/v2"  # verified: POST /api/pricing/v2/prices
+# NEEDS ABC DOC/SANDBOX VERIFICATION: order/notification service path prefixes are not explicitly
+# stated on the public docs (only the resource names /orders, /webhooks). Isolated here.
 ORDER_PREFIX = "/api/order/v1"
 NOTIFICATION_PREFIX = "/api/notification/v1"
 

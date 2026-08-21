@@ -116,12 +116,26 @@ class POLineIn(BaseModel):
     quantity: float = Field(default=1, gt=0)
     unit: str = "each"
     unit_cost: float = Field(default=0, ge=0)
+    # ABC Supply line metadata (optional; only present for ABC-supplied lines)
+    integration_provider: Optional[str] = None
+    abc_item_number: Optional[str] = None
+    abc_branch_number: Optional[str] = None
+    abc_ship_to_number: Optional[str] = None
+    abc_uom: Optional[str] = None
+    abc_variation: Optional[dict] = None
+    abc_price: Optional[float] = None
+    abc_price_status: Optional[str] = None
+    abc_product_description: Optional[str] = None
+    abc_product_family: Optional[str] = None
+    abc_product_image_url: Optional[str] = None
+    pricing_source: Optional[str] = None
 
 
 class POLineOut(POLineIn):
     id: str
     line_total: float
     received_quantity: float
+    abc_price_timestamp: Optional[datetime] = None
 
 
 class POIn(BaseModel):
@@ -129,11 +143,29 @@ class POIn(BaseModel):
     job_id: Optional[str] = None
     expected_date: Optional[datetime] = None
     notes: Optional[str] = None
+    integration_provider: Optional[str] = None
+    abc_ship_to_number: Optional[str] = None
+    abc_branch_number: Optional[str] = None
     items: List[POLineIn] = []
 
 
 class POStatusIn(BaseModel):
     status: str
+
+
+class RefreshPriceIn(BaseModel):
+    po_item_id: str
+    apply: bool = False  # when true, apply the refreshed ABC price to the line unit_cost
+
+
+class RefreshPriceOut(BaseModel):
+    po_item_id: str
+    previous_unit_cost: float
+    abc_price: Optional[float] = None
+    price_status: str
+    changed: bool
+    applied: bool
+    message: Optional[str] = None
 
 
 class ReceiveLine(BaseModel):
@@ -157,4 +189,8 @@ class POOut(BaseModel):
     total: float
     notes: Optional[str] = None
     created_at: datetime
+    integration_provider: Optional[str] = None
+    abc_ship_to_number: Optional[str] = None
+    abc_branch_number: Optional[str] = None
+    pricing_warning: Optional[str] = None
     items: List[POLineOut] = []

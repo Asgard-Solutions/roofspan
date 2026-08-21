@@ -33,7 +33,15 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - DB: `abc_integrations`, `abc_account_links` (migration `a7c3f1b9d2e4`). RBAC: config/connect = owner/administrator; read = +office; sales 403. Audit actions `abc.*`.
   - Local mock ABC server (OAuth + Account + Location) for dev/test. Tests: 10 unit + 22 HTTP integration pass; in-browser OAuth round-trip validated (iteration_23). Regression (phase4 + prod_infra) green.
   - **NEEDS ABC DOC/SANDBOX VERIFICATION**: real Sandbox client_id/secret + registered redirect URI; pricing/order/notification service path prefixes (`/api/pricing/v1`,`/api/order/v1`,`/api/notification/v1`) inferred, isolated in `config.py`.
-  - Remaining phases: **P2** Product & Pricing + PO extension + $0 handling; **P3** Ordering + real-time price refresh + idempotency + history/templates; **P4** Notification webhooks via Relay (ORDER_UPDATE/ORDER_INVOICED, idempotent).
+  - Remaining phases: **P3** Ordering + real-time price refresh + idempotency + history/templates; **P4** Notification webhooks via Relay (ORDER_UPDATE/ORDER_INVOICED, idempotent).
+
+- **[2026-06] Phase 2 COMPLETE & TESTED** — Product & Pricing:
+  - Product API (`products.py`): `POST /api/product/v1/search/items` (contains/equals filters, embed branches, familyItems), item details, branch availability from embedded branches (Available/Not — never quantity-on-hand). Pricing API (`pricing.py`): `POST /api/pricing/v2/prices` (user token, ≤50 lines, qty/UOM/variation); $0.00 + per-line status normalized to price_status priced|unavailable.
+  - PO integration: `PurchaseOrder`/`POLineItem` extended with nullable ABC metadata (migration `b2d5e7c9a1f3`); `POOut.pricing_warning`; `POST /api/purchase-orders/{id}/refresh-price` (explicit, optional apply, recomputes total, never silently overwrites manual). Changing Ship-To/branch clears gathered ABC pricing.
+  - RoofSpan API: products/search, products/{item}, products/{item}/image (lazy proxy), pricing. Audit `abc.product.search/view`, `abc.price.lookup/refresh/apply`.
+  - UI: `AbcProductSearch.jsx` inside `PODialog.jsx` ABC mode (Ship-To/branch context + unresolved-pricing warning). Generic POs unaffected.
+  - Tests: 9 P2 unit + 14 P2 HTTP integration; **55/55 backend + full frontend flow pass** (iteration_24). RBAC (sales 403) + generic-PO regression green.
+  - **NEEDS ABC DOC/SANDBOX VERIFICATION**: order/notification path prefixes; product image URLs (future release per docs); recent/frequent/favorite endpoints not implemented (out of P2 need).
 
 
 ## DB schema (key tables)

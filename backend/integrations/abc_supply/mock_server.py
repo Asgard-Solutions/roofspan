@@ -209,6 +209,142 @@ async def get_branch(number: str, authorization: str | None = Header(default=Non
     return {**_BRANCH_DETAIL, "branch": {**_BRANCH_DETAIL["branch"], "number": number}}
 
 
+# ---------------- Product API (Phase 2) ----------------
+# Synthetic roofing catalog. Item numbers are CLEARLY synthetic (MOCK-*) and are NOT real ABC items.
+_MOCK_ITEMS = [
+    {
+        "itemNumber": "MOCK-SHINGLE-ARCH-WW", "familyId": "PFam_MOCK_SHINGLE",
+        "familyName": "Mock Architectural Shingles", "isDimensional": False,
+        "itemDescription": "Mock Architectural Shingles - Weathered Wood (3 bundles/square)",
+        "status": "Active", "color": {"name": "Weathered Wood", "code": "384", "description": "Product Color"},
+        "uoms": [{"name": "Square", "code": "SQ", "description": "estimate"}, {"name": "Bundle", "code": "BD", "description": "stocking"}],
+        "images": [{"assetId": "mock-shingle-arch-ww", "type": "PrimaryProductImage", "href": "http://127.0.0.1:8001/api/abc-mock/api/product/v1/items/mock-shingle-arch-ww/images"}],
+        "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Steep Slope Roofing"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {
+        "itemNumber": "MOCK-UNDERLAYMENT-30", "familyId": "PFam_MOCK_UNDER",
+        "familyName": "Mock Synthetic Underlayment", "isDimensional": False,
+        "itemDescription": "Mock Synthetic Roofing Underlayment 30 (10 sq roll)", "status": "Active",
+        "uoms": [{"name": "Roll", "code": "RL", "description": "stocking"}],
+        "images": [], "hierarchy": {"productGroup": {"label": "Underlayment", "category": {"label": "Roofing Accessories"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18"],  # NOT available at 409
+    },
+    {
+        "itemNumber": "MOCK-DRIP-EDGE-DIM", "familyId": "PFam_MOCK_DRIP",
+        "familyName": "Mock Drip Edge", "isDimensional": True,
+        "itemDescription": "Mock Aluminum Drip Edge (dimensional - length required)", "status": "Active",
+        "uoms": [{"name": "Piece", "code": "PC", "description": "stocking"}],
+        "images": [], "hierarchy": {"productGroup": {"label": "Metal", "category": {"label": "Roofing Accessories"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {
+        "itemNumber": "MOCK-RIDGE-CAP-NOPRICE", "familyId": "PFam_MOCK_RIDGE",
+        "familyName": "Mock Ridge Cap", "isDimensional": False,
+        "itemDescription": "Mock Hip & Ridge Cap Shingles (branch pricing not entered)", "status": "Active",
+        "uoms": [{"name": "Bundle", "code": "BD", "description": "stocking"}],
+        "images": [], "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Hip & Ridge"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {
+        "itemNumber": "MOCK-ICEWATER-BARRIER", "familyId": "PFam_MOCK_IW",
+        "familyName": "Mock Ice & Water Barrier", "isDimensional": False,
+        "itemDescription": "Mock Ice and Water Barrier Membrane (2 sq roll)", "status": "Active",
+        "uoms": [{"name": "Roll", "code": "RL", "description": "stocking"}],
+        "images": [], "hierarchy": {"productGroup": {"label": "Underlayment", "category": {"label": "Roofing Accessories"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+]
+_PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
+    "MOCK-SHINGLE-ARCH-WW": 135.36,
+    "MOCK-UNDERLAYMENT-30": 89.5,
+    "MOCK-ICEWATER-BARRIER": 112.0,
+    # MOCK-DRIP-EDGE-DIM priced by length below; MOCK-RIDGE-CAP-NOPRICE intentionally 0.00 (unavailable)
+}
+
+
+def _item_view(it: dict, *, branch_filter: str | None, embed_branches: bool) -> dict:
+    view = {k: v for k, v in it.items() if k != "branchNumbers"}
+    if embed_branches:
+        view["branches"] = [{"number": n, "links": {"self": f"http://127.0.0.1:8001/api/abc-mock/api/location/v1/branches/{n}"}} for n in it["branchNumbers"]]
+    return view
+
+
+@router.post("/api/product/v1/search/items")
+async def search_items(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    body = await request.json()
+    filters = body.get("filters") or []
+    embed = "branches" in (body.get("embed") or [])
+    branch_filter = None
+    contains_key = contains_val = eq_item = eq_family = None
+    for f in filters:
+        cond, key, vals = f.get("condition"), f.get("key"), (f.get("values") or [])
+        val = vals[0] if vals else None
+        if cond == "contains":
+            contains_key, contains_val = key, (val or "").lower()
+        elif cond == "equals" and key == "itemNumber":
+            eq_item = val
+        elif cond == "equals" and key == "productFamilyId":
+            eq_family = val
+        elif cond == "equals" and key == "branchNumber":
+            branch_filter = val
+    results = []
+    for it in _MOCK_ITEMS:
+        if eq_item and it["itemNumber"] != eq_item:
+            continue
+        if eq_family and it["familyId"] != eq_family:
+            continue
+        if contains_val:
+            hay = (it["itemDescription"] if contains_key != "itemNumber" else it["itemNumber"]).lower()
+            if contains_val not in hay:
+                continue
+        if branch_filter and branch_filter not in it["branchNumbers"]:
+            continue
+        results.append(_item_view(it, branch_filter=branch_filter, embed_branches=embed))
+    return {"pagination": {"itemsPerPage": 25, "pageNumber": 1, "totalPages": 1, "totalItems": len(results)}, "items": results}
+
+
+@router.get("/api/product/v1/items/{asset_id}/images")
+async def get_item_image(asset_id: str, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    # 1x1 transparent PNG.
+    import base64 as _b64
+    png = _b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+    from fastapi.responses import Response as _Resp
+    return _Resp(content=png, media_type="image/png")
+
+
+# ---------------- Pricing API (Phase 2, /api/pricing/v2/prices) ----------------
+@router.post("/api/pricing/v2/prices")
+async def price_items(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    body = await request.json()
+    known = {it["itemNumber"] for it in _MOCK_ITEMS}
+    out_lines = []
+    for line in body.get("lines") or []:
+        item = line.get("itemNumber")
+        qty = line.get("quantity")
+        uom = line.get("uom")
+        length = line.get("length")
+        base = {"id": line.get("id"), "itemNumber": item, "quantity": qty, "uom": uom,
+                "currency": {"code": "USD", "symbol": "$"}}
+        if item not in known:
+            base.update({"unitPrice": 0.00, "status": {"code": "Error", "message": f"Cannot price item {item}. Call for pricing."}})
+        elif item == "MOCK-RIDGE-CAP-NOPRICE":
+            base.update({"unitPrice": 0.00, "status": {"code": "OK", "message": "Priced Successfully"}})  # $0 = branch has not entered pricing
+        elif item == "MOCK-DRIP-EDGE-DIM":
+            if not length:
+                base.update({"unitPrice": 0.00, "status": {"code": "Error", "message": "This item requires a length variation before pricing can be retrieved."}})
+            else:
+                base.update({"unitPrice": round(6.5 * float(length.get("value") or 1), 2), "length": length, "status": {"code": "OK", "message": "Priced Successfully"}})
+        else:
+            base.update({"unitPrice": _PRICE_TABLE.get(item, 0.00), "status": {"code": "OK", "message": "Priced Successfully"}})
+        out_lines.append(base)
+    return {"requestId": body.get("requestId"), "shipToNumber": body.get("shipToNumber"),
+            "branchNumber": body.get("branchNumber"), "purpose": body.get("purpose"), "lines": out_lines}
+
+
 # Standalone app (tests / manual runs).
 mock_app = FastAPI(title="Mock ABC Supply")
 mock_app.include_router(router)

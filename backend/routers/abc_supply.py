@@ -27,10 +27,12 @@ from integrations.abc_supply import auth as abc_auth
 from integrations.abc_supply.client import AbcClient
 from integrations.abc_supply import accounts as abc_accounts
 from integrations.abc_supply import locations as abc_locations
+from integrations.abc_supply import products as abc_products
+from integrations.abc_supply import pricing as abc_pricing
 from integrations.abc_supply.exceptions import AbcError, AbcAuthError, AbcNotConfigured
 from integrations.abc_supply.schemas import (
     AbcConfigUpdate, AbcSecretUpdate, AbcDefaultsUpdate, AbcStatusOut, AbcConnectOut,
-    AbcTestResult, AbcShipToOut, AbcBranchOut,
+    AbcTestResult, AbcShipToOut, AbcBranchOut, AbcProductSearchIn, AbcProductOut, AbcPriceIn,
 )
 
 log = logging.getLogger("roofspan.abc")
@@ -395,3 +397,109 @@ async def set_defaults(payload: AbcDefaultsUpdate, request: Request, user: User 
     await db.commit()
     await db.refresh(row)
     return _status_out(row, request)
+
+
+# --------------------------- products / pricing (Phase 2) ---------------------------
+async def _connected_client(db: AsyncSession, request: Request) -> AbcClient:
+    row = await _get_or_create(db)
+    access = await _ensure_user_token(db, row, request)
+    return AbcClient(_build_cfg(row, redirect_uri=_effective_redirect(row, request)), access_token=access)
+
+
+def _map_product(item: dict, branch_number: str | None) -> AbcProductOut:
+    hier = item.get("hierarchy") or {}
+    pg = hier.get("productGroup") or {}
+    cat = (pg.get("category") or {}).get("label") if isinstance(pg.get("category"), dict) else None
+    color = item.get("color") or {}
+    return AbcProductOut(
+        item_number=str(item.get("itemNumber") or ""),
+        description=item.get("itemDescription"),
+        family_id=item.get("familyId"),
+        family_name=item.get("familyName"),
+        manufacturer=item.get("manufacturer"),
+        is_dimensional=bool(item.get("isDimensional")),
+        uoms=item.get("uoms") or [],
+        color=color.get("name") if isinstance(color, dict) else None,
+        product_family=pg.get("label") or cat,
+        image_url=abc_products.primary_image_href(item),
+        available_at_branch=abc_products.item_available_at_branch(item, branch_number) if branch_number else None,
+        branch_number=branch_number,
+    )
+
+
+@router.post("/products/search", response_model=list[AbcProductOut])
+async def product_search(payload: AbcProductSearchIn, request: Request,
+                         user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    client = await _connected_client(db, request)
+    try:
+        data = await abc_products.search_items(
+            client, query=payload.query, by=payload.by, family_id=payload.family_id,
+            branch_number=payload.branch_number, embed_branches=True, page_number=payload.page,
+        )
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    row = await _get_or_create(db)
+    await log_action(db, user=user, action="abc.product.search", entity_type="abc_integration", entity_id=str(row.id),
+                     detail={"query": (payload.query or payload.family_id or "")[:120]}, request=request)
+    return [_map_product(it, payload.branch_number) for it in (data.get("items") or [])]
+
+
+@router.get("/products/{item_number}", response_model=AbcProductOut)
+async def product_detail(item_number: str, request: Request, branch_number: str | None = None,
+                         user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    client = await _connected_client(db, request)
+    try:
+        item = await abc_products.get_item(client, item_number)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    if not item:
+        raise HTTPException(status_code=404, detail="Product not found")
+    row = await _get_or_create(db)
+    await log_action(db, user=user, action="abc.product.view", entity_type="abc_integration", entity_id=str(row.id),
+                     detail={"item": item_number}, request=request)
+    return _map_product(item, branch_number)
+
+
+@router.get("/products/{item_number}/image")
+async def product_image(item_number: str, request: Request, href: str,
+                        user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Lazy image proxy: fetches the ABC image href with the user token so the browser never sees the token.
+    Only ABC hosts (or the local mock) are allowed."""
+    row = await _get_or_create(db)
+    cfg = _build_cfg(row)
+    allowed = href.startswith(cfg.api_base) or "abcsupply.com" in href
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Invalid image host")
+    access = await _ensure_user_token(db, row, request)
+    import httpx
+    from fastapi.responses import Response
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(href, headers={"Authorization": f"Bearer {access}"})
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not load product image")
+    if r.status_code != 200:
+        raise HTTPException(status_code=404, detail="Image unavailable")
+    return Response(content=r.content, media_type=r.headers.get("content-type", "image/png"))
+
+
+@router.post("/pricing")
+async def price(payload: AbcPriceIn, request: Request,
+                user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    if not payload.lines:
+        raise HTTPException(status_code=400, detail="No lines to price")
+    client = await _connected_client(db, request)
+    lines = [
+        abc_pricing.build_line(line_id=l.id, item_number=l.item_number, quantity=l.quantity, uom=l.uom,
+                               length_value=l.length_value, length_uom=l.length_uom)
+        for l in payload.lines
+    ]
+    try:
+        result = await abc_pricing.price_items(client, ship_to_number=payload.ship_to_number,
+                                               branch_number=payload.branch_number, lines=lines, purpose=payload.purpose)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    row = await _get_or_create(db)
+    await log_action(db, user=user, action="abc.price.lookup", entity_type="abc_integration", entity_id=str(row.id),
+                     detail={"count": len(result)}, request=request)
+    return {"lines": result}

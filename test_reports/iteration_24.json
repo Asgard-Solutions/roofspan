@@ -1,0 +1,30 @@
+{
+  "summary": "ABC Supply Phase 2 (Product + Pricing + PO integration) end-to-end validated. Backend: authored /app/backend/tests/test_abc_supply_p2_api.py (14 HTTP-integration cases) — all 14 PASS against the public preview URL. Combined with prior P1 unit + P2 unit + P1 API integration suites, 55/55 backend tests PASS. Frontend: full Playwright flow on the deployed preview passes — Owner logs in → Inventory → Purchase Orders → Create purchase order → type 'ABC Supply' → ABC context appears with defaults (Ship-To 1163698, Branch 18 Home) → Search ABC Supply Products → 'Mock' query lists synthetic items → adding MOCK-SHINGLE-ARCH-WW (10 SQ) inserts a $135.36 priced line; adding MOCK-RIDGE-CAP-NOPRICE (5 BD) inserts a 'Pricing unavailable' line and amber warning 'ABC Supply item do not currently have pricing.' Create PO succeeds (PO list refreshes with new ABC PO). Changing Branch from 18→409 clears ABC pricing and shows toast 'Ship-To/branch changed — ABC pricing was cleared. Re-add or refresh items.' No frontend/backend issues found.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_p2_api.py",
+    "/app/test_reports/pytest/abc_p2_iter24.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "The public ingress (Cloudflare) rewrites 502-status backend errors into an HTML 'Bad gateway' page, so /api/integrations/abc/products/search returning HTTPException(502) (raised on AbcAuthError / expired token / mock outage) becomes an unhelpful HTML response for the browser. Consider mapping 'connection expired' to 401/409 with structured JSON (or 200 + {status:'reconnect_required'}), which the SPA can distinguish from a real gateway failure. Not a blocker for P2 tests.",
+    "abc_pricing endpoint returns {lines:[...]} but products/search returns a bare list. Consistent envelope would ease future clients.",
+    "During testing the ABC access token had a ~30-min TTL and mock refresh path returns 'connection expired' if a stale row is used; consider seeding a longer TTL in mock-mode or auto-reconnect in mock mode to avoid flakiness in long-running test sessions.",
+    "Nice-to-have: expose an 'is_dimensional' boolean on the search results so the UI could pre-hint the length input (currently only present on product-detail response and available_at_branch/uoms in search)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_supply_p2_api.py (new)"
+  ],
+  "success_rate": {
+    "backend": "55/55 (100%) across P1 unit + P2 unit + P1 HTTP integration + P2 HTTP integration",
+    "backend_p2_http": "14/14 (100%)",
+    "frontend": "PASS — ABC PO create flow, pricing_warning, branch-change-clears-pricing all work"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; Sales sales1_38f545f9@example.com / Sales1#2026 (used for RBAC 403 asserts).",
+  "seed_data_creation": "Created several TEST_ / ABC purchase orders during flow (test_01_create_abc_po, test_03_refresh_non_abc_returns_400, generic regression, plus 2 UI-created POs). No cleanup performed — safe test data left in PO list only.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 is fully green. For Phase 3/4 (ordering + webhooks) create separate test files (test_abc_supply_p3_*.py). Re-use the connect fixture pattern in test_abc_supply_p2_api.py::_ensure_connected to guarantee ABC is connected before hitting product/pricing endpoints; the mock refresh flow does not preserve state across long idle periods so tests that run in isolation should always call disconnect→connect first if status!=connected.",
+  "rca of the issue": "N/A — no failures. Initial 502s during test iteration were caused by a stale/expired mock ABC token in the DB (mock tokens expire in ~30 min and the mock refresh path is a no-op); the added fixture forces a fresh connect at test-module start which resolves it."
+}
