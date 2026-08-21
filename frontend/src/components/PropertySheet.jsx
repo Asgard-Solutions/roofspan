@@ -192,56 +192,6 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
             </div>
 
             <div className="mt-5">
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pin location diagnostics</div>
-              {loc ? (
-                <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="pin-location-diagnostics">
-                  <div className="flex items-center gap-2 font-medium text-slate-900">
-                    {locationResolved ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
-                    Pin source: {pinSource}
-                  </div>
-                  <div className={`mt-2 rounded px-2 py-1.5 text-xs font-semibold ${locationResolved ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
-                    Pin location: {locationResolved ? "RESOLVED" : "UNRESOLVED"}
-                  </div>
-                  {!locationResolved && (
-                    <div className="mt-2 text-xs text-slate-600">
-                      RentCast supplied this property's known address. RoofSpan keeps the RentCast pin until Mapbox returns a matching property-level location.
-                    </div>
-                  )}
-                  <div className="mt-2 space-y-1 text-xs text-slate-600">
-                    <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
-                    <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
-                    {locationResolved && <div><span className="font-medium text-slate-700">Mapbox location:</span> {formatCoords(loc.mapbox_latitude, loc.mapbox_longitude)}</div>}
-                    <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.geocoder_reason)}</div>
-                    {loc.geocoder_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.geocoder_http_status}</div>}
-                    {loc.mapbox_formatted_address && <div><span className="font-medium text-slate-700">Matched address:</span> {loc.mapbox_formatted_address}</div>}
-                    {loc.mapbox_accuracy && <div><span className="font-medium text-slate-700">Location accuracy:</span> {accuracyLabel(loc.mapbox_accuracy)}</div>}
-                    {loc.mapbox_confidence && <div><span className="font-medium text-slate-700">Match confidence:</span> {String(loc.mapbox_confidence).toUpperCase()}</div>}
-                    <div><span className="font-medium text-slate-700">Known address:</span> {loc.query_address || p.formatted_address}</div>
-                    {loc.cached_permanently && <div className="font-medium text-green-700">Cached locally — normal map use will not geocode this address again.</div>}
-                  </div>
-                  {canLocate && p.source === "rentcast" && (
-                    <Button size="sm" variant="outline" className="mt-3 w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
-                      {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with Mapbox"}
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  <div className="flex items-center gap-2 text-sm text-slate-400">
-                    <Crosshair className="h-4 w-4" /> Property location lookup has not run yet.
-                  </div>
-                  {canLocate && p.source === "rentcast" && (
-                    <Button size="sm" variant="outline" className="w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
-                      {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with Mapbox"}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-5">
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner / Renter</div>
               {owner ? (
                 <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="owner-info">
@@ -308,6 +258,49 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                 </Button>
               )}
             </div>
+
+            <details className="group mt-6 rounded-md border border-border bg-slate-50" data-testid="pin-location-diagnostics">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium text-slate-800 [&::-webkit-details-marker]:hidden">
+                <span className="flex items-center gap-2">
+                  {locationResolved ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+                  Pin location diagnostics
+                </span>
+                <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${locationResolved ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                  {locationResolved ? "RESOLVED" : "UNRESOLVED"}
+                </span>
+              </summary>
+
+              <div className="border-t border-border bg-white p-3 text-sm">
+                <div className="flex items-center gap-2 font-medium text-slate-900">Pin source: {pinSource}</div>
+                {!locationResolved && (
+                  <div className="mt-2 text-xs text-slate-600">
+                    RentCast supplied this property's known address. RoofSpan keeps the RentCast pin until Mapbox returns a matching property-level location.
+                  </div>
+                )}
+                {loc ? (
+                  <div className="mt-2 space-y-1 text-xs text-slate-600">
+                    <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
+                    <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
+                    {locationResolved && <div><span className="font-medium text-slate-700">Mapbox location:</span> {formatCoords(loc.mapbox_latitude, loc.mapbox_longitude)}</div>}
+                    <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.geocoder_reason)}</div>
+                    {loc.geocoder_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.geocoder_http_status}</div>}
+                    {loc.mapbox_formatted_address && <div><span className="font-medium text-slate-700">Matched address:</span> {loc.mapbox_formatted_address}</div>}
+                    {loc.mapbox_accuracy && <div><span className="font-medium text-slate-700">Location accuracy:</span> {accuracyLabel(loc.mapbox_accuracy)}</div>}
+                    {loc.mapbox_confidence && <div><span className="font-medium text-slate-700">Match confidence:</span> {String(loc.mapbox_confidence).toUpperCase()}</div>}
+                    <div><span className="font-medium text-slate-700">Known address:</span> {loc.query_address || p.formatted_address}</div>
+                    {loc.cached_permanently && <div className="font-medium text-green-700">Cached locally — normal map use will not geocode this address again.</div>}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">Property location lookup has not run yet.</div>
+                )}
+                {canLocate && p.source === "rentcast" && (
+                  <Button size="sm" variant="outline" className="mt-3 w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
+                    {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                    {locating ? "Locating property..." : "Locate property with Mapbox"}
+                  </Button>
+                )}
+              </div>
+            </details>
           </>
         )}
 
