@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 KNOWN_PROVIDERS = {
     "rentcast": {"label": "RentCast", "config_defaults": {}},
     "maptiler": {"label": "MapTiler", "config_defaults": {}},
-    "geocodio": {"label": "Geocodio", "config_defaults": {}},
+    "mapbox": {"label": "Mapbox Permanent Geocoding", "config_defaults": {}},
 }
 
 
@@ -43,8 +43,8 @@ def _to_out(row: IntegrationSetting) -> IntegrationOut:
     )
 
 
-def _start_geocodio_backfill_if_ready(row: IntegrationSetting) -> None:
-    if row.provider != "geocodio" or not row.enabled or not row.secret_ciphertext:
+def _start_mapbox_backfill_if_ready(row: IntegrationSetting) -> None:
+    if row.provider != "mapbox" or not row.enabled or not row.secret_ciphertext:
         return
     from location_upgrade import refresh_existing_property_locations
     asyncio.create_task(refresh_existing_property_locations())
@@ -71,7 +71,7 @@ async def update_integration(provider: str, payload: IntegrationUpdate, request:
     await db.commit()
     await db.refresh(row)
     await log_action(db, user=user, action="integration.update", entity_type="integration", entity_id=provider, detail={"enabled": row.enabled}, request=request)
-    _start_geocodio_backfill_if_ready(row)
+    _start_mapbox_backfill_if_ready(row)
     return _to_out(row)
 
 
@@ -85,7 +85,7 @@ async def set_secret(provider: str, payload: SecretUpdate, request: Request, use
     await db.commit()
     await db.refresh(row)
     await log_action(db, user=user, action="integration.set_secret", entity_type="integration", entity_id=provider, request=request)
-    _start_geocodio_backfill_if_ready(row)
+    _start_mapbox_backfill_if_ready(row)
     return _to_out(row)
 
 
@@ -133,16 +133,27 @@ async def test_connection(provider: str, user: User = Depends(require_roles(*SEN
                 if resp.status_code in (401, 403):
                     return TestConnectionResult(ok=False, message="MapTiler rejected the API key (unauthorized).")
                 return TestConnectionResult(ok=False, message=f"MapTiler responded with status {resp.status_code}.")
-            if provider == "geocodio":
+            if provider == "mapbox":
                 resp = await client.get(
-                    "https://api.geocod.io/v2/geocode",
-                    params={"q": "1109 N Highland St, Arlington, VA 22201", "api_key": secret, "limit": 1},
+                    "https://api.mapbox.com/search/geocode/v6/forward",
+                    params={
+                        "address_number": "1600",
+                        "street": "Pennsylvania Ave NW",
+                        "place": "Washington",
+                        "region": "DC",
+                        "postcode": "20500",
+                        "country": "us",
+                        "types": "address",
+                        "autocomplete": "false",
+                        "permanent": "true",
+                        "access_token": secret,
+                    },
                 )
                 if resp.status_code == 200:
-                    return TestConnectionResult(ok=True, message="Geocodio connection successful. Property locations can be cached locally.")
+                    return TestConnectionResult(ok=True, message="Mapbox Permanent Geocoding connection successful.")
                 if resp.status_code in (401, 403):
-                    return TestConnectionResult(ok=False, message="Geocodio rejected the API key (unauthorized).")
-                return TestConnectionResult(ok=False, message=f"Geocodio responded with status {resp.status_code}.")
+                    return TestConnectionResult(ok=False, message="Mapbox rejected the access token or permanent-geocoding access is unavailable.")
+                return TestConnectionResult(ok=False, message=f"Mapbox responded with status {resp.status_code}.")
     except httpx.RequestError as e:
         return TestConnectionResult(ok=False, message=f"Could not reach provider: {e.__class__.__name__}")
     return TestConnectionResult(ok=False, message="Unsupported provider test.")
