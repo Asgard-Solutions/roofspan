@@ -33,6 +33,33 @@ def _xyz_tile(lng: float, lat: float, zoom: int) -> tuple[int, int, int]:
     return zoom, x, y
 
 
+def _valid_center(value) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) >= 2
+        and isinstance(value[0], (int, float))
+        and isinstance(value[1], (int, float))
+        and math.isfinite(value[0])
+        and math.isfinite(value[1])
+        and -180 <= value[0] <= 180
+        and -90 <= value[1] <= 90
+    )
+
+
+def _valid_bbox(value) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(isinstance(v, (int, float)) and math.isfinite(v) for v in value)
+        and -180 <= value[0] <= 180
+        and -90 <= value[1] <= 90
+        and -180 <= value[2] <= 180
+        and -90 <= value[3] <= 90
+        and value[0] < value[2]
+        and value[1] < value[3]
+    )
+
+
 async def _get_config(db: AsyncSession, key: str, default: dict) -> dict:
     row = (await db.execute(select(AppConfig).where(AppConfig.key == key))).scalar_one_or_none()
     if not row:
@@ -114,6 +141,109 @@ async def update_map_config(payload: MapConfigUpdate, request: Request, user: Us
     return await get_map_config(user=user, db=db)
 
 
+@router.get("/geocode/zip")
+async def geocode_zip(
+    zip: str = Query(..., min_length=3, max_length=16),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Center the map on a ZIP/postal code using the configured server-side MapTiler key."""
+    code = zip.strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="ZIP / postal code is required")
+
+    key = await _maptiler_key(db)
+    if not key:
+        raise HTTPException(status_code=503, detail="MapTiler is not configured. Add and enable a MapTiler key in Settings.")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://api.maptiler.com/geocoding/{code}.json",
+                params={
+                    "key": key,
+                    "types": "postal_code",
+                    "country": "us",
+                    "limit": 5,
+                    "autocomplete": "false",
+                    "fuzzyMatch": "false",
+                    "worldview": "us",
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Could not reach MapTiler ZIP search.") from exc
+
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=503, detail="MapTiler rejected the configured API key.")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"MapTiler ZIP search failed with HTTP {r.status_code}.")
+
+    try:
+        payload = r.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="MapTiler returned an invalid ZIP-search response.") from exc
+
+    features = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(features, list):
+        features = []
+
+    normalized_code = code.split("-", 1)[0].strip().lower()
+    feature = None
+    for candidate in features:
+        if not isinstance(candidate, dict):
+            continue
+        place_types = candidate.get("place_type") or []
+        if isinstance(place_types, str):
+            place_types = [place_types]
+        if "postal_code" not in place_types:
+            continue
+        candidate_code = str(candidate.get("text") or candidate.get("matching_text") or "").strip().lower()
+        if candidate_code == normalized_code:
+            feature = candidate
+            break
+        if feature is None:
+            feature = candidate
+
+    if not feature:
+        raise HTTPException(status_code=404, detail=f'ZIP / postal code "{code}" was not found.')
+
+    center = feature.get("center")
+    if not _valid_center(center):
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates")
+        center = coords if geometry.get("type") == "Point" and _valid_center(coords) else None
+    if not _valid_center(center):
+        raise HTTPException(status_code=502, detail="MapTiler returned a ZIP result without usable coordinates.")
+
+    bbox = feature.get("bbox")
+    approximate_bbox = False
+    if not _valid_bbox(bbox):
+        lng, lat = float(center[0]), float(center[1])
+        lat_pad = 0.05
+        lng_pad = 0.05 / max(math.cos(math.radians(lat)), 0.25)
+        bbox = [
+            max(-180.0, lng - lng_pad),
+            max(-90.0, lat - lat_pad),
+            min(180.0, lng + lng_pad),
+            min(90.0, lat + lat_pad),
+        ]
+        approximate_bbox = True
+
+    geometry = feature.get("geometry")
+    if not isinstance(geometry, dict) or geometry.get("type") not in ("Polygon", "MultiPolygon"):
+        geometry = None
+
+    return {
+        "zip": code,
+        "display_name": feature.get("place_name") or feature.get("matching_place_name") or feature.get("text") or code,
+        "center": [float(center[0]), float(center[1])],
+        "bbox": [[float(bbox[0]), float(bbox[1])], [float(bbox[2]), float(bbox[3])]],
+        "geometry": geometry,
+        "bbox_approximate": approximate_bbox,
+        "provider": "maptiler",
+    }
+
+
 @router.get("/map/cadastre-capability")
 async def cadastre_capability(
     lat: float | None = Query(None, ge=-85.05112878, le=85.05112878),
@@ -182,8 +312,6 @@ async def cadastre_capability(
             result["coverage_http_status"] = tile.status_code
 
             if tile.status_code == 200:
-                # A non-empty vector tile means Cadastre has data at this location. We intentionally
-                # do not expose or persist the raw tile here; parcel parsing belongs in the resolver.
                 result["coverage_available"] = len(tile.content) > 0
                 result["reason"] = "cadastre_coverage_available" if result["coverage_available"] else "cadastre_tile_empty"
             elif tile.status_code == 204:
