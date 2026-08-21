@@ -21,7 +21,7 @@ from models import IntegrationSetting, Property, Territory
 
 logger = logging.getLogger("roofspan.location_upgrade")
 
-RESOLUTION_VERSION = "mapbox_permanent_property_location_v1"
+RESOLUTION_VERSION = "mapbox_permanent_property_location_v2"
 CHUNK_SIZE = MAPBOX_BATCH_SIZE
 
 _running_lock = asyncio.Lock()
@@ -111,6 +111,9 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "mapbox_routable_points": result.get("routable_points"),
         "identity_expected": result.get("identity_expected"),
         "identity_returned": result.get("identity_returned"),
+        "street_alias_detected": bool(result.get("street_alias_detected")),
+        "street_alias_expected": result.get("street_alias_expected"),
+        "street_alias_returned": result.get("street_alias_returned"),
         "location_quality": result.get("location_quality"),
         "location_resolved": resolved,
         "location_method": "mapbox_permanent_geocode" if resolved else None,
@@ -194,6 +197,9 @@ async def locate_property_now(property_id: str) -> dict:
                 "reason": loc.get("geocoder_reason"),
                 "accuracy": loc.get("mapbox_accuracy"),
                 "confidence": loc.get("mapbox_confidence"),
+                "street_alias_detected": bool(loc.get("street_alias_detected")),
+                "street_alias_expected": loc.get("street_alias_expected"),
+                "street_alias_returned": loc.get("street_alias_returned"),
                 "location_quality": loc.get("location_quality"),
                 "cached_permanently": bool(loc.get("cached_permanently")),
                 "checked_at": loc.get("auto_resolution_checked_at"),
