@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -20,6 +21,7 @@ const OUTCOMES = [
   { value: "appointment", label: "Appointment set" },
   { value: "do_not_knock", label: "Do Not Knock" },
 ];
+const MANAGE = ["owner", "administrator", "office"];
 
 function Stat({ icon: Icon, label, value }) {
   if (value == null || value === "") return null;
@@ -70,8 +72,11 @@ function humanReason(reason) {
 }
 
 export default function PropertySheet({ propertyId, open, onOpenChange, onChanged }) {
+  const { user } = useAuth();
+  const canVerifyAddress = MANAGE.includes(user?.role);
   const [p, setP] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [verifyingAddress, setVerifyingAddress] = useState(false);
   const [visitOutcome, setVisitOutcome] = useState("no_answer");
   const [visitNotes, setVisitNotes] = useState("");
   const [savingVisit, setSavingVisit] = useState(false);
@@ -88,6 +93,21 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
   useEffect(() => {
     if (open && propertyId) load();
   }, [open, propertyId]); // eslint-disable-line
+
+  const verifyAddress = async () => {
+    if (!p?.id) return;
+    setVerifyingAddress(true);
+    try {
+      const { data } = await api.post(`/properties/${p.id}/verify-address`);
+      toast.success(data.verified ? "Address verified by MapTiler" : "MapTiler could not verify the exact address");
+      load();
+      onChanged && onChanged();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setVerifyingAddress(false);
+    }
+  };
 
   const toggleDNK = async (val) => {
     try {
@@ -195,10 +215,31 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                     {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
                     <div><span className="font-medium text-slate-700">Queried address:</span> {loc.query_address || p.formatted_address}</div>
                   </div>
+                  {canVerifyAddress && p.source === "rentcast" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-3 w-full"
+                      onClick={verifyAddress}
+                      disabled={verifyingAddress}
+                      data-testid="verify-address-button"
+                    >
+                      {verifyingAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                      {verifyingAddress ? "Verifying address..." : "Verify address with MapTiler"}
+                    </Button>
+                  )}
                 </div>
               ) : (
-                <div className="mt-2 flex items-center gap-2 text-sm text-slate-400">
-                  <Crosshair className="h-4 w-4" /> Location resolution has not run for this property yet.
+                <div className="mt-2 space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-slate-400">
+                    <Crosshair className="h-4 w-4" /> Location resolution has not run for this property yet.
+                  </div>
+                  {canVerifyAddress && p.source === "rentcast" && (
+                    <Button size="sm" variant="outline" className="w-full" onClick={verifyAddress} disabled={verifyingAddress} data-testid="verify-address-button">
+                      {verifyingAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                      {verifyingAddress ? "Verifying address..." : "Verify address with MapTiler"}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
