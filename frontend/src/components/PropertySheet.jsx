@@ -38,19 +38,30 @@ function formatCoords(lat, lng) {
 
 function humanReason(reason) {
   const labels = {
-    accepted: "Accepted address match",
+    accepted: "Verified exact address match",
+    exact_address_identity: "Verified exact address match",
     no_result: "No MapTiler result",
     invalid_response: "Invalid provider response",
     invalid_feature: "Invalid provider feature",
     invalid_coordinates: "Invalid returned coordinates",
-    not_address_result: "Returned result was not an address",
-    no_house_number: "No house-number-level match",
+    not_address_result: "MapTiler found a place/road, not the exact property address",
+    no_house_number: "MapTiler did not return the requested house number",
+    house_number_mismatch: "MapTiler returned a different house number",
+    street_mismatch: "MapTiler returned a different street",
+    city_mismatch: "MapTiler returned a different city",
+    state_mismatch: "MapTiler returned a different state",
+    zip_mismatch: "MapTiler returned a different ZIP code",
+    returned_street_missing: "MapTiler result did not include a street",
+    returned_city_missing: "MapTiler result did not include a city",
+    returned_state_missing: "MapTiler result did not include a state",
+    returned_zip_missing: "MapTiler result did not include a ZIP code",
     low_relevance: "MapTiler match relevance was too low",
     invalid_relevance: "Invalid relevance value",
-    outside_territory: "Returned point was outside the territory",
+    outside_territory: "Verified address point was outside the territory",
     provider_http_error: "MapTiler returned an HTTP error",
     provider_request_error: "MapTiler request failed",
-    batch_result_count_mismatch: "MapTiler batch response did not match the request",
+    single_result_count_mismatch: "MapTiler returned an unexpected result count",
+    single_request_exception: "MapTiler request failed unexpectedly",
     maptiler_not_configured: "MapTiler geocoding is not configured",
     unexpected_geocoder_error: "Unexpected geocoder error",
     not_attempted: "MapTiler geocoding was not attempted",
@@ -121,7 +132,13 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
 
   const owner = p?.contacts?.find((c) => c.kind === "owner");
   const loc = p?.location_diagnostics;
-  const maptilerUsed = loc?.coordinate_source === "maptiler_address";
+  const maptilerUsed = loc?.coordinate_source === "maptiler_address" || loc?.coordinate_source === "maptiler_numbered_building";
+  const addressVerified = loc?.address_verified === true || maptilerUsed;
+  const pinSource = loc?.coordinate_source === "maptiler_numbered_building"
+    ? "MapTiler verified building"
+    : loc?.coordinate_source === "maptiler_address"
+      ? "MapTiler verified address"
+      : "RentCast";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -154,24 +171,34 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               {loc ? (
                 <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="pin-location-diagnostics">
                   <div className="flex items-center gap-2 font-medium text-slate-900">
-                    {maptilerUsed ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
-                    Pin source: {maptilerUsed ? "MapTiler address" : "RentCast"}
+                    {addressVerified ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+                    Pin source: {pinSource}
                   </div>
+                  <div className={`mt-2 rounded px-2 py-1.5 text-xs font-semibold ${addressVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                    Address resolution: {addressVerified ? "VERIFIED" : "NOT VERIFIED"}
+                  </div>
+                  {!addressVerified && (
+                    <div className="mt-2 text-xs text-slate-600">
+                      MapTiler did not verify the exact house-number address, so RoofSpan did not use the returned place/road coordinate for this property pin.
+                    </div>
+                  )}
                   <div className="mt-2 space-y-1 text-xs text-slate-600">
-                    <div><span className="font-medium text-slate-700">RentCast:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
-                    <div><span className="font-medium text-slate-700">MapTiler:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
-                    {loc.distance_feet != null && <div><span className="font-medium text-slate-700">Difference:</span> {Number(loc.distance_feet).toLocaleString()} ft</div>}
+                    <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
+                    <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
+                    {addressVerified && (
+                      <div><span className="font-medium text-slate-700">Verified MapTiler:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
+                    )}
                     <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.maptiler_reason)}</div>
                     {loc.maptiler_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.maptiler_http_status}</div>}
                     {loc.maptiler_returned_address && <div><span className="font-medium text-slate-700">Returned number:</span> {loc.maptiler_returned_address}</div>}
                     {loc.maptiler_returned_label && <div><span className="font-medium text-slate-700">Returned place:</span> {loc.maptiler_returned_label}</div>}
                     {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
-                    <div><span className="font-medium text-slate-700">Query:</span> {loc.query_address || p.formatted_address}</div>
+                    <div><span className="font-medium text-slate-700">Queried address:</span> {loc.query_address || p.formatted_address}</div>
                   </div>
                 </div>
               ) : (
                 <div className="mt-2 flex items-center gap-2 text-sm text-slate-400">
-                  <Crosshair className="h-4 w-4" /> Re-import this territory to generate pin diagnostics.
+                  <Crosshair className="h-4 w-4" /> Location resolution has not run for this property yet.
                 </div>
               )}
             </div>
