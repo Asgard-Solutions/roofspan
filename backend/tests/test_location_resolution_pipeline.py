@@ -69,3 +69,18 @@ def test_location_status_endpoint_exists():
     source = (BACKEND / "routers" / "imports.py").read_text(encoding="utf-8")
     assert '@router.get("/territories/{territory_id}/location-resolution")' in source
     assert 'status = loc.get("geocoder_status")' in source
+
+
+def test_map_progress_is_sidebar_content_and_pin_diagnostics_are_collapsed_footer():
+    progress = (FRONTEND / "components" / "LocationResolutionProgress.jsx").read_text(encoding="utf-8")
+    sheet = (FRONTEND / "components" / "PropertySheet.jsx").read_text(encoding="utf-8")
+
+    assert 'document.querySelector(\'[data-testid="territory-panel"]\')' in progress
+    assert "createPortal(" in progress
+    assert "fixed top-3" not in progress
+
+    assert '<details className="group mt-6' in sheet
+    assert 'data-testid="pin-location-diagnostics"' in sheet
+    assert "<summary" in sheet
+    assert " open=" not in sheet
+    assert sheet.index('data-testid="convert-lead-button"') < sheet.index('data-testid="pin-location-diagnostics"')
