@@ -18,7 +18,7 @@ from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
-from routers import operations, purchasing, cron, admin_ops, mobile, licensing as licensing_router
+from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, licensing as licensing_router
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -50,6 +50,7 @@ app.include_router(settings.router)
 app.include_router(territories.router)
 app.include_router(properties.router)
 app.include_router(imports.router)
+app.include_router(location_resolution.router)
 app.include_router(leads.router)
 app.include_router(customers.router)
 app.include_router(inspections.router)
