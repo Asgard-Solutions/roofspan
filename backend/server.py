@@ -104,6 +104,21 @@ async def seed_owner():
             logger.info("Updated owner password: %s", email)
 
 
+async def cleanup_duplicates_then_refresh_locations():
+    """Remove conservative RentCast duplicates before spending Mapbox calls on the backfill."""
+    from property_dedup import cleanup_duplicate_properties
+    from location_upgrade import refresh_existing_property_locations
+
+    try:
+        stats = await cleanup_duplicate_properties()
+        logger.info("Duplicate property cleanup complete: scanned=%d merged=%d", stats["scanned"], stats["merged"])
+    except Exception:
+        # Cleanup is intentionally non-fatal. A cleanup bug must never prevent Office from starting
+        # or block the existing location resolver.
+        logger.exception("Duplicate property cleanup failed; continuing with location backfill")
+    await refresh_existing_property_locations()
+
+
 @app.on_event("startup")
 async def on_startup():
     # Migration-driven schema: Alembic is the single authoritative schema path (no create_all,
@@ -121,11 +136,9 @@ async def on_startup():
     from relay.hub import hub as relay_hub
     await relay_hub.startup()
 
-    # Existing RentCast properties are upgraded in place after a software update. This is a
-    # background, idempotent data migration: users do not need to delete/re-import territories.
-    # Starting it after core services keeps normal startup responsive even for large territories.
-    from location_upgrade import refresh_existing_property_locations
-    asyncio.create_task(refresh_existing_property_locations())
+    # Existing RentCast properties are de-duplicated first, then upgraded in place. Both operations
+    # are background/idempotent so users do not need to delete or re-import territories.
+    asyncio.create_task(cleanup_duplicates_then_refresh_locations())
 
     logger.info("RoofSpan Office backend ready")
 
