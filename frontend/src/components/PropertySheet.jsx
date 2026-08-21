@@ -41,19 +41,19 @@ function formatCoords(lat, lng) {
 function humanReason(reason) {
   const labels = {
     known_address_located: "Known RentCast address located",
-    no_result: "No Geocodio result for the known address",
+    no_result: "No Mapbox address result for the known address",
     house_number_mismatch: "Returned house number did not match",
     street_mismatch: "Returned street did not match",
     city_mismatch: "Returned city did not match",
     state_mismatch: "Returned state did not match",
     zip_mismatch: "Returned ZIP code did not match",
-    low_accuracy: "Geocodio match confidence was too low",
-    insufficient_precision: "Geocodio result was not precise enough for a property pin",
-    outside_territory: "Located point was outside the territory",
-    provider_http_error: "Geocodio returned an HTTP error",
-    provider_request_error: "Geocodio request failed",
-    single_result_missing: "Geocodio did not return a result for this property",
-    batch_result_missing: "Geocodio batch response was missing this property",
+    low_confidence: "Mapbox match confidence was too low",
+    insufficient_precision: "Mapbox result was not precise enough for a property pin",
+    provider_http_error: "Mapbox returned an HTTP error",
+    provider_request_error: "Mapbox request failed",
+    single_result_missing: "Mapbox did not return a result for this property",
+    batch_result_missing: "Mapbox batch response was missing this property",
+    batch_result_count_mismatch: "Mapbox returned an unexpected batch result count",
     queued_after_rentcast_import: "Waiting for property location lookup",
   };
   return labels[reason] || reason || "Unknown";
@@ -62,11 +62,10 @@ function humanReason(reason) {
 function accuracyLabel(type) {
   const labels = {
     rooftop: "Rooftop",
+    parcel: "Parcel",
     point: "Address point",
-    range_interpolation: "Interpolated",
-    nearest_rooftop_match: "Nearest rooftop",
-    street_center: "Street center",
-    place: "Place",
+    interpolated: "Interpolated",
+    approximate: "Approximate",
   };
   return labels[type] || type || "—";
 }
@@ -99,7 +98,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
     setLocating(true);
     try {
       const { data } = await api.post(`/properties/${p.id}/locate`);
-      toast.success(data.resolved ? "Property located and cached" : "Geocodio could not confidently locate this property");
+      toast.success(data.resolved ? "Property located and cached" : "Mapbox could not confidently locate this property");
       load();
       onChanged && onChanged();
     } catch (e) {
@@ -152,17 +151,19 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
 
   const owner = p?.contacts?.find((c) => c.kind === "owner");
   const loc = p?.location_diagnostics;
-  const geocodioUsed = ["geocodio_rooftop", "geocodio_point", "geocodio_interpolated", "geocodio"].includes(loc?.coordinate_source);
-  const locationResolved = loc?.location_resolved === true || geocodioUsed;
-  const pinSource = loc?.coordinate_source === "geocodio_rooftop"
-    ? "Geocodio rooftop"
-    : loc?.coordinate_source === "geocodio_point"
-      ? "Geocodio address point"
-      : loc?.coordinate_source === "geocodio_interpolated"
-        ? "Geocodio interpolated address"
-        : loc?.coordinate_source === "geocodio"
-          ? "Geocodio"
-          : "RentCast";
+  const mapboxUsed = ["mapbox_rooftop", "mapbox_parcel", "mapbox_point", "mapbox_interpolated", "mapbox"].includes(loc?.coordinate_source);
+  const locationResolved = loc?.location_resolved === true || mapboxUsed;
+  const pinSource = loc?.coordinate_source === "mapbox_rooftop"
+    ? "Mapbox rooftop"
+    : loc?.coordinate_source === "mapbox_parcel"
+      ? "Mapbox parcel"
+      : loc?.coordinate_source === "mapbox_point"
+        ? "Mapbox address point"
+        : loc?.coordinate_source === "mapbox_interpolated"
+          ? "Mapbox interpolated address"
+          : loc?.coordinate_source === "mapbox"
+            ? "Mapbox"
+            : "RentCast";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -203,27 +204,25 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                   </div>
                   {!locationResolved && (
                     <div className="mt-2 text-xs text-slate-600">
-                      RentCast supplied this property's known address. RoofSpan keeps the RentCast pin until Geocodio returns a matching property-level location.
+                      RentCast supplied this property's known address. RoofSpan keeps the RentCast pin until Mapbox returns a matching property-level location.
                     </div>
                   )}
                   <div className="mt-2 space-y-1 text-xs text-slate-600">
                     <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
                     <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
-                    {locationResolved && <div><span className="font-medium text-slate-700">Geocodio location:</span> {formatCoords(loc.geocodio_latitude, loc.geocodio_longitude)}</div>}
+                    {locationResolved && <div><span className="font-medium text-slate-700">Mapbox location:</span> {formatCoords(loc.mapbox_latitude, loc.mapbox_longitude)}</div>}
                     <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.geocoder_reason)}</div>
                     {loc.geocoder_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.geocoder_http_status}</div>}
-                    {loc.geocodio_formatted_address && <div><span className="font-medium text-slate-700">Matched address:</span> {loc.geocodio_formatted_address}</div>}
-                    {loc.geocodio_accuracy_type && <div><span className="font-medium text-slate-700">Location accuracy:</span> {accuracyLabel(loc.geocodio_accuracy_type)}</div>}
-                    {loc.geocodio_accuracy != null && <div><span className="font-medium text-slate-700">Match score:</span> {Number(loc.geocodio_accuracy).toFixed(2)}</div>}
-                    {loc.geocodio_match_type && <div><span className="font-medium text-slate-700">Match type:</span> {loc.geocodio_match_type}</div>}
-                    {loc.geocodio_source && <div><span className="font-medium text-slate-700">Geocode source:</span> {loc.geocodio_source}</div>}
+                    {loc.mapbox_formatted_address && <div><span className="font-medium text-slate-700">Matched address:</span> {loc.mapbox_formatted_address}</div>}
+                    {loc.mapbox_accuracy && <div><span className="font-medium text-slate-700">Location accuracy:</span> {accuracyLabel(loc.mapbox_accuracy)}</div>}
+                    {loc.mapbox_confidence && <div><span className="font-medium text-slate-700">Match confidence:</span> {String(loc.mapbox_confidence).toUpperCase()}</div>}
                     <div><span className="font-medium text-slate-700">Known address:</span> {loc.query_address || p.formatted_address}</div>
                     {loc.cached_permanently && <div className="font-medium text-green-700">Cached locally — normal map use will not geocode this address again.</div>}
                   </div>
                   {canLocate && p.source === "rentcast" && (
                     <Button size="sm" variant="outline" className="mt-3 w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
                       {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with Geocodio"}
+                      {locating ? "Locating property..." : "Locate property with Mapbox"}
                     </Button>
                   )}
                 </div>
@@ -235,7 +234,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                   {canLocate && p.source === "rentcast" && (
                     <Button size="sm" variant="outline" className="w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
                       {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with Geocodio"}
+                      {locating ? "Locating property..." : "Locate property with Mapbox"}
                     </Button>
                   )}
                 </div>
