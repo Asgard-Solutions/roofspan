@@ -52,7 +52,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Verifying backend runtime imports"
-$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; print('backend import preflight OK')"
+$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; print('backend import preflight OK')"
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
