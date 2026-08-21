@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
@@ -31,6 +32,20 @@ const ACCURACY_LABELS = {
 
 export default function LocationResolutionProgress() {
   const [status, setStatus] = useState(null);
+  const [target, setTarget] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    let timer;
+    const findTarget = () => {
+      if (!alive) return;
+      const node = document.querySelector('[data-testid="territory-panel"]');
+      if (node) setTarget(node);
+      else timer = window.setTimeout(findTarget, 100);
+    };
+    findTarget();
+    return () => { alive = false; if (timer) window.clearTimeout(timer); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -49,7 +64,7 @@ export default function LocationResolutionProgress() {
     return () => { alive = false; if (timer) window.clearTimeout(timer); };
   }, []);
 
-  if (!status || !status.total) return null;
+  if (!target || !status || !status.total) return null;
 
   const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
   const resolved = Number(status.resolved || 0);
@@ -62,38 +77,39 @@ export default function LocationResolutionProgress() {
   const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 6);
   const accuracies = (status.accuracy_breakdown || []).filter((r) => Number(r.count || 0) > 0);
 
-  return (
-    <div className="fixed top-3 z-40 w-[min(580px,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur md:left-[calc(50%+8rem)] left-1/2" data-testid="location-resolution-progress">
+  return createPortal(
+    <div className="border-t border-border bg-slate-50 px-4 py-3" data-testid="location-resolution-progress">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {processing ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600" /> : providerRequired || completeWithRetries ? <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900">
-              {providerRequired ? "Mapbox Permanent Geocoding key required" : processing ? "Locating properties with Mapbox" : completeWithRetries ? "Property location pass complete" : "Property locations checked"}
+            <div className="text-xs font-semibold text-slate-900">
+              {providerRequired ? "Mapbox key required" : processing ? "Locating properties" : completeWithRetries ? "Location pass complete" : "Property locations checked"}
             </div>
-            <div className="text-xs text-slate-500">
-              {providerRequired ? `${Number(status.pending || 0).toLocaleString()} properties waiting for location lookup` : `${Number(status.attempted || 0).toLocaleString()} of ${Number(status.total || 0).toLocaleString()} checked`}
+            <div className="text-[11px] text-slate-500">
+              {providerRequired ? `${Number(status.pending || 0).toLocaleString()} waiting` : `${Number(status.attempted || 0).toLocaleString()} of ${Number(status.total || 0).toLocaleString()} checked`}
             </div>
           </div>
         </div>
-        {!providerRequired && <div className="shrink-0 text-sm font-semibold text-slate-700">{percent.toFixed(percent % 1 ? 1 : 0)}%</div>}
+        {!providerRequired && <div className="shrink-0 text-xs font-semibold text-slate-700">{percent.toFixed(percent % 1 ? 1 : 0)}%</div>}
       </div>
 
-      {!providerRequired && <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width] duration-500" style={{ width: `${percent}%` }} /></div>}
+      {!providerRequired && <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width] duration-500" style={{ width: `${percent}%` }} /></div>}
 
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-500">
         <span><strong className="text-slate-700">{resolved.toLocaleString()}</strong> located</span>
         <span><strong className="text-slate-700">{unresolved.toLocaleString()}</strong> unresolved</span>
-        <span><strong className="text-slate-700">{cached.toLocaleString()}</strong> cached locally</span>
-        {retries > 0 && <span><strong className="text-amber-700">{retries.toLocaleString()}</strong> retry pending</span>}
+        <span><strong className="text-slate-700">{cached.toLocaleString()}</strong> cached</span>
+        {retries > 0 && <span><strong className="text-amber-700">{retries.toLocaleString()}</strong> retry</span>}
         {processing && <span><strong className="text-slate-700">{Number(status.pending || 0).toLocaleString()}</strong> remaining</span>}
       </div>
 
-      {providerRequired && <div className="mt-2 text-xs text-slate-600">Add and enable a Mapbox access token under Settings → Integrations. RoofSpan uses Permanent Geocoding and saves completed results in the local database.</div>}
+      {providerRequired && <div className="mt-2 text-[11px] text-slate-600">Add and enable a Mapbox access token under Settings → Integrations.</div>}
 
-      {accuracies.length > 0 && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-200 pt-2 text-[11px] text-slate-500" data-testid="location-accuracy-breakdown">{accuracies.map((item) => <span key={item.accuracy_type}><strong className="text-slate-700">{Number(item.count || 0).toLocaleString()}</strong> {ACCURACY_LABELS[item.accuracy_type] || item.accuracy_type}</span>)}</div>}
+      {accuracies.length > 0 && <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 border-t border-slate-200 pt-2 text-[10px] text-slate-500" data-testid="location-accuracy-breakdown">{accuracies.map((item) => <span key={item.accuracy_type}><strong className="text-slate-700">{Number(item.count || 0).toLocaleString()}</strong> {ACCURACY_LABELS[item.accuracy_type] || item.accuracy_type}</span>)}</div>}
 
-      {reasons.length > 0 && <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown"><div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Why locations remain unresolved</div><div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-slate-500">{reasons.map((item) => <div key={item.reason} className="flex items-center justify-between gap-2"><span className="truncate" title={item.reason}>{REASON_LABELS[item.reason] || item.reason}</span><strong className="shrink-0 text-slate-700">{Number(item.count || 0).toLocaleString()}</strong></div>)}</div></div>}
-    </div>
+      {reasons.length > 0 && <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown"><div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Why unresolved</div><div className="space-y-0.5 text-[10px] text-slate-500">{reasons.map((item) => <div key={item.reason} className="flex items-center justify-between gap-2"><span className="truncate" title={item.reason}>{REASON_LABELS[item.reason] || item.reason}</span><strong className="shrink-0 text-slate-700">{Number(item.count || 0).toLocaleString()}</strong></div>)}</div></div>}
+    </div>,
+    target
   );
 }
