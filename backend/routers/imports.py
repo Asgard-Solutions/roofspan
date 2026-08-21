@@ -54,25 +54,24 @@ def _resolve_mode(requested: str | None, configured: bool) -> str:
 
 
 def _mark_location_pending(nd: dict) -> None:
-    """Persist RentCast coordinates immediately and queue Geocodio as a separate pin-location phase."""
+    """Persist RentCast coordinates immediately and queue Mapbox as a separate pin-location phase."""
     raw = dict(nd.get("raw") or {})
     raw["roofspan_location"] = {
         "query_address": nd.get("formatted_address") or "",
         "rentcast_latitude": nd.get("latitude"),
         "rentcast_longitude": nd.get("longitude"),
         "coordinate_source": "rentcast",
-        "location_provider": "geocodio",
+        "location_provider": "mapbox",
         "geocoder_status": "pending",
         "geocoder_reason": "queued_after_rentcast_import",
         "geocoder_http_status": None,
-        "geocodio_formatted_address": None,
-        "geocodio_latitude": None,
-        "geocodio_longitude": None,
-        "geocodio_accuracy": None,
-        "geocodio_accuracy_type": None,
-        "geocodio_match_type": None,
-        "geocodio_source": None,
-        "geocodio_stable_address_key": None,
+        "mapbox_formatted_address": None,
+        "mapbox_latitude": None,
+        "mapbox_longitude": None,
+        "mapbox_accuracy": None,
+        "mapbox_confidence": None,
+        "mapbox_id": None,
+        "mapbox_match_code": None,
         "location_resolved": False,
         "location_quality": None,
         "cached_permanently": False,
@@ -85,13 +84,12 @@ def _mark_location_pending(nd: dict) -> None:
 
 
 def _preserve_permanent_location_cache(existing: Property, nd: dict) -> dict:
-    """A RentCast refresh must not spend another geocode lookup when the address did not change."""
     new_raw = dict(nd.get("raw") or {})
     old_raw = existing.raw if isinstance(existing.raw, dict) else {}
     old_loc = old_raw.get("roofspan_location") if isinstance(old_raw.get("roofspan_location"), dict) else {}
     if (
         old_loc.get("cached_permanently") is True
-        and old_loc.get("location_provider") == "geocodio"
+        and old_loc.get("location_provider") == "mapbox"
         and str(old_loc.get("query_address") or "").strip().lower() == str(nd.get("formatted_address") or "").strip().lower()
     ):
         new_raw["roofspan_location"] = dict(old_loc)
@@ -123,7 +121,7 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). Geocodio pin location runs separately afterward when configured, and completed results are reused from the local cache.",
+            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). Mapbox Permanent Geocoding runs separately afterward when configured, and completed results are reused from the local cache.",
         )
 
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
@@ -191,12 +189,10 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                     existing.year_built = nd["year_built"]
                     existing.owner_occupied = nd["owner_occupied"]
                     existing.raw = preserved_raw
-                    # If a permanent location was preserved, keep that cached pin instead of the
-                    # newly refreshed RentCast coordinate.
                     preserved_loc = preserved_raw.get("roofspan_location") if isinstance(preserved_raw, dict) else None
                     if isinstance(preserved_loc, dict) and preserved_loc.get("cached_permanently") and preserved_loc.get("location_resolved"):
-                        existing.latitude = preserved_loc.get("geocodio_latitude") or existing.latitude
-                        existing.longitude = preserved_loc.get("geocodio_longitude") or existing.longitude
+                        existing.latitude = preserved_loc.get("mapbox_latitude") or existing.latitude
+                        existing.longitude = preserved_loc.get("mapbox_longitude") or existing.longitude
                     if existing.territory_id is None:
                         existing.territory_id = territory.id
                     oc = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == existing.id, PropertyContact.kind == "owner"))).scalars().first()
@@ -237,8 +233,6 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
             should_resolve_locations = False
 
     if should_resolve_locations:
-        # Phase 2 is deliberately separate from RentCast acquisition. Provider failures cannot roll
-        # back property acquisition, and permanent cached rows are skipped on later runs.
         from location_upgrade import refresh_existing_property_locations
         asyncio.create_task(refresh_existing_property_locations(territory_id=territory_id))
 
