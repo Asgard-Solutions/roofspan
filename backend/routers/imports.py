@@ -121,7 +121,7 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). Mapbox Permanent Geocoding runs separately afterward when configured, and completed results are reused from the local cache.",
+            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). Duplicate physical properties are merged before Mapbox Permanent Geocoding runs, and completed geocodes are reused from the local cache.",
         )
 
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
@@ -130,6 +130,14 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         estimated_properties=len(generated), radius_miles=radius, sample=generated[:10],
         note="Sample data (RentCast not used). Generates demo properties inside the territory for workflow testing.",
     )
+
+
+async def _cleanup_then_resolve(territory_id: str) -> None:
+    from property_dedup import cleanup_duplicate_properties
+    from location_upgrade import refresh_existing_property_locations
+
+    await cleanup_duplicate_properties(territory_id=territory_id)
+    await refresh_existing_property_locations(territory_id=territory_id)
 
 
 async def _run_import(job_id: str, territory_id: str, mode: str, max_records: int):
@@ -233,8 +241,9 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
             should_resolve_locations = False
 
     if should_resolve_locations:
-        from location_upgrade import refresh_existing_property_locations
-        asyncio.create_task(refresh_existing_property_locations(territory_id=territory_id))
+        # Cleanup happens before geocoding so duplicate physical properties do not consume Mapbox
+        # requests or render as two map pins after an import.
+        asyncio.create_task(_cleanup_then_resolve(territory_id))
 
 
 @router.post("/territories/{territory_id}/import", response_model=ImportJobOut, status_code=202)
