@@ -59,6 +59,7 @@ export default function LocationResolutionProgress() {
   const retries = Number(status.retry_pending || 0);
   const cached = Number(status.cached || 0);
   const processing = status.state === "processing";
+  const notConfigured = status.state === "not_configured";
   const completeWithRetries = status.state === "complete_with_retries";
   const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 6);
   const accuracies = (status.accuracy_breakdown || []).filter((r) => Number(r.count || 0) > 0);
@@ -72,26 +73,36 @@ export default function LocationResolutionProgress() {
         <div className="flex min-w-0 items-center gap-2">
           {processing ? (
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600" />
-          ) : completeWithRetries ? (
+          ) : notConfigured || completeWithRetries ? (
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           ) : (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
           )}
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
-              {processing ? "Locating properties with Geocodio" : completeWithRetries ? "Property location pass complete" : "Property locations checked"}
+              {processing
+                ? "Locating properties with Geocodio"
+                : notConfigured
+                  ? "Geocodio property locations not configured"
+                  : completeWithRetries
+                    ? "Property location pass complete"
+                    : "Property locations checked"}
             </div>
             <div className="text-xs text-slate-500">
-              {Number(status.attempted || 0).toLocaleString()} of {Number(status.total || 0).toLocaleString()} checked
+              {notConfigured
+                ? `${Number(status.pending || 0).toLocaleString()} properties waiting for a Geocodio API key`
+                : `${Number(status.attempted || 0).toLocaleString()} of ${Number(status.total || 0).toLocaleString()} checked`}
             </div>
           </div>
         </div>
-        <div className="shrink-0 text-sm font-semibold text-slate-700">{percent.toFixed(percent % 1 ? 1 : 0)}%</div>
+        {!notConfigured && <div className="shrink-0 text-sm font-semibold text-slate-700">{percent.toFixed(percent % 1 ? 1 : 0)}%</div>}
       </div>
 
-      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full rounded-full bg-blue-600 transition-[width] duration-500" style={{ width: `${percent}%` }} />
-      </div>
+      {!notConfigured && (
+        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full rounded-full bg-blue-600 transition-[width] duration-500" style={{ width: `${percent}%` }} />
+        </div>
+      )}
 
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
         <span><strong className="text-slate-700">{resolved.toLocaleString()}</strong> located</span>
@@ -101,6 +112,12 @@ export default function LocationResolutionProgress() {
         {processing && <span><strong className="text-slate-700">{Number(status.pending || 0).toLocaleString()}</strong> remaining</span>}
       </div>
 
+      {notConfigured && (
+        <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
+          Add and enable a Geocodio API key in Settings → Integrations to start the one-time location pass. Existing RentCast properties do not need to be imported again.
+        </div>
+      )}
+
       {accuracies.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-200 pt-2 text-[11px] text-slate-500" data-testid="location-accuracy-breakdown">
           {accuracies.map((item) => (
@@ -109,7 +126,7 @@ export default function LocationResolutionProgress() {
         </div>
       )}
 
-      {reasons.length > 0 && (
+      {reasons.length > 0 && !notConfigured && (
         <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Why locations remain unresolved</div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-slate-500">
