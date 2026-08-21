@@ -25,6 +25,11 @@ English.
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.
 
+## Cloud deploy (Railway)
+- **roofspan-website** (marketing site): service Root Directory `/roofspan-website`, Nixpacks. Config at `roofspan-website/railway.json` (build `yarn build`, start `yarn serve`). Config-as-code path in Railway must be `/roofspan-website/railway.json` (absolute from repo root — it does NOT follow Root Directory).
+- **Control Plane** (`cp.roofspan.io`, serves `backend/cp_asgi.py:app`): Dockerfile build via root `railway.json` → `deploy/railway/Dockerfile`. **Build context = repo root** (Dockerfile `COPY backend/ /app/`), so the Railway service Root Directory MUST be empty/repo-root. Required env vars documented in `deploy/railway/README.md` (CONTROL_PLANE_DATABASE_URL, Stripe, KMS, operator issuer/audience) — startup fails-closed without them.
+  - **[2026-06] Recovered lost deploy files**: a Save-to-GitHub conflict merge (PR#2 `conflict_190826_0821`) left `main` without `deploy/railway/*`, root `railway.json`, and `backend/cp_asgi.py`; the Railway build then failed with `COPY backend/ → "/backend": not found`. Restored all 4 files from PR#2 onto current `main`; verified `cp_asgi:app` imports and exposes `/health`. Docker not available in-pod, so the live Railway build is pending user Save-to-GitHub + Root Directory=repo root + redeploy.
+
 ## Completed (this session)
 - **[2026-06] Reconciled 3 stale pytest failures after upstream git pull (110 commits → aab2d95).** All were stale test assertions from legitimate upstream refactors; production behavior intact:
   - `test_spec_datas_reference_real_backend_alembic`: broadened `"migrations" not in spec` → now forbids only the removed `backend/migrations` dir, allows the `migrations_runner` hiddenimport.
