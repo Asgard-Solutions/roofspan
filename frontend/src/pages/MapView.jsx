@@ -241,7 +241,7 @@ export default function MapView() {
         center: data.default_center,
         zoom: data.default_zoom,
         transformRequest: (url) => {
-          if (url.includes("/map/tiles/satellite/")) {
+          if (url.includes("/map/tiles/satellite/") || url.includes("/map/tiles/buildings/")) {
             return { url, headers: { Authorization: `Bearer ${getToken()}` } };
           }
           return { url };
@@ -263,6 +263,39 @@ export default function MapView() {
             layout: { visibility: startBase === "satellite" ? "visible" : "none" },
           });
           map.setLayoutProperty("osm", "visibility", startBase === "satellite" ? "none" : "visible");
+
+          map.addSource("buildings", {
+            type: "vector",
+            tiles: [`${API_BASE}/map/tiles/buildings/{z}/{x}/{y}`],
+            minzoom: 14,
+            maxzoom: 20,
+            attribution: "© MapTiler © OpenStreetMap contributors",
+          });
+          map.addLayer({
+            id: "buildings-fill",
+            type: "fill",
+            source: "buildings",
+            "source-layer": "building",
+            minzoom: 14,
+            layout: { visibility: "none" },
+            paint: {
+              "fill-color": ["case", ["==", ["get", "class"], "residential"], "#f97316", "#64748b"],
+              "fill-opacity": 0.35,
+            },
+          });
+          map.addLayer({
+            id: "buildings-outline",
+            type: "line",
+            source: "buildings",
+            "source-layer": "building",
+            minzoom: 14,
+            layout: { visibility: "none" },
+            paint: {
+              "line-color": ["case", ["==", ["get", "class"], "residential"], "#c2410c", "#475569"],
+              "line-width": 1.25,
+              "line-opacity": 0.9,
+            },
+          });
         }
 
         map.addSource("territories", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -439,9 +472,15 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map || layer === baseLayer) return;
     if (layer === "satellite" && !map.getLayer("satellite-layer")) return;
+    if (layer === "buildings" && !map.getLayer("buildings-fill")) return;
     setBaseLayer(layer);
     if (map.getLayer("satellite-layer")) map.setLayoutProperty("satellite-layer", "visibility", layer === "satellite" ? "visible" : "none");
     if (map.getLayer("osm")) map.setLayoutProperty("osm", "visibility", layer === "satellite" ? "none" : "visible");
+    if (map.getLayer("buildings-fill")) map.setLayoutProperty("buildings-fill", "visibility", layer === "buildings" ? "visible" : "none");
+    if (map.getLayer("buildings-outline")) map.setLayoutProperty("buildings-outline", "visibility", layer === "buildings" ? "visible" : "none");
+    if (layer === "buildings" && map.getZoom() < 14) {
+      toast.info("Zoom in to level 14 or closer to see MapTiler building footprints.");
+    }
   };
 
   const searchZip = async (e) => {
@@ -574,15 +613,19 @@ export default function MapView() {
           <div className="flex-1 overflow-y-auto">
             {mapConfig?.maptiler_configured && (
               <div className="space-y-2 border-b border-border p-4" data-testid="basemap-panel">
-                <Label className="text-xs font-semibold text-slate-600">Base map</Label>
+                <Label className="text-xs font-semibold text-slate-600">Map view</Label>
                 <div className="flex gap-1 rounded-md bg-slate-100 p-1">
                   <button type="button" onClick={() => switchBase("map")}
-                    className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "map" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${baseLayer === "map" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
                     data-testid="basemap-map-button">Street</button>
-                  <button type="button" onClick={() => switchBase("satellite")}
-                    className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${baseLayer === "satellite" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                  <button type="button" onClick={() => switchBase("satellite")} disabled={!mapConfig?.satellite_enabled}
+                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${baseLayer === "satellite" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"} disabled:cursor-not-allowed disabled:opacity-40`}
                     data-testid="basemap-satellite-button">Satellite</button>
+                  <button type="button" onClick={() => switchBase("buildings")}
+                    className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${baseLayer === "buildings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    data-testid="basemap-buildings-button">Buildings</button>
                 </div>
+                {baseLayer === "buildings" && <p className="text-[11px] text-slate-500">MapTiler building footprints appear at zoom level 14 and closer.</p>}
               </div>
             )}
 
