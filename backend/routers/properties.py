@@ -38,7 +38,6 @@ def _occupancy_status(owner_occupied: bool | None) -> str:
 
 
 def _location_diagnostics(p: Property) -> dict | None:
-    """Expose only RoofSpan's safe geocoding provenance, never the full provider raw payload."""
     raw = p.raw if isinstance(p.raw, dict) else {}
     loc = raw.get("roofspan_location")
     return dict(loc) if isinstance(loc, dict) else None
@@ -151,14 +150,15 @@ async def _locate_property(property_id: str, request: Request, user: User, db: A
     await log_action(
         db,
         user=user,
-        action="property.locate_geocodio",
+        action="property.locate_mapbox",
         entity_type="property",
         entity_id=p.id,
         detail={
             "resolved": result.get("resolved"),
             "coordinate_source": result.get("coordinate_source"),
             "reason": result.get("reason"),
-            "accuracy_type": result.get("accuracy_type"),
+            "accuracy": result.get("accuracy"),
+            "confidence": result.get("confidence"),
             "cached_permanently": result.get("cached_permanently"),
         },
         request=request,
@@ -173,7 +173,7 @@ async def locate_property(
     user: User = Depends(require_roles(*MANAGE_ROLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Force a fresh Geocodio lookup for one known RentCast address."""
+    """Force a fresh Mapbox Permanent Geocoding lookup for one known RentCast address."""
     return await _locate_property(property_id, request, user, db)
 
 
@@ -184,7 +184,6 @@ async def verify_property_address_legacy(
     user: User = Depends(require_roles(*MANAGE_ROLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Backward-compatible alias for older Office clients."""
     return await _locate_property(property_id, request, user, db)
 
 
