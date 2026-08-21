@@ -54,35 +54,48 @@ def _resolve_mode(requested: str | None, configured: bool) -> str:
 
 
 def _mark_location_pending(nd: dict) -> None:
-    """Persist RentCast coordinates immediately and queue MapTiler as a second-phase resolver."""
+    """Persist RentCast coordinates immediately and queue Geocodio as a separate pin-location phase."""
     raw = dict(nd.get("raw") or {})
     raw["roofspan_location"] = {
         "query_address": nd.get("formatted_address") or "",
         "rentcast_latitude": nd.get("latitude"),
         "rentcast_longitude": nd.get("longitude"),
         "coordinate_source": "rentcast",
-        "maptiler_status": "pending",
-        "maptiler_reason": "queued_after_rentcast_import",
-        "maptiler_http_status": None,
-        "maptiler_returned_address": None,
-        "maptiler_returned_label": None,
-        "maptiler_latitude": None,
-        "maptiler_longitude": None,
-        "maptiler_relevance": None,
-        "maptiler_place_type": None,
-        "maptiler_feature_id": None,
-        "building_status": "pending",
-        "building_reason": "queued_after_rentcast_import",
-        "building_number": None,
-        "building_number_latitude": None,
-        "building_number_longitude": None,
-        "building_latitude": None,
-        "building_longitude": None,
+        "location_provider": "geocodio",
+        "geocoder_status": "pending",
+        "geocoder_reason": "queued_after_rentcast_import",
+        "geocoder_http_status": None,
+        "geocodio_formatted_address": None,
+        "geocodio_latitude": None,
+        "geocodio_longitude": None,
+        "geocodio_accuracy": None,
+        "geocodio_accuracy_type": None,
+        "geocodio_match_type": None,
+        "geocodio_source": None,
+        "geocodio_stable_address_key": None,
+        "location_resolved": False,
+        "location_quality": None,
+        "cached_permanently": False,
+        "cached_at": None,
         "auto_resolution_version": None,
         "auto_resolution_checked_at": None,
         "queued_at": _now().isoformat(),
     }
     nd["raw"] = raw
+
+
+def _preserve_permanent_location_cache(existing: Property, nd: dict) -> dict:
+    """A RentCast refresh must not spend another geocode lookup when the address did not change."""
+    new_raw = dict(nd.get("raw") or {})
+    old_raw = existing.raw if isinstance(existing.raw, dict) else {}
+    old_loc = old_raw.get("roofspan_location") if isinstance(old_raw.get("roofspan_location"), dict) else {}
+    if (
+        old_loc.get("cached_permanently") is True
+        and old_loc.get("location_provider") == "geocodio"
+        and str(old_loc.get("query_address") or "").strip().lower() == str(nd.get("formatted_address") or "").strip().lower()
+    ):
+        new_raw["roofspan_location"] = dict(old_loc)
+    return new_raw
 
 
 @router.post("/territories/{territory_id}/import/preview", response_model=ImportPreviewOut)
@@ -110,7 +123,7 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). MapTiler location resolution runs separately after the RentCast import completes.",
+            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). Geocodio pin location runs separately afterward when configured, and completed results are reused from the local cache.",
         )
 
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
@@ -163,6 +176,7 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                 existing = (await db.execute(select(Property).where(Property.external_id == ext))).scalar_one_or_none()
                 owner = nd.get("owner") or {}
                 if existing:
+                    preserved_raw = _preserve_permanent_location_cache(existing, nd) if mode == "rentcast" else nd["raw"]
                     existing.formatted_address = nd["formatted_address"]
                     existing.address_line1 = nd["address_line1"]
                     existing.city = nd["city"]
@@ -176,7 +190,13 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                     existing.square_footage = nd["square_footage"]
                     existing.year_built = nd["year_built"]
                     existing.owner_occupied = nd["owner_occupied"]
-                    existing.raw = nd["raw"]
+                    existing.raw = preserved_raw
+                    # If a permanent location was preserved, keep that cached pin instead of the
+                    # newly refreshed RentCast coordinate.
+                    preserved_loc = preserved_raw.get("roofspan_location") if isinstance(preserved_raw, dict) else None
+                    if isinstance(preserved_loc, dict) and preserved_loc.get("cached_permanently") and preserved_loc.get("location_resolved"):
+                        existing.latitude = preserved_loc.get("geocodio_latitude") or existing.latitude
+                        existing.longitude = preserved_loc.get("geocodio_longitude") or existing.longitude
                     if existing.territory_id is None:
                         existing.territory_id = territory.id
                     oc = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == existing.id, PropertyContact.kind == "owner"))).scalars().first()
@@ -217,8 +237,8 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
             should_resolve_locations = False
 
     if should_resolve_locations:
-        # Phase 2 is deliberately separate from the RentCast import. Provider failures cannot roll
-        # back property acquisition, and the resolver is resumable across restarts.
+        # Phase 2 is deliberately separate from RentCast acquisition. Provider failures cannot roll
+        # back property acquisition, and permanent cached rows are skipped on later runs.
         from location_upgrade import refresh_existing_property_locations
         asyncio.create_task(refresh_existing_property_locations(territory_id=territory_id))
 
@@ -256,16 +276,13 @@ async def location_resolution_status(territory_id: str, user: User = Depends(req
     for prop in props:
         raw = prop.raw if isinstance(prop.raw, dict) else {}
         loc = raw.get("roofspan_location") if isinstance(raw.get("roofspan_location"), dict) else {}
-        status = loc.get("maptiler_status")
-        building_status = loc.get("building_status")
+        status = loc.get("geocoder_status")
         if status in (None, "pending", "not_attempted"):
             counts["pending"] += 1
         elif status == "error":
             counts["errors"] += 1
-        elif building_status == "resolved":
+        elif loc.get("location_resolved") or status == "located":
             counts["resolved"] += 1
-        elif status == "accepted":
-            counts["address_only"] += 1
         else:
             counts["unresolved"] += 1
     counts["complete"] = counts["pending"] == 0
