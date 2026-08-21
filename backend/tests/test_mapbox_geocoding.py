@@ -13,7 +13,7 @@ def _record():
     }
 
 
-def _feature(*, accuracy="rooftop", confidence="exact", house="1127", street="Southwest 22nd Street", postcode="73010", place="Blanchard", region_code="OK"):
+def _feature(*, accuracy="rooftop", confidence="exact", house="1127", street="Southwest 22nd Street", postcode="73010", place="Blanchard", region_code="OK", street_match="matched"):
     return {
         "type": "Feature",
         "id": "mapbox-address-id",
@@ -30,7 +30,7 @@ def _feature(*, accuracy="rooftop", confidence="exact", house="1127", street="So
             },
             "match_code": {
                 "address_number": "plausible" if accuracy == "interpolated" else "matched",
-                "street": "matched",
+                "street": street_match,
                 "postcode": "matched",
                 "place": "matched",
                 "region": "matched",
@@ -95,3 +95,51 @@ def test_low_confidence_is_rejected():
     result = evaluate_mapbox_result({"features": [_feature(confidence="low")]}, _record())
     assert result["status"] == "rejected"
     assert result["reason"] == "low_confidence"
+
+
+def test_high_confidence_parcel_allows_rural_street_alias_when_other_identity_matches():
+    record = {
+        "id": "2",
+        "address_line1": "1985 S County Line Ave",
+        "city": "Blanchard",
+        "state": "OK",
+        "zip_code": "73010",
+        "rentcast_latitude": 35.119961,
+        "rentcast_longitude": -97.670637,
+    }
+    feature = _feature(
+        accuracy="parcel",
+        confidence="high",
+        house="1985",
+        street="N2990 Road",
+        postcode="73010",
+        place="Blanchard",
+        region_code="OK",
+        street_match="unmatched",
+    )
+    result = evaluate_mapbox_result({"features": [feature]}, record)
+    assert result["status"] == "located"
+    assert result["reason"] == "known_address_located_street_alias"
+    assert result["street_alias_detected"] is True
+    assert result["street_alias_expected"] == "s county line ave"
+    assert result["street_alias_returned"] == "n2990 rd"
+
+
+def test_street_alias_exception_does_not_apply_to_medium_confidence():
+    record = {
+        "id": "3",
+        "address_line1": "1985 S County Line Ave",
+        "city": "Blanchard",
+        "state": "OK",
+        "zip_code": "73010",
+    }
+    feature = _feature(
+        accuracy="parcel",
+        confidence="medium",
+        house="1985",
+        street="N2990 Road",
+        street_match="unmatched",
+    )
+    result = evaluate_mapbox_result({"features": [feature]}, record)
+    assert result["status"] == "rejected"
+    assert result["reason"] == "street_mismatch"
