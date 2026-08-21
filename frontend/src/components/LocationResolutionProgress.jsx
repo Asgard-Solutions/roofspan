@@ -4,25 +4,25 @@ import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
 const REASON_LABELS = {
   no_result: "No MapTiler result",
-  not_address_result: "Road/place result only",
-  no_house_number: "No house number",
-  house_number_mismatch: "House number mismatch",
-  street_mismatch: "Street mismatch",
-  city_mismatch: "City mismatch",
-  state_mismatch: "State mismatch",
-  zip_mismatch: "ZIP mismatch",
+  not_address_result: "Road/place only",
+  no_house_number: "House number not located",
+  house_number_mismatch: "Different house number",
+  street_mismatch: "Different street",
+  city_mismatch: "Different city",
+  state_mismatch: "Different state",
+  zip_mismatch: "Different ZIP",
   returned_street_missing: "Street missing",
   returned_city_missing: "City missing",
   returned_state_missing: "State missing",
   returned_zip_missing: "ZIP missing",
-  low_relevance: "Low relevance",
+  low_relevance: "Search result too weak",
   invalid_relevance: "Invalid relevance",
   invalid_coordinates: "Invalid coordinates",
   provider_http_error: "Provider HTTP error",
   provider_request_error: "Provider request error",
   single_request_exception: "Provider request exception",
   single_result_count_mismatch: "Unexpected result count",
-  outside_territory: "Outside territory",
+  outside_territory: "Located outside territory",
   unknown: "Other / unknown",
 };
 
@@ -54,7 +54,7 @@ export default function LocationResolutionProgress() {
   if (!status || !status.total) return null;
 
   const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
-  const verified = Number(status.resolved || 0) + Number(status.address_only || 0);
+  const resolved = Number(status.resolved || 0) + Number(status.address_only || 0);
   const unresolved = Number(status.unresolved || 0);
   const retries = Number(status.retry_pending || 0);
   const processing = status.state === "processing";
@@ -77,7 +77,7 @@ export default function LocationResolutionProgress() {
           )}
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
-              {processing ? "Verifying property locations" : completeWithRetries ? "Location verification pass complete" : "Property locations checked"}
+              {processing ? "Locating properties with MapTiler" : completeWithRetries ? "Property location pass complete" : "Property locations checked"}
             </div>
             <div className="text-xs text-slate-500">
               {Number(status.attempted || 0).toLocaleString()} of {Number(status.total || 0).toLocaleString()} checked
@@ -92,15 +92,15 @@ export default function LocationResolutionProgress() {
       </div>
 
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-        <span><strong className="text-slate-700">{verified.toLocaleString()}</strong> verified</span>
-        <span><strong className="text-slate-700">{unresolved.toLocaleString()}</strong> not verified</span>
+        <span><strong className="text-slate-700">{resolved.toLocaleString()}</strong> located</span>
+        <span><strong className="text-slate-700">{unresolved.toLocaleString()}</strong> unresolved</span>
         {retries > 0 && <span><strong className="text-amber-700">{retries.toLocaleString()}</strong> retry pending</span>}
         {processing && <span><strong className="text-slate-700">{Number(status.pending || 0).toLocaleString()}</strong> remaining</span>}
       </div>
 
       {reasons.length > 0 && (
         <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Why addresses were not verified</div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Why locations remain unresolved</div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-slate-500">
             {reasons.map((item) => (
               <div key={item.reason} className="flex items-center justify-between gap-2">
