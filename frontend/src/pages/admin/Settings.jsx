@@ -291,10 +291,16 @@ export default function Settings() {
               help="Server-side property data import. The key is encrypted and never returned to the browser."
             />
             <IntegrationCard
+              provider="geocodio"
+              label="Geocodio Property Locations"
+              keyLabel="Geocodio API key"
+              help="Bring your own Geocodio key for address-to-coordinate lookup. RoofSpan stores completed forward-geocode results permanently in the local database so normal map use does not call the API again."
+            />
+            <IntegrationCard
               provider="maptiler"
               label="MapTiler"
               keyLabel="MapTiler API key"
-              help="One server-side MapTiler key for satellite imagery, address geocoding, and parcel/cadastre capability checks."
+              help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin geocoding is handled separately by Geocodio."
             />
           </TabsContent>
           <TabsContent value="map" className="mt-6">
