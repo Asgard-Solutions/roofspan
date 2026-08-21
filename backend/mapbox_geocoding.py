@@ -71,6 +71,9 @@ def _empty(status: str = "rejected", reason: str = "no_result") -> dict:
         "match_code": None,
         "location_quality": None,
         "routable_points": None,
+        "street_alias_detected": False,
+        "street_alias_expected": None,
+        "street_alias_returned": None,
     }
 
 
@@ -125,6 +128,26 @@ def _critical_match_ok(match_code: dict, accuracy: str) -> tuple[bool, str]:
     return True, "known_address_match"
 
 
+def _street_alias_match_ok(match_code: dict, accuracy: str, expected: dict, returned: dict) -> bool:
+    """Allow rural/secondary road aliases only when every non-street identity signal is strong."""
+    if accuracy not in HIGH_ACCURACY:
+        return False
+    confidence = str(match_code.get("confidence") or "").lower()
+    if confidence not in {"exact", "high"}:
+        return False
+    if str(match_code.get("address_number") or "").lower() != "matched":
+        return False
+    if str(match_code.get("street") or "").lower() == "matched":
+        return False
+    for key in ("postcode", "place", "region"):
+        if str(match_code.get(key) or "").lower() not in {"matched", "not_applicable"}:
+            return False
+    for key in ("house_number", "city", "state", "zip_code"):
+        if expected.get(key) and returned.get(key) != expected.get(key):
+            return False
+    return bool(expected.get("street") and returned.get("street") and expected.get("street") != returned.get("street"))
+
+
 def evaluate_mapbox_result(result: dict | None, record: dict) -> dict:
     """Select a property-level Mapbox result for the authoritative RentCast address."""
     if not isinstance(result, dict):
@@ -151,6 +174,7 @@ def evaluate_mapbox_result(result: dict | None, record: dict) -> dict:
         accuracy = str(coords_obj.get("accuracy") or "").lower()
         match_code = props.get("match_code") or {}
         confidence = str(match_code.get("confidence") or "").lower() or None
+        returned_identity = _candidate_identity(feature)
         diagnostic = _empty()
         diagnostic.update({
             "latitude": float(lat),
@@ -161,7 +185,7 @@ def evaluate_mapbox_result(result: dict | None, record: dict) -> dict:
             "mapbox_id": props.get("mapbox_id") or feature.get("id"),
             "match_code": match_code,
             "routable_points": coords_obj.get("routable_points"),
-            "identity_returned": _candidate_identity(feature),
+            "identity_returned": returned_identity,
             "identity_expected": expected,
         })
 
@@ -171,13 +195,23 @@ def evaluate_mapbox_result(result: dict | None, record: dict) -> dict:
             continue
 
         ok, reason = _critical_match_ok(match_code, accuracy)
-        if not ok:
+        alias_ok = False
+        if not ok and reason == "street_mismatch":
+            alias_ok = _street_alias_match_ok(match_code, accuracy, expected, returned_identity)
+
+        if not ok and not alias_ok:
             diagnostic["reason"] = reason
             best_rejection = best_rejection or diagnostic
             continue
 
         diagnostic["status"] = "located"
-        diagnostic["reason"] = "known_address_located"
+        if alias_ok:
+            diagnostic["reason"] = "known_address_located_street_alias"
+            diagnostic["street_alias_detected"] = True
+            diagnostic["street_alias_expected"] = expected.get("street")
+            diagnostic["street_alias_returned"] = returned_identity.get("street")
+        else:
+            diagnostic["reason"] = "known_address_located"
         diagnostic["location_quality"] = "high" if accuracy in HIGH_ACCURACY else "approximate"
         return diagnostic
 
