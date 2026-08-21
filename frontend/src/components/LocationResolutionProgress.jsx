@@ -3,27 +3,27 @@ import { api } from "@/lib/api";
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
 const REASON_LABELS = {
-  no_result: "No MapTiler result",
-  not_address_result: "Road/place only",
-  no_house_number: "House number not located",
+  no_result: "No Geocodio result",
   house_number_mismatch: "Different house number",
   street_mismatch: "Different street",
   city_mismatch: "Different city",
   state_mismatch: "Different state",
   zip_mismatch: "Different ZIP",
-  returned_street_missing: "Street missing",
-  returned_city_missing: "City missing",
-  returned_state_missing: "State missing",
-  returned_zip_missing: "ZIP missing",
-  low_relevance: "Search result too weak",
-  invalid_relevance: "Invalid relevance",
-  invalid_coordinates: "Invalid coordinates",
+  low_accuracy: "Match confidence too low",
+  insufficient_precision: "Result not property-level",
   provider_http_error: "Provider HTTP error",
   provider_request_error: "Provider request error",
-  single_request_exception: "Provider request exception",
-  single_result_count_mismatch: "Unexpected result count",
-  outside_territory: "Located outside territory",
+  single_result_missing: "Single result missing",
+  batch_result_missing: "Batch result missing",
+  queued_after_rentcast_import: "Waiting for location lookup",
   unknown: "Other / unknown",
+};
+
+const ACCURACY_LABELS = {
+  rooftop: "Rooftop",
+  point: "Address point",
+  range_interpolation: "Interpolated",
+  unknown: "Other",
 };
 
 export default function LocationResolutionProgress() {
@@ -54,16 +54,18 @@ export default function LocationResolutionProgress() {
   if (!status || !status.total) return null;
 
   const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
-  const resolved = Number(status.resolved || 0) + Number(status.address_only || 0);
+  const resolved = Number(status.resolved || 0);
   const unresolved = Number(status.unresolved || 0);
   const retries = Number(status.retry_pending || 0);
+  const cached = Number(status.cached || 0);
   const processing = status.state === "processing";
   const completeWithRetries = status.state === "complete_with_retries";
-  const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 8);
+  const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 6);
+  const accuracies = (status.accuracy_breakdown || []).filter((r) => Number(r.count || 0) > 0);
 
   return (
     <div
-      className="fixed top-3 z-40 w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur md:left-[calc(50%+8rem)] left-1/2"
+      className="fixed top-3 z-40 w-[min(580px,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur md:left-[calc(50%+8rem)] left-1/2"
       data-testid="location-resolution-progress"
     >
       <div className="flex items-center justify-between gap-3">
@@ -77,7 +79,7 @@ export default function LocationResolutionProgress() {
           )}
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
-              {processing ? "Locating properties with MapTiler" : completeWithRetries ? "Property location pass complete" : "Property locations checked"}
+              {processing ? "Locating properties with Geocodio" : completeWithRetries ? "Property location pass complete" : "Property locations checked"}
             </div>
             <div className="text-xs text-slate-500">
               {Number(status.attempted || 0).toLocaleString()} of {Number(status.total || 0).toLocaleString()} checked
@@ -94,9 +96,18 @@ export default function LocationResolutionProgress() {
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
         <span><strong className="text-slate-700">{resolved.toLocaleString()}</strong> located</span>
         <span><strong className="text-slate-700">{unresolved.toLocaleString()}</strong> unresolved</span>
+        <span><strong className="text-slate-700">{cached.toLocaleString()}</strong> cached locally</span>
         {retries > 0 && <span><strong className="text-amber-700">{retries.toLocaleString()}</strong> retry pending</span>}
         {processing && <span><strong className="text-slate-700">{Number(status.pending || 0).toLocaleString()}</strong> remaining</span>}
       </div>
+
+      {accuracies.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-200 pt-2 text-[11px] text-slate-500" data-testid="location-accuracy-breakdown">
+          {accuracies.map((item) => (
+            <span key={item.accuracy_type}><strong className="text-slate-700">{Number(item.count || 0).toLocaleString()}</strong> {ACCURACY_LABELS[item.accuracy_type] || item.accuracy_type}</span>
+          ))}
+        </div>
+      )}
 
       {reasons.length > 0 && (
         <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown">
