@@ -24,10 +24,10 @@ async def location_resolution_progress(
     db: AsyncSession = Depends(get_db),
 ):
     props = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
-    geocodio = (
-        await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "geocodio"))
+    integration = (
+        await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "mapbox"))
     ).scalar_one_or_none()
-    provider_configured = bool(geocodio and geocodio.enabled and geocodio.secret_ciphertext)
+    configured = bool(integration and integration.enabled and integration.secret_ciphertext)
 
     counts = {
         "total": len(props),
@@ -59,7 +59,7 @@ async def location_resolution_progress(
             counts["cached"] += 1
         if loc.get("location_resolved") or status == "located":
             counts["resolved"] += 1
-            accuracy_types[loc.get("geocodio_accuracy_type") or "unknown"] += 1
+            accuracy_types[loc.get("mapbox_accuracy") or "unknown"] += 1
         else:
             counts["unresolved"] += 1
             reasons[reason] += 1
@@ -69,8 +69,8 @@ async def location_resolution_progress(
     complete = counts["pending"] == 0
     if counts["total"] == 0:
         state = "idle"
-    elif not provider_configured and counts["pending"]:
-        state = "not_configured"
+    elif not configured and counts["pending"]:
+        state = "provider_required"
     elif not complete:
         state = "processing"
     elif counts["retry_pending"]:
@@ -84,9 +84,9 @@ async def location_resolution_progress(
         "percent": percent,
         "pass_complete": complete,
         "state": state,
+        "provider": "mapbox",
+        "provider_configured": configured,
         "resolver_version": RESOLUTION_VERSION,
-        "provider": "geocodio",
-        "provider_configured": provider_configured,
         "rejection_breakdown": [
             {"reason": reason, "count": count}
             for reason, count in reasons.most_common()
