@@ -4,6 +4,28 @@ import os
 from urllib.parse import urlparse, urlunparse
 
 
+def _to_async_url(url: str) -> str:
+    """Force the SQLAlchemy async driver (asyncpg).
+
+    Managed providers (e.g. Railway) hand out plain ``postgresql://`` (or ``postgres://``) URLs. Passed
+    to ``create_async_engine`` those default to the SYNC psycopg2 dialect (not installed / wrong for
+    async) and crash at import. The rest of the CP package deliberately converts AWAY from ``+asyncpg``
+    for its sync psycopg work, so ``+asyncpg`` is the single canonical form.
+    """
+    if not url:
+        return url
+    parsed = urlparse(url)
+    if parsed.scheme in (
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg2",
+        "postgresql+psycopg",
+        "postgresql+asyncpg",
+    ):
+        parsed = parsed._replace(scheme="postgresql+asyncpg")
+    return urlunparse(parsed)
+
+
 def _derive_cp_url() -> str:
     """Default the Control Plane DB to a SEPARATE database on the same server as the business DB.
 
@@ -12,14 +34,14 @@ def _derive_cp_url() -> str:
     """
     explicit = os.environ.get("CONTROL_PLANE_DATABASE_URL")
     if explicit:
-        return explicit
+        return _to_async_url(explicit)
     base = os.environ.get("DATABASE_URL")
     if not base:
         return ""
     parsed = urlparse(base)
     # replace the path (database name) with the control-plane database
     new = parsed._replace(path="/roofspan_control_plane")
-    return urlunparse(new)
+    return _to_async_url(urlunparse(new))
 
 
 CONTROL_PLANE_DATABASE_URL = _derive_cp_url()
