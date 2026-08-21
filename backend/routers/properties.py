@@ -130,19 +130,12 @@ async def get_property(property_id: str, user: User = Depends(get_current_user),
     )
 
 
-@router.post("/{property_id}/verify-address")
-async def verify_property_address(
-    property_id: str,
-    request: Request,
-    user: User = Depends(require_roles(*MANAGE_ROLES)),
-    db: AsyncSession = Depends(get_db),
-):
-    """Force a fresh MapTiler verification for exactly one stored property address."""
+async def _locate_property_with_maptiler(property_id: str, request: Request, user: User, db: AsyncSession):
     p = await db.get(Property, property_id)
     if not p:
         raise HTTPException(status_code=404, detail="Property not found")
     if p.source != "rentcast":
-        raise HTTPException(status_code=400, detail="Address verification is available for RentCast properties")
+        raise HTTPException(status_code=400, detail="MapTiler location lookup is available for RentCast properties")
 
     from location_upgrade import verify_property_location_now
 
@@ -158,17 +151,40 @@ async def verify_property_address(
     await log_action(
         db,
         user=user,
-        action="property.verify_address",
+        action="property.locate_maptiler",
         entity_type="property",
         entity_id=p.id,
         detail={
-            "verified": result.get("verified"),
+            "resolved": result.get("resolved"),
             "coordinate_source": result.get("coordinate_source"),
             "reason": result.get("reason"),
+            "building_reason": result.get("building_reason"),
         },
         request=request,
     )
     return result
+
+
+@router.post("/{property_id}/locate")
+async def locate_property(
+    property_id: str,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGE_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force a fresh MapTiler location lookup for one known RentCast address."""
+    return await _locate_property_with_maptiler(property_id, request, user, db)
+
+
+@router.post("/{property_id}/verify-address")
+async def verify_property_address_legacy(
+    property_id: str,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGE_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Backward-compatible alias for older Office clients; location, not address identity, is the goal."""
+    return await _locate_property_with_maptiler(property_id, request, user, db)
 
 
 @router.patch("/{property_id}", response_model=PropertyOut)
