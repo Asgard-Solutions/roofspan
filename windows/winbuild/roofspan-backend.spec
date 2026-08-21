@@ -26,9 +26,8 @@ a = Analysis(
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
         "static_serve", "httpx", "websockets",
-        # Property-location upgrade/runtime dependencies. Keep explicit because the upgrade module is
-        # imported during FastAPI startup and PyInstaller must freeze these modules into ONEDIR.
-        "location_upgrade", "geocodio",
+        # Property-location upgrade/runtime dependencies.
+        "location_upgrade", "mapbox_geocoding",
         # MapTiler remains a separate visualization provider for satellite/building map layers.
         "maptiler", "mapbox_vector_tile", "shapely", "shapely.geometry",
     ] + PYWIN32,
