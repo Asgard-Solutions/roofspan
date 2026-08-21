@@ -10,9 +10,8 @@ from db import get_db, SessionLocal
 from models import Territory, Property, PropertyContact, ImportJob, IntegrationSetting, User
 from core import require_roles, MANAGE_ROLES, decrypt_secret, log_action
 from schemas_phase2 import ImportPreviewIn, ImportPreviewOut, ImportStartIn, ImportJobOut
-from geo import bbox, centroid, enclosing_radius_miles, point_in_polygon, haversine_miles
+from geo import centroid, enclosing_radius_miles, point_in_polygon
 from rentcast import fetch_rentcast_properties, normalize_rentcast, generate_sample_properties
-from maptiler import geocode_addresses_batch
 
 router = APIRouter(prefix="/api", tags=["imports"])
 
@@ -39,10 +38,6 @@ async def _rentcast_setting(db: AsyncSession) -> IntegrationSetting | None:
     return await _integration_setting(db, "rentcast")
 
 
-async def _maptiler_setting(db: AsyncSession) -> IntegrationSetting | None:
-    return await _integration_setting(db, "maptiler")
-
-
 def _usable_secret(row: IntegrationSetting | None) -> str | None:
     if not (row and row.enabled and row.secret_ciphertext):
         return None
@@ -58,14 +53,16 @@ def _resolve_mode(requested: str | None, configured: bool) -> str:
     return "rentcast" if configured else "sample"
 
 
-def _base_location_diag(nd: dict) -> dict:
-    return {
+def _mark_location_pending(nd: dict) -> None:
+    """Persist RentCast coordinates immediately and queue MapTiler as a second-phase resolver."""
+    raw = dict(nd.get("raw") or {})
+    raw["roofspan_location"] = {
         "query_address": nd.get("formatted_address") or "",
         "rentcast_latitude": nd.get("latitude"),
         "rentcast_longitude": nd.get("longitude"),
         "coordinate_source": "rentcast",
-        "maptiler_status": "not_attempted",
-        "maptiler_reason": "not_attempted",
+        "maptiler_status": "pending",
+        "maptiler_reason": "queued_after_rentcast_import",
         "maptiler_http_status": None,
         "maptiler_returned_address": None,
         "maptiler_returned_label": None,
@@ -74,102 +71,18 @@ def _base_location_diag(nd: dict) -> dict:
         "maptiler_relevance": None,
         "maptiler_place_type": None,
         "maptiler_feature_id": None,
-        "distance_feet": None,
-        "checked_at": _now().isoformat(),
+        "building_status": "pending",
+        "building_reason": "queued_after_rentcast_import",
+        "building_number": None,
+        "building_number_latitude": None,
+        "building_number_longitude": None,
+        "building_latitude": None,
+        "building_longitude": None,
+        "auto_resolution_version": None,
+        "auto_resolution_checked_at": None,
+        "queued_at": _now().isoformat(),
     }
-
-
-def _apply_maptiler_locations(normalized: list[dict], diagnostics: list[dict], territory_geometry: dict) -> None:
-    """Apply accepted MapTiler locations and persist safe provenance diagnostics."""
-    for nd, result in zip(normalized, diagnostics):
-        source_lat = nd.get("latitude")
-        source_lng = nd.get("longitude")
-        raw = dict(nd.get("raw") or {})
-        loc = _base_location_diag(nd)
-        loc.update({
-            "maptiler_status": result.get("status"),
-            "maptiler_reason": result.get("reason"),
-            "maptiler_http_status": result.get("http_status"),
-            "maptiler_returned_address": result.get("returned_address"),
-            "maptiler_returned_label": result.get("returned_label"),
-            "maptiler_latitude": result.get("latitude"),
-            "maptiler_longitude": result.get("longitude"),
-            "maptiler_relevance": result.get("relevance"),
-            "maptiler_place_type": result.get("place_type"),
-            "maptiler_feature_id": result.get("feature_id"),
-        })
-
-        candidate_lat = result.get("latitude")
-        candidate_lng = result.get("longitude")
-        if (
-            source_lat is not None and source_lng is not None
-            and candidate_lat is not None and candidate_lng is not None
-        ):
-            loc["distance_feet"] = round(
-                haversine_miles(source_lng, source_lat, candidate_lng, candidate_lat) * 5280,
-                1,
-            )
-
-        feature = result.get("feature")
-        if feature and candidate_lat is not None and candidate_lng is not None:
-            if point_in_polygon(candidate_lng, candidate_lat, territory_geometry):
-                nd["longitude"] = candidate_lng
-                nd["latitude"] = candidate_lat
-                loc["coordinate_source"] = "maptiler_address"
-                loc["maptiler_status"] = "accepted"
-                loc["maptiler_reason"] = "accepted"
-            else:
-                loc["maptiler_status"] = "rejected"
-                loc["maptiler_reason"] = "outside_territory"
-
-        raw["roofspan_location"] = loc
-        nd["raw"] = raw
-
-
-async def _geocode_rentcast_locations(db: AsyncSession, normalized: list[dict], territory_geometry: dict) -> None:
-    """Resolve RentCast addresses through MapTiler and always record provenance."""
-    if not normalized:
-        return
-
-    maptiler = await _maptiler_setting(db)
-    key = _usable_secret(maptiler)
-    if not key:
-        for nd in normalized:
-            raw = dict(nd.get("raw") or {})
-            loc = _base_location_diag(nd)
-            loc["maptiler_status"] = "unavailable"
-            loc["maptiler_reason"] = "maptiler_not_configured"
-            raw["roofspan_location"] = loc
-            nd["raw"] = raw
-        return
-
-    addresses = [nd.get("formatted_address") or "" for nd in normalized]
-    try:
-        diagnostics = await geocode_addresses_batch(
-            key,
-            addresses,
-            bbox=bbox(territory_geometry),
-            country="us",
-            min_relevance=0.80,
-        )
-    except Exception:
-        diagnostics = [
-            {
-                "status": "error",
-                "reason": "unexpected_geocoder_error",
-                "http_status": None,
-                "feature": None,
-                "returned_address": None,
-                "returned_label": None,
-                "relevance": None,
-                "place_type": None,
-                "latitude": None,
-                "longitude": None,
-                "feature_id": None,
-            }
-            for _ in normalized
-        ]
-    _apply_maptiler_locations(normalized, diagnostics, territory_geometry)
+    nd["raw"] = raw
 
 
 @router.post("/territories/{territory_id}/import/preview", response_model=ImportPreviewOut)
@@ -192,13 +105,12 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"RentCast preview failed: {e.__class__.__name__}")
         inside = [normalize_rentcast(r) for r in raws if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], t.geometry)]
-        await _geocode_rentcast_locations(db, inside, t.geometry)
         est_requests = math.ceil(payload.max_records / 500)
         return ImportPreviewOut(
             mode="rentcast", rentcast_configured=True, estimated_requests=est_requests,
             estimated_properties=min(payload.max_records, len(inside)) if inside else 0,
             radius_miles=radius, sample=inside[:10],
-            note=f"Full import will request up to {payload.max_records} properties (~{est_requests} RentCast request(s)); MapTiler pin diagnostics are recorded for every imported property.",
+            note=f"Full import will first save up to {payload.max_records} RentCast properties (~{est_requests} request(s)). MapTiler location resolution runs separately after the RentCast import completes.",
         )
 
     generated = generate_sample_properties(str(t.id), t.geometry, payload.max_records)
@@ -210,6 +122,7 @@ async def import_preview(territory_id: str, payload: ImportPreviewIn, user: User
 
 
 async def _run_import(job_id: str, territory_id: str, mode: str, max_records: int):
+    should_resolve_locations = False
     async with SessionLocal() as db:
         job = await db.get(ImportJob, job_id)
         territory = await db.get(Territory, territory_id)
@@ -226,9 +139,15 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
                 clng, clat = centroid(territory.geometry)
                 radius = enclosing_radius_miles(territory.geometry)
                 raws = await fetch_rentcast_properties(key, clat, clng, radius, max_records)
-                normalized = [normalize_rentcast(r) for r in raws
-                              if r.get("latitude") and r.get("longitude") and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)]
-                await _geocode_rentcast_locations(db, normalized, territory.geometry)
+                normalized = [
+                    normalize_rentcast(r)
+                    for r in raws
+                    if r.get("latitude") and r.get("longitude")
+                    and point_in_polygon(r["longitude"], r["latitude"], territory.geometry)
+                ]
+                for nd in normalized:
+                    _mark_location_pending(nd)
+                should_resolve_locations = True
             else:
                 normalized = generate_sample_properties(str(territory.id), territory.geometry, max_records)
 
@@ -295,6 +214,13 @@ async def _run_import(job_id: str, territory_id: str, mode: str, max_records: in
             job.error = str(e)[:400]
             job.finished_at = _now()
             await db.commit()
+            should_resolve_locations = False
+
+    if should_resolve_locations:
+        # Phase 2 is deliberately separate from the RentCast import. Provider failures cannot roll
+        # back property acquisition, and the resolver is resumable across restarts.
+        from location_upgrade import refresh_existing_property_locations
+        asyncio.create_task(refresh_existing_property_locations(territory_id=territory_id))
 
 
 @router.post("/territories/{territory_id}/import", response_model=ImportJobOut, status_code=202)
@@ -318,6 +244,32 @@ async def start_import(territory_id: str, payload: ImportStartIn, request: Reque
     await log_action(db, user=user, action="import.start", entity_type="territory", entity_id=t.id, detail={"mode": mode, "max_records": payload.max_records}, request=request)
     asyncio.create_task(_run_import(str(job.id), str(t.id), mode, payload.max_records))
     return _job_out(job)
+
+
+@router.get("/territories/{territory_id}/location-resolution")
+async def location_resolution_status(territory_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    territory = await db.get(Territory, territory_id)
+    if not territory:
+        raise HTTPException(status_code=404, detail="Territory not found")
+    props = (await db.execute(select(Property).where(Property.territory_id == territory.id, Property.source == "rentcast"))).scalars().all()
+    counts = {"total": len(props), "pending": 0, "resolved": 0, "address_only": 0, "unresolved": 0, "errors": 0}
+    for prop in props:
+        raw = prop.raw if isinstance(prop.raw, dict) else {}
+        loc = raw.get("roofspan_location") if isinstance(raw.get("roofspan_location"), dict) else {}
+        status = loc.get("maptiler_status")
+        building_status = loc.get("building_status")
+        if status in (None, "pending", "not_attempted"):
+            counts["pending"] += 1
+        elif status == "error":
+            counts["errors"] += 1
+        elif building_status == "resolved":
+            counts["resolved"] += 1
+        elif status == "accepted":
+            counts["address_only"] += 1
+        else:
+            counts["unresolved"] += 1
+    counts["complete"] = counts["pending"] == 0
+    return counts
 
 
 @router.get("/imports/{job_id}", response_model=ImportJobOut)
