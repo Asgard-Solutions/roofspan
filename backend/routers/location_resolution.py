@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import get_current_user
 from db import get_db
 from location_upgrade import RESOLUTION_VERSION
-from models import Property, User
+from models import IntegrationSetting, Property, User
 
 router = APIRouter(prefix="/api/location-resolution", tags=["location-resolution"])
 
@@ -24,6 +24,11 @@ async def location_resolution_progress(
     db: AsyncSession = Depends(get_db),
 ):
     props = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
+    geocodio = (
+        await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "geocodio"))
+    ).scalar_one_or_none()
+    provider_configured = bool(geocodio and geocodio.enabled and geocodio.secret_ciphertext)
+
     counts = {
         "total": len(props),
         "pending": 0,
@@ -64,6 +69,8 @@ async def location_resolution_progress(
     complete = counts["pending"] == 0
     if counts["total"] == 0:
         state = "idle"
+    elif not provider_configured and counts["pending"]:
+        state = "not_configured"
     elif not complete:
         state = "processing"
     elif counts["retry_pending"]:
@@ -79,6 +86,7 @@ async def location_resolution_progress(
         "state": state,
         "resolver_version": RESOLUTION_VERSION,
         "provider": "geocodio",
+        "provider_configured": provider_configured,
         "rejection_breakdown": [
             {"reason": reason, "count": count}
             for reason, count in reasons.most_common()
