@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -41,6 +43,13 @@ def _to_out(row: IntegrationSetting) -> IntegrationOut:
     )
 
 
+def _start_geocodio_backfill_if_ready(row: IntegrationSetting) -> None:
+    if row.provider != "geocodio" or not row.enabled or not row.secret_ciphertext:
+        return
+    from location_upgrade import refresh_existing_property_locations
+    asyncio.create_task(refresh_existing_property_locations())
+
+
 @router.get("", response_model=list[IntegrationOut])
 async def list_integrations(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     return [_to_out(await _get_or_create(db, p)) for p in KNOWN_PROVIDERS]
@@ -62,6 +71,7 @@ async def update_integration(provider: str, payload: IntegrationUpdate, request:
     await db.commit()
     await db.refresh(row)
     await log_action(db, user=user, action="integration.update", entity_type="integration", entity_id=provider, detail={"enabled": row.enabled}, request=request)
+    _start_geocodio_backfill_if_ready(row)
     return _to_out(row)
 
 
@@ -75,6 +85,7 @@ async def set_secret(provider: str, payload: SecretUpdate, request: Request, use
     await db.commit()
     await db.refresh(row)
     await log_action(db, user=user, action="integration.set_secret", entity_type="integration", entity_id=provider, request=request)
+    _start_geocodio_backfill_if_ready(row)
     return _to_out(row)
 
 
