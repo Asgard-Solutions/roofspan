@@ -40,14 +40,15 @@ function formatCoords(lat, lng) {
 
 function humanReason(reason) {
   const labels = {
-    accepted: "Verified exact address match",
-    exact_address_identity: "Verified exact address match",
-    no_result: "No MapTiler result",
+    accepted: "MapTiler returned the known address location",
+    exact_address_identity: "MapTiler returned the known address location",
+    known_address_located_by_building_number: "Located from the known house number and nearby MapTiler building data",
+    no_result: "No MapTiler location result",
     invalid_response: "Invalid provider response",
     invalid_feature: "Invalid provider feature",
     invalid_coordinates: "Invalid returned coordinates",
-    not_address_result: "MapTiler found a place/road, not the exact property address",
-    no_house_number: "MapTiler did not return the requested house number",
+    not_address_result: "MapTiler found the road/place but not a confident property location",
+    no_house_number: "MapTiler found the road but not a confident house-number location",
     house_number_mismatch: "MapTiler returned a different house number",
     street_mismatch: "MapTiler returned a different street",
     city_mismatch: "MapTiler returned a different city",
@@ -57,26 +58,26 @@ function humanReason(reason) {
     returned_city_missing: "MapTiler result did not include a city",
     returned_state_missing: "MapTiler result did not include a state",
     returned_zip_missing: "MapTiler result did not include a ZIP code",
-    low_relevance: "MapTiler match relevance was too low",
+    low_relevance: "MapTiler result was not close enough to the known address",
     invalid_relevance: "Invalid relevance value",
-    outside_territory: "Verified address point was outside the territory",
+    outside_territory: "Located point was outside the territory",
     provider_http_error: "MapTiler returned an HTTP error",
     provider_request_error: "MapTiler request failed",
     single_result_count_mismatch: "MapTiler returned an unexpected result count",
     single_request_exception: "MapTiler request failed unexpectedly",
-    maptiler_not_configured: "MapTiler geocoding is not configured",
-    unexpected_geocoder_error: "Unexpected geocoder error",
-    not_attempted: "MapTiler geocoding was not attempted",
+    maptiler_not_configured: "MapTiler location service is not configured",
+    unexpected_geocoder_error: "Unexpected MapTiler error",
+    not_attempted: "MapTiler location lookup was not attempted",
   };
   return labels[reason] || reason || "Unknown";
 }
 
 export default function PropertySheet({ propertyId, open, onOpenChange, onChanged }) {
   const { user } = useAuth();
-  const canVerifyAddress = MANAGE.includes(user?.role);
+  const canLocate = MANAGE.includes(user?.role);
   const [p, setP] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [verifyingAddress, setVerifyingAddress] = useState(false);
+  const [locating, setLocating] = useState(false);
   const [visitOutcome, setVisitOutcome] = useState("no_answer");
   const [visitNotes, setVisitNotes] = useState("");
   const [savingVisit, setSavingVisit] = useState(false);
@@ -94,18 +95,18 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
     if (open && propertyId) load();
   }, [open, propertyId]); // eslint-disable-line
 
-  const verifyAddress = async () => {
+  const locateProperty = async () => {
     if (!p?.id) return;
-    setVerifyingAddress(true);
+    setLocating(true);
     try {
-      const { data } = await api.post(`/properties/${p.id}/verify-address`);
-      toast.success(data.verified ? "Address verified by MapTiler" : "MapTiler could not verify the exact address");
+      const { data } = await api.post(`/properties/${p.id}/locate`);
+      toast.success(data.resolved ? "Property located with MapTiler" : "MapTiler could not confidently locate this property");
       load();
       onChanged && onChanged();
     } catch (e) {
       toast.error(apiError(e));
     } finally {
-      setVerifyingAddress(false);
+      setLocating(false);
     }
   };
 
@@ -152,13 +153,15 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
 
   const owner = p?.contacts?.find((c) => c.kind === "owner");
   const loc = p?.location_diagnostics;
-  const maptilerUsed = loc?.coordinate_source === "maptiler_address" || loc?.coordinate_source === "maptiler_numbered_building";
-  const addressVerified = loc?.address_verified === true || maptilerUsed;
+  const maptilerUsed = ["maptiler_address", "maptiler_numbered_building", "maptiler_location"].includes(loc?.coordinate_source);
+  const locationResolved = loc?.location_resolved === true || maptilerUsed;
   const pinSource = loc?.coordinate_source === "maptiler_numbered_building"
-    ? "MapTiler verified building"
+    ? "MapTiler numbered building"
     : loc?.coordinate_source === "maptiler_address"
-      ? "MapTiler verified address"
-      : "RentCast";
+      ? "MapTiler address point"
+      : loc?.coordinate_source === "maptiler_location"
+        ? "MapTiler located point"
+        : "RentCast";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -191,53 +194,54 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
               {loc ? (
                 <div className="mt-2 rounded-md border border-border p-3 text-sm" data-testid="pin-location-diagnostics">
                   <div className="flex items-center gap-2 font-medium text-slate-900">
-                    {addressVerified ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+                    {locationResolved ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
                     Pin source: {pinSource}
                   </div>
-                  <div className={`mt-2 rounded px-2 py-1.5 text-xs font-semibold ${addressVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
-                    Address resolution: {addressVerified ? "VERIFIED" : "NOT VERIFIED"}
+                  <div className={`mt-2 rounded px-2 py-1.5 text-xs font-semibold ${locationResolved ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                    Pin location: {locationResolved ? "RESOLVED" : "UNRESOLVED"}
                   </div>
-                  {!addressVerified && (
+                  {!locationResolved && (
                     <div className="mt-2 text-xs text-slate-600">
-                      MapTiler did not verify the exact house-number address, so RoofSpan did not use the returned place/road coordinate for this property pin.
+                      RentCast supplied this property's address. MapTiler has not yet found a confident location for that known address, so RoofSpan is keeping the RentCast pin.
                     </div>
                   )}
                   <div className="mt-2 space-y-1 text-xs text-slate-600">
                     <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
                     <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
-                    {addressVerified && (
-                      <div><span className="font-medium text-slate-700">Verified MapTiler:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
+                    {locationResolved && (
+                      <div><span className="font-medium text-slate-700">MapTiler location:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
                     )}
+                    {loc.building_number && <div><span className="font-medium text-slate-700">Matched building number:</span> {loc.building_number}</div>}
                     <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.maptiler_reason)}</div>
                     {loc.maptiler_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.maptiler_http_status}</div>}
-                    {loc.maptiler_returned_address && <div><span className="font-medium text-slate-700">Returned number:</span> {loc.maptiler_returned_address}</div>}
-                    {loc.maptiler_returned_label && <div><span className="font-medium text-slate-700">Returned place:</span> {loc.maptiler_returned_label}</div>}
-                    {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
-                    <div><span className="font-medium text-slate-700">Queried address:</span> {loc.query_address || p.formatted_address}</div>
+                    {loc.maptiler_returned_address && <div><span className="font-medium text-slate-700">MapTiler returned number:</span> {loc.maptiler_returned_address}</div>}
+                    {loc.maptiler_returned_label && <div><span className="font-medium text-slate-700">MapTiler search result:</span> {loc.maptiler_returned_label}</div>}
+                    {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Search relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
+                    <div><span className="font-medium text-slate-700">Known address:</span> {loc.query_address || p.formatted_address}</div>
                   </div>
-                  {canVerifyAddress && p.source === "rentcast" && (
+                  {canLocate && p.source === "rentcast" && (
                     <Button
                       size="sm"
                       variant="outline"
                       className="mt-3 w-full"
-                      onClick={verifyAddress}
-                      disabled={verifyingAddress}
-                      data-testid="verify-address-button"
+                      onClick={locateProperty}
+                      disabled={locating}
+                      data-testid="locate-property-button"
                     >
-                      {verifyingAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {verifyingAddress ? "Verifying address..." : "Verify address with MapTiler"}
+                      {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                      {locating ? "Locating property..." : "Locate property with MapTiler"}
                     </Button>
                   )}
                 </div>
               ) : (
                 <div className="mt-2 space-y-2">
                   <div className="flex items-center gap-2 text-sm text-slate-400">
-                    <Crosshair className="h-4 w-4" /> Location resolution has not run for this property yet.
+                    <Crosshair className="h-4 w-4" /> MapTiler location lookup has not run for this property yet.
                   </div>
-                  {canVerifyAddress && p.source === "rentcast" && (
-                    <Button size="sm" variant="outline" className="w-full" onClick={verifyAddress} disabled={verifyingAddress} data-testid="verify-address-button">
-                      {verifyingAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {verifyingAddress ? "Verifying address..." : "Verify address with MapTiler"}
+                  {canLocate && p.source === "rentcast" && (
+                    <Button size="sm" variant="outline" className="w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
+                      {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                      {locating ? "Locating property..." : "Locate property with MapTiler"}
                     </Button>
                   )}
                 </div>
