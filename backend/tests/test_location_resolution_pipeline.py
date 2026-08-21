@@ -19,13 +19,14 @@ def test_rentcast_import_is_separate_from_mapbox_resolution():
 
 def test_second_phase_batches_uncached_properties_and_persists_completed_cache():
     source = (BACKEND / "location_upgrade.py").read_text(encoding="utf-8")
-    assert 'RESOLUTION_VERSION = "mapbox_permanent_property_location_v1"' in source
+    assert 'RESOLUTION_VERSION = "mapbox_permanent_property_location_v2"' in source
     assert "CHUNK_SIZE = MAPBOX_BATCH_SIZE" in source
     assert "geocode_batch" in source
     assert 'loc["cached_permanently"] = True' in source
     assert 'loc["auto_resolution_version"] = RESOLUTION_VERSION' in source
     assert 'loc["auto_resolution_version"] = None' in source
     assert 'loc["resolution_state"] = "retry_pending"' in source
+    assert '"street_alias_detected"' in source
     assert "await db.commit()" in source
 
 
