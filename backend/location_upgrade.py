@@ -26,6 +26,7 @@ CHUNK_SIZE = 25
 CONCURRENCY = 8
 
 _running_lock = asyncio.Lock()
+_property_locks: dict[str, asyncio.Lock] = {}
 
 
 def _now_iso() -> str:
@@ -74,11 +75,8 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "maptiler_http_status": result.get("http_status"),
         "maptiler_returned_address": result.get("returned_address"),
         "maptiler_returned_label": result.get("returned_label"),
-        # Only expose the provider coordinate as an authoritative MapTiler coordinate when the
-        # complete house-number/street/city/state/ZIP identity passed validation.
         "maptiler_latitude": candidate_lat if verified else None,
         "maptiler_longitude": candidate_lng if verified else None,
-        # Keep a rejected provider point only as diagnostic evidence. RoofSpan never maps from it.
         "maptiler_candidate_latitude": candidate_lat if not verified else None,
         "maptiler_candidate_longitude": candidate_lng if not verified else None,
         "maptiler_relevance": result.get("relevance"),
@@ -112,8 +110,6 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         )
         loc["resolution_state"] = "verified"
     else:
-        # A road/street/city result is not a property address. Return the active pin to the original
-        # RentCast point instead of leaving a stale MapTiler coordinate from an older resolver.
         if rentcast_lat is not None and rentcast_lng is not None:
             prop.latitude = rentcast_lat
             prop.longitude = rentcast_lng
@@ -123,8 +119,6 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         else:
             loc["resolution_state"] = "not_verified"
 
-    # Provider/transport errors remain retryable. Deterministic rejected results are current for this
-    # resolver version: they are explicitly NOT VERIFIED, not failed imports and not alternate pins.
     if result.get("status") == "error":
         loc["auto_resolution_version"] = None
     else:
@@ -163,6 +157,61 @@ async def _resolve_one(key: str, address: str, territory: Territory, semaphore: 
             }
 
 
+async def _maptiler_key(db) -> str:
+    row = (
+        await db.execute(
+            select(IntegrationSetting).where(IntegrationSetting.provider == "maptiler")
+        )
+    ).scalar_one_or_none()
+    if not (row and row.enabled and row.secret_ciphertext):
+        raise RuntimeError("MapTiler is not configured")
+    try:
+        return decrypt_secret(row.secret_ciphertext)
+    except Exception as exc:
+        raise RuntimeError("MapTiler key cannot be decrypted") from exc
+
+
+async def verify_property_location_now(property_id: str) -> dict:
+    """Force a fresh MapTiler verification for one stored property and persist the result."""
+    lock = _property_locks.setdefault(str(property_id), asyncio.Lock())
+    async with lock:
+        async with SessionLocal() as db:
+            prop = await db.get(Property, property_id)
+            if not prop:
+                raise LookupError("Property not found")
+            if not prop.territory_id:
+                raise ValueError("Property is not assigned to a territory")
+            territory = await db.get(Territory, prop.territory_id)
+            if not territory:
+                raise LookupError("Territory not found")
+            if not (prop.formatted_address or "").strip():
+                raise ValueError("Property does not have a formatted address")
+
+            key = await _maptiler_key(db)
+            result = await _resolve_one(
+                key,
+                prop.formatted_address,
+                territory,
+                asyncio.Semaphore(1),
+            )
+            _store_result(prop, result, territory)
+            await db.commit()
+            await db.refresh(prop)
+            raw = prop.raw if isinstance(prop.raw, dict) else {}
+            loc = raw.get("roofspan_location") if isinstance(raw.get("roofspan_location"), dict) else {}
+            return {
+                "property_id": str(prop.id),
+                "address": prop.formatted_address,
+                "verified": bool(loc.get("address_verified")),
+                "coordinate_source": loc.get("coordinate_source"),
+                "latitude": prop.latitude,
+                "longitude": prop.longitude,
+                "reason": loc.get("maptiler_reason"),
+                "http_status": loc.get("maptiler_http_status"),
+                "checked_at": loc.get("auto_resolution_checked_at"),
+            }
+
+
 async def refresh_existing_property_locations(territory_id: str | None = None) -> None:
     """Resolve pending RentCast properties in a separate, resumable MapTiler phase."""
     if _running_lock.locked():
@@ -171,18 +220,10 @@ async def refresh_existing_property_locations(territory_id: str | None = None) -
 
     async with _running_lock:
         async with SessionLocal() as db:
-            row = (
-                await db.execute(
-                    select(IntegrationSetting).where(IntegrationSetting.provider == "maptiler")
-                )
-            ).scalar_one_or_none()
-            if not (row and row.enabled and row.secret_ciphertext):
-                logger.info("Property location resolution skipped: MapTiler is not configured")
-                return
             try:
-                key = decrypt_secret(row.secret_ciphertext)
-            except Exception:
-                logger.warning("Property location resolution skipped: MapTiler key cannot be decrypted")
+                key = await _maptiler_key(db)
+            except RuntimeError as exc:
+                logger.info("Property location resolution skipped: %s", exc)
                 return
 
             territory_stmt = select(Territory)
