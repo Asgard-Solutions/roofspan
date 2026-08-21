@@ -2,7 +2,8 @@
 
 RentCast acquisition and MapTiler location resolution are deliberately separate jobs. Properties are
 saved first with their RentCast coordinates, then this resumable background worker resolves exact
-addresses and numbered buildings without risking the completed property import.
+addresses and optionally refines verified address points to numbered buildings. A road/street-level
+MapTiler result is diagnostic only and is never allowed to move a RoofSpan property pin.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from models import IntegrationSetting, Property, Territory
 
 logger = logging.getLogger("roofspan.location_upgrade")
 
-RESOLUTION_VERSION = "maptiler_numbered_building_v2"
+RESOLUTION_VERSION = "maptiler_verified_address_v3"
 CHUNK_SIZE = 25
 CONCURRENCY = 8
 
@@ -52,6 +53,17 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
     previous = raw.get("roofspan_location") if isinstance(raw.get("roofspan_location"), dict) else {}
     rentcast_lat, rentcast_lng = _rentcast_source_coords(prop)
 
+    accepted = result.get("status") == "accepted"
+    candidate_lat = result.get("latitude")
+    candidate_lng = result.get("longitude")
+    inside = (
+        accepted
+        and candidate_lat is not None
+        and candidate_lng is not None
+        and point_in_polygon(candidate_lng, candidate_lat, territory.geometry)
+    )
+    verified = bool(inside)
+
     loc = dict(previous)
     loc.update({
         "query_address": prop.formatted_address,
@@ -62,14 +74,20 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "maptiler_http_status": result.get("http_status"),
         "maptiler_returned_address": result.get("returned_address"),
         "maptiler_returned_label": result.get("returned_label"),
-        "maptiler_latitude": result.get("latitude"),
-        "maptiler_longitude": result.get("longitude"),
+        # Only expose the provider coordinate as an authoritative MapTiler coordinate when the
+        # complete house-number/street/city/state/ZIP identity passed validation.
+        "maptiler_latitude": candidate_lat if verified else None,
+        "maptiler_longitude": candidate_lng if verified else None,
+        # Keep a rejected provider point only as diagnostic evidence. RoofSpan never maps from it.
+        "maptiler_candidate_latitude": candidate_lat if not verified else None,
+        "maptiler_candidate_longitude": candidate_lng if not verified else None,
         "maptiler_relevance": result.get("relevance"),
         "maptiler_place_type": result.get("place_type"),
         "maptiler_feature_id": result.get("feature_id"),
         "identity_expected": result.get("identity_expected"),
         "identity_returned": result.get("identity_returned"),
         "identity_checks": result.get("identity_checks"),
+        "address_verified": verified,
         "building_status": result.get("building_status"),
         "building_reason": result.get("building_reason"),
         "building_number": result.get("building_number"),
@@ -84,16 +102,7 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
         "auto_resolution_checked_at": _now_iso(),
     })
 
-    candidate_lat = result.get("latitude")
-    candidate_lng = result.get("longitude")
-    accepted = result.get("status") == "accepted"
-    inside = (
-        accepted
-        and candidate_lat is not None
-        and candidate_lng is not None
-        and point_in_polygon(candidate_lng, candidate_lat, territory.geometry)
-    )
-    if inside:
+    if verified:
         prop.latitude = candidate_lat
         prop.longitude = candidate_lng
         loc["coordinate_source"] = (
@@ -101,24 +110,32 @@ def _store_result(prop: Property, result: dict, territory: Territory) -> None:
             if result.get("building_status") == "resolved"
             else "maptiler_address"
         )
+        loc["resolution_state"] = "verified"
     else:
-        loc["coordinate_source"] = previous.get("coordinate_source") or "rentcast"
+        # A road/street/city result is not a property address. Return the active pin to the original
+        # RentCast point instead of leaving a stale MapTiler coordinate from an older resolver.
+        if rentcast_lat is not None and rentcast_lng is not None:
+            prop.latitude = rentcast_lat
+            prop.longitude = rentcast_lng
+        loc["coordinate_source"] = "rentcast"
+        if result.get("status") == "error":
+            loc["resolution_state"] = "retry_pending"
+        else:
+            loc["resolution_state"] = "not_verified"
 
-    # Transport/provider errors remain retryable. Deterministic accepted/rejected results are marked
-    # current for this resolver version so a restart resumes only the unfinished work.
+    # Provider/transport errors remain retryable. Deterministic rejected results are current for this
+    # resolver version: they are explicitly NOT VERIFIED, not failed imports and not alternate pins.
     if result.get("status") == "error":
         loc["auto_resolution_version"] = None
-        loc["resolution_state"] = "retry_pending"
     else:
         loc["auto_resolution_version"] = RESOLUTION_VERSION
-        loc["resolution_state"] = "complete"
 
     raw["roofspan_location"] = loc
     prop.raw = raw
 
 
 async def _resolve_one(key: str, address: str, territory: Territory, semaphore: asyncio.Semaphore) -> dict:
-    """Use a single-address MapTiler request so one bad/bulk URL cannot poison neighboring records."""
+    """Use one full stored property address per MapTiler request."""
     async with semaphore:
         try:
             results = await geocode_addresses_batch(
@@ -188,10 +205,10 @@ async def refresh_existing_property_locations(territory_id: str | None = None) -
                 logger.info("Property location resolution already current (%s)", RESOLUTION_VERSION)
                 return
 
-            logger.info("Starting MapTiler second-phase resolution for %d properties", len(pending))
+            logger.info("Starting MapTiler verified-address resolution for %d properties", len(pending))
             semaphore = asyncio.Semaphore(CONCURRENCY)
             processed = 0
-            resolved = 0
+            verified_count = 0
             retry_pending = 0
 
             for tid in {str(p.territory_id) for p in pending}:
@@ -208,17 +225,17 @@ async def refresh_existing_property_locations(territory_id: str | None = None) -
                     for prop, result in zip(chunk, results):
                         _store_result(prop, result, territory)
                         processed += 1
-                        if result.get("status") == "accepted" and result.get("building_status") == "resolved":
-                            resolved += 1
+                        if result.get("status") == "accepted":
+                            verified_count += 1
                         if result.get("status") == "error":
                             retry_pending += 1
                     await db.commit()
                     await asyncio.sleep(0)
 
             logger.info(
-                "MapTiler second-phase resolution finished: processed=%d building_resolved=%d retry_pending=%d version=%s",
+                "MapTiler verified-address resolution finished: processed=%d verified=%d retry_pending=%d version=%s",
                 processed,
-                resolved,
+                verified_count,
                 retry_pending,
                 RESOLUTION_VERSION,
             )
