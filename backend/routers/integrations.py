@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 KNOWN_PROVIDERS = {
     "rentcast": {"label": "RentCast", "config_defaults": {}},
     "maptiler": {"label": "MapTiler", "config_defaults": {}},
+    "geocodio": {"label": "Geocodio", "config_defaults": {}},
 }
 
 
@@ -114,13 +115,23 @@ async def test_connection(provider: str, user: User = Depends(require_roles(*SEN
                 if resp.status_code in (401, 403):
                     return TestConnectionResult(ok=False, message="RentCast rejected the API key (unauthorized).")
                 return TestConnectionResult(ok=False, message=f"RentCast responded with status {resp.status_code}.")
-            elif provider == "maptiler":
-                resp = await client.get(f"https://api.maptiler.com/tiles/satellite-v2/tiles.json?key={secret}")
+            if provider == "maptiler":
+                resp = await client.get("https://api.maptiler.com/tiles/satellite-v2/tiles.json", params={"key": secret})
                 if resp.status_code == 200:
                     return TestConnectionResult(ok=True, message="MapTiler connection successful.")
                 if resp.status_code in (401, 403):
                     return TestConnectionResult(ok=False, message="MapTiler rejected the API key (unauthorized).")
                 return TestConnectionResult(ok=False, message=f"MapTiler responded with status {resp.status_code}.")
+            if provider == "geocodio":
+                resp = await client.get(
+                    "https://api.geocod.io/v2/geocode",
+                    params={"q": "1109 N Highland St, Arlington, VA 22201", "api_key": secret, "limit": 1},
+                )
+                if resp.status_code == 200:
+                    return TestConnectionResult(ok=True, message="Geocodio connection successful. Property locations can be cached locally.")
+                if resp.status_code in (401, 403):
+                    return TestConnectionResult(ok=False, message="Geocodio rejected the API key (unauthorized).")
+                return TestConnectionResult(ok=False, message=f"Geocodio responded with status {resp.status_code}.")
     except httpx.RequestError as e:
         return TestConnectionResult(ok=False, message=f"Could not reach provider: {e.__class__.__name__}")
     return TestConnectionResult(ok=False, message="Unsupported provider test.")
