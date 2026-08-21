@@ -40,36 +40,35 @@ function formatCoords(lat, lng) {
 
 function humanReason(reason) {
   const labels = {
-    accepted: "MapTiler returned the known address location",
-    exact_address_identity: "MapTiler returned the known address location",
-    known_address_located_by_building_number: "Located from the known house number and nearby MapTiler building data",
-    no_result: "No MapTiler location result",
-    invalid_response: "Invalid provider response",
-    invalid_feature: "Invalid provider feature",
-    invalid_coordinates: "Invalid returned coordinates",
-    not_address_result: "MapTiler found the road/place but not a confident property location",
-    no_house_number: "MapTiler found the road but not a confident house-number location",
-    house_number_mismatch: "MapTiler returned a different house number",
-    street_mismatch: "MapTiler returned a different street",
-    city_mismatch: "MapTiler returned a different city",
-    state_mismatch: "MapTiler returned a different state",
-    zip_mismatch: "MapTiler returned a different ZIP code",
-    returned_street_missing: "MapTiler result did not include a street",
-    returned_city_missing: "MapTiler result did not include a city",
-    returned_state_missing: "MapTiler result did not include a state",
-    returned_zip_missing: "MapTiler result did not include a ZIP code",
-    low_relevance: "MapTiler result was not close enough to the known address",
-    invalid_relevance: "Invalid relevance value",
+    known_address_located: "Known RentCast address located",
+    no_result: "No Geocodio result for the known address",
+    house_number_mismatch: "Returned house number did not match",
+    street_mismatch: "Returned street did not match",
+    city_mismatch: "Returned city did not match",
+    state_mismatch: "Returned state did not match",
+    zip_mismatch: "Returned ZIP code did not match",
+    low_accuracy: "Geocodio match confidence was too low",
+    insufficient_precision: "Geocodio result was not precise enough for a property pin",
     outside_territory: "Located point was outside the territory",
-    provider_http_error: "MapTiler returned an HTTP error",
-    provider_request_error: "MapTiler request failed",
-    single_result_count_mismatch: "MapTiler returned an unexpected result count",
-    single_request_exception: "MapTiler request failed unexpectedly",
-    maptiler_not_configured: "MapTiler location service is not configured",
-    unexpected_geocoder_error: "Unexpected MapTiler error",
-    not_attempted: "MapTiler location lookup was not attempted",
+    provider_http_error: "Geocodio returned an HTTP error",
+    provider_request_error: "Geocodio request failed",
+    single_result_missing: "Geocodio did not return a result for this property",
+    batch_result_missing: "Geocodio batch response was missing this property",
+    queued_after_rentcast_import: "Waiting for property location lookup",
   };
   return labels[reason] || reason || "Unknown";
+}
+
+function accuracyLabel(type) {
+  const labels = {
+    rooftop: "Rooftop",
+    point: "Address point",
+    range_interpolation: "Interpolated",
+    nearest_rooftop_match: "Nearest rooftop",
+    street_center: "Street center",
+    place: "Place",
+  };
+  return labels[type] || type || "—";
 }
 
 export default function PropertySheet({ propertyId, open, onOpenChange, onChanged }) {
@@ -100,7 +99,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
     setLocating(true);
     try {
       const { data } = await api.post(`/properties/${p.id}/locate`);
-      toast.success(data.resolved ? "Property located with MapTiler" : "MapTiler could not confidently locate this property");
+      toast.success(data.resolved ? "Property located and cached" : "Geocodio could not confidently locate this property");
       load();
       onChanged && onChanged();
     } catch (e) {
@@ -153,15 +152,17 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
 
   const owner = p?.contacts?.find((c) => c.kind === "owner");
   const loc = p?.location_diagnostics;
-  const maptilerUsed = ["maptiler_address", "maptiler_numbered_building", "maptiler_location"].includes(loc?.coordinate_source);
-  const locationResolved = loc?.location_resolved === true || maptilerUsed;
-  const pinSource = loc?.coordinate_source === "maptiler_numbered_building"
-    ? "MapTiler numbered building"
-    : loc?.coordinate_source === "maptiler_address"
-      ? "MapTiler address point"
-      : loc?.coordinate_source === "maptiler_location"
-        ? "MapTiler located point"
-        : "RentCast";
+  const geocodioUsed = ["geocodio_rooftop", "geocodio_point", "geocodio_interpolated", "geocodio"].includes(loc?.coordinate_source);
+  const locationResolved = loc?.location_resolved === true || geocodioUsed;
+  const pinSource = loc?.coordinate_source === "geocodio_rooftop"
+    ? "Geocodio rooftop"
+    : loc?.coordinate_source === "geocodio_point"
+      ? "Geocodio address point"
+      : loc?.coordinate_source === "geocodio_interpolated"
+        ? "Geocodio interpolated address"
+        : loc?.coordinate_source === "geocodio"
+          ? "Geocodio"
+          : "RentCast";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -202,46 +203,39 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                   </div>
                   {!locationResolved && (
                     <div className="mt-2 text-xs text-slate-600">
-                      RentCast supplied this property's address. MapTiler has not yet found a confident location for that known address, so RoofSpan is keeping the RentCast pin.
+                      RentCast supplied this property's known address. RoofSpan keeps the RentCast pin until Geocodio returns a matching property-level location.
                     </div>
                   )}
                   <div className="mt-2 space-y-1 text-xs text-slate-600">
                     <div><span className="font-medium text-slate-700">Active pin:</span> {formatCoords(p.latitude, p.longitude)}</div>
                     <div><span className="font-medium text-slate-700">RentCast source:</span> {formatCoords(loc.rentcast_latitude, loc.rentcast_longitude)}</div>
-                    {locationResolved && (
-                      <div><span className="font-medium text-slate-700">MapTiler location:</span> {formatCoords(loc.maptiler_latitude, loc.maptiler_longitude)}</div>
-                    )}
-                    {loc.building_number && <div><span className="font-medium text-slate-700">Matched building number:</span> {loc.building_number}</div>}
-                    <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.maptiler_reason)}</div>
-                    {loc.maptiler_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.maptiler_http_status}</div>}
-                    {loc.maptiler_returned_address && <div><span className="font-medium text-slate-700">MapTiler returned number:</span> {loc.maptiler_returned_address}</div>}
-                    {loc.maptiler_returned_label && <div><span className="font-medium text-slate-700">MapTiler search result:</span> {loc.maptiler_returned_label}</div>}
-                    {loc.maptiler_relevance != null && <div><span className="font-medium text-slate-700">Search relevance:</span> {Number(loc.maptiler_relevance).toFixed(2)}</div>}
+                    {locationResolved && <div><span className="font-medium text-slate-700">Geocodio location:</span> {formatCoords(loc.geocodio_latitude, loc.geocodio_longitude)}</div>}
+                    <div><span className="font-medium text-slate-700">Status:</span> {humanReason(loc.geocoder_reason)}</div>
+                    {loc.geocoder_http_status != null && <div><span className="font-medium text-slate-700">HTTP:</span> {loc.geocoder_http_status}</div>}
+                    {loc.geocodio_formatted_address && <div><span className="font-medium text-slate-700">Matched address:</span> {loc.geocodio_formatted_address}</div>}
+                    {loc.geocodio_accuracy_type && <div><span className="font-medium text-slate-700">Location accuracy:</span> {accuracyLabel(loc.geocodio_accuracy_type)}</div>}
+                    {loc.geocodio_accuracy != null && <div><span className="font-medium text-slate-700">Match score:</span> {Number(loc.geocodio_accuracy).toFixed(2)}</div>}
+                    {loc.geocodio_match_type && <div><span className="font-medium text-slate-700">Match type:</span> {loc.geocodio_match_type}</div>}
+                    {loc.geocodio_source && <div><span className="font-medium text-slate-700">Geocode source:</span> {loc.geocodio_source}</div>}
                     <div><span className="font-medium text-slate-700">Known address:</span> {loc.query_address || p.formatted_address}</div>
+                    {loc.cached_permanently && <div className="font-medium text-green-700">Cached locally — normal map use will not geocode this address again.</div>}
                   </div>
                   {canLocate && p.source === "rentcast" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="mt-3 w-full"
-                      onClick={locateProperty}
-                      disabled={locating}
-                      data-testid="locate-property-button"
-                    >
+                    <Button size="sm" variant="outline" className="mt-3 w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
                       {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with MapTiler"}
+                      {locating ? "Locating property..." : "Locate property with Geocodio"}
                     </Button>
                   )}
                 </div>
               ) : (
                 <div className="mt-2 space-y-2">
                   <div className="flex items-center gap-2 text-sm text-slate-400">
-                    <Crosshair className="h-4 w-4" /> MapTiler location lookup has not run for this property yet.
+                    <Crosshair className="h-4 w-4" /> Property location lookup has not run yet.
                   </div>
                   {canLocate && p.source === "rentcast" && (
                     <Button size="sm" variant="outline" className="w-full" onClick={locateProperty} disabled={locating} data-testid="locate-property-button">
                       {locating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
-                      {locating ? "Locating property..." : "Locate property with MapTiler"}
+                      {locating ? "Locating property..." : "Locate property with Geocodio"}
                     </Button>
                   )}
                 </div>
