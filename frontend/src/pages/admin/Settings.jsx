@@ -18,25 +18,18 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
   const [testResult, setTestResult] = useState(null);
 
   const load = () => api.get(`/integrations/${provider}`).then((r) => setData(r.data)).catch((e) => toast.error(apiError(e)));
-  useEffect(() => {
-    load();
-  }, []); // eslint-disable-line
+  useEffect(() => { load(); }, []); // eslint-disable-line
 
   const toggleEnabled = async (val) => {
     try {
       const { data: d } = await api.put(`/integrations/${provider}`, { enabled: val });
       setData(d);
       toast.success(`${label} ${val ? "enabled" : "disabled"}`);
-    } catch (e) {
-      toast.error(apiError(e));
-    }
+    } catch (e) { toast.error(apiError(e)); }
   };
 
   const saveSecret = async () => {
-    if (!secret.trim()) {
-      toast.error("Enter an API key first");
-      return;
-    }
+    if (!secret.trim()) { toast.error("Enter an API key first"); return; }
     setBusy(true);
     try {
       const { data: d } = await api.put(`/integrations/${provider}/secret`, { secret: secret.trim() });
@@ -44,11 +37,7 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
       setSecret("");
       setTestResult(null);
       toast.success("API key saved (encrypted)");
-    } catch (e) {
-      toast.error(apiError(e));
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
   const clearSecret = async () => {
@@ -58,11 +47,7 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
       setData(d);
       setTestResult(null);
       toast.success("API key removed");
-    } catch (e) {
-      toast.error(apiError(e));
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
   const test = async () => {
@@ -71,11 +56,7 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
     try {
       const { data: res } = await api.post(`/integrations/${provider}/test`);
       setTestResult(res);
-    } catch (e) {
-      setTestResult({ ok: false, message: apiError(e) });
-    } finally {
-      setTesting(false);
-    }
+    } catch (e) { setTestResult({ ok: false, message: apiError(e) }); } finally { setTesting(false); }
   };
 
   if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
@@ -104,20 +85,8 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
           </div>
         )}
         <div className="relative">
-          <Input
-            type={showSecret ? "text" : "password"}
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            placeholder={data.has_secret ? "Enter a new key to replace" : "Paste API key"}
-            className="pr-10 font-mono"
-            data-testid={`secret-input-${provider}`}
-          />
-          <button
-            type="button"
-            onClick={() => setShowSecret((s) => !s)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-            tabIndex={-1}
-          >
+          <Input type={showSecret ? "text" : "password"} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={data.has_secret ? "Enter a new key to replace" : "Paste API key"} className="pr-10 font-mono" data-testid={`secret-input-${provider}`} />
+          <button type="button" onClick={() => setShowSecret((s) => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700" tabIndex={-1}>
             {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </button>
         </div>
@@ -133,10 +102,7 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
       </div>
 
       {testResult && (
-        <div
-          className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${testResult.ok ? "border-green-200 bg-green-50 text-green-700" : "border-red-200 bg-red-50 text-red-700"}`}
-          data-testid={`test-result-${provider}`}
-        >
+        <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${testResult.ok ? "border-green-200 bg-green-50 text-green-700" : "border-red-200 bg-red-50 text-red-700"}`} data-testid={`test-result-${provider}`}>
           {testResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
           {testResult.message}
         </div>
@@ -150,31 +116,22 @@ function MapSettings() {
   const [cadastre, setCadastre] = useState(null);
   const [checkingCadastre, setCheckingCadastre] = useState(false);
   const load = () => api.get("/map-config").then((r) => setCfg(r.data));
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   const setSatellite = async (val) => {
     try {
       const { data } = await api.put("/map-config", { satellite_enabled: val });
       setCfg(data);
       toast.success("Map configuration updated");
-    } catch (e) {
-      toast.error(apiError(e));
-    }
+    } catch (e) { toast.error(apiError(e)); }
   };
 
   const checkCadastre = async () => {
     setCheckingCadastre(true);
     setCadastre(null);
-    try {
-      const { data } = await api.get("/map/cadastre-capability");
-      setCadastre(data);
-    } catch (e) {
-      setCadastre({ configured: true, tileset_accessible: false, reason: apiError(e) });
-    } finally {
-      setCheckingCadastre(false);
-    }
+    try { const { data } = await api.get("/map/cadastre-capability"); setCadastre(data); }
+    catch (e) { setCadastre({ configured: true, tileset_accessible: false, reason: apiError(e) }); }
+    finally { setCheckingCadastre(false); }
   };
 
   if (!cfg) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
@@ -184,26 +141,15 @@ function MapSettings() {
       <div>
         <h3 className="font-heading text-lg font-semibold text-slate-900">Base map</h3>
         <p className="mt-0.5 text-sm text-slate-500">OpenStreetMap is the default street-map provider and requires no key.</p>
-        <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-700">
-          OpenStreetMap
-        </div>
+        <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-700">OpenStreetMap</div>
       </div>
       <div className="border-t border-border pt-5">
         <div className="flex items-start justify-between">
           <div>
             <h3 className="font-heading text-lg font-semibold text-slate-900">Satellite imagery (MapTiler)</h3>
-            <p className="mt-0.5 text-sm text-slate-500">
-              {cfg.maptiler_configured
-                ? "MapTiler key is configured. Satellite imagery can be enabled."
-                : "Add and enable a MapTiler key under the Integrations tab to use satellite imagery."}
-            </p>
+            <p className="mt-0.5 text-sm text-slate-500">{cfg.maptiler_configured ? "MapTiler key is configured. Satellite imagery can be enabled." : "Add and enable a MapTiler key under the Integrations tab to use satellite imagery."}</p>
           </div>
-          <Switch
-            checked={cfg.satellite_enabled}
-            disabled={!cfg.maptiler_configured}
-            onCheckedChange={setSatellite}
-            data-testid="toggle-satellite"
-          />
+          <Switch checked={cfg.satellite_enabled} disabled={!cfg.maptiler_configured} onCheckedChange={setSatellite} data-testid="toggle-satellite" />
         </div>
       </div>
       <div className="border-t border-border pt-5" data-testid="cadastre-capability">
@@ -219,10 +165,7 @@ function MapSettings() {
         {cadastre && (
           <div className={`mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${cadastre.tileset_accessible ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-800"}`} data-testid="cadastre-result">
             {cadastre.tileset_accessible ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
-            <div>
-              <div className="font-medium">{cadastre.tileset_accessible ? "Cadastre tileset is accessible" : "Cadastre tileset is not accessible"}</div>
-              <div className="mt-0.5 text-xs opacity-80">Status: {cadastre.reason || "unknown"}{cadastre.tileset_http_status != null ? ` · HTTP ${cadastre.tileset_http_status}` : ""}</div>
-            </div>
+            <div><div className="font-medium">{cadastre.tileset_accessible ? "Cadastre tileset is accessible" : "Cadastre tileset is not accessible"}</div><div className="mt-0.5 text-xs opacity-80">Status: {cadastre.reason || "unknown"}{cadastre.tileset_http_status != null ? ` · HTTP ${cadastre.tileset_http_status}` : ""}</div></div>
           </div>
         )}
       </div>
@@ -233,43 +176,11 @@ function MapSettings() {
 function CompanySettings() {
   const [c, setC] = useState(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    api.get("/company").then((r) => setC(r.data));
-  }, []);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const { data } = await api.put("/company", c);
-      setC(data);
-      toast.success("Company profile saved");
-    } catch (e) {
-      toast.error(apiError(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  useEffect(() => { api.get("/company").then((r) => setC(r.data)); }, []);
+  const save = async () => { setSaving(true); try { const { data } = await api.put("/company", c); setC(data); toast.success("Company profile saved"); } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); } };
   if (!c) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
-  const field = (key, label, ph) => (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <Input value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} />
-    </div>
-  );
-
-  return (
-    <div className="max-w-2xl space-y-4 rounded-md border border-border bg-white p-6" data-testid="company-settings">
-      {field("name", "Company name", "RoofSpan Roofing Co.")}
-      {field("phone", "Phone", "(555) 123-4567")}
-      {field("email", "Email", "office@company.com")}
-      {field("address", "Address", "123 Main St, Austin, TX")}
-      {field("license_number", "License number", "TX-ROOF-0001")}
-      <Button onClick={save} disabled={saving} data-testid="save-company">
-        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save profile</>}
-      </Button>
-    </div>
-  );
+  const field = (key, label, ph) => <div className="space-y-1.5"><Label>{label}</Label><Input value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} /></div>;
+  return <div className="max-w-2xl space-y-4 rounded-md border border-border bg-white p-6" data-testid="company-settings">{field("name", "Company name", "RoofSpan Roofing Co.")}{field("phone", "Phone", "(555) 123-4567")}{field("email", "Email", "office@company.com")}{field("address", "Address", "123 Main St, Austin, TX")}{field("license_number", "License number", "TX-ROOF-0001")}<Button onClick={save} disabled={saving} data-testid="save-company">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save profile</>}</Button></div>;
 }
 
 export default function Settings() {
@@ -278,37 +189,14 @@ export default function Settings() {
       <PageHeader title="Settings" description="Manage integrations, maps, and company details." testid="page-settings" />
       <div className="p-6 sm:p-8">
         <Tabs defaultValue="integrations">
-          <TabsList data-testid="settings-tabs">
-            <TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger>
-            <TabsTrigger value="map" data-testid="tab-map">Map Configuration</TabsTrigger>
-            <TabsTrigger value="company" data-testid="tab-company">Company Profile</TabsTrigger>
-          </TabsList>
+          <TabsList data-testid="settings-tabs"><TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger><TabsTrigger value="map" data-testid="tab-map">Map Configuration</TabsTrigger><TabsTrigger value="company" data-testid="tab-company">Company Profile</TabsTrigger></TabsList>
           <TabsContent value="integrations" className="mt-6 space-y-6">
-            <IntegrationCard
-              provider="rentcast"
-              label="RentCast"
-              keyLabel="RentCast API key"
-              help="Server-side property data import. The key is encrypted and never returned to the browser."
-            />
-            <IntegrationCard
-              provider="geocodio"
-              label="Geocodio Property Locations"
-              keyLabel="Geocodio API key"
-              help="Bring your own Geocodio key for address-to-coordinate lookup. RoofSpan stores completed forward-geocode results permanently in the local database so normal map use does not call the API again."
-            />
-            <IntegrationCard
-              provider="maptiler"
-              label="MapTiler"
-              keyLabel="MapTiler API key"
-              help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin geocoding is handled separately by Geocodio."
-            />
+            <IntegrationCard provider="rentcast" label="RentCast" keyLabel="RentCast API key" help="Server-side property data import. The key is encrypted and never returned to the browser." />
+            <IntegrationCard provider="mapbox" label="Mapbox Permanent Geocoding" keyLabel="Mapbox access token" help="Bring your own Mapbox token for permanent address-to-coordinate lookup. RoofSpan requests permanent geocodes and caches completed results in the local database so normal map use does not geocode the same address again." />
+            <IntegrationCard provider="maptiler" label="MapTiler" keyLabel="MapTiler API key" help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin placement is handled separately by Mapbox Permanent Geocoding." />
           </TabsContent>
-          <TabsContent value="map" className="mt-6">
-            <MapSettings />
-          </TabsContent>
-          <TabsContent value="company" className="mt-6">
-            <CompanySettings />
-          </TabsContent>
+          <TabsContent value="map" className="mt-6"><MapSettings /></TabsContent>
+          <TabsContent value="company" className="mt-6"><CompanySettings /></TabsContent>
         </Tabs>
       </div>
     </div>
