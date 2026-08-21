@@ -26,8 +26,8 @@ a = Analysis(
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on", "asyncpg", "sqlalchemy.dialects.postgresql", "alembic",
         "static_serve", "httpx", "websockets",
-        # Property-location upgrade/runtime dependencies.
-        "location_upgrade", "mapbox_geocoding",
+        # Property de-duplication and location upgrade/runtime dependencies.
+        "property_dedup", "location_upgrade", "mapbox_geocoding",
         # MapTiler remains a separate visualization provider for satellite/building map layers.
         "maptiler", "mapbox_vector_tile", "shapely", "shapely.geometry",
     ] + PYWIN32,
