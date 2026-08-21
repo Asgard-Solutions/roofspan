@@ -84,3 +84,15 @@ def test_map_progress_is_sidebar_content_and_pin_diagnostics_are_collapsed_foote
     assert "<summary" in sheet
     assert " open=" not in sheet
     assert sheet.index('data-testid="convert-lead-button"') < sheet.index('data-testid="pin-location-diagnostics"')
+
+
+def test_zip_search_frontend_has_matching_maptiler_backend_route():
+    settings = (BACKEND / "routers" / "settings.py").read_text(encoding="utf-8")
+    map_view = (FRONTEND / "pages" / "MapView.jsx").read_text(encoding="utf-8")
+
+    assert '@router.get("/geocode/zip")' in settings
+    assert '"types": "postal_code"' in settings
+    assert '"country": "us"' in settings
+    assert '"provider": "maptiler"' in settings
+    assert '"bbox": [[float(bbox[0]), float(bbox[1])], [float(bbox[2]), float(bbox[3])]]' in settings
+    assert '`/geocode/zip?zip=${encodeURIComponent(code)}`' in map_view
