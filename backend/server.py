@@ -19,6 +19,7 @@ from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, building_tiles, licensing as licensing_router
+from routers import abc_supply
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -45,6 +46,7 @@ async def version():
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(audit.router)
+app.include_router(abc_supply.router)
 app.include_router(integrations.router)
 app.include_router(settings.router)
 app.include_router(territories.router)
@@ -71,6 +73,13 @@ if licensing_config.LICENSING_MODE == "dev":
 app.include_router(control_plane_router)
 from relay.server import router as relay_router  # noqa: E402
 app.include_router(relay_router)
+
+# Local mock ABC Supply server for development/testing (mounted only when ABC_MOCK_ENABLED is set).
+# Lets the full ABC OAuth + API flow be exercised without real ABC Sandbox credentials.
+from integrations.abc_supply.config import mock_enabled as _abc_mock_enabled  # noqa: E402
+if _abc_mock_enabled():
+    from integrations.abc_supply.mock_server import router as abc_mock_router  # noqa: E402
+    app.include_router(abc_mock_router, prefix="/api/abc-mock", tags=["abc-mock"])
 
 # Guard business workflows when the subscription is not ACTIVE/GRACE. Added before CORS so CORS
 # remains the outermost middleware (guard 403 responses still receive CORS headers).

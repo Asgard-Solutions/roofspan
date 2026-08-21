@@ -1,0 +1,65 @@
+{
+  "summary": "ABC Supply Phase 1 tested. Backend unit tests (10/10) pass. New HTTP integration suite: 17/22 pass. RBAC (owner allowed, sales 403 on all ABC endpoints) verified. Config PUT + secret PUT round-trip verified. Defaults/disconnect/purchase-orders regression pass. However the in-browser OAuth mock flow is COMPLETELY BROKEN in the deployed preview environment due to two production/infra issues (details below). All connect->accounts->branches->test-when-connected tests fail as a consequence. Note: main agent's curl-based verification passed because it hit localhost:8001 directly, bypassing the Kubernetes ingress that only routes /api/*.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/abc-mock/oauth2/v1/authorize (browser-facing)",
+        "issue": "Mock ABC server is mounted at /abc-mock in server.py (not under /api). Kubernetes ingress routes ONLY /api/* to the backend; every other path is served by the React frontend catch-all. Browser navigation to the authorize_url returns 200 HTML from the frontend (React Router logs 'No routes matched location /abc-mock/...'). Verified: `curl https://<public>/abc-mock/...` -> 200 (frontend), `curl http://localhost:8001/abc-mock/...` -> 302 (backend). Fix: mount abc_mock_router under `/api/abc-mock` in server.py AND update `AbcConfig.authorize_endpoint()` + `_mock_internal_base()` accordingly so the built URL is `{public_base}/api/abc-mock/oauth2/v1/authorize`.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "AbcIntegration.redirect_uri (DB state)",
+        "issue": "The stored `redirect_uri` in the AbcIntegration row is `http://127.0.0.1:8001/api/integrations/abc/callback` (a leftover from main agent's local curl verification). `_effective_redirect()` prefers the stored value over the public base, so once populated it is sticky — even after saving fresh config via the UI. This is displayed in the OAuth Redirect URI field on the settings page and is embedded in the authorize URL. Result: even after fixing the ingress route, the browser would be told to redirect back to localhost. Two-part fix required: (a) reset row.redirect_uri to NULL for existing installs (or clear it in disconnect / when saving config without an explicit value), (b) consider only allowing overrides for production/real ABC, never for mock, so mock always uses the request's public base.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "AbcSupply.jsx UI",
+        "issue": "The Configuration section persists the previously-loaded value of `redirect_uri` in the input; there is no easy way from the UI to clear it back to the effective default (Remove/Reset button only exists for secret). Users get confused by the stale localhost URL."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "ABC OAuth Connect (in-browser)",
+        "issue": "Clicking `abc-connect-button` navigates to `/abc-mock/oauth2/v1/authorize?...` which is served by the frontend catch-all; page never redirects back and status stays Not Connected. Reproduced via Playwright on the deployed URL.",
+        "affected_selectors": ["abc-connect-button", "abc-status-badge"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_p1.py",
+    "/app/backend/tests/test_abc_supply_api_integration.py",
+    "/app/test_reports/pytest/abc_api.xml"
+  ],
+  "action_items": [
+    "Re-mount ABC mock router under `/api/abc-mock` (or configure ingress to route `/abc-mock/*` to backend) and update AbcConfig.authorize_endpoint to build `{public_base}/api/abc-mock/oauth2/v1/authorize`.",
+    "Also update `_mock_internal_base()` and any hardcoded `/abc-mock` references (client `api_base`, `oauth_base`) so internal server-to-mock calls still work.",
+    "Clear the leftover `redirect_uri` value on existing AbcIntegration rows (SQL UPDATE), and either (a) do not persist redirect_uri when environment is sandbox+mock, or (b) always use the request's public base for the effective redirect URI when is_mock=True.",
+    "After fixes, re-run /app/backend/tests/test_abc_supply_api_integration.py — 5 currently-failing tests should pass.",
+    "Consider adding a UI 'Reset to default' button next to the Redirect URI field for clarity."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 82: `app.include_router(abc_mock_router, prefix='/abc-mock', ...)` is unreachable from the browser through the K8s ingress. Any non-/api prefix in this environment goes to the SPA.",
+    "routers/abc_supply.py _effective_redirect: prefers stored redirect_uri over public base without any 'mock override', causing stale localhost values to leak into the browser flow.",
+    "integrations/abc_supply/config.py authorize_endpoint: assumes /abc-mock is browser-reachable at public_base — same infra assumption bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_supply_api_integration.py (new)"
+  ],
+  "success_rate": {
+    "backend_unit": "10/10 (100%)",
+    "backend_http_integration": "17/22 (77%) — 5 cascade-failing from the two critical issues",
+    "frontend": "UI loads and non-OAuth flows work; OAuth connect flow broken end-to-end"
+  },
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026. Sales: sales1_38f545f9@example.com / Sales1#2026.",
+  "seed_data_creation": "None (test creates a TEST_ purchase order in regression test).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes ingress-path/redirect_uri issues, run: `cd /app/backend && PYTHONPATH=/app/backend pytest tests/test_abc_supply_api_integration.py -v -n 0` — expect all 22 to pass. Then Playwright test the full in-browser Connect->Callback->Connected flow, including account/branch selection.",
+  "rca of the issue": "Root cause: main agent developed and verified using `curl http://localhost:8001/...` which bypasses the Kubernetes ingress. The ingress rule in this preview env forwards only /api/* to the backend; /abc-mock/* falls through to the React frontend, so the browser-facing OAuth authorize URL cannot reach the mock server. Compounding this, the AbcIntegration row was persisted with a redirect_uri pointing at 127.0.0.1:8001 during that curl testing, and _effective_redirect prefers stored value over the public base, making the stale value sticky. Reproduction: (1) Log in as owner, go to /admin/settings/abc, (2) Save mock client_id + client_secret, (3) Click Connect ABC Supply — browser navigates to /abc-mock/... and lands on the SPA 'No routes matched' warning; status remains Not Connected. Mitigation: mount the mock under /api/abc-mock, update authorize URL builder, clear/override stored redirect_uri for mock."
+}

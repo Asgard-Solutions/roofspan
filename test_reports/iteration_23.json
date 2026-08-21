@@ -1,0 +1,27 @@
+{
+  "summary": "RETEST after iteration_22 infra fixes: BOTH critical bugs are resolved. Backend integration suite 22/22 PASS (test_abc_supply_api_integration.py) and unit suite 10/10 PASS (test_abc_supply_p1.py). In-browser Playwright OAuth flow on the DEPLOYED preview URL now completes: Owner logs in -> /admin/settings/abc -> click Connect -> full-page redirect through /api/abc-mock/oauth2/v1/authorize -> callback -> /admin/settings/abc?abc=connected -> Status badge shows 'Connected' and 'ABC Supply connected' toast appears. Ship-to dropdown lists exactly the active 'EASY ROOFING - JOB SITE (1163698)'; Branch dropdown lists 18 (Home) and 409; Save defaults success; Test connection returns 'Connected. Found 1 active ABC ship-to account(s).'; Disconnect returns badge to 'Not Connected'. RBAC (sales -> 403) covered by integration tests. Purchase-orders regression covered.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_api_integration.py",
+    "/app/backend/tests/test_abc_supply_p1.py",
+    "/app/test_reports/pytest/abc_api_iter23.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "iteration_22 findings (ingress path + sticky redirect_uri) are correctly addressed: mock router now mounted at /api/abc-mock so it traverses the K8s ingress; _effective_redirect always uses request public base in mock mode; connect no longer persists redirect_uri.",
+    "Nice-to-have: add a 'Reset to default' button beside the Redirect URI input on the Configuration section (minor UX, already noted in iter_22 minor)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend_unit": "10/10 (100%)",
+    "backend_http_integration": "22/22 (100%)",
+    "frontend_oauth_flow": "PASS (end-to-end connect/select-defaults/test/disconnect)"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; Sales sales1_38f545f9@example.com / Sales1#2026 (used by pytest RBAC parametrized cases).",
+  "seed_data_creation": "Integration test creates one TEST_ purchase order (regression).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ABC Supply Phase 1 mock-mode integration is fully green. If real ABC Sandbox creds arrive, add tests toggling ABC_MOCK_ENABLED=false and re-run.",
+  "rca of the issue": "N/A — prior CRITICAL issues confirmed fixed."
+}

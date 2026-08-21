@@ -21,6 +21,20 @@ English.
 ## Integrations
 - Stripe (payments) — requires user API key.
 - MapLibre GL JS / MapTiler (maps, ZIP search).
+- **ABC Supply** (Desktop only) — Third-Party Aggregator OAuth 2.0 (Auth Code + PKCE). Phased build; see below and `docs/ABC_SUPPLY_INTEGRATION.md`.
+
+## ABC Supply Integration (RoofSpan Office / Desktop only)
+Goal: connect each customer's own myABCSupply account for Account/Location/Product/Pricing/Ordering/Notifications. Mobile/website/control-plane untouched. Local PostgreSQL stays authoritative; Relay is webhook transport only (Phase 4). Provider layer: `backend/integrations/abc_supply/`. Router: `backend/routers/abc_supply.py` (`/api/integrations/abc/*`). UI: `frontend/src/pages/admin/AbcSupply.jsx` (`/admin/settings/abc`). Local mock ABC server mounted at `/api/abc-mock` when `ABC_MOCK_ENABLED=true` (must be under /api/* for K8s ingress).
+
+- **[2026-06] Phase 1 COMPLETE & TESTED** — Foundation:
+  - Provider abstraction (config/auth/client/exceptions/accounts/locations/schemas), OAuth 2.0 Auth Code + PKCE (S256) connect flow, encrypted (AES-GCM) token storage + auto-refresh + rotation, reconnect_required handling.
+  - Account API (search + sold/bill/ship-to + contacts; retired ship-to filtering) and Location API (search branches, get branch).
+  - Settings → Integrations → ABC Supply UI: config (env/client id/secret/redirect/webhook), Connect/Reconnect/Disconnect, Test connection, Ship-To + Branch default selection.
+  - DB: `abc_integrations`, `abc_account_links` (migration `a7c3f1b9d2e4`). RBAC: config/connect = owner/administrator; read = +office; sales 403. Audit actions `abc.*`.
+  - Local mock ABC server (OAuth + Account + Location) for dev/test. Tests: 10 unit + 22 HTTP integration pass; in-browser OAuth round-trip validated (iteration_23). Regression (phase4 + prod_infra) green.
+  - **NEEDS ABC DOC/SANDBOX VERIFICATION**: real Sandbox client_id/secret + registered redirect URI; pricing/order/notification service path prefixes (`/api/pricing/v1`,`/api/order/v1`,`/api/notification/v1`) inferred, isolated in `config.py`.
+  - Remaining phases: **P2** Product & Pricing + PO extension + $0 handling; **P3** Ordering + real-time price refresh + idempotency + history/templates; **P4** Notification webhooks via Relay (ORDER_UPDATE/ORDER_INVOICED, idempotent).
+
 
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.

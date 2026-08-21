@@ -470,3 +470,59 @@ class LicenseCache(Base):
     last_check_ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+
+# ---------- ABC Supply Integration (RoofSpan Office / Desktop only) ----------
+
+class AbcIntegration(Base):
+    """Singleton-style ABC Supply connection state + per-install config for this RoofSpan Office.
+
+    Client secret and OAuth tokens are AES-GCM encrypted (core.encrypt_secret). Contains NO
+    roofing business data — purchasing/order linkage lives on existing PO tables (later phases)."""
+    __tablename__ = "abc_integrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment: Mapped[str] = mapped_column(String(16), default="sandbox", nullable=False)  # sandbox|production
+    client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_secret_last4: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    redirect_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    webhook_public_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="not_connected", nullable=False)  # not_connected|connected|reconnect_required
+    # user OAuth tokens (encrypted)
+    access_token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_scopes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # transient PKCE verifier + CSRF state during an in-flight authorization
+    pkce_verifier_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oauth_state: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # connected identity + selected defaults
+    connected_identity: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    default_ship_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    default_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class AbcAccountLink(Base):
+    """Convenience cache of a selected ABC account hierarchy (sold-to/bill-to/ship-to + branches).
+
+    ABC remains authoritative; this only speeds up repeated reads and stores non-retired ship-tos."""
+    __tablename__ = "abc_account_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ship_to_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    ship_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bill_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bill_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sold_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sold_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    branches: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    home_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

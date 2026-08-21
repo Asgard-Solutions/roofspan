@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, MapPinned } from "lucide-react";
+import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, MapPinned, PackageSearch, ChevronRight } from "lucide-react";
 
 function IntegrationCard({ provider, label, help, keyLabel }) {
   const [data, setData] = useState(null);
@@ -191,6 +192,18 @@ export default function Settings() {
         <Tabs defaultValue="integrations">
           <TabsList data-testid="settings-tabs"><TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger><TabsTrigger value="map" data-testid="tab-map">Map Configuration</TabsTrigger><TabsTrigger value="company" data-testid="tab-company">Company Profile</TabsTrigger></TabsList>
           <TabsContent value="integrations" className="mt-6 space-y-6">
+            <Link to="/admin/settings/abc" className="block max-w-2xl" data-testid="abc-supply-link">
+              <div className="flex items-center justify-between rounded-md border border-border bg-white p-6 transition-colors hover:border-orange-300 hover:bg-orange-50/40">
+                <div className="flex items-start gap-3">
+                  <PackageSearch className="mt-0.5 h-6 w-6 text-orange-600" />
+                  <div>
+                    <h3 className="font-heading text-lg font-semibold text-slate-900">ABC Supply</h3>
+                    <p className="mt-0.5 text-sm text-slate-500">Connect your myABCSupply account for products, real-time pricing, and ordering.</p>
+                  </div>
+                </div>
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+              </div>
+            </Link>
             <IntegrationCard provider="rentcast" label="RentCast" keyLabel="RentCast API key" help="Server-side property data import. The key is encrypted and never returned to the browser." />
             <IntegrationCard provider="mapbox" label="Mapbox Permanent Geocoding" keyLabel="Mapbox access token" help="Bring your own Mapbox token for permanent address-to-coordinate lookup. RoofSpan requests permanent geocodes and caches completed results in the local database so normal map use does not geocode the same address again." />
             <IntegrationCard provider="maptiler" label="MapTiler" keyLabel="MapTiler API key" help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin placement is handled separately by Mapbox Permanent Geocoding." />
