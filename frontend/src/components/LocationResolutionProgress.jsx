@@ -2,6 +2,30 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
+const REASON_LABELS = {
+  no_result: "No MapTiler result",
+  not_address_result: "Road/place result only",
+  no_house_number: "No house number",
+  house_number_mismatch: "House number mismatch",
+  street_mismatch: "Street mismatch",
+  city_mismatch: "City mismatch",
+  state_mismatch: "State mismatch",
+  zip_mismatch: "ZIP mismatch",
+  returned_street_missing: "Street missing",
+  returned_city_missing: "City missing",
+  returned_state_missing: "State missing",
+  returned_zip_missing: "ZIP missing",
+  low_relevance: "Low relevance",
+  invalid_relevance: "Invalid relevance",
+  invalid_coordinates: "Invalid coordinates",
+  provider_http_error: "Provider HTTP error",
+  provider_request_error: "Provider request error",
+  single_request_exception: "Provider request exception",
+  single_result_count_mismatch: "Unexpected result count",
+  outside_territory: "Outside territory",
+  unknown: "Other / unknown",
+};
+
 export default function LocationResolutionProgress() {
   const [status, setStatus] = useState(null);
 
@@ -35,10 +59,11 @@ export default function LocationResolutionProgress() {
   const retries = Number(status.retry_pending || 0);
   const processing = status.state === "processing";
   const completeWithRetries = status.state === "complete_with_retries";
+  const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 8);
 
   return (
     <div
-      className="fixed top-3 z-40 w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur md:left-[calc(50%+8rem)] left-1/2"
+      className="fixed top-3 z-40 w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur md:left-[calc(50%+8rem)] left-1/2"
       data-testid="location-resolution-progress"
     >
       <div className="flex items-center justify-between gap-3">
@@ -72,6 +97,20 @@ export default function LocationResolutionProgress() {
         {retries > 0 && <span><strong className="text-amber-700">{retries.toLocaleString()}</strong> retry pending</span>}
         {processing && <span><strong className="text-slate-700">{Number(status.pending || 0).toLocaleString()}</strong> remaining</span>}
       </div>
+
+      {reasons.length > 0 && (
+        <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Why addresses were not verified</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-slate-500">
+            {reasons.map((item) => (
+              <div key={item.reason} className="flex items-center justify-between gap-2">
+                <span className="truncate" title={item.reason}>{REASON_LABELS[item.reason] || item.reason}</span>
+                <strong className="shrink-0 text-slate-700">{Number(item.count || 0).toLocaleString()}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
