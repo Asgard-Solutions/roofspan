@@ -24,16 +24,23 @@ async def location_resolution_progress(
     db: AsyncSession = Depends(get_db),
 ):
     props = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
-    counts = {"total": len(props), "pending": 0, "resolved": 0, "address_only": 0, "unresolved": 0, "retry_pending": 0}
+    counts = {
+        "total": len(props),
+        "pending": 0,
+        "resolved": 0,
+        "address_only": 0,
+        "unresolved": 0,
+        "retry_pending": 0,
+        "cached": 0,
+    }
     reasons = Counter()
+    accuracy_types = Counter()
 
     for prop in props:
         loc = _loc(prop)
         current = loc.get("auto_resolution_version") == RESOLUTION_VERSION
-        status = loc.get("maptiler_status")
-        reason = loc.get("maptiler_reason") or "unknown"
-        building_status = loc.get("building_status")
-        source = loc.get("coordinate_source")
+        status = loc.get("geocoder_status")
+        reason = loc.get("geocoder_reason") or "unknown"
 
         if not current:
             if status == "error" or loc.get("resolution_state") == "retry_pending":
@@ -42,10 +49,12 @@ async def location_resolution_progress(
             else:
                 counts["pending"] += 1
             continue
-        if building_status == "resolved" or source == "maptiler_numbered_building":
+
+        if loc.get("cached_permanently"):
+            counts["cached"] += 1
+        if loc.get("location_resolved") or status == "located":
             counts["resolved"] += 1
-        elif status == "accepted" or source == "maptiler_address":
-            counts["address_only"] += 1
+            accuracy_types[loc.get("geocodio_accuracy_type") or "unknown"] += 1
         else:
             counts["unresolved"] += 1
             reasons[reason] += 1
@@ -62,11 +71,6 @@ async def location_resolution_progress(
     else:
         state = "complete"
 
-    rejection_breakdown = [
-        {"reason": reason, "count": count}
-        for reason, count in reasons.most_common()
-    ]
-
     return {
         **counts,
         "attempted": attempted,
@@ -74,5 +78,13 @@ async def location_resolution_progress(
         "pass_complete": complete,
         "state": state,
         "resolver_version": RESOLUTION_VERSION,
-        "rejection_breakdown": rejection_breakdown,
+        "provider": "geocodio",
+        "rejection_breakdown": [
+            {"reason": reason, "count": count}
+            for reason, count in reasons.most_common()
+        ],
+        "accuracy_breakdown": [
+            {"accuracy_type": accuracy_type, "count": count}
+            for accuracy_type, count in accuracy_types.most_common()
+        ],
     }
