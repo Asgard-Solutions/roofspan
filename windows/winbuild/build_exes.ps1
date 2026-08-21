@@ -46,8 +46,7 @@ Write-Host "==> Using PyInstaller: $pyinstaller"
 
 # ---- DETERMINISTIC DEPENDENCY SYNC: every clean build installs the CURRENT backend requirements into
 # the SAME environment PyInstaller freezes from. This prevents a git pull that adds a backend import
-# (for example mapbox-vector-tile/Shapely) from producing an exe that builds successfully but crashes
-# when Windows SCM starts it.
+# from producing an exe that builds successfully but crashes when Windows SCM starts it.
 Write-Host "==> Syncing backend Python dependencies"
 & $pip install -r $requirements
 if ($LASTEXITCODE -ne 0) { throw "Failed to install backend requirements; refusing to freeze stale dependencies." }
@@ -64,7 +63,7 @@ if ($LASTEXITCODE -ne 0) {
 # ---- BACKEND FREEZE PREFLIGHT: these imports are required by the service at runtime. Fail the build
 # here instead of shipping an installer whose RoofSpanBackend service cannot start.
 Write-Host "==> Verifying backend runtime imports"
-$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, location_upgrade, maptiler, mapbox_vector_tile, shapely; print('backend import preflight OK')"
+$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, location_upgrade, geocodio, maptiler, mapbox_vector_tile, shapely; print('backend import preflight OK')"
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
