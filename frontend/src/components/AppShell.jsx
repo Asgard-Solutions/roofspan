@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import ChangePasswordDialog from "@/components/ChangePasswordDialog";
+import LocationResolutionProgress from "@/components/LocationResolutionProgress";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
@@ -84,6 +85,7 @@ export default function AppShell() {
   const [open, setOpen] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     api.get("/version").then(({ data }) => setAppVersion(data.display_version || data.version || "")).catch(() => {});
@@ -141,6 +143,7 @@ export default function AppShell() {
 
       <main className="flex-1 pt-14 md:ml-64 md:pt-0">
         <SubscriptionBanner />
+        {location.pathname === "/map" && <LocationResolutionProgress />}
         <Outlet />
       </main>
     </div>
