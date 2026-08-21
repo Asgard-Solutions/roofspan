@@ -130,6 +130,47 @@ async def get_property(property_id: str, user: User = Depends(get_current_user),
     )
 
 
+@router.post("/{property_id}/verify-address")
+async def verify_property_address(
+    property_id: str,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGE_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force a fresh MapTiler verification for exactly one stored property address."""
+    p = await db.get(Property, property_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Property not found")
+    if p.source != "rentcast":
+        raise HTTPException(status_code=400, detail="Address verification is available for RentCast properties")
+
+    from location_upgrade import verify_property_location_now
+
+    try:
+        result = await verify_property_location_now(property_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    await log_action(
+        db,
+        user=user,
+        action="property.verify_address",
+        entity_type="property",
+        entity_id=p.id,
+        detail={
+            "verified": result.get("verified"),
+            "coordinate_source": result.get("coordinate_source"),
+            "reason": result.get("reason"),
+        },
+        request=request,
+    )
+    return result
+
+
 @router.patch("/{property_id}", response_model=PropertyOut)
 async def patch_property(property_id: str, payload: PropertyPatch, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await db.get(Property, property_id)
