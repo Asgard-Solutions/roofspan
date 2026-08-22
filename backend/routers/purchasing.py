@@ -12,7 +12,10 @@ from schemas_phase4 import POIn, POStatusIn, ReceiveIn, POOut, POLineOut, Refres
 from sales_common import next_number
 
 router = APIRouter(prefix="/api/purchase-orders", tags=["purchasing"])
-VALID = ["draft", "ordered", "partially_received", "received", "cancelled"]
+# Normalized RoofSpan PO lifecycle (Slice 11). ABC raw provider status is preserved separately
+# in po.abc_order_status / po.abc_normalized_status and is never overwritten by these.
+VALID = ["draft", "ready_for_review", "ordered", "submitted", "acknowledged", "scheduled",
+         "partially_received", "received", "backordered", "cancelled"]
 
 
 async def _find_or_create_supplier(db: AsyncSession, name: str | None):

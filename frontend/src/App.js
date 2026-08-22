@@ -15,6 +15,7 @@ import JobDetail from "@/pages/JobDetail";
 import Inventory from "@/pages/Inventory";
 import ProductCatalog from "@/pages/ProductCatalog";
 import MaterialDetail from "@/pages/MaterialDetail";
+import PurchaseOrderDetail from "@/pages/PurchaseOrderDetail";
 import EstimateEditor from "@/pages/EstimateEditor";
 import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
@@ -56,6 +57,7 @@ function App() {
             <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
             <Route path="/suppliers" element={<Suppliers />} />
+            <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />

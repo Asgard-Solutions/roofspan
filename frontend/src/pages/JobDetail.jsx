@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
+import JobMaterialPlan from "@/components/JobMaterialPlan";
 import PhotoGallery from "@/components/PhotoGallery";
 import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck, Camera } from "lucide-react";
 
@@ -35,6 +36,7 @@ function Section({ icon: Icon, title, action, children, testid }) {
 
 export default function JobDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const canManage = MANAGE.includes(user?.role);
   const [job, setJob] = useState(null);
@@ -141,36 +143,23 @@ export default function JobDetail() {
           </div>
         </Section>
 
-        {/* Materials */}
-        <Section icon={Boxes} title="Required materials" testid="section-job-materials"
+        {/* Materials — operational plan */}
+        <Section icon={Boxes} title="Job materials" testid="section-job-materials"
           action={canManage && <Button size="sm" variant="outline" onClick={() => setAddOpen(true)} data-testid="add-job-material"><Plus className="h-4 w-4" /> Add</Button>}>
-          {job.materials.length === 0 ? <p className="text-sm text-slate-500">No materials assigned yet.</p> : (
-            <div className="space-y-2">
-              {job.materials.map((m) => (
-                <div key={m.id} className="flex items-center justify-between rounded border border-border p-2 text-sm" data-testid={`jobmat-${m.id}`}>
-                  <div><span className="font-medium text-slate-900">{m.material_name}</span> <span className="text-slate-400">· need {m.planned_quantity} {m.unit}</span></div>
-                  <div className="flex items-center gap-2">
-                    <span className="tabular-nums text-slate-500">on hand {m.quantity_on_hand}</span>
-                    {m.low_stock && <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`jobmat-low-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Low</Badge>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <JobMaterialPlan jobId={id} canManage={canManage} />
         </Section>
 
         {/* Purchase orders */}
         <Section icon={ShoppingCart} title="Purchase orders" testid="section-job-pos"
           action={canManage && <Button size="sm" variant="outline" onClick={() => setPoOpen(true)} data-testid="job-create-po"><Plus className="h-4 w-4" /> New PO</Button>}>
-          {job.purchase_orders.length === 0 ? <p className="text-sm text-slate-500">No purchase orders for this job. Manage receiving in Inventory.</p> : (
+          {job.purchase_orders.length === 0 ? <p className="text-sm text-slate-500">No purchase orders for this job.</p> : (
             <div className="space-y-2">
               {job.purchase_orders.map((po) => (
-                <div key={po.id} className="flex items-center justify-between rounded border border-border p-2 text-sm" data-testid={`job-po-${po.id}`}>
-                  <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary">{po.status.replace("_", " ")}</Badge></div>
+                <div key={po.id} className="flex items-center justify-between rounded border border-border p-2 text-sm hover:border-orange-300 cursor-pointer" onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`job-po-${po.id}`}>
+                  <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary">{po.status.replace(/_/g, " ")}</Badge></div>
                   <span className="tabular-nums">{money(po.total)}</span>
                 </div>
               ))}
-              <Link to="/inventory" className="text-xs text-orange-600 hover:underline">Receive materials in Inventory →</Link>
             </div>
           )}
         </Section>

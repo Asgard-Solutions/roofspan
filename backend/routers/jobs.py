@@ -8,8 +8,37 @@ from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase3 import JobOut
 from schemas_phase4 import JobPatch, JobMaterialIn, JobMaterialOut, JobDetailOut
+from services import job_planning as jp
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+
+class ReserveIn(BaseModel):
+    quantity: float | None = None
+
+
+async def _plan_row(db, jm):
+    m = await db.get(Material, jm.material_id)
+    roll = await jp.rollup(db, jm)
+    return {"id": str(jm.id), "material_id": str(jm.material_id), "material_name": m.name if m else "?",
+            "unit": jm.unit or (m.unit if m else "ea"), "notes": jm.notes,
+            "assembly_name": jm.assembly_name,
+            "preferred_supplier": (await _pref_name(db, jm.material_id)),
+            "best_known_cost": await _best_cost(db, jm.material_id), **roll}
+
+
+async def _pref_name(db, material_id):
+    from services import inventory_core as inv
+    sm = await inv.preferred_supplier_material(db, material_id)
+    if sm and sm.supplier_id:
+        s = await db.get(__import__("models").Supplier, sm.supplier_id)
+        return s.name if s else None
+    return None
+
+
+async def _best_cost(db, material_id):
+    from services import inventory_core as inv
+    return await inv.best_known_cost(db, material_id)
 
 
 class AssignIn(BaseModel):
@@ -149,3 +178,58 @@ async def remove_job_material(job_id: str, jm_id: str, user: User = Depends(requ
     await db.delete(jm)
     await db.commit()
     return {"ok": True}
+
+
+
+@router.get("/{job_id}/material-plan")
+async def job_material_plan(job_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == j.id))).scalars().all()
+    rows = [await _plan_row(db, jm) for jm in jms]
+    order = {"backordered": 0, "waiting_on_materials": 1, "partially_ready": 2, "ready": 3}
+    job_status = min([r["status"] for r in rows], key=lambda s: order.get(s, 1)) if rows else "ready"
+    return {"job_id": str(j.id), "job_number": j.number, "job_status": job_status,
+            "can_generate": bool(j.quote_id), "materials": rows}
+
+
+@router.post("/{job_id}/materials/generate")
+async def generate_job_materials(job_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    result = await jp.generate_from_quote(db, j, user.email)
+    await db.commit()
+    await log_action(db, user=user, action="job.materials.generate", entity_type="job", entity_id=j.id, detail=result, request=request)
+    return result
+
+
+@router.post("/{job_id}/materials/{jm_id}/reserve")
+async def reserve_job_material(job_id: str, jm_id: str, payload: ReserveIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    jm = await db.get(JobMaterial, jm_id)
+    if not jm or str(jm.job_id) != job_id:
+        raise HTTPException(status_code=404, detail="Job material not found")
+    result = await jp.reserve(db, jm, payload.quantity, user.email)
+    await db.commit()
+    await log_action(db, user=user, action="job.material.reserve", entity_type="job", entity_id=jm.job_id, detail={"jm": jm_id, "reserved": result.get("reserved")}, request=request)
+    return result
+
+
+@router.post("/{job_id}/materials/{jm_id}/release")
+async def release_job_material(job_id: str, jm_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    jm = await db.get(JobMaterial, jm_id)
+    if not jm or str(jm.job_id) != job_id:
+        raise HTTPException(status_code=404, detail="Job material not found")
+    result = await jp.release(db, jm, user.email)
+    await db.commit()
+    await log_action(db, user=user, action="job.material.release", entity_type="job", entity_id=jm.job_id, detail={"jm": jm_id}, request=request)
+    return result
+
+
+@router.get("/{job_id}/purchase-proposal")
+async def job_purchase_proposal(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await jp.shortage_proposal(db, j)

@@ -585,6 +585,12 @@ class JobMaterial(Base):
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), index=True)
     planned_quantity: Mapped[float] = mapped_column(Float, default=1, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Job Material Automation: operational plan linkage (snapshot; never recalculated from current assemblies)
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_quote_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    assembly_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

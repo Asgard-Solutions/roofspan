@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
+import ReorderSuggestions from "@/components/ReorderSuggestions";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
 import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search } from "lucide-react";
 
@@ -128,6 +129,7 @@ export default function Inventory() {
               <Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Create custom</Button>
               <Button variant="outline" onClick={() => navigate("/inventory/catalog")} data-testid="abc-catalog-button"><PackageSearch className="h-4 w-4" /> Product Catalog</Button>
               <Button variant="outline" onClick={() => { setCsvPreview(null); setCsvRows([]); setCsvOpen(true); }} data-testid="import-csv-button"><Upload className="h-4 w-4" /> Import CSV</Button>
+              <ReorderSuggestions onCreated={load} />
             </div>}
             <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="material-filters">
               <div className="relative w-64"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><Input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="Search name / SKU / mfr" className="pl-8" data-testid="material-search" /></div>

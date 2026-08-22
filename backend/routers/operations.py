@@ -89,6 +89,37 @@ async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
     )
 
 
+
+@router.get("/inventory/reorder-suggestions")
+async def reorder_suggestions(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Materials whose projected quantity falls below the reorder threshold, after accounting for
+    inbound On Order. Recommends a replenishment quantity; never auto-orders."""
+    mats = (await db.execute(select(Material).where(Material.active.is_(True)))).scalars().all()
+    out = []
+    for m in mats:
+        q = await inv_core.compute_quantities(db, m)
+        threshold = float(m.reorder_threshold or 0)
+        # Do not suggest if inbound already covers projected need
+        if q["projected"] >= threshold or threshold <= 0:
+            continue
+        pref = await inv_core.preferred_supplier_material(db, m.id)
+        pref_name = None
+        pref_supplier_id = None
+        if pref and pref.supplier_id:
+            s = await db.get(Supplier, pref.supplier_id)
+            pref_name = s.name if s else None
+            pref_supplier_id = str(pref.supplier_id)
+        recommend = round(max(threshold - q["projected"], 0), 3)
+        out.append({"material_id": str(m.id), "material_name": m.name, "unit": m.unit,
+                    "on_hand": q["on_hand"], "reserved": q["reserved"], "available": q["available"],
+                    "on_order": q["on_order"], "required": q["required"], "projected": q["projected"],
+                    "reorder_threshold": threshold, "recommended_quantity": recommend,
+                    "preferred_supplier": pref_name, "preferred_supplier_id": pref_supplier_id,
+                    "preferred_supplier_material_id": str(pref.id) if pref else None,
+                    "best_known_cost": await inv_core.best_known_cost(db, m.id)})
+    return {"suggestions": out}
+
+
 @router.get("/materials", response_model=list[MaterialListItemOut])
 async def list_materials(low_stock: bool | None = Query(None), q: str | None = Query(None),
                          category: str | None = Query(None), manufacturer: str | None = Query(None),

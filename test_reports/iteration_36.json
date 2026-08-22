@@ -1,0 +1,44 @@
+{
+  "summary": "Job Material Automation & Smart Purchasing (job material plan, reservations, shortage, PO proposal, PO detail, receive, reorder suggestions) — end-to-end verified via backend pytest (6/6 pass) and Playwright UI tests. All acceptance criteria met.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_job_material_automation.py",
+    "/app/test_reports/pytest/jma_iter36.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PO status vocabulary mismatch with problem statement: task text mentions 'submitted' but backend VALID list is ['draft','ordered','partially_received','received','cancelled']. Testing used 'ordered' successfully. Not a bug, but worth aligning docs.",
+    "PurchaseOrderDetail hides the Receive button for draft POs (correct per spec). There is currently NO UI control to advance a draft to 'ordered' from PurchaseOrderDetail (only via API). Consider surfacing a 'Mark ordered' button so office users can advance status without leaving UI.",
+    "ReorderSuggestions.jsx groups picked items by supplier NAME matching via /suppliers list — brittle if two suppliers share a name. Preferred to add preferred_supplier_id to the /inventory/reorder-suggestions response.",
+    "Material 'Mock Aluminum Drip Edge': available=0 despite on_hand=30 because reserved=30 accumulated across prior test runs — expected math, but reservations from stale/completed jobs should ideally auto-release on job close/cancel to prevent drift over time.",
+    "Confirmed correct behavior: reservation via InventoryTxn(reason=job_reservation) does NOT change quantity_on_hand (verified in pytest and curl)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Created 3 test estimates→quotes→jobs via /api/estimates→/api/quotes→/api/quotes/{id}/accept for Mock Aluminum Drip Edge (customer TEST_SalesCust_d67e64). One draft PO advanced to 'ordered' and partially received (qty=1), lifting on_hand 30→31.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_job_material_automation.py (6 tests) covers: idempotent generate, snapshot waste in required, reservation-does-not-change-on-hand, purchase-proposal shortage+suppliers, reorder-suggestions endpoint, incoming-only-counts-job-linked-PO. Frontend flow verified end-to-end. PO status transitions valid values: draft→ordered→partially_received→received (not 'submitted'). Reserve UI button disabled when available<=0.",
+  "verified_flows": [
+    "Owner login + create estimate/quote/accept → Job created",
+    "Job page renders job-material-plan with job-readiness badge",
+    "Generate from quote → 1 row; second click no duplicates (idempotent)",
+    "Shortage cell shows 55 in text-red-600; status = 'Waiting on Materials'",
+    "Reserve button disabled when available=0 (backend pytest confirms on_hand unchanged on reserve/release)",
+    "Create PO for shortages → po-proposal-dialog with proposal-include/qty/supplier, defaults correct",
+    "Create draft PO(s) → PO listed under job, linked to job_id",
+    "PurchaseOrderDetail (/purchase-orders/:id) shows po-status, po-job-link, po-lines-table",
+    "po-receive hidden for draft, visible after status→ordered; recv-qty + recv-confirm updates plan.received and increments material.on_hand (30→31)",
+    "Inventory > Materials > Reorder Suggestions dialog opens; reorder-empty state renders correctly when no material below projected threshold",
+    "Regression: job-create-po button still present on Job page"
+  ]
+}
