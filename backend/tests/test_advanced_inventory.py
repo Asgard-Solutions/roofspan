@@ -29,9 +29,19 @@ def _material_onhand(h, mid):
     return next(m for m in d if m["id"] == mid)["on_hand"]
 
 
-def _stocked_material(h):
-    d = requests.get(f"{API}/materials", headers=h, timeout=20).json()
-    return next(m["id"] for m in d if m["quantity_on_hand"] > 20)
+def _stocked_material(h, qty=40):
+    """Deterministic: create a brand-new material this test OWNS and receive `qty` to the DEFAULT
+    location via a manual PO. Never depends on arbitrary preview-DB materials or execution order."""
+    mid = requests.post(f"{API}/materials", headers=h, timeout=20, json={
+        "name": f"QA AdvInv {uuid.uuid4().hex[:10]}", "unit": "EA", "category": "test", "quantity_on_hand": 0}).json()["id"]
+    po = requests.post(f"{API}/purchase-orders", headers=h, timeout=20, json={
+        "supplier_name": "QA AdvInv Supplier",
+        "items": [{"material_id": mid, "description": "seed", "quantity": qty, "unit": "EA", "unit_cost": 5}]}).json()
+    loc = _default_loc(h)
+    r = requests.post(f"{API}/purchase-orders/{po['id']}/receive", headers=h, timeout=20,
+                      json={"items": [{"po_item_id": po["items"][0]["id"], "quantity": qty}], "location_id": loc})
+    assert r.status_code == 200, r.text  # stock now lives entirely at the default location
+    return mid
 
 
 def _balance_sum(h, mid):
@@ -40,8 +50,7 @@ def _balance_sum(h, mid):
 
 
 def _accepted_job(h):
-    d = requests.get(f"{API}/materials", headers=h, timeout=20).json()
-    mid = next(m["id"] for m in d if m["quantity_on_hand"] > 20)
+    mid = _stocked_material(h)  # owns its own default-location stock
     cust = requests.get(f"{API}/customers", headers=h, timeout=20).json()
     cid = cust[0]["id"] if isinstance(cust, list) else cust["items"][0]["id"]
     est = requests.post(f"{API}/estimates", headers=h, timeout=20, json={

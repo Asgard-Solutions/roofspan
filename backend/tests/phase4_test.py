@@ -128,7 +128,7 @@ def test_material_patch(owner_headers, state):
 
 def test_material_adjust_positive_and_flag_flip(owner_headers, state):
     mid = state["mat_low_id"]  # currently 5 on hand, threshold 10
-    r = requests.post(f"{API}/materials/{mid}/adjust", json={"delta": 20, "reason": "stock_in"}, headers=owner_headers, timeout=15)
+    r = requests.post(f"{API}/materials/{mid}/adjust", json={"delta": 20, "reason": "adjustment"}, headers=owner_headers, timeout=15)
     assert r.status_code == 200, r.text
     m = r.json()
     assert m["quantity_on_hand"] == 25

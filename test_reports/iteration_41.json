@@ -1,0 +1,36 @@
+{
+  "summary": "Part 22 full frontend regression across all modernized RoofSpan modules after backend test-isolation fixes. No app/production code was changed this phase. Ran a comprehensive owner+sales sweep touching Inventory (list, locations, transactions), Suppliers & Product Catalog (with pricing labels/Best Known Cost/Preferred Supplier), Estimating (draft estimate + price-book selector), Customer Proposal (preview + PDF + cost-leak scan), Jobs > Costing (JOB-0117 status/overrun/snapshot history/material variance), Purchase Orders (PO-0454 timeline + attachments), Reports (owner CSV exports for all 4 kinds), Settings > Company Profile (branding + Margin guardrail save), and RBAC (sales UI + direct API 403 checks). Everything from iteration_40 still holds: no regressions detected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_details": {
+    "inventory_list": "PASS - /inventory renders with 'On hand', 'Reserved', 'Available', 'On order' columns (lowercase in headers) plus Cost, Status. Product Catalog / Locations / Transactions buttons present. Material rows link to detail.",
+    "inventory_locations": "PASS - /inventory/locations renders location list.",
+    "inventory_transactions": "PASS - /inventory/transactions renders immutable ledger with columns When/Material/Delta/Type/From/To/Job-PO/User. Type column serves as the reason (job issue, waste, receipt). Owner sees cost-related columns on the parent Inventory grid; the txn ledger itself intentionally shows delta+type only. Rows populate (many QA txns).",
+    "suppliers_list_and_detail": "PASS - /suppliers lists suppliers (ABC Supply, Generic Roofing Supply, PriceSup*, etc). Clicking ABC Supply opens a Supplier detail modal with Overview, Capabilities, Products (Preferred + Cached labels), and Recent purchase orders (20).",
+    "product_catalog": "PASS - Product Catalog opens at /inventory/catalog. Shows Product, Manufacturer, Category, Available, Preferred Supplier, Best Known Cost columns. Pricing labels 'Cached' and 'Manual' visible next to preferred supplier and Best Known Cost (e.g., $45.00 Manual · 8/22/2026 for Mock Aluminum Drip Edge). Supplier presence does NOT inflate On Hand column.",
+    "estimate_editor": "PASS - /estimates/<draft-id> (EST-0371) loads with estimate-price-book selector showing 'Standard *'. Cost columns (Unit Cost, Markup %, Sell Price, Line Total) plus Estimated Cost / Gross Profit / Gross Margin / Selling Price are visually distinct for owner. Margin banner is correctly not shown on estimates whose margin meets policy target; selectors present in code.",
+    "customer_proposal": "PASS - /quotes/48d65724-.../proposal renders proposal-preview + proposal-number + proposal-items + proposal-download-pdf. Body text scan found ZERO of {material cost, supplier cost, markup, gross profit, cost basis, unit cost, margin}. GET /api/quotes/<id>/proposal.pdf → 200 with content-type application/pdf.",
+    "jobs_costing": "PASS - /jobs/bf0f0a28... shows section-job-costing with costing-status-badge=Partial, costing-alert-overrun (red 'Cost overrun: actual cost exceeds estimate by $50.00 (100.0%)'), Revenue $60, Actual $100, GP -$40, Margin -66.7%, estimated-vs-actual table with Material +$10 red variance, and costing-snapshot-history with prior snapshots. costing-material-table renders.",
+    "purchase_orders": "PASS - /purchase-orders/f33af19f... (PO-0454, ABC Supply, ordered) shows po-status-timeline with Draft and Ordered events, ABC provider tag, and po-attachments (Type=Packing Slip, Description, Upload) section. Receive button top-right; no auto-submit occurred.",
+    "reports_owner_csv": "PASS - /reports shows tab-profitability/material-variance/waste/supplier. API-level exports validated: GET /api/reports/costing/profitability.csv=200, material-variance.csv=200, waste.csv=200, supplier-impact.csv=200.",
+    "settings_company_profile_and_margin": "PASS (route is /admin/settings, then Company Profile tab): company-logo_url, company-website, company-proposal_footer_text, company-proposal_terms_text, margin-policy-settings card with margin-enabled toggle, margin-target input, save-margin-policy button. Saved margin policy successfully.",
+    "rbac_sales": "PASS - Login sales1_38f545f9@example.com → /reports renders reports-restricted and reports-page is absent. /jobs/<id> hides section-job-costing (no Costing block). /quotes/<id>/proposal still viewable (customer-safe). Direct API: GET /api/jobs/<id>/costing → 403; GET /api/reports/costing/profitability.csv → 403."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Inventory list header uses lowercase 'On hand'/'Reserved'/'Available'/'On order' which is consistent visually but any string-based tests should account for casing. Consider adding data-testid on the header cells for stable assertions.",
+    "Settings routes are inconsistent between review request (/settings) and actual (/admin/settings). Consider either aliasing /settings → /admin/settings or documenting the canonical path in prompts to avoid mis-routing in future test agents.",
+    "Inventory Transactions ledger does not expose a dedicated 'Reason' column header — it uses 'Type' (job issue/waste/receipt). If ops explicitly want the word 'Reason', rename or add a subtitle; behavior is otherwise correct.",
+    "Suppliers list opens supplier detail as a modal rather than /suppliers/<id> page. If deep-linking to a supplier is expected (e.g., from PO detail), a routed page would be more shareable.",
+    "Estimate margin warning banner is correctly gated on policy.enabled && current_margin < target. For visibility, consider showing a subtle informational badge (e.g., 'On target 40%+') on estimates that meet target, so owners know the guardrail is active."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (per request)", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 ; Sales sales1_38f545f9@example.com / Sales1#2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Reused JOB-0117, PO-0454, quote 48d65724 seed data. Saved margin policy (already at target 40 from previous iterations).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Full modernized surface (Inventory/Suppliers/Catalog/Estimating/Proposal/Jobs-Costing/POs/Reports/Settings) is stable. Reliable seeds: JOB-0117 bf0f0a28-4c1f-408d-a8e5-cc6de6befd63 (overrun costing), PO-0454 f33af19f-7679-4349-96b3-2abb4e2ffe33 (ordered ABC), quote 48d65724-d734-4005-8d18-aea008796de2 (accepted). Route for Settings is /admin/settings (Company Profile tab). Sales user sales1_38f545f9@example.com / Sales1#2026 available for RBAC.",
+  "rca of the issue": "No new issues found in this regression. Backend-only test-file changes (test_advanced_inventory fixture isolation, phase4_test reason string) did not affect UI paths. Iteration_40's Reports.jsx Button import fix remains in place (verified /reports still renders for owner)."
+}
