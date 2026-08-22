@@ -364,9 +364,33 @@ async def list_branches(request: Request, ship_to: str | None = None, state: str
     client = AbcClient(_build_cfg(row, redirect_uri=_effective_redirect(row, request)), access_token=access)
     try:
         if ship_to:
-            # Ship-To determines eligible branches. Read them from the account record.
-            st = await abc_accounts.get_ship_to(client, ship_to)
-            branches = st.get("branches") or []
+            # Prefer the branch list from the account SEARCH result (this is what populated the
+            # Ship-To picker). ABC's Ship-To DETAIL endpoint sometimes omits branches, which would
+            # otherwise leave the branch picker empty. Fall back to detail, then Location search.
+            branches: list[dict] = []
+            try:
+                ship_tos = await abc_accounts.list_ship_to_accounts(client)
+                match = next((s for s in ship_tos if str(s.get("number")) == str(ship_to)), None)
+                branches = (match or {}).get("branches") or []
+            except AbcError:
+                branches = []
+            if not branches:
+                st = await abc_accounts.get_ship_to(client, ship_to)
+                branches = st.get("branches") or []
+                if not branches:
+                    state = (st.get("address") or {}).get("state")
+                    if state:
+                        results = await abc_locations.search_branches(client, state=state)
+                        return [
+                            AbcBranchOut(
+                                number=str((r.get("branch") or {}).get("number") or ""),
+                                name=(r.get("branch") or {}).get("name"),
+                                storefront=(r.get("branch") or {}).get("storefront"),
+                                status=(r.get("branch") or {}).get("status"),
+                                distance=(r.get("branch") or {}).get("distance"),
+                                address=r.get("address"),
+                            ) for r in results
+                        ]
             return [
                 AbcBranchOut(number=str(b.get("number") or ""), name=b.get("name"), storefront=b.get("storefront"),
                              status=b.get("status"), home_branch=b.get("homeBranch"))

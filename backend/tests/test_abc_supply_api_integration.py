@@ -128,9 +128,10 @@ class TestConnectFlow:
         r = requests.get(f"{BASE_URL}/api/integrations/abc/accounts", headers=owner_headers, timeout=30)
         assert r.status_code == 200
         accs = r.json()
-        assert len(accs) == 1, accs
-        assert accs[0]["number"] == "1163698"
-        assert not any(a["number"] == "9999999" for a in accs)
+        nums = [a["number"] for a in accs]
+        assert "1163698" in nums                         # active, has branches
+        assert not any(a["number"] == "9999999" for a in accs)  # retired (empty branches) filtered out
+        assert all(a.get("branches") for a in accs)      # only non-retired accounts returned
 
     def test_06_branches_by_ship_to(self, owner_headers):
         r = requests.get(f"{BASE_URL}/api/integrations/abc/branches?ship_to=1163698", headers=owner_headers, timeout=30)
@@ -140,6 +141,16 @@ class TestConnectFlow:
         assert "18" in nums and "409" in nums
         home = [b for b in branches if b["number"] == "18"]
         assert home and home[0].get("home_branch") is True
+
+    def test_06b_branches_when_shipto_detail_omits_branches(self, owner_headers):
+        # Regression: ABC Ship-To DETAIL sometimes omits the branch list even though the account
+        # SEARCH result (which populated the picker) had branches. Ship-To 2010466-2 models this in
+        # the mock. The branch picker must NOT come back empty.
+        r = requests.get(f"{BASE_URL}/api/integrations/abc/branches?ship_to=2010466-2", headers=owner_headers, timeout=30)
+        assert r.status_code == 200, r.text[:200]
+        branches = r.json()
+        assert len(branches) >= 1, "branch picker must resolve branches even when Ship-To detail omits them"
+        assert "18" in [b["number"] for b in branches]
 
     def test_07_branches_by_state(self, owner_headers):
         r = requests.get(f"{BASE_URL}/api/integrations/abc/branches?state=WI", headers=owner_headers, timeout=30)

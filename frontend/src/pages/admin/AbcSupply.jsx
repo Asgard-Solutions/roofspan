@@ -91,9 +91,20 @@ export default function AbcSupply() {
 
   useEffect(() => {
     if (status?.status === "connected" && shipTo) {
-      api.get(`/integrations/abc/branches?ship_to=${encodeURIComponent(shipTo)}`).then((r) => setBranches(r.data)).catch(() => {});
+      // Seed the branch picker from the branches embedded on the selected account (reliable — this is
+      // what made the Ship-To selectable). The API call then enriches/overrides when it returns data.
+      const acct = accounts.find((a) => a.number === shipTo);
+      const embedded = (acct?.branches || []).map((b) => ({
+        number: String(b.number ?? b.branchNumber ?? ""),
+        name: b.name, status: b.status, storefront: b.storefront,
+        home_branch: b.homeBranch ?? b.home_branch ?? false,
+      })).filter((b) => b.number);
+      if (embedded.length) setBranches(embedded);
+      api.get(`/integrations/abc/branches?ship_to=${encodeURIComponent(shipTo)}`)
+        .then((r) => { if (Array.isArray(r.data) && r.data.length) setBranches(r.data); })
+        .catch(() => {});
     }
-  }, [status?.status, shipTo]);
+  }, [status?.status, shipTo, accounts]);
 
   const saveConfig = async () => {
     setBusy(true);

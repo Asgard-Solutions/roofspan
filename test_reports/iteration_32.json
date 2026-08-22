@@ -1,0 +1,25 @@
+{
+  "summary": "Frontend-only verification of ABC Supply Settings branch-dropdown bug fix and downstream catalog context. All 6 test steps PASSED. Bug is fixed: selecting Ship-To '2010466-2' (BIG PINE ROOFING COM-SHOP), whose DETAIL omits branches, now populates the Default Branch dropdown with 2 options (Madison WI 18 · Home, Oklahoma City OK 409). Regression Ship-To 1163698 still shows 2 branches. Save + reload persistence works. Catalog page shows the saved Ship-To 2010466-2 & Branch 18 in the context bar, no 'needs selection' banner.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Minor: Task description referenced data-testid 'abc-ship-to-select' but actual testid in code is 'abc-shipto-select'. Consider standardizing (either update code or update docs). Not a bug — informational."
+  ],
+  "critical_code_review_comments": [
+    "AbcSupply.jsx branch effect correctly seeds options from selected account's embedded branches (from /accounts search) before/while /branches API resolves — fix is well designed and defensive.",
+    "Confirmed via network trace: GET /api/integrations/abc/branches?ship_to=2010466-2 returns 200 with 2 branches even though the account detail endpoint omits them — matches the intended search-first + Location fallbacks strategy."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% (6/6 checks passed)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Reconnected to ABC mock via Connect ABC Supply (OAuth mock). Saved default Ship-To 2010466-2 + Branch 18.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Settings ABC page uses shadcn Select components (button-based, not native <select>). Actual data-testids: abc-shipto-select (NOT abc-ship-to-select), abc-branch-select, abc-save-defaults, abc-connect-button. Ship-To options included in shadcn portal have role=option; interact by clicking role=option elements. Downstream: /inventory/abc-catalog uses catalog-branch and catalog-needs-selection testids.",
+  "rca_of_the_issue": "Bug RCA: Original branch endpoint refetched Ship-To detail; some accounts (e.g., 2010466-2) return detail without embedded branches -> empty branch dropdown -> save blocked -> catalog inaccessible. Fix (verified): branch endpoint now sources from the account SEARCH result with detail + Location fallbacks; frontend also seeds branch options from selected account's embedded branches while API resolves. Verified end-to-end: selecting BIG PINE 2010466-2 populates 2 branches, saves, persists, and the ABC Supply Catalog context bar picks it up (Ship-To: 2010466-2, Branch: 18)."
+}

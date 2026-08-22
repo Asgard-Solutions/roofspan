@@ -142,6 +142,16 @@ _SHIP_TO_RETIRED = {
     "billTo": {"number": "116660", "name": "EASY ROOFING", "status": "inactive", "links": {"self": ""}},
     "soldTo": {"number": "116660", "name": "EASY ROOFING", "status": "inactive", "links": {"self": ""}},
 }
+# Real-world case: this Ship-To carries branches in the account SEARCH response (so it is selectable),
+# but ABC's GET /shiptos/{number} DETAIL response omits the branch list. RoofSpan must still resolve
+# branches for it (from the search result / Location API), otherwise the branch picker is empty.
+_SHIP_TO_DETAIL_NOBRANCH = {
+    "name": "BIG PINE ROOFING COM-SHOP", "number": "2010466-2", "status": "active",
+    "address": {"line1": "700 PINE ST", "line2": "", "line3": "", "city": "MADISON", "state": "WI", "postal": "53704", "country": "USA"},
+    "billTo": {"number": "2010466-1", "name": "BIG PINE ROOFING COMPANY", "status": "active", "links": {"self": ""}},
+    "soldTo": {"number": "2010466", "name": "BIG PINE ROOFING COMPANY", "status": "active", "links": {"self": ""}},
+    "branches": [_HOME_BRANCH, _OKC_BRANCH],
+}
 
 
 @router.post("/api/account/v1/search/accounts")
@@ -151,8 +161,17 @@ async def search_accounts(request: Request, authorization: str | None = Header(d
         "pagination": {"itemsPerPage": 50, "pageNumber": 1, "totalPages": 1, "totalItems": 1},
         "soldTos": [_SOLD_TO],
         "billTos": [_BILL_TO],
-        "shipTos": [_SHIP_TO_ACTIVE, _SHIP_TO_RETIRED],
+        "shipTos": [_SHIP_TO_ACTIVE, _SHIP_TO_DETAIL_NOBRANCH, _SHIP_TO_RETIRED],
     }
+
+
+@router.get("/api/account/v1/shiptos/{number}")
+async def get_ship_to(number: str, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    # Emulate ABC returning a Ship-To DETAIL without an embedded branch list for some accounts.
+    if number == "2010466-2":
+        return {k: v for k, v in _SHIP_TO_DETAIL_NOBRANCH.items() if k != "branches"}
+    return {**_SHIP_TO_ACTIVE, "number": number}
 
 
 @router.get("/api/account/v1/soldtos/{number}")
@@ -165,12 +184,6 @@ async def get_sold_to(number: str, authorization: str | None = Header(default=No
 async def get_bill_to(number: str, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
     return {**_BILL_TO, "number": number}
-
-
-@router.get("/api/account/v1/shiptos/{number}")
-async def get_ship_to(number: str, authorization: str | None = Header(default=None)):
-    _require_bearer(authorization)
-    return {**_SHIP_TO_ACTIVE, "number": number}
 
 
 @router.get("/api/account/v1/shiptos/{number}/contacts")
