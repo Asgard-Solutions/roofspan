@@ -247,6 +247,7 @@ class Estimate(Base):
     total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    price_book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("price_books.id", ondelete="SET NULL"), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -284,6 +285,10 @@ class EstimateLineItem(_LineItem, Base):
     assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     assembly_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assembly_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Price Book auto-application snapshot (frozen at time of applying; never revalued later)
+    applied_price_book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    applied_price_rule_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # fixed|markup|margin
+    applied_price_rule_value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class Quote(Base):
@@ -722,6 +727,22 @@ class POLineItem(Base):
     abc_product_family: Mapped[str | None] = mapped_column(String(255), nullable=True)
     abc_product_image_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
     pricing_source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # abc | manual
+
+
+class PurchaseOrderStatusHistory(Base):
+    """Append-only real status events for a purchase order. A row is written only when the normalized
+    status meaningfully changes (repeated syncs that don't change status do not create duplicates).
+    Raw provider (ABC) status is preserved separately."""
+    __tablename__ = "po_status_history"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchase_orders.id", ondelete="CASCADE"), index=True)
+    normalized_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_status: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    source: Mapped[str] = mapped_column(String(24), default="roofspan", nullable=False)  # roofspan|abc|imported
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
 
 
 

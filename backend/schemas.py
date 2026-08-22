@@ -95,6 +95,10 @@ class CompanyProfile(BaseModel):
     email: str = ""
     address: str = ""
     license_number: str = ""
+    logo_url: str = ""
+    website: str = ""
+    proposal_footer_text: str = ""
+    proposal_terms_text: str = ""
 
 
 class AuditOut(BaseModel):

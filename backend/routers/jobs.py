@@ -338,6 +338,15 @@ async def list_cost_snapshots(job_id: str, user: User = Depends(require_roles(*M
     } for s in rows]}
 
 
+@router.get("/{job_id}/cost-snapshots/{snap_id}")
+async def get_cost_snapshot(job_id: str, snap_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    s = await db.get(JobCostSnapshot, snap_id)
+    if not s or str(s.job_id) != job_id:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return {"id": str(s.id), "trigger": s.trigger, "created_at": s.created_at.isoformat() if s.created_at else None,
+            "created_by": s.created_by, "costing_status": s.costing_status, "payload": s.payload}
+
+
 @router.post("/{job_id}/cost-snapshots", status_code=201)
 async def create_cost_snapshot(job_id: str, payload: SnapshotIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     j = await db.get(Job, job_id)

@@ -24,6 +24,7 @@ import PriceBooks from "@/pages/PriceBooks";
 import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
 import Reports from "@/pages/Reports";
+import ProposalPreview from "@/pages/ProposalPreview";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
@@ -63,6 +64,7 @@ function App() {
             <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
+            <Route path="/quotes/:id/proposal" element={<ProposalPreview />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
             <Route path="/finance" element={<Finance />} />

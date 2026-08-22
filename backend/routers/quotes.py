@@ -243,3 +243,28 @@ async def decline_quote(quote_id: str, request: Request, user: User = Depends(re
     await db.refresh(q)
     await log_action(db, user=user, action="quote.decline", entity_type="quote", entity_id=q.id, request=request)
     return await _out(db, q)
+
+
+# ---- Customer Proposal (customer-safe; built from stored snapshot; never exposes internal cost) ----
+from fastapi.responses import StreamingResponse as _Streaming
+import io as _io
+from services import proposal as _proposal
+
+
+@router.get("/{quote_id}/proposal")
+async def quote_proposal(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return await _proposal.proposal_data(db, q)
+
+
+@router.get("/{quote_id}/proposal.pdf")
+async def quote_proposal_pdf(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    data = await _proposal.proposal_data(db, q)
+    pdf = _proposal.build_pdf(data)
+    return _Streaming(_io.BytesIO(pdf), media_type="application/pdf",
+                      headers={"Content-Disposition": f'inline; filename="Proposal-{q.number}.pdf"'})

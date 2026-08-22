@@ -12,6 +12,7 @@ from schemas_estimating import CostRefreshPreviewOut, CostRefreshRow, CostRefres
 from sales_common import next_number, check_idempotency, record_idempotency, enforce_version
 from services import estimating as calc
 from services import inventory_core as inv_core
+from services import pricing as pricing_svc
 
 router = APIRouter(prefix="/api/estimates", tags=["estimates"])
 
@@ -47,10 +48,18 @@ def _line_out(i: EstimateLineItem, see_cost: bool) -> LineItemOut:
     return LineItemOut(**data)
 
 
+async def _margin_policy(db: AsyncSession) -> dict:
+    from models import AppConfig
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == "margin_policy"))).scalar_one_or_none()
+    val = row.value if row and isinstance(row.value, dict) else {}
+    return {"enabled": bool(val.get("enabled", False)), "target_minimum_margin": float(val.get("target_minimum_margin", 30.0))}
+
+
 async def _out(db: AsyncSession, e: Estimate, user: User) -> EstimateOut:
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     see = _can_see_cost(user)
     summary = None
+    warnings = None
     if see:
         line_dicts = [{
             "quantity": i.quantity, "material_cost": i.material_cost, "labor_cost": i.labor_cost,
@@ -59,14 +68,30 @@ async def _out(db: AsyncSession, e: Estimate, user: User) -> EstimateOut:
             "_unit_cost": calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost),
         } for i in items]
         summary = calc.summarize(line_dicts, e.tax_rate)
+        # Margin guardrail (warning only; NEVER on customer output; never blocks anything)
+        policy = await _margin_policy(db)
+        if policy["enabled"]:
+            target = policy["target_minimum_margin"]
+            below_lines = []
+            for i in items:
+                uc = calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost)
+                m = calc.margin_from_prices(uc, i.selling_unit_price)
+                if i.selling_unit_price and m < target:
+                    below_lines.append({"line_id": str(i.id), "description": i.description, "margin_percent": m})
+            overall = summary.get("gross_margin_pct", 0)
+            warnings = {"enabled": True, "target_minimum_margin": target,
+                        "overall_margin_percent": overall, "overall_below": overall < target,
+                        "below_lines": below_lines}
     return EstimateOut(
         id=str(e.id), number=e.number, lead_id=str(e.lead_id) if e.lead_id else None,
         customer_id=str(e.customer_id) if e.customer_id else None,
         property_id=str(e.property_id) if e.property_id else None,
         inspection_id=str(e.inspection_id) if e.inspection_id else None,
         status=e.status, tax_rate=e.tax_rate, subtotal=e.subtotal, tax=e.tax, total=e.total,
-        notes=e.notes, version=e.version, created_at=e.created_at,
+        notes=e.notes, version=e.version, price_book_id=str(e.price_book_id) if e.price_book_id else None,
+        created_at=e.created_at,
         items=[_line_out(i, see) for i in items], cost_summary=summary, can_see_cost=see,
+        margin_warnings=warnings,
     )
 
 
@@ -98,13 +123,32 @@ async def _snapshot_cost(db: AsyncSession, d: dict):
         d["purchase_unit"] = sm.supplier_uom
 
 
-async def _apply_items(db: AsyncSession, estimate_id, items) -> list[dict]:
-    """Snapshot cost, compute authoritative fields, persist. Returns computed line dicts (for totals)."""
+async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None) -> list[dict]:
+    """Snapshot cost, apply Price Book rule (deterministic priority, respecting explicit user pricing),
+    compute authoritative fields, persist. Returns computed line dicts (for totals)."""
     computed = []
     for idx, it in enumerate(items):
         d = it.model_dump() if hasattr(it, "model_dump") else dict(it)
         if d.get("material_id") or d.get("supplier_material_id"):
             await _snapshot_cost(db, d)
+        # Price Book auto-application (only when the user hasn't explicitly priced the line).
+        applied_book = applied_type = applied_value = None
+        if price_book_id and (d.get("material_id") or d.get("assembly_id")):
+            user_priced = (
+                d.get("pricing_mode") in ("fixed", "markup", "margin")
+                or (d.get("selling_unit_price") not in (None, "") and float(d.get("selling_unit_price") or 0) > 0)
+                or (d.get("markup_percent") not in (None, ""))
+            )
+            if not user_priced:
+                rule = await pricing_svc.find_rule(db, price_book_id, d.get("material_id"), d.get("assembly_id"))
+                if rule:
+                    ucost = calc.unit_cost(d.get("material_cost"), d.get("labor_cost"), d.get("equipment_cost"), d.get("subcontract_cost"))
+                    sell = pricing_svc.apply_rule(rule, ucost)
+                    if sell is not None:
+                        d["selling_unit_price"] = sell
+                        applied_book = price_book_id
+                        applied_type = rule.rule_type
+                        applied_value = pricing_svc.rule_value(rule)
         calc.compute_line(d)
         computed.append(d)
         db.add(EstimateLineItem(
@@ -125,6 +169,7 @@ async def _apply_items(db: AsyncSession, estimate_id, items) -> list[dict]:
             cost_snapshot_at=(datetime.now(timezone.utc) if (d.get("material_id") or d.get("supplier_material_id")) else None),
             assembly_id=d.get("assembly_id") or None, assembly_version=d.get("assembly_version"),
             assembly_name=d.get("assembly_name"),
+            applied_price_book_id=applied_book, applied_price_rule_type=applied_type, applied_price_rule_value=applied_value,
         ))
     return computed
 
@@ -148,11 +193,13 @@ async def create_estimate(payload: EstimateIn, request: Request, idempotency_key
         if e:
             return await _out(db, e, user)
     number = await next_number(db, "estimate", "EST")
+    pb_id = getattr(payload, "price_book_id", None) or await pricing_svc.default_price_book_id(db)
     e = Estimate(number=number, lead_id=payload.lead_id, customer_id=payload.customer_id, property_id=payload.property_id,
-                 inspection_id=payload.inspection_id, tax_rate=payload.tax_rate, notes=payload.notes, created_by=user.email)
+                 inspection_id=payload.inspection_id, tax_rate=payload.tax_rate, notes=payload.notes,
+                 price_book_id=pb_id, created_by=user.email)
     db.add(e)
     await db.flush()
-    computed = await _apply_items(db, e.id, payload.items)
+    computed = await _apply_items(db, e.id, payload.items, price_book_id=pb_id)
     s = calc.summarize(computed, payload.tax_rate)
     e.subtotal, e.tax, e.total = s["subtotal"], s["tax"], s["total"]
     await record_idempotency(db, idempotency_key, "estimate", e.id)
@@ -176,8 +223,10 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
     if not e:
         raise HTTPException(status_code=404, detail="Estimate not found")
     enforce_version(e, if_match, "Estimate")
+    if getattr(payload, "price_book_id", None) is not None:
+        e.price_book_id = payload.price_book_id
     await db.execute(EstimateLineItem.__table__.delete().where(EstimateLineItem.estimate_id == e.id))
-    computed = await _apply_items(db, e.id, payload.items)
+    computed = await _apply_items(db, e.id, payload.items, price_book_id=e.price_book_id)
     s = calc.summarize(computed, payload.tax_rate)
     e.tax_rate = payload.tax_rate
     e.subtotal, e.tax, e.total = s["subtotal"], s["tax"], s["total"]
@@ -262,4 +311,73 @@ async def cost_refresh_apply(estimate_id: str, payload: CostRefreshApplyIn, requ
     await db.refresh(e)
     await log_action(db, user=user, action="estimate.cost_refresh", entity_type="estimate", entity_id=e.id,
                      detail={"lines": len(ids), "recalc_price": payload.recalc_selling_price}, request=request)
+    return await _out(db, e, user)
+
+
+
+# ---- Price Book: preview & apply repricing (explicit; existing estimates never silently repriced) ----
+from pydantic import BaseModel as _BM
+
+
+class PriceBookApplyIn(_BM):
+    price_book_id: str
+    apply: bool = False
+
+
+@router.post("/{estimate_id}/price-book/preview")
+async def price_book_preview(estimate_id: str, payload: PriceBookApplyIn, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
+    e = await db.get(Estimate, estimate_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
+    rows = []
+    for i in items:
+        if not (i.material_id or i.assembly_id):
+            continue  # manual lines with no matching rule remain unchanged
+        rule = await pricing_svc.find_rule(db, payload.price_book_id, i.material_id, i.assembly_id)
+        if not rule:
+            continue
+        uc = calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost)
+        new_sell = pricing_svc.apply_rule(rule, uc)
+        if new_sell is None:
+            continue
+        rows.append({"line_id": str(i.id), "description": i.description, "current_sell": i.selling_unit_price,
+                     "new_sell": new_sell, "difference": calc.r4(new_sell - (i.selling_unit_price or 0)),
+                     "rule_type": rule.rule_type, "rule_value": pricing_svc.rule_value(rule)})
+    return {"price_book_id": payload.price_book_id, "affected": len(rows), "lines": rows}
+
+
+@router.post("/{estimate_id}/price-book/apply", response_model=EstimateOut)
+async def price_book_apply(estimate_id: str, payload: PriceBookApplyIn, request: Request, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
+    e = await db.get(Estimate, estimate_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    e.price_book_id = payload.price_book_id
+    items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
+    computed = []
+    for i in items:
+        if i.material_id or i.assembly_id:
+            rule = await pricing_svc.find_rule(db, payload.price_book_id, i.material_id, i.assembly_id)
+            if rule:
+                uc = calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost)
+                new_sell = pricing_svc.apply_rule(rule, uc)
+                if new_sell is not None:
+                    i.selling_unit_price = new_sell
+                    i.unit_price = new_sell
+                    i.line_total = calc.r2(i.quantity * new_sell)
+                    i.markup_percent = calc.markup_from_prices(uc, new_sell)
+                    i.applied_price_book_id = e.price_book_id
+                    i.applied_price_rule_type = rule.rule_type
+                    i.applied_price_rule_value = pricing_svc.rule_value(rule)
+        computed.append({"quantity": i.quantity, "material_cost": i.material_cost, "labor_cost": i.labor_cost,
+                         "equipment_cost": i.equipment_cost, "subcontract_cost": i.subcontract_cost,
+                         "line_total": i.line_total,
+                         "_unit_cost": calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost)})
+    s = calc.summarize(computed, e.tax_rate)
+    e.subtotal, e.tax, e.total = s["subtotal"], s["tax"], s["total"]
+    e.version += 1
+    await db.commit()
+    await db.refresh(e)
+    await log_action(db, user=user, action="estimate.price_book_apply", entity_type="estimate", entity_id=e.id,
+                     detail={"price_book_id": payload.price_book_id}, request=request)
     return await _out(db, e, user)

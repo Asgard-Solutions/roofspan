@@ -7,9 +7,24 @@ import { PageHeader } from "@/components/PageHeader";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Lock, BarChart3 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Loader2, Lock, BarChart3, Download } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
+
+async function downloadCsv(path, filename) {
+  try {
+    const res = await api.get(path, { responseType: "blob" });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast.error(apiError(e)); }
+}
+
+function ExportBtn({ path, filename, testid }) {
+  return <Button size="sm" variant="outline" onClick={() => downloadCsv(path, filename)} data-testid={testid}><Download className="h-4 w-4" /> Export CSV</Button>;
+}
 
 function Money({ value, signed = false, invert = false }) {
   const v = Number(value || 0);
@@ -178,10 +193,22 @@ export default function Reports() {
           <TabsTrigger value="supplier" data-testid="tab-supplier">Supplier impact</TabsTrigger>
         </TabsList>
         <div className="mt-4 rounded-md border border-border bg-white p-4">
-          <TabsContent value="profitability"><Profitability enabled={tab === "profitability"} /></TabsContent>
-          <TabsContent value="material-variance"><MaterialVariance enabled={tab === "material-variance"} /></TabsContent>
-          <TabsContent value="waste"><Waste enabled={tab === "waste"} /></TabsContent>
-          <TabsContent value="supplier"><SupplierImpact enabled={tab === "supplier"} /></TabsContent>
+          <TabsContent value="profitability">
+            <div className="mb-3 flex justify-end"><ExportBtn path="/reports/costing/profitability.csv" filename="job_profitability.csv" testid="export-profitability" /></div>
+            <Profitability enabled={tab === "profitability"} />
+          </TabsContent>
+          <TabsContent value="material-variance">
+            <div className="mb-3 flex justify-end"><ExportBtn path="/reports/costing/material-variance.csv" filename="material_variance.csv" testid="export-material-variance" /></div>
+            <MaterialVariance enabled={tab === "material-variance"} />
+          </TabsContent>
+          <TabsContent value="waste">
+            <div className="mb-3 flex justify-end"><ExportBtn path="/reports/costing/waste.csv" filename="waste_cost.csv" testid="export-waste" /></div>
+            <Waste enabled={tab === "waste"} />
+          </TabsContent>
+          <TabsContent value="supplier">
+            <div className="mb-3 flex justify-end"><ExportBtn path="/reports/costing/supplier-impact.csv" filename="supplier_cost_impact.csv" testid="export-supplier" /></div>
+            <SupplierImpact enabled={tab === "supplier"} />
+          </TabsContent>
         </div>
       </Tabs>
     </div>

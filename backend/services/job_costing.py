@@ -315,6 +315,24 @@ async def summary(db: AsyncSession, job: Job, baseline=None, material=None, manu
     else:
         status = "not_started"
 
+    over_amt = act["total"] - est["total"]
+    mat_over = act["material"] - est["material"]
+    other_est = est["total"] - est["material"]
+    other_act = act["total"] - act["material"]
+    other_over = other_act - other_est
+    def _pct(over, base):
+        return float(_q2(over / base * Decimal(100))) if base and base != 0 else 0.0
+    alerts = {
+        "has_baseline": baseline["baseline_status"] != "none",
+        "over_budget": over_amt > 0,
+        "total_overrun_amount": _f2(over_amt if over_amt > 0 else ZERO),
+        "total_overrun_percent": _pct(over_amt, est["total"]) if over_amt > 0 else 0.0,
+        "material_overrun": mat_over > 0,
+        "material_overrun_amount": _f2(mat_over if mat_over > 0 else ZERO),
+        "other_overrun": other_over > 0,
+        "other_overrun_amount": _f2(other_over if other_over > 0 else ZERO),
+    }
+
     return {
         "revenue": _f2(revenue),
         "estimated": {**{k: _f4(est[k]) for k in keys}, "gross_profit": _f2(est_gp),
@@ -323,6 +341,7 @@ async def summary(db: AsyncSession, job: Job, baseline=None, material=None, manu
                    "gross_margin_percent": float(_margin_pct(revenue, act["total"]))},
         "variance": {**{k: _f4(variance[k]) for k in keys}, "gross_profit": _f2(act_gp - est_gp)},
         "costing_status": status,
+        "alerts": alerts,
     }
 
 

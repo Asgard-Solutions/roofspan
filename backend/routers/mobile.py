@@ -168,7 +168,8 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
 
 # ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----
 _EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
-_CATS = {"Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"}
+_CATS = {"Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other",
+         "packing_slip", "receipt", "delivery_photo", "damage_photo", "other"}
 
 
 @router.post("/photos", status_code=201)
@@ -176,7 +177,7 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
                        description: str | None = Form(None), category: str | None = Form(None),
                        idempotency_key: str | None = Header(None),
                        user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    if record_type not in ("lead", "property", "visit", "inspection", "job"):
+    if record_type not in ("lead", "property", "visit", "inspection", "job", "purchase_order"):
         raise HTTPException(status_code=422, detail="Invalid record_type")
     if category and category not in _CATS:
         raise HTTPException(status_code=422, detail="Invalid category")

@@ -382,3 +382,26 @@ async def dashboard_summary(user: User = Depends(get_current_user), db: AsyncSes
         "phase": "Office Phase 1 — Foundation",
         "current_user": {"email": user.email, "role": user.role, "full_name": user.full_name},
     }
+
+
+# ---- Margin guardrail policy (company-level; warning-only, never blocks) ----
+from pydantic import BaseModel as _MPBase
+from core import MANAGE_ROLES as _MANAGE_ROLES
+
+
+class MarginPolicy(_MPBase):
+    enabled: bool = False
+    target_minimum_margin: float = 30.0
+
+
+@router.get("/margin-policy", response_model=MarginPolicy)
+async def get_margin_policy(user: User = Depends(require_roles(*_MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    cfg = await _get_config(db, "margin_policy", MarginPolicy().model_dump())
+    return MarginPolicy(**cfg)
+
+
+@router.put("/margin-policy", response_model=MarginPolicy)
+async def update_margin_policy(payload: MarginPolicy, request: Request, user: User = Depends(require_roles(*_MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await _set_config(db, "margin_policy", payload.model_dump())
+    await log_action(db, user=user, action="margin_policy.update", entity_type="config", entity_id="margin_policy", request=request)
+    return payload

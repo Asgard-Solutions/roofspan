@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LineItemsEditor, { computeTotals } from "@/components/LineItemsEditor";
 import PhotoGallery from "@/components/PhotoGallery";
-import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera } from "lucide-react";
+import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
@@ -129,6 +129,14 @@ export default function LeadDetail() {
   };
   const sendQuote = async (q) => { try { await api.put(`/quotes/${q.id}`, { status: "sent" }); toast.success("Quote marked sent"); load(); } catch (e) { toast.error(apiError(e)); } };
   const declineQuote = async (q) => { try { await api.post(`/quotes/${q.id}/decline`); toast.success("Quote declined"); load(); } catch (e) { toast.error(apiError(e)); } };
+  const downloadProposal = async (q) => {
+    try {
+      const res = await api.get(`/quotes/${q.id}/proposal.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { toast.error(apiError(e)); }
+  };
   const openAccept = (q) => { setAcceptTarget(q); setAcceptName(lead?.name || ""); setAcceptPackage(q.multi_package && q.packages?.length ? q.packages[q.packages.length - 1].id : ""); setAcceptOpen(true); };
   const confirmAccept = async () => {
     setBusy(true);
@@ -252,6 +260,8 @@ export default function LeadDetail() {
                   )}
                   <div className="mt-2 flex flex-wrap gap-2">
                     {q.status === "draft" && <Button size="sm" variant="outline" onClick={() => sendQuote(q)} data-testid={`send-quote-${q.id}`}><Send className="h-3.5 w-3.5" /> Send</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => navigate(`/quotes/${q.id}/proposal`)} data-testid={`preview-proposal-${q.id}`}><FileText className="h-3.5 w-3.5" /> Preview</Button>
+                    <Button size="sm" variant="ghost" onClick={() => downloadProposal(q)} data-testid={`download-proposal-${q.id}`}><Download className="h-3.5 w-3.5" /> PDF</Button>
                     {isManage && q.status !== "accepted" && q.status !== "declined" && <Button size="sm" onClick={() => openAccept(q)} data-testid={`accept-quote-${q.id}`}><Check className="h-3.5 w-3.5" /> Accept</Button>}
                     {isManage && q.status !== "accepted" && q.status !== "declined" && <Button size="sm" variant="ghost" onClick={() => declineQuote(q)} data-testid={`decline-quote-${q.id}`}><Ban className="h-3.5 w-3.5" /> Decline</Button>}
                     {isManage && q.status === "accepted" && <Button size="sm" variant="outline" onClick={() => createInvoice(q)} data-testid={`create-invoice-${q.id}`}><Receipt className="h-3.5 w-3.5" /> Create invoice</Button>}

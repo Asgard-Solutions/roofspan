@@ -181,7 +181,39 @@ function CompanySettings() {
   const save = async () => { setSaving(true); try { const { data } = await api.put("/company", c); setC(data); toast.success("Company profile saved"); } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); } };
   if (!c) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
   const field = (key, label, ph) => <div className="space-y-1.5"><Label>{label}</Label><Input value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} /></div>;
-  return <div className="max-w-2xl space-y-4 rounded-md border border-border bg-white p-6" data-testid="company-settings">{field("name", "Company name", "RoofSpan Roofing Co.")}{field("phone", "Phone", "(555) 123-4567")}{field("email", "Email", "office@company.com")}{field("address", "Address", "123 Main St, Austin, TX")}{field("license_number", "License number", "TX-ROOF-0001")}<Button onClick={save} disabled={saving} data-testid="save-company">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save profile</>}</Button></div>;
+  const area = (key, label, ph) => <div className="space-y-1.5"><Label>{label}</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} /></div>;
+  return (
+    <div className="space-y-6">
+      <div className="max-w-2xl space-y-4 rounded-md border border-border bg-white p-6" data-testid="company-settings">
+        {field("name", "Company name", "RoofSpan Roofing Co.")}{field("phone", "Phone", "(555) 123-4567")}
+        {field("email", "Email", "office@company.com")}{field("address", "Address", "123 Main St, Austin, TX")}
+        {field("license_number", "License number", "TX-ROOF-0001")}
+        <div className="border-t border-slate-100 pt-4 text-xs font-semibold uppercase text-slate-400">Proposal branding</div>
+        {field("logo_url", "Logo URL", "https://…/logo.png")}{field("website", "Website", "www.company.com")}
+        {area("proposal_footer_text", "Proposal footer text", "Thank you for your business.")}
+        {area("proposal_terms_text", "Default proposal terms", "50% deposit due on acceptance…")}
+        <Button onClick={save} disabled={saving} data-testid="save-company">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save profile</>}</Button>
+      </div>
+      <MarginPolicySettings />
+    </div>
+  );
+}
+
+function MarginPolicySettings() {
+  const [p, setP] = useState(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { api.get("/margin-policy").then((r) => setP(r.data)).catch(() => {}); }, []);
+  const save = async () => { setSaving(true); try { const { data } = await api.put("/margin-policy", { enabled: !!p.enabled, target_minimum_margin: Number(p.target_minimum_margin) || 0 }); setP(data); toast.success("Margin policy saved"); } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); } };
+  if (!p) return null;
+  return (
+    <div className="max-w-2xl space-y-4 rounded-md border border-border bg-white p-6" data-testid="margin-policy-settings">
+      <div className="text-sm font-semibold text-slate-700">Margin guardrail</div>
+      <p className="text-xs text-slate-500">Internal warning only — never blocks estimates or appears on customer proposals.</p>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!p.enabled} onChange={(e) => setP({ ...p, enabled: e.target.checked })} data-testid="margin-enabled" /> Enable margin warnings</label>
+      <div className="space-y-1.5"><Label>Target minimum margin (%)</Label><Input type="number" min="0" max="100" step="0.1" value={p.target_minimum_margin} onChange={(e) => setP({ ...p, target_minimum_margin: e.target.value })} data-testid="margin-target" className="w-40" /></div>
+      <Button onClick={save} disabled={saving} data-testid="save-margin-policy">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save policy</>}</Button>
+    </div>
+  );
 }
 
 export default function Settings() {

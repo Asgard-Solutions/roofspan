@@ -48,13 +48,19 @@ export default function JobCosting({ jobId, canManage }) {
   const [busy, setBusy] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState({ category: "labor", description: "", amount: "", notes: "" });
+  const [snaps, setSnaps] = useState([]);
+  const [viewSnap, setViewSnap] = useState(null);
+
+  const loadSnaps = useCallback(async () => {
+    try { setSnaps((await api.get(`/jobs/${jobId}/cost-snapshots`)).data.snapshots); } catch (e) { /* noop */ }
+  }, [jobId]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const { data } = await api.get(`/jobs/${jobId}/costing`); setData(data); }
+    try { const { data } = await api.get(`/jobs/${jobId}/costing`); setData(data); loadSnaps(); }
     catch (e) { toast.error(apiError(e)); }
     finally { setLoading(false); }
-  }, [jobId]);
+  }, [jobId, loadSnaps]);
   useEffect(() => { load(); }, [load]);
 
   const addEntry = async () => {
@@ -86,6 +92,7 @@ export default function JobCosting({ jobId, canManage }) {
   const s = data.summary;
   const st = STATUS[s.costing_status] || STATUS.partial;
   const gpDown = Number(s.actual.gross_profit) < Number(s.estimated.gross_profit);
+  const al = s.alerts || {};
 
   return (
     <div className="space-y-5" data-testid="job-costing">
@@ -111,6 +118,16 @@ export default function JobCosting({ jobId, canManage }) {
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="costing-warn-basis">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>Some issued material has no cost basis (received without a recorded unit cost). Actual material cost is understated until those receipts are priced.</span>
+        </div>
+      )}
+      {al.over_budget && (
+        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700" data-testid="costing-alert-overrun">
+          <TrendingDown className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Cost overrun: actual cost exceeds estimate by <Money value={al.total_overrun_amount} /> ({Number(al.total_overrun_percent).toFixed(1)}%).
+            {al.material_overrun ? ` Material over by ${money(al.material_overrun_amount)}.` : ""}
+            {al.other_overrun ? ` Other costs over by ${money(al.other_overrun_amount)}.` : ""}
+          </span>
         </div>
       )}
 
@@ -230,6 +247,48 @@ export default function JobCosting({ jobId, canManage }) {
           </Table>
         )}
       </div>
+
+      {/* cost snapshot history (immutable) */}
+      {snaps.length > 0 && (
+        <div data-testid="costing-snapshot-history">
+          <h4 className="mb-2 text-sm font-semibold text-slate-700">Job cost history</h4>
+          <Table>
+            <TableHeader><TableRow>
+              <TableHead>Captured</TableHead><TableHead>Type</TableHead><TableHead>Status</TableHead>
+              <TableHead className="text-right">Actual cost</TableHead><TableHead className="text-right">Margin</TableHead><TableHead className="w-10" />
+            </TableRow></TableHeader>
+            <TableBody>
+              {snaps.map((sn) => (
+                <TableRow key={sn.id} data-testid={`costing-snap-${sn.id}`}>
+                  <TableCell>{sn.created_at ? new Date(sn.created_at).toLocaleString() : "—"}</TableCell>
+                  <TableCell className="capitalize">{sn.trigger}</TableCell>
+                  <TableCell><Badge variant="secondary" className="capitalize">{(sn.costing_status || "").replace(/_/g, " ")}</Badge></TableCell>
+                  <TableCell className="text-right"><Money value={sn.actual_total_cost} /></TableCell>
+                  <TableCell className="text-right">{sn.actual_gross_margin_percent != null ? `${Number(sn.actual_gross_margin_percent).toFixed(1)}%` : "—"}</TableCell>
+                  <TableCell><Button size="sm" variant="ghost" onClick={() => setViewSnap(sn)} data-testid={`costing-snap-view-${sn.id}`}>View</Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      <Dialog open={!!viewSnap} onOpenChange={(o) => !o && setViewSnap(null)}>
+        <DialogContent data-testid="costing-snapshot-dialog">
+          <DialogHeader><DialogTitle>Snapshot — {viewSnap?.created_at ? new Date(viewSnap.created_at).toLocaleString() : ""}</DialogTitle>
+            <DialogDescription>Immutable saved values at capture time.</DialogDescription></DialogHeader>
+          {viewSnap && (
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Revenue</span><Money value={viewSnap.revenue} /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Estimated cost</span><Money value={viewSnap.estimated_total_cost} /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Actual cost</span><Money value={viewSnap.actual_total_cost} /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Gross profit</span><Money value={viewSnap.actual_gross_profit} signed /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Margin</span><span>{viewSnap.actual_gross_margin_percent != null ? `${Number(viewSnap.actual_gross_margin_percent).toFixed(1)}%` : "—"}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Total variance</span><Money value={viewSnap.total_variance} signed invert /></div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent data-testid="costing-add-dialog">

@@ -1,0 +1,47 @@
+{
+  "summary": "Frontend validation of RoofSpan 'Purchasing, Pricing & Customer Output Completion' phase. Found and fixed one critical bug (missing Button import in Reports.jsx that broke the entire Reports page). After fix, all 9 requested flows PASS (PO timeline+attachments, Estimate price-book selector+margin warning banner, Customer Proposal preview + PDF with NO cost leaks, Job costing overrun alert + snapshot history/dialog, Reports CSV exports for all 4 tabs, Settings branding + Margin policy save, Sales RBAC).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "pages/Reports.jsx (ExportBtn)",
+        "issue": "Missing `Button` import — `ReferenceError: Button is not defined` crashed the entire /reports route with an Uncaught runtime error overlay. reports-page never rendered for owner; sales still hit reports-restricted branch because that block also referenced Button? (No — restricted branch uses no Button, but page load failed after fix.)",
+        "selector": "[data-testid=\"reports-page\"]",
+        "priority": "CRITICAL",
+        "status": "FIXED by testing agent (added `import { Button } from \"@/components/ui/button\"`)"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_details": {
+    "settings_branding_and_margin": "PASS - /admin/settings > Company Profile shows company-logo_url, company-website, company-proposal_footer_text, company-proposal_terms_text. margin-policy-settings card renders with margin-enabled + margin-target + save-margin-policy. Saved policy (enabled=true, target=40) via PUT /api/company/margin-policy 200.",
+    "reports_csv_owner": "PASS (after import fix) - reports-page renders; each of 4 tabs (tab-profitability, tab-material-variance, tab-waste, tab-supplier) loads and Export CSV buttons (export-profitability/material-variance/waste/supplier) each fired GET to /api/reports/costing/profitability.csv|material-variance.csv|waste.csv|supplier-impact.csv all returning 200.",
+    "customer_proposal": "PASS - LeadDetail (lead fd970044...) shows preview-proposal-<id> and download-proposal-<id> buttons. preview navigates to /quotes/<id>/proposal → proposal-preview + proposal-number + proposal-items render. Body text scan on proposal-preview found ZERO of the internal keywords: 'material cost', 'supplier cost', 'markup', 'gross profit', 'cost basis', 'unit cost', 'margin'. proposal-download-pdf triggered GET /quotes/<id>/proposal.pdf → 200 (PDF blob). Verified again as sales user (customer-safe path still viewable).",
+    "purchase_order_detail": "PASS - PO f33af19f... (PO-0454, ABC Supply, ordered): po-status-timeline visible with 2 events (po-status-event-draft, po-status-event-ordered). Receiving section shows po-attachments, po-attach-cat (default 'Packing Slip'), po-attach-desc, po-attach-upload. GET /api/purchase-orders/<id>/status-history 200.",
+    "estimate_editor_price_book": "PASS - Draft estimate b60b79af... opened; estimate-price-book selector renders with 11 price-book-<id> options + price-book-none. Selecting a non-default book with 0 lines correctly did NOT open reprice-dialog (per spec: 'If no lines match, it should just set the book with an info toast.'). estimate-margin-warning banner visible on this estimate (target 40% guardrail was hit).",
+    "job_costing_overrun_and_snapshots": "PASS - JOB-0117 (bf0f0a28...) shows costing-alert-overrun (red 'Cost overrun: actual cost exceeds estimate by …'). costing-snapshot-btn captured a new snapshot; costing-snapshot-history now shows 2 rows. Clicking costing-snap-view-<id> opened costing-snapshot-dialog displaying immutable Revenue $60, Estimated $50, Actual $100, Gross profit -$40, Margin -66.7%, Total variance +$50.",
+    "rbac_sales": "PASS - POST /api/users {role: sales} → 201. Logged in as sales_qa_<hex>@example.com. /reports → reports-restricted visible, reports-page NOT rendered. /quotes/<id>/proposal → proposal-preview still renders (customer-safe). Screenshot confirms no cost/markup/margin/gross profit anywhere in the customer proposal for sales user."
+  },
+  "test_report_links": [],
+  "action_items": [
+    "None — critical Reports.jsx import bug already fixed by testing agent. Please review and keep the fix (added `import { Button } from '@/components/ui/button'`) — without it the entire /reports route crashes for management roles."
+  ],
+  "critical_code_review_comments": [
+    "Reports.jsx used <Button> in ExportBtn without importing it — no lint/CI catch. Consider enabling `no-undef` ESLint rule with react plugin so this fails at build time. This exact pattern (JSX identifier without import) is invisible to React until render.",
+    "ProposalPreview.jsx correctly restricts fields to description/qty/unit/unit_price/line_total/subtotal/tax/total + optional terms/footer/logo — good customer-safe design. Backend must also enforce this on GET /api/quotes/{id}/proposal (spot-checked payload keys server-side would be reassuring).",
+    "JobCosting.jsx `costing-alert-overrun` correctly gated on summary.alerts.over_budget and displays both material_overrun_amount and other_overrun_amount when set. Money component and Snapshot dialog reuse are clean.",
+    "EstimateEditor.jsx price-book flow: dialog is only opened when preview returns rows; the toast-only path for zero matching lines is a nice UX touch. Consider exposing reprice-preview response count in the toast for clarity.",
+    "Settings.jsx branding + margin cards are cleanly split; MarginPolicySettings percentages are stored as strings from Input — verify backend coerces to number to avoid `\"40\"` vs `40` comparison bugs downstream."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/Reports.jsx (added missing Button import)"
+  ],
+  "success_rate": { "backend": "skipped (per request)", "frontend": "100% (after Reports.jsx fix)" },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 ; ephemeral sales user created during test (sales_qa_<hex>@example.com / SalesQA#2026x)",
+  "seed_data_creation": "Created 1 ephemeral sales user via POST /api/users for RBAC test (kept, not deleted). Captured 1 new cost snapshot for JOB-0117 (immutable historical row — expected by design).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "JOB-0117 (bf0f0a28-4c1f-408d-a8e5-cc6de6befd63) is the reliable overrun-costing job (revenue $60, estimated $50, actual $100, GP -$40, margin -66.7%). Reliable PO for timeline: PO-0454 (f33af19f-7679-4349-96b3-2abb4e2ffe33, ABC ordered). For proposal tests, quote 48d65724-d734-4005-8d18-aea008796de2 belongs to lead fd970044-9081-4d6d-bb14-b1f0a09594be and is 'accepted' so proposal-accepted banner also renders. Reports.jsx Button import was missing — verify it stays in place after any Reports edits.",
+  "rca of the issue": "Reports.jsx imported Loader2/Lock/BarChart3/Download/Badge/Tabs/Table but omitted `Button` (needed by ExportBtn). React attempted to render <Button> in each TabsContent → ReferenceError bubbled to the runtime error overlay, blanking the whole /reports route. Fix: add `import { Button } from '@/components/ui/button'`. Reproduction: log in as owner, visit /reports; overlay says 'Uncaught runtime errors: Button is not defined at ExportBtn'. Mitigation applied. Recommend adding no-undef ESLint rule to prevent recurrence."
+}

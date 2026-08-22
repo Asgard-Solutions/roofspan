@@ -6,7 +6,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission
+from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory
+
+
+async def record_status(db: AsyncSession, po: PurchaseOrder, normalized: str, *, provider: str | None = None,
+                        source: str = "roofspan", note: str | None = None, user_email: str | None = None):
+    """Append a status event ONLY when the normalized status meaningfully changes (no duplicate events
+    from repeated syncs). Raw provider status is stored separately."""
+    if not normalized:
+        return
+    last = (await db.execute(select(PurchaseOrderStatusHistory).where(
+        PurchaseOrderStatusHistory.purchase_order_id == po.id)
+        .order_by(PurchaseOrderStatusHistory.created_at.desc()).limit(1))).scalars().first()
+    if last and last.normalized_status == normalized and (last.provider_status or None) == (provider or None):
+        return
+    db.add(PurchaseOrderStatusHistory(purchase_order_id=po.id, normalized_status=normalized,
+                                      provider_status=provider, source=source, note=note, created_by=user_email))
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase4 import POIn, POStatusIn, ReceiveIn, POOut, POLineOut, RefreshPriceIn, RefreshPriceOut, AbcSubmitReviewIn, AbcSubmitIn
 from sales_common import next_number
@@ -111,6 +126,7 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
                           abc_product_description=it.abc_product_description, abc_product_family=it.abc_product_family,
                           abc_product_image_url=it.abc_product_image_url,
                           pricing_source=it.pricing_source or ("abc" if it.abc_item_number else None)))
+    await record_status(db, po, "draft", source="roofspan", note="PO created", user_email=user.email)
     await db.commit()
     await db.refresh(po)
     await log_action(db, user=user, action="po.create", entity_type="purchase_order", entity_id=po.id, detail={"number": number, "total": total}, request=request)
@@ -490,6 +506,7 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     po.abc_last_sync_at = now
     po.status = "ordered"
     po.order_date = po.order_date or now
+    await record_status(db, po, "ordered", provider=po.abc_order_status, source="abc", note="Submitted to ABC", user_email=user.email)
     # Register the minimal routing index so the Relay can map future ABC webhooks to this installation.
     from models import AbcOrderRoute
     import os as _os
@@ -521,6 +538,13 @@ async def abc_refresh_status(po_id: str, request: Request,
     po.abc_normalized_status = detail.get("normalized_status") or po.abc_normalized_status
     po.external_order_number = detail.get("order_number") or po.external_order_number
     po.abc_last_sync_at = datetime.now(timezone.utc)
+    # Map ABC's normalized state onto a RoofSpan PO status where sensible, and record the event.
+    _abc_to_po = {"delivered": "received", "invoiced": "received", "shipped": "scheduled",
+                  "scheduled": "scheduled", "acknowledged": "acknowledged", "cancelled": "cancelled"}
+    mapped = _abc_to_po.get((po.abc_normalized_status or "").lower())
+    if mapped and po.status not in ("received", "partially_received", "cancelled"):
+        po.status = mapped
+    await record_status(db, po, po.status, provider=po.abc_order_status, source="abc", note="ABC status refresh", user_email=user.email)
     await db.commit()
     await log_action(db, user=user, action="abc.order.status_refresh", entity_type="purchase_order", entity_id=po.id,
                      detail={"status": po.abc_order_status}, request=request)
@@ -579,6 +603,7 @@ async def set_status(po_id: str, payload: POStatusIn, request: Request, user: Us
     if payload.status == "ordered" and not po.order_date:
         po.order_date = datetime.now(timezone.utc)
     po.status = payload.status
+    await record_status(db, po, payload.status, source="roofspan", user_email=user.email)
     await db.commit()
     await db.refresh(po)
     await log_action(db, user=user, action="po.status", entity_type="purchase_order", entity_id=po.id, detail={"status": payload.status}, request=request)
@@ -641,7 +666,22 @@ async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_
     fully = all(i.received_quantity >= i.quantity - 1e-9 for i in items)
     any_recv = any(i.received_quantity > 0 for i in items)
     po.status = "received" if fully else ("partially_received" if any_recv else po.status)
+    await record_status(db, po, po.status, source="roofspan", note="Receiving", user_email=user.email)
     await db.commit()
     await db.refresh(po)
     await log_action(db, user=user, action="po.receive", entity_type="purchase_order", entity_id=po.id, detail={"status": po.status, "lines": len(payload.items)}, request=request)
     return await _out(db, po)
+
+
+@router.get("/{po_id}/status-history")
+async def status_history(po_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    po = await db.get(PurchaseOrder, po_id)
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    rows = (await db.execute(select(PurchaseOrderStatusHistory).where(
+        PurchaseOrderStatusHistory.purchase_order_id == po.id)
+        .order_by(PurchaseOrderStatusHistory.created_at.asc()))).scalars().all()
+    return {"events": [{
+        "id": str(r.id), "normalized_status": r.normalized_status, "provider_status": r.provider_status,
+        "source": r.source, "note": r.note, "created_by": r.created_by,
+        "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]}

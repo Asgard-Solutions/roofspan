@@ -129,6 +129,7 @@ class EstimateIn(BaseModel):
     inspection_id: Optional[str] = None
     tax_rate: float = 0
     notes: Optional[str] = None
+    price_book_id: Optional[str] = None
     items: List[LineItemIn] = []
 
 
@@ -146,11 +147,13 @@ class EstimateOut(BaseModel):
     total: float
     notes: Optional[str] = None
     version: int
+    price_book_id: Optional[str] = None
     created_at: datetime
     items: List[LineItemOut] = []
     # cost/margin summary — populated only for authorized (internal) roles, else None
     cost_summary: Optional[dict] = None
     can_see_cost: bool = False
+    margin_warnings: Optional[dict] = None
 
 
 # ---- Quotes ----

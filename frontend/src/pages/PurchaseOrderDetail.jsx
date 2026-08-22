@@ -12,9 +12,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
-import { ArrowLeft, Loader2, PackageCheck, Ban, Truck, Building2, Link2 } from "lucide-react";
+import ReceivingAttachments from "@/components/ReceivingAttachments";
+import { ArrowLeft, Loader2, PackageCheck, Ban, Truck, Building2, Link2, Paperclip, CircleDot } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
+
+function StatusTimeline({ poId }) {
+  const [events, setEvents] = useState(null);
+  useEffect(() => { api.get(`/purchase-orders/${poId}/status-history`).then((r) => setEvents(r.data.events)).catch(() => setEvents([])); }, [poId]);
+  if (events === null) return <div className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
+  if (events.length === 0) return <p className="text-sm text-slate-400">No status events recorded.</p>;
+  return (
+    <ol className="relative ml-2 border-l border-slate-200" data-testid="po-status-timeline">
+      {events.map((e) => (
+        <li key={e.id} className="mb-4 ml-4" data-testid={`po-status-event-${e.normalized_status}`}>
+          <span className="absolute -left-1.5 mt-1 flex h-3 w-3 items-center justify-center"><CircleDot className="h-3 w-3 text-orange-500" /></span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium capitalize text-slate-800">{e.normalized_status.replace(/_/g, " ")}</span>
+            {e.source === "abc" && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700">ABC</Badge>}
+            {e.source === "imported" && <Badge variant="secondary" className="bg-slate-100 text-slate-500">imported</Badge>}
+            {e.provider_status && <span className="text-xs text-slate-400">provider: {e.provider_status}</span>}
+          </div>
+          <div className="text-xs text-slate-400">{e.created_at ? new Date(e.created_at).toLocaleString() : ""}{e.note ? ` · ${e.note}` : ""}</div>
+        </li>
+      ))}
+    </ol>
+  );
+}
 const STATUS = {
   draft: "bg-slate-100 text-slate-600", ready_for_review: "bg-blue-50 text-blue-700",
   submitted: "bg-indigo-50 text-indigo-700", acknowledged: "bg-indigo-50 text-indigo-700",
@@ -129,6 +153,18 @@ export default function PurchaseOrderDetail() {
               {(po.items || []).length === 0 && <TableRow><TableCell colSpan={7} className="py-6 text-center text-slate-400">No line items.</TableCell></TableRow>}
             </TableBody>
           </Table>
+        </div>
+
+        {/* Status timeline (real stored events) */}
+        <div className="mt-6 rounded-md border border-border bg-white p-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Status timeline</h3>
+          <StatusTimeline poId={id} />
+        </div>
+
+        {/* Receiving attachments (reuses RoofSpan photo infrastructure) */}
+        <div className="mt-4 rounded-md border border-border bg-white p-4">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700"><Paperclip className="h-4 w-4" /> Receiving attachments</h3>
+          <ReceivingAttachments poId={id} canUpload={canManage} />
         </div>
       </div>
 

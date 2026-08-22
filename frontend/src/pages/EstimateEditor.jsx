@@ -42,11 +42,17 @@ export default function EstimateEditor() {
   const [prodOpen, setProdOpen] = useState(false);
   const [asmOpen, setAsmOpen] = useState(false);
   const [refreshData, setRefreshData] = useState(null);
+  const [priceBooks, setPriceBooks] = useState([]);
+  const [priceBookId, setPriceBookId] = useState("");
+  const [reprice, setReprice] = useState(null); // { price_book_id, lines }
+
+  useEffect(() => { api.get("/estimating/price-books", { params: { active: true } }).then((r) => setPriceBooks(r.data)).catch(() => {}); }, []);
 
   const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/estimates/${id}`);
       setEst(data); setTaxRate(data.tax_rate || 0); setVersion(data.version);
+      setPriceBookId(data.price_book_id || "");
       setLines((data.items || []).map((i) => ({
         description: i.description, unit: i.unit || "EA", measured_quantity: i.measured_quantity ?? i.quantity,
         waste_percent: i.waste_percent || 0, material_cost: i.material_cost || 0, labor_cost: i.labor_cost || 0,
@@ -82,7 +88,7 @@ export default function EstimateEditor() {
     setBusy(true);
     try {
       const payload = { lead_id: est.lead_id, customer_id: est.customer_id, property_id: est.property_id,
-        inspection_id: est.inspection_id, tax_rate: Number(taxRate) || 0,
+        inspection_id: est.inspection_id, tax_rate: Number(taxRate) || 0, price_book_id: priceBookId || null,
         items: lines.map((l) => ({ ...l, measured_quantity: Number(l.measured_quantity) || 0, waste_percent: Number(l.waste_percent) || 0,
           material_cost: Number(l.material_cost) || 0, labor_cost: Number(l.labor_cost) || 0,
           equipment_cost: Number(l.equipment_cost) || 0, subcontract_cost: Number(l.subcontract_cost) || 0,
@@ -123,6 +129,26 @@ export default function EstimateEditor() {
     } catch (e) { toast.error(apiError(e)); }
   };
 
+  const onPriceBookChange = async (pbId) => {
+    if (pbId === priceBookId) return;
+    try {
+      const { data } = await api.post(`/estimates/${id}/price-book/preview`, { price_book_id: pbId });
+      if (data.affected > 0) {
+        setReprice({ price_book_id: pbId, lines: data.lines });
+      } else {
+        setPriceBookId(pbId);
+        toast.info("Price Book set. No existing lines matched a rule — nothing repriced.");
+      }
+    } catch (e) { toast.error(apiError(e)); }
+  };
+  const applyReprice = async () => {
+    try {
+      const { data } = await api.post(`/estimates/${id}/price-book/apply`, { price_book_id: reprice.price_book_id });
+      setEst(data); setVersion(data.version); setPriceBookId(data.price_book_id || ""); setReprice(null);
+      toast.success("Price Book applied"); load();
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
   if (!est) return <div className="p-8"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
   const editable = est.status === "draft" || est.status === "sent";
 
@@ -133,11 +159,31 @@ export default function EstimateEditor() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <Button variant="ghost" size="sm" onClick={() => navigate(est.lead_id ? `/leads/${est.lead_id}` : "/")} data-testid="estimate-back"><ArrowLeft className="h-4 w-4" /> Back</Button>
           <div className="flex flex-wrap items-center gap-2">
+            {seeCost && priceBooks.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs text-slate-500">Price Book</Label>
+                <Select value={priceBookId || "none"} onValueChange={(v) => onPriceBookChange(v === "none" ? "" : v)}>
+                  <SelectTrigger className="h-9 w-44" data-testid="estimate-price-book"><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none" data-testid="price-book-none">None (manual)</SelectItem>
+                    {priceBooks.map((pb) => <SelectItem key={pb.id} value={pb.id} data-testid={`price-book-${pb.id}`}>{pb.name}{pb.is_default ? " ★" : ""}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {seeCost && <Button variant="outline" size="sm" onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="h-4 w-4" /> Refresh Current Costs</Button>}
             <Button variant="outline" size="sm" onClick={generateQuote} data-testid="estimate-generate-quote"><FileCheck2 className="h-4 w-4" /> Generate Quote</Button>
             <Button size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
           </div>
         </div>
+
+        {seeCost && est.margin_warnings?.enabled && est.margin_warnings.overall_below && (
+          <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="estimate-margin-warning">
+            <span className="font-medium">Margin below target.</span>
+            <span>Actual: {Number(est.margin_warnings.overall_margin_percent).toFixed(1)}% · Target: {Number(est.margin_warnings.target_minimum_margin).toFixed(1)}%
+            {est.margin_warnings.below_lines?.length ? ` · ${est.margin_warnings.below_lines.length} line(s) below target.` : ""}</span>
+          </div>
+        )}
 
         <div className="mb-3">
           <DropdownMenu>
@@ -213,6 +259,34 @@ export default function EstimateEditor() {
       <ProductPicker open={prodOpen} onOpenChange={setProdOpen} seeCost={seeCost} onPick={addProduct} />
       <AssemblyPicker open={asmOpen} onOpenChange={setAsmOpen} onAdd={addAssemblyLines} />
       <RefreshDialog data={refreshData} setData={setRefreshData} onApply={applyRefresh} />
+
+      <Dialog open={!!reprice} onOpenChange={(o) => !o && setReprice(null)}>
+        <DialogContent data-testid="reprice-dialog">
+          <DialogHeader>
+            <DialogTitle>Apply Price Book?</DialogTitle>
+            <DialogDescription>Changing the Price Book may affect {reprice?.lines?.length || 0} line(s). Review the new selling prices before applying. Manual lines without a matching rule are unchanged.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-72 overflow-y-auto">
+            <Table>
+              <TableHeader><TableRow><TableHead>Item</TableHead><TableHead className="text-right">Current</TableHead><TableHead className="text-right">New</TableHead><TableHead className="text-right">Diff</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {reprice?.lines?.map((r) => (
+                  <TableRow key={r.line_id} data-testid={`reprice-row-${r.line_id}`}>
+                    <TableCell className="max-w-[220px] truncate">{r.description}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(r.current_sell)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(r.new_sell)}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${r.difference >= 0 ? "text-green-700" : "text-red-600"}`}>{r.difference > 0 ? "+" : ""}{money(r.difference)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReprice(null)}>Cancel</Button>
+            <Button onClick={applyReprice} data-testid="reprice-apply">Apply changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
