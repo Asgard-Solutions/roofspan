@@ -196,10 +196,77 @@ class SupplierIn(BaseModel):
     email: Optional[str] = None
     notes: Optional[str] = None
     active: bool = True
+    supplier_type: Optional[str] = None
+    account_number: Optional[str] = None
+    sales_rep: Optional[str] = None
+    ordering_email: Optional[str] = None
+    website: Optional[str] = None
+    payment_terms: Optional[str] = None
+    default_branch: Optional[str] = None
+    delivery_terms: Optional[str] = None
+    minimum_order: Optional[float] = None
+    freight_notes: Optional[str] = None
+    tax_notes: Optional[str] = None
+
+
+class SupplierPatch(BaseModel):
+    name: Optional[str] = None
+    contact_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+    supplier_type: Optional[str] = None
+    account_number: Optional[str] = None
+    sales_rep: Optional[str] = None
+    ordering_email: Optional[str] = None
+    website: Optional[str] = None
+    payment_terms: Optional[str] = None
+    default_branch: Optional[str] = None
+    delivery_terms: Optional[str] = None
+    minimum_order: Optional[float] = None
+    freight_notes: Optional[str] = None
+    tax_notes: Optional[str] = None
 
 
 class SupplierOut(SupplierIn):
     id: str
+    integration_provider: Optional[str] = None  # never exposes secrets
+    integration_status: Optional[str] = None
+    capabilities: List[str] = []
+
+
+class ManualSupplierMaterialIn(BaseModel):
+    material_id: str
+    supplier_id: str
+    supplier_item_number: Optional[str] = None
+    supplier_description: Optional[str] = None
+    supplier_uom: Optional[str] = None
+    conversion_factor: float = 1
+    manufacturer_part_number: Optional[str] = None
+    current_cost: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class ManualSupplierMaterialPatch(BaseModel):
+    supplier_item_number: Optional[str] = None
+    supplier_description: Optional[str] = None
+    supplier_uom: Optional[str] = None
+    conversion_factor: Optional[float] = None
+    manufacturer_part_number: Optional[str] = None
+    current_cost: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class PriceHistoryOut(BaseModel):
+    id: str
+    cost: Optional[float] = None
+    source: Optional[str] = None
+    branch_context: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
 
 
 # ---- Jobs ----

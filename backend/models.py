@@ -413,6 +413,34 @@ class Supplier(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply" | None(manual)
+    integration_status: Mapped[str | None] = mapped_column(String(24), nullable=True)  # connected|not_connected|manual
+    supplier_type: Mapped[str | None] = mapped_column(String(48), nullable=True)  # distributor|manufacturer|manual|other
+    account_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sales_rep: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ordering_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payment_terms: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    default_branch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_terms: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    minimum_order: Mapped[float | None] = mapped_column(Float, nullable=True)
+    freight_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tax_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class SupplierPriceHistory(Base):
+    """Immutable price snapshot for a SupplierMaterial. Manual price edits and supplier price refreshes
+    append a row; historical PO/estimate/quote costs are never rewritten from these."""
+    __tablename__ = "supplier_price_history"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_materials.id", ondelete="CASCADE"), index=True, nullable=False)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
+    branch_context: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(24), nullable=True)  # manual|abc_live|abc_cache
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

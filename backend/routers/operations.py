@@ -10,6 +10,7 @@ from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase4 import (
     MaterialIn, MaterialPatch, MaterialOut, MaterialListItemOut, MaterialFacetsOut, QuantitiesOut,
     MaterialDetailOut, TxnOut, OpenPOLineOut, JobRequirementOut, AdjustIn, SupplierIn, SupplierOut,
+    SupplierPatch, ManualSupplierMaterialIn, ManualSupplierMaterialPatch, PriceHistoryOut,
     CsvPreviewIn, CsvPreviewOut, CsvPreviewRowOut, CsvCommitIn,
 )
 from integrations.abc_supply.schemas import SupplierMaterialOut
@@ -94,8 +95,10 @@ async def material_facets(user: User = Depends(get_current_user), db: AsyncSessi
     cats = [c for c in (await db.execute(select(Material.category).distinct().where(Material.category.isnot(None)))).scalars().all() if c]
     mfrs = [c for c in (await db.execute(select(Material.manufacturer).distinct().where(Material.manufacturer.isnot(None)))).scalars().all() if c]
     sups = (await db.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
+    from integrations.supplier_connectors import capabilities_for
     return MaterialFacetsOut(categories=sorted(cats), manufacturers=sorted(mfrs),
-                             suppliers=[{"id": str(s.id), "name": s.name} for s in sups])
+                             suppliers=[{"id": str(s.id), "name": s.name, "integration_provider": s.integration_provider,
+                                         "capabilities": capabilities_for(s.integration_provider)} for s in sups])
 
 
 @router.post("/materials", response_model=MaterialOut, status_code=201)
@@ -366,13 +369,29 @@ async def material_suppliers(material_id: str, user: User = Depends(get_current_
 
 
 # ---- Suppliers (minimal) ----
-def _sup_out(s: Supplier) -> SupplierOut:
-    return SupplierOut(id=str(s.id), name=s.name, contact_name=s.contact_name, phone=s.phone, email=s.email, notes=s.notes, active=s.active)
+def _sup_out(s: Supplier):
+    from integrations.supplier_connectors import capabilities_for
+    status = s.integration_status or ("manual" if not s.integration_provider else None)
+    return SupplierOut(
+        id=str(s.id), name=s.name, contact_name=s.contact_name, phone=s.phone, email=s.email, notes=s.notes,
+        active=s.active, supplier_type=s.supplier_type, account_number=s.account_number, sales_rep=s.sales_rep,
+        ordering_email=s.ordering_email, website=s.website, payment_terms=s.payment_terms,
+        default_branch=s.default_branch, delivery_terms=s.delivery_terms, minimum_order=s.minimum_order,
+        freight_notes=s.freight_notes, tax_notes=s.tax_notes,
+        integration_provider=s.integration_provider, integration_status=status,
+        capabilities=capabilities_for(s.integration_provider),
+    )
 
 
 @router.get("/suppliers", response_model=list[SupplierOut])
-async def list_suppliers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
+async def list_suppliers(q: str | None = Query(None), active: bool | None = Query(None),
+                         user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    stmt = select(Supplier).order_by(Supplier.name)
+    if q:
+        stmt = stmt.where(Supplier.name.ilike(f"%{q}%"))
+    if active is not None:
+        stmt = stmt.where(Supplier.active.is_(active))
+    rows = (await db.execute(stmt)).scalars().all()
     return [_sup_out(s) for s in rows]
 
 
@@ -381,9 +400,120 @@ async def create_supplier(payload: SupplierIn, request: Request, user: User = De
     existing = (await db.execute(select(Supplier).where(Supplier.name == payload.name))).scalar_one_or_none()
     if existing:
         return _sup_out(existing)
-    s = Supplier(**payload.model_dump())
+    s = Supplier(**payload.model_dump(), integration_status="manual")  # manual supplier
     db.add(s)
-    await db.commit()
-    await db.refresh(s)
+    await db.commit(); await db.refresh(s)
     await log_action(db, user=user, action="supplier.create", entity_type="supplier", entity_id=s.id, request=request)
     return _sup_out(s)
+
+
+@router.get("/suppliers/{supplier_id}")
+async def supplier_detail(supplier_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    s = await db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    # products (supplier material mappings)
+    sm_rows = (await db.execute(
+        select(SupplierMaterial, Material.name).outerjoin(Material, Material.id == SupplierMaterial.material_id)
+        .where(SupplierMaterial.supplier_id == s.id)
+    )).all()
+    products = [{"id": str(sm.id), "material_id": str(sm.material_id), "material_name": mname,
+                 "supplier_item_number": sm.supplier_item_number, "current_cost": sm.current_cost,
+                 "is_preferred": sm.is_preferred, "active": sm.active} for sm, mname in sm_rows]
+    return {"supplier": _sup_out(s).model_dump(), "products": products}
+
+
+@router.patch("/suppliers/{supplier_id}", response_model=SupplierOut)
+async def update_supplier(supplier_id: str, payload: SupplierPatch, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    s = await db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(s, k, v)
+    await db.commit(); await db.refresh(s)
+    await log_action(db, user=user, action="supplier.update", entity_type="supplier", entity_id=s.id, request=request)
+    return _sup_out(s)
+
+
+@router.post("/suppliers/{supplier_id}/active", response_model=SupplierOut)
+async def set_supplier_active(supplier_id: str, request: Request, active: bool = Query(...), user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    s = await db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    s.active = active
+    await db.commit(); await db.refresh(s)
+    await log_action(db, user=user, action=("supplier.reactivate" if active else "supplier.deactivate"), entity_type="supplier", entity_id=s.id, request=request)
+    return _sup_out(s)
+
+
+# ---- Manual SupplierMaterial mappings + price history (Slice 6) ----
+async def _snapshot_price(db, sm: SupplierMaterial, source: str, user_email: str | None):
+    from models import SupplierPriceHistory
+    db.add(SupplierPriceHistory(supplier_material_id=sm.id, supplier_id=sm.supplier_id, material_id=sm.material_id,
+                                branch_context=sm.branch_context, cost=sm.current_cost, source=source, created_by=user_email))
+
+
+@router.post("/supplier-materials", response_model=SupplierMaterialOut, status_code=201)
+async def create_manual_supplier_material(payload: ManualSupplierMaterialIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    sup = await db.get(Supplier, payload.supplier_id)
+    if not sup:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    sm = await inv_core.upsert_supplier_material(
+        db, material_id=payload.material_id, supplier_id=payload.supplier_id,
+        integration_provider=(sup.integration_provider or "manual"),
+        supplier_item_number=payload.supplier_item_number, supplier_description=payload.supplier_description,
+        supplier_uom=payload.supplier_uom, current_cost=payload.current_cost)
+    await db.flush()  # assign sm.id before snapshotting price history
+    sm.conversion_factor = payload.conversion_factor or 1
+    sm.manufacturer_part_number = payload.manufacturer_part_number
+    sm.lead_time_days = payload.lead_time_days
+    sm.meta = {**(sm.meta or {}), "notes": payload.notes} if payload.notes else sm.meta
+    if payload.current_cost is not None:
+        sm.price_status = "manual"
+        await _snapshot_price(db, sm, "manual", user.email)
+    await db.commit(); await db.refresh(sm)
+    await log_action(db, user=user, action="supplier_material.create", entity_type="supplier_material", entity_id=sm.id, detail={"manual": True}, request=request)
+    return await _sm_out(db, sm)
+
+
+@router.patch("/supplier-materials/{sm_id}", response_model=SupplierMaterialOut)
+async def update_manual_supplier_material(sm_id: str, payload: ManualSupplierMaterialPatch, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    sm = await db.get(SupplierMaterial, sm_id)
+    if not sm:
+        raise HTTPException(status_code=404, detail="Supplier mapping not found")
+    data = payload.model_dump(exclude_unset=True)
+    cost_changed = ("current_cost" in data and data["current_cost"] != sm.current_cost)
+    for k, v in data.items():
+        if k == "notes":
+            sm.meta = {**(sm.meta or {}), "notes": v}
+        else:
+            setattr(sm, k, v)
+    if cost_changed:
+        sm.price_status = "manual"
+        from datetime import datetime, timezone
+        sm.price_updated_at = datetime.now(timezone.utc)
+        await _snapshot_price(db, sm, "manual", user.email)
+    await db.commit(); await db.refresh(sm)
+    await log_action(db, user=user, action="supplier_material.update", entity_type="supplier_material", entity_id=sm.id, detail={"cost_changed": cost_changed}, request=request)
+    return await _sm_out(db, sm)
+
+
+@router.get("/supplier-materials/{sm_id}/price-history", response_model=list[PriceHistoryOut])
+async def price_history(sm_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from models import SupplierPriceHistory
+    rows = (await db.execute(select(SupplierPriceHistory).where(SupplierPriceHistory.supplier_material_id == sm_id).order_by(SupplierPriceHistory.created_at.desc()))).scalars().all()
+    return [PriceHistoryOut(id=str(r.id), cost=r.cost, source=r.source, branch_context=r.branch_context, created_by=r.created_by, created_at=r.created_at) for r in rows]
+
+
+async def _sm_out(db, sm: SupplierMaterial) -> SupplierMaterialOut:
+    sname = None
+    if sm.supplier_id:
+        sup = await db.get(Supplier, sm.supplier_id)
+        sname = sup.name if sup else None
+    return SupplierMaterialOut(
+        id=str(sm.id), material_id=str(sm.material_id), supplier_id=(str(sm.supplier_id) if sm.supplier_id else None),
+        supplier_name=sname, integration_provider=sm.integration_provider, external_item_id=sm.external_item_id,
+        supplier_item_number=sm.supplier_item_number, supplier_description=sm.supplier_description,
+        supplier_uom=sm.supplier_uom, current_cost=sm.current_cost, price_status=sm.price_status,
+        price_updated_at=sm.price_updated_at, availability_status=sm.availability_status,
+        lead_time_days=sm.lead_time_days, is_preferred=sm.is_preferred, active=sm.active)

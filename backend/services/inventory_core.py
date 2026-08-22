@@ -40,6 +40,8 @@ async def upsert_supplier_material(db: AsyncSession, *, material_id, supplier_id
     make_preferred_if_first is set, mark it preferred."""
     q = select(SupplierMaterial).where(SupplierMaterial.material_id == material_id,
                                        SupplierMaterial.integration_provider == integration_provider)
+    if supplier_id is not None:
+        q = q.where(SupplierMaterial.supplier_id == supplier_id)
     if external_item_id is not None:
         q = q.where(SupplierMaterial.external_item_id == external_item_id)
     sm = (await db.execute(q)).scalars().first()
