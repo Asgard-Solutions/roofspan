@@ -34,6 +34,7 @@ def _mat_out(m: Material) -> MaterialOut:
         id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
         active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
         low_stock=(m.quantity_on_hand <= m.reorder_threshold),
+        vendor=m.vendor, abc_item_number=m.abc_item_number,
     )
 
 

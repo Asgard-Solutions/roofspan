@@ -44,6 +44,21 @@ async def get_item(client: AbcClient, item_number: str) -> dict | None:
     return items[0] if items else None
 
 
+async def list_items(client: AbcClient, *, page_number: int = 1, items_per_page: int = 100,
+                     since: str | None = None) -> dict:
+    """Full-catalog retrieval for synchronization (GET {PRODUCT_PREFIX}/items).
+
+    Paginate by passing page_number. `since` (ISO-8601) uses ABC's documented
+    `sinceLastModifiedDateTime` filter to fetch only products changed since the last successful sync.
+    Returns the raw ABC page dict: {"items": [...], "pagination": {...}}.
+    """
+    params: dict = {"itemsPerPage": items_per_page, "pageNumber": page_number, "embed": "branches"}
+    if since:
+        params["sinceLastModifiedDateTime"] = since
+    data = await client.get_json(f"{PRODUCT_PREFIX}/items", params=params)
+    return data if isinstance(data, dict) else {"items": []}
+
+
 def item_available_at_branch(item: dict, branch_number: str | None) -> bool:
     if not branch_number:
         return False

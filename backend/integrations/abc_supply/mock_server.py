@@ -336,6 +336,48 @@ async def get_item_image(asset_id: str, authorization: str | None = Header(defau
     return _Resp(content=png, media_type="image/png")
 
 
+# Full-catalog retrieval for sync (GET /api/product/v1/items). Includes a synthetic DISCONTINUED item so
+# incremental/inactive handling can be exercised. `sinceLastModifiedDateTime` filters by lastModifiedDateTime.
+_CATALOG_LAST_MODIFIED = "2026-06-01T00:00:00Z"
+_MOCK_DISCONTINUED = {
+    "itemNumber": "MOCK-DISCONTINUED", "familyId": "PFam_MOCK_OLD", "familyName": "Mock Discontinued",
+    "isDimensional": False, "itemDescription": "Mock Discontinued Shingle (no longer stocked)",
+    "status": "Inactive", "uoms": [{"name": "Bundle", "code": "BD", "description": "stocking"}], "images": [],
+    "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Steep Slope Roofing"}}},
+    "manufacturer": "MockBrand", "branchNumbers": ["18"],
+}
+
+
+def _catalog_items():
+    items = [dict(it, lastModifiedDateTime=_CATALOG_LAST_MODIFIED) for it in _MOCK_ITEMS]
+    items.append(dict(_MOCK_DISCONTINUED, lastModifiedDateTime="2026-06-10T00:00:00Z"))
+    return items
+
+
+@router.get("/api/product/v1/items")
+async def list_items_mock(request: Request, authorization: str | None = Header(default=None),
+                          pageNumber: int = 1, itemsPerPage: int = 100,
+                          sinceLastModifiedDateTime: str | None = None, embed: str | None = None):
+    _require_bearer(authorization)
+    all_items = _catalog_items()
+    if sinceLastModifiedDateTime:
+        all_items = [it for it in all_items if it["lastModifiedDateTime"] >= sinceLastModifiedDateTime]
+    total = len(all_items)
+    total_pages = max(1, (total + itemsPerPage - 1) // itemsPerPage) if total else 1
+    start = (pageNumber - 1) * itemsPerPage
+    page_items = all_items[start:start + itemsPerPage]
+    embed_branches = embed == "branches"
+    views = [_item_view(it, branch_filter=None, embed_branches=embed_branches) for it in page_items]
+    for v, src in zip(views, page_items):
+        v["lastModifiedDateTime"] = src["lastModifiedDateTime"]
+        v["status"] = src.get("status", "Active")
+        if not embed_branches:
+            v["branchNumbers"] = src["branchNumbers"]
+    return {"pagination": {"itemsPerPage": itemsPerPage, "pageNumber": pageNumber, "totalPages": total_pages, "totalItems": total},
+            "items": views}
+
+
+
 # ---------------- Pricing API (Phase 2, /api/pricing/v2/prices) ----------------
 @router.post("/api/pricing/v2/prices")
 async def price_items(request: Request, authorization: str | None = Header(default=None)):

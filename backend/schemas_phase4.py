@@ -36,6 +36,8 @@ class MaterialOut(BaseModel):
     quantity_on_hand: float
     reorder_threshold: float
     low_stock: bool
+    vendor: Optional[str] = None
+    abc_item_number: Optional[str] = None
 
 
 class AdjustIn(BaseModel):

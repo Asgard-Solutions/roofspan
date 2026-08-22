@@ -115,3 +115,66 @@ class AbcPriceIn(BaseModel):
     branch_number: str
     purpose: str = "ordering"
     lines: List[AbcPriceLineIn] = []
+
+
+# ---- Vendor Catalog (Inventory) ----
+class AbcCatalogItemOut(BaseModel):
+    id: Optional[str] = None  # local catalog row id (present once cached)
+    item_number: str
+    description: Optional[str] = None
+    manufacturer: Optional[str] = None
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    family_id: Optional[str] = None
+    family_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    uoms: List[dict] = []
+    status: str = "active"
+    is_dimensional: bool = False
+    image_url: Optional[str] = None
+    available_at_branch: Optional[bool] = None  # for the active/default branch; None = unknown
+    branch_number: Optional[str] = None
+    in_inventory: bool = False
+    material_id: Optional[str] = None
+
+
+class AbcCatalogContext(BaseModel):
+    connected: bool
+    ship_to_number: Optional[str] = None
+    ship_to_name: Optional[str] = None
+    branch_number: Optional[str] = None
+    needs_ship_to: bool = False
+    needs_branch: bool = False
+
+
+class AbcCatalogListOut(BaseModel):
+    items: List[AbcCatalogItemOut] = []
+    page: int = 1
+    page_size: int = 25
+    total: Optional[int] = None
+    total_pages: Optional[int] = None
+    source: str = "cache"  # cache | live
+    context: AbcCatalogContext
+
+
+class AbcCatalogSyncOut(BaseModel):
+    status: str
+    last_synced_at: Optional[datetime] = None
+    last_full_sync_at: Optional[datetime] = None
+    items_synced: int = 0
+    total_items: int = 0
+    last_error: Optional[str] = None
+    started_at: Optional[datetime] = None
+
+
+class AbcAddToInventoryIn(BaseModel):
+    branch_number: Optional[str] = None
+    name_override: Optional[str] = None
+
+
+class AbcAddToInventoryOut(BaseModel):
+    material_id: str
+    material_name: str
+    created: bool
+    already_linked: bool
+    abc_item_number: str

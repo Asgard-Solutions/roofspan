@@ -19,8 +19,8 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import get_db
-from models import AbcIntegration, User
+from db import get_db, SessionLocal
+from models import AbcIntegration, User, Material, AbcCatalogItem, AbcCatalogSync, AbcAccountLink
 from core import require_roles, SENSITIVE_ROLES, MANAGE_ROLES, encrypt_secret, decrypt_secret, log_action
 from integrations.abc_supply import config as abc_config
 from integrations.abc_supply import auth as abc_auth
@@ -29,10 +29,13 @@ from integrations.abc_supply import accounts as abc_accounts
 from integrations.abc_supply import locations as abc_locations
 from integrations.abc_supply import products as abc_products
 from integrations.abc_supply import pricing as abc_pricing
+from integrations.abc_supply import catalog as abc_catalog
 from integrations.abc_supply.exceptions import AbcError, AbcAuthError, AbcNotConfigured
 from integrations.abc_supply.schemas import (
     AbcConfigUpdate, AbcSecretUpdate, AbcDefaultsUpdate, AbcStatusOut, AbcConnectOut,
     AbcTestResult, AbcShipToOut, AbcBranchOut, AbcProductSearchIn, AbcProductOut, AbcPriceIn,
+    AbcCatalogItemOut, AbcCatalogContext, AbcCatalogListOut, AbcCatalogSyncOut,
+    AbcAddToInventoryIn, AbcAddToInventoryOut,
 )
 
 log = logging.getLogger("roofspan.abc")
@@ -537,3 +540,261 @@ async def order_templates(request: Request, user: User = Depends(require_roles(*
         return {"templates": await abc_orders.list_templates(client)}
     except AbcError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
+
+
+# --------------------------- vendor catalog (Inventory) ---------------------------
+from sqlalchemy import or_, func  # noqa: E402
+
+
+async def _catalog_context(db: AsyncSession, row: AbcIntegration, branch_override: str | None) -> AbcCatalogContext:
+    ship_to = row.default_ship_to_number
+    branch = branch_override or row.default_branch_number
+    ship_to_name = None
+    if ship_to:
+        link = (await db.execute(select(AbcAccountLink).where(AbcAccountLink.ship_to_number == ship_to))).scalars().first()
+        ship_to_name = link.ship_to_name if link else None
+    connected = row.status == "connected" and bool(row.access_token_ciphertext)
+    return AbcCatalogContext(
+        connected=connected, ship_to_number=ship_to, ship_to_name=ship_to_name, branch_number=branch,
+        needs_ship_to=(connected and not ship_to), needs_branch=(connected and not branch),
+    )
+
+
+async def _existing_material_numbers(db: AsyncSession) -> set[str]:
+    rows = (await db.execute(select(Material.abc_item_number).where(Material.abc_item_number.isnot(None)))).scalars().all()
+    return {str(n) for n in rows if n}
+
+
+def _catalog_out_from_row(r: AbcCatalogItem, branch: str | None, in_inventory: bool) -> AbcCatalogItemOut:
+    branches = r.branch_numbers or []
+    available = (str(branch) in [str(b) for b in branches]) if branch else None
+    return AbcCatalogItemOut(
+        id=str(r.id), item_number=r.abc_item_number, description=r.description, manufacturer=r.manufacturer,
+        brand=r.brand, category=r.category, family_id=r.family_id, family_name=r.family_name,
+        unit_of_measure=r.unit_of_measure, uoms=r.uoms or [], status=r.status, is_dimensional=r.is_dimensional,
+        image_url=r.image_url, available_at_branch=available, branch_number=branch,
+        in_inventory=in_inventory or bool(r.material_id), material_id=(str(r.material_id) if r.material_id else None),
+    )
+
+
+def _catalog_out_from_raw(item: dict, branch: str | None, existing: set[str]) -> AbcCatalogItemOut:
+    fields = abc_catalog.map_catalog_fields(item)
+    num = fields["abc_item_number"]
+    branches = fields.get("branch_numbers") or []
+    available = (str(branch) in [str(b) for b in branches]) if branch else None
+    return AbcCatalogItemOut(
+        id=None, item_number=num, description=fields.get("description"), manufacturer=fields.get("manufacturer"),
+        brand=fields.get("brand"), category=fields.get("category"), family_id=fields.get("family_id"),
+        family_name=fields.get("family_name"), unit_of_measure=fields.get("unit_of_measure"),
+        uoms=fields.get("uoms") or [], status=fields.get("status") or "active",
+        is_dimensional=bool(fields.get("is_dimensional")), image_url=fields.get("image_url"),
+        available_at_branch=available, branch_number=branch, in_inventory=(num in existing), material_id=None,
+    )
+
+
+@router.get("/catalog", response_model=AbcCatalogListOut)
+async def catalog_list(request: Request, q: str | None = None, page: int = 1, page_size: int = 25,
+                       category: str | None = None, active_only: bool = True, branch: str | None = None,
+                       live: bool = False, user: User = Depends(require_roles(*MANAGE_ROLES)),
+                       db: AsyncSession = Depends(get_db)):
+    """Browse/search the ABC vendor catalog. Serves the local cache by default (fast, paginated); set
+    live=true (or when the cache is empty) to query ABC directly and warm the cache. ABC availability is
+    branch-specific and is NEVER RoofSpan on-hand stock."""
+    row = await _get_or_create(db)
+    ctx = await _catalog_context(db, row, branch)
+    page = max(1, page)
+    page_size = min(max(page_size, 1), 100)
+    eff_branch = ctx.branch_number
+    cache_count = (await db.execute(select(func.count(AbcCatalogItem.id)))).scalar() or 0
+
+    use_live = (live or cache_count == 0) and ctx.connected
+    if use_live:
+        client = await _connected_client(db, request)
+        try:
+            data = await abc_products.search_items(client, query=q, by="itemDescription",
+                                                   branch_number=(branch if branch else None),
+                                                   embed_branches=True, page_number=page, items_per_page=page_size)
+        except AbcError as e:
+            raise HTTPException(status_code=502, detail=e.user_message)
+        items_raw = data.get("items") or []
+        for it in items_raw:  # opportunistic cache warm (best-effort)
+            try:
+                await abc_catalog.upsert_catalog_item(db, it)
+            except Exception:
+                pass
+        await db.commit()
+        existing = await _existing_material_numbers(db)
+        out = [_catalog_out_from_raw(it, eff_branch, existing) for it in items_raw]
+        if active_only:
+            out = [o for o in out if o.status == "active"]
+        if category:
+            out = [o for o in out if (o.category or "").lower() == category.lower()]
+        pg = data.get("pagination") or {}
+        await log_action(db, user=user, action="abc.catalog.search", entity_type="abc_integration", entity_id=str(row.id),
+                         detail={"q": (q or "")[:120], "source": "live"}, request=request)
+        return AbcCatalogListOut(items=out, page=page, page_size=page_size, total=pg.get("totalItems"),
+                                 total_pages=pg.get("totalPages"), source="live", context=ctx)
+
+    # ---- local cache browse ----
+    stmt = select(AbcCatalogItem)
+    count_stmt = select(func.count(AbcCatalogItem.id))
+    conds = []
+    if active_only:
+        conds.append(AbcCatalogItem.status == "active")
+    if category:
+        conds.append(func.lower(AbcCatalogItem.category) == category.lower())
+    if q:
+        like = f"%{q}%"
+        conds.append(or_(AbcCatalogItem.description.ilike(like), AbcCatalogItem.abc_item_number.ilike(like),
+                         AbcCatalogItem.manufacturer.ilike(like)))
+    for c in conds:
+        stmt = stmt.where(c)
+        count_stmt = count_stmt.where(c)
+    total = (await db.execute(count_stmt)).scalar() or 0
+    stmt = stmt.order_by(AbcCatalogItem.description.asc()).offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(stmt)).scalars().all()
+    existing = await _existing_material_numbers(db)
+    out = [_catalog_out_from_row(r, eff_branch, r.abc_item_number in existing) for r in rows]
+    total_pages = max(1, (int(total) + page_size - 1) // page_size)
+    return AbcCatalogListOut(items=out, page=page, page_size=page_size, total=int(total),
+                             total_pages=total_pages, source="cache", context=ctx)
+
+
+@router.get("/catalog/sync/status", response_model=AbcCatalogSyncOut)
+async def catalog_sync_status(user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    sync = await abc_catalog.get_sync_row(db)
+    return AbcCatalogSyncOut(status=sync.status, last_synced_at=sync.last_synced_at,
+                             last_full_sync_at=sync.last_full_sync_at, items_synced=sync.items_synced,
+                             total_items=sync.total_items, last_error=sync.last_error, started_at=sync.started_at)
+
+
+async def _run_sync_task(full: bool, started_by: str | None):
+    """Background catalog sync with its own DB session + client (survives request lifecycle)."""
+    async with SessionLocal() as db:
+        try:
+            row = await _get_or_create(db)
+            if row.status != "connected" or not row.access_token_ciphertext:
+                sync = await abc_catalog.get_sync_row(db)
+                sync.status = "failed"; sync.last_error = "ABC Supply is not connected."
+                await db.commit()
+                return
+            access = _safe_decrypt(row.access_token_ciphertext)
+            client = AbcClient(_build_cfg(row), access_token=access)
+            await abc_catalog.run_sync(db, client, full=full, started_by=started_by)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                sync = await abc_catalog.get_sync_row(db)
+                sync.status = "failed"; sync.last_error = str(exc)[:480]
+                await db.commit()
+            except Exception:
+                pass
+
+
+@router.post("/catalog/sync", response_model=AbcCatalogSyncOut)
+async def catalog_sync(request: Request, full: bool = False, user: User = Depends(require_roles(*MANAGE_ROLES)),
+                       db: AsyncSession = Depends(get_db)):
+    row = await _get_or_create(db)
+    if row.status != "connected" or not row.access_token_ciphertext:
+        raise HTTPException(status_code=400, detail="Connect ABC Supply before synchronizing the catalog.")
+    sync = await abc_catalog.get_sync_row(db)
+    if sync.status == "syncing":
+        raise HTTPException(status_code=409, detail="A catalog sync is already in progress.")
+    # Full sync when explicitly requested OR when there has never been a successful full sync.
+    do_full = full or sync.last_full_sync_at is None
+    await log_action(db, user=user, action="abc.catalog.sync", entity_type="abc_integration", entity_id=str(row.id),
+                     detail={"full": do_full}, request=request)
+    import asyncio
+    asyncio.create_task(_run_sync_task(do_full, user.email))
+    return AbcCatalogSyncOut(status="syncing", last_synced_at=sync.last_synced_at,
+                             last_full_sync_at=sync.last_full_sync_at, items_synced=sync.items_synced,
+                             total_items=sync.total_items, last_error=None, started_at=datetime.now(timezone.utc))
+
+
+@router.get("/catalog/{item_number}", response_model=AbcCatalogItemOut)
+async def catalog_detail(item_number: str, request: Request, branch: str | None = None,
+                         user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    row = await _get_or_create(db)
+    ctx = await _catalog_context(db, row, branch)
+    eff_branch = ctx.branch_number
+    cached = (await db.execute(select(AbcCatalogItem).where(AbcCatalogItem.abc_item_number == item_number))).scalars().first()
+    existing = await _existing_material_numbers(db)
+    if cached:
+        return _catalog_out_from_row(cached, eff_branch, cached.abc_item_number in existing)
+    if not ctx.connected:
+        raise HTTPException(status_code=404, detail="Product not found in local catalog. Sync or connect ABC Supply.")
+    client = await _connected_client(db, request)
+    try:
+        item = await abc_products.get_item(client, item_number)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    if not item:
+        raise HTTPException(status_code=404, detail="Product not found")
+    try:
+        await abc_catalog.upsert_catalog_item(db, item)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+    return _catalog_out_from_raw(item, eff_branch, existing)
+
+
+@router.post("/catalog/{item_number}/add-to-inventory", response_model=AbcAddToInventoryOut)
+async def catalog_add_to_inventory(item_number: str, payload: AbcAddToInventoryIn, request: Request,
+                                   user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Create or link a RoofSpan Material from an ABC catalog item, preserving the ABC identity for future
+    pricing/ordering. Never duplicates: if this ABC item already maps to a Material, returns it unchanged.
+    ABC branch availability is NOT written to quantity_on_hand (defaults to 0 per existing inventory rules)."""
+    row = await _get_or_create(db)
+    # Ensure we have the catalog row (fetch live if needed and connected).
+    cat = (await db.execute(select(AbcCatalogItem).where(AbcCatalogItem.abc_item_number == item_number))).scalars().first()
+    if not cat:
+        if row.status != "connected" or not row.access_token_ciphertext:
+            raise HTTPException(status_code=404, detail="Product not in local catalog. Sync the ABC catalog first.")
+        client = await _connected_client(db, request)
+        try:
+            item = await abc_products.get_item(client, item_number)
+        except AbcError as e:
+            raise HTTPException(status_code=502, detail=e.user_message)
+        if not item:
+            raise HTTPException(status_code=404, detail="ABC product not found")
+        cat, _ = await abc_catalog.upsert_catalog_item(db, item)
+        await db.commit()
+        await db.refresh(cat)
+
+    # Already linked? (durable ABC↔RoofSpan mapping — never create a second identity)
+    existing = None
+    if cat.material_id:
+        existing = await db.get(Material, cat.material_id)
+    if not existing:
+        existing = (await db.execute(select(Material).where(Material.abc_item_number == item_number))).scalars().first()
+    if existing:
+        if not cat.material_id:
+            cat.material_id = existing.id
+            await db.commit()
+        return AbcAddToInventoryOut(material_id=str(existing.id), material_name=existing.name, created=False,
+                                    already_linked=True, abc_item_number=item_number)
+
+    # Create a new material. Resolve a unique name (avoid clashing with an existing manually-created name).
+    base_name = (payload.name_override or cat.description or item_number).strip()[:240]
+    name = base_name
+    clash = (await db.execute(select(Material).where(func.lower(Material.name) == name.lower()))).scalars().first()
+    if clash:
+        name = f"{base_name} (ABC {item_number})"[:250]
+    mat = Material(
+        name=name, sku=item_number, category=cat.category, unit=(cat.unit_of_measure or "each"),
+        description=cat.description, active=True, quantity_on_hand=0, reorder_threshold=0,
+        vendor="ABC Supply", abc_item_number=item_number, abc_catalog_item_id=cat.id,
+        abc_uom=cat.unit_of_measure,
+        abc_metadata={"family_id": cat.family_id, "family_name": cat.family_name, "manufacturer": cat.manufacturer,
+                      "brand": cat.brand, "is_dimensional": cat.is_dimensional, "uoms": cat.uoms,
+                      "branch_numbers": cat.branch_numbers, "image_url": cat.image_url},
+        created_by=user.email,
+    )
+    db.add(mat)
+    await db.commit()
+    await db.refresh(mat)
+    cat.material_id = mat.id
+    await db.commit()
+    await log_action(db, user=user, action="abc.catalog.add_to_inventory", entity_type="material", entity_id=mat.id,
+                     detail={"abc_item_number": item_number}, request=request)
+    return AbcAddToInventoryOut(material_id=str(mat.id), material_name=mat.name, created=True,
+                                already_linked=False, abc_item_number=item_number)

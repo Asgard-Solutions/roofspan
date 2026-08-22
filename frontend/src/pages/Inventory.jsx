@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -15,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
-import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send } from "lucide-react";
+import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
@@ -23,6 +24,7 @@ const sc = { draft: "bg-slate-100 text-slate-600", ordered: "bg-blue-50 text-blu
 
 export default function Inventory() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const canManage = MANAGE.includes(user?.role);
   const [materials, setMaterials] = useState([]);
   const [pos, setPos] = useState([]);
@@ -78,7 +80,7 @@ export default function Inventory() {
           </TabsList>
 
           <TabsContent value="materials" className="mt-6">
-            {canManage && <div className="mb-4"><Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Add material</Button></div>}
+            {canManage && <div className="mb-4 flex items-center gap-2"><Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Add material</Button><Button variant="outline" onClick={() => navigate("/inventory/abc-catalog")} data-testid="abc-catalog-button"><PackageSearch className="h-4 w-4" /> ABC Supply Catalog</Button></div>}
             <div className="overflow-x-auto rounded-md border border-border bg-white">
               <Table data-testid="materials-table">
                 <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>Category</TableHead><TableHead>Unit</TableHead><TableHead>On hand</TableHead><TableHead>Reorder at</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>

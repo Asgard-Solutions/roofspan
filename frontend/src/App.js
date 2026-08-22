@@ -13,6 +13,7 @@ import Customers from "@/pages/Customers";
 import Jobs from "@/pages/Jobs";
 import JobDetail from "@/pages/JobDetail";
 import Inventory from "@/pages/Inventory";
+import AbcCatalog from "@/pages/AbcCatalog";
 import Finance from "@/pages/Finance";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
@@ -46,6 +47,7 @@ function App() {
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/jobs/:id" element={<JobDetail />} />
             <Route path="/inventory" element={<Inventory />} />
+            <Route path="/inventory/abc-catalog" element={<AbcCatalog />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/reports" element={<Placeholder title="Reports" />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />

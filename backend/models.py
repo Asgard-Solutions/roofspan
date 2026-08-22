@@ -361,6 +361,13 @@ class Material(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     quantity_on_hand: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     reorder_threshold: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    # Vendor linkage (nullable; only set for materials imported from a vendor catalog such as ABC Supply).
+    # ABC branch AVAILABILITY is never written to quantity_on_hand — these fields are identity only.
+    vendor: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "ABC Supply"
+    abc_item_number: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    abc_catalog_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    abc_uom: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    abc_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -656,3 +663,49 @@ class AbcInvoiceEvent(Base):
     is_rebill: Mapped[bool] = mapped_column(Boolean, default=False)
     event_received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     payload_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+# ---------- ABC Supply Vendor Catalog (local cache of ABC master product data) ----------
+
+class AbcCatalogItem(Base):
+    """Local cache of an ABC Supply vendor product (master data). This is VENDOR data, NOT RoofSpan
+    on-hand inventory. Availability at a branch is derived from `branch_numbers`; ABC does not expose
+    physical quantity-on-hand, so this is never treated as stock. `material_id` links an imported item
+    to a RoofSpan Material (the durable ABC↔RoofSpan mapping used for future pricing/ordering)."""
+    __tablename__ = "abc_catalog_items"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    abc_item_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    family_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    family_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unit_of_measure: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    uoms: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False, index=True)  # active | inactive
+    image_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    is_dimensional: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    branch_numbers: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # branches item is purchasable from
+    abc_last_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True, index=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AbcCatalogSync(Base):
+    """Singleton-style sync status for the ABC vendor catalog. One row tracks the last full/incremental
+    sync so the UI can show 'Last synced' / 'Syncing' / 'Sync failed' without misleading percentages."""
+    __tablename__ = "abc_catalog_sync"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(String(16), default="never_synced", nullable=False)  # never_synced|syncing|completed|failed
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_full_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    items_synced: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # from the last run
+    total_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # total catalog rows locally
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
