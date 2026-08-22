@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only regression after dependency cleanup (removed emergentintegrations==0.2.0 and the private-URL litellm wheel from backend/requirements.txt). Verified no code references remain to either package (grep -r emergentintegrations/litellm across /app/backend => 0 hits), backend module imports cleanly (python -c 'import server' => 277 routes registered), and supervisor reports backend RUNNING. Executed 3 targeted pytest suites totaling 71 tests, all PASSED: (a) test_final_e2e_acceptance.py - 31/31 covering full chain: owner login, master material, supplier framework + SupplierMaterial mapping, estimate (price book auto-apply, markup vs margin, cost snapshot), quote+proposal HTML+PDF (customer-safe, PDF starts %PDF), quote accept -> job -> material plan -> reserve -> shortage -> purchase proposal draft -> manual PO create+partial receive with idempotency-key dedupe -> transfer/issue/return/waste, inventory math invariants (Material.quantity_on_hand == Sigma InventoryBalance, Available == OnHand-Reserved), transactions ledger, job costing baseline+actual, immutable cost snapshot, and 7 RBAC sales-denial checks (403 on /jobs/{id}/costing, /jobs/{id}/actual-costs, /reports/costing/{profitability,material-variance,waste,supplier-impact}.csv) + sales can GET proposal; (b) test_purchasing_pricing_output.py + test_spec_closure_dashboard.py + test_estimating_modernization.py - 30/30 covering /api/dashboard/purchasing (owner data + sales cost-hide), /api/reports/inventory/on-hand (JSON + CSV + RBAC), proposal JSON customer-safe, proposal PDF generation, CSV exports RBAC, price book, margin policy, cost snapshots, assemblies; (c) test_abc_supply_p1.py - 10/10 covering ABC mocked OAuth (PKCE, client credentials, refresh rotation) + ship-to + branches. No regressions detected from the two package removals.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_details": {
+    "static_check": "PASS - grep emergentintegrations|litellm across /app/backend (excluding __pycache__) => 0 matches. backend/requirements.txt no longer lists either package. `python -c 'import server'` succeeds and app exposes 277 routes.",
+    "supervisor": "PASS - backend RUNNING (pid 27943), mongodb RUNNING.",
+    "e2e_chain": "31/31 PASSED in 9.64s (test_final_e2e_acceptance.py) - covers all requested items: auth login, supplier framework, product catalog pricing, inventory create/receive/reserve/issue/return/waste/transfer with invariants, estimating with price book+margin, quote proposal HTML+PDF (%PDF prefix), job costing baseline+actual+summary, /api/dashboard/purchasing, /api/reports/inventory/on-hand indirectly via spec-closure suite.",
+    "purchasing_and_dashboard": "PASS - test_spec_closure_dashboard 4/4 (purchasing dashboard real data + actions, sales cost hidden, inventory on-hand JSON+CSV, inventory report RBAC).",
+    "rbac_sales": "PASS - 7/7 sales-denial checks on costing endpoints + CSV exports; sales still allowed customer proposal.",
+    "abc_mocked": "PASS - test_abc_supply_p1 10/10 (PKCE, refresh rotation, ship-to filtering, branch search)."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_final_e2e_acceptance.py",
+    "/app/backend/tests/test_purchasing_pricing_output.py",
+    "/app/backend/tests/test_spec_closure_dashboard.py",
+    "/app/backend/tests/test_estimating_modernization.py",
+    "/app/backend/tests/test_abc_supply_p1.py",
+    "/app/test_reports/pytest/iter44_e2e.xml",
+    "/app/test_reports/pytest/iter44_extra.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Dependency cleanup is safe: neither emergentintegrations nor litellm is imported anywhere in /app/backend. Removing them has no runtime impact, and requirements.txt now installs cleanly from pypi.org only (per E1's manual clean-venv verification).",
+    "No new code was introduced in this iteration, so no code-review deltas beyond the requirements.txt diff."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (71/71 across E2E + purchasing/dashboard + estimating + ABC-mock suites)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md). Sales users are created per-test with pattern sales_e2e_<hex8>@example.com / SalesE2E#2026.",
+  "seed_data_creation": "Self-owned per-test data prefixed TEST_E2E_<hex>. No production/preview records modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Dependency-decoupling regression is signed off. If future iterations remove more packages, rerun `cd /app/backend && python -m pytest tests/test_final_e2e_acceptance.py tests/test_purchasing_pricing_output.py tests/test_spec_closure_dashboard.py tests/test_estimating_modernization.py tests/test_abc_supply_p1.py -v -o addopts=''` -- completes in ~2 minutes and covers the entire modernized stack. Full ABC suite (p1-p4) still requires per-file serial execution per prior agent notes.",
+  "rca of the issue": "No issues found. The removal of emergentintegrations==0.2.0 and the litellm private wheel is purely a dependency cleanup; both packages were unused (0 import references in /app/backend). Runtime, imports, routes, auth, inventory math invariants, RBAC, and proposal generation all behave identically to iteration_42/43 baselines."
+}
