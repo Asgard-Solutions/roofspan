@@ -10,7 +10,7 @@ import LocationResolutionProgress from "@/components/LocationResolutionProgress"
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck, Layers, BookOpen,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
@@ -26,6 +26,11 @@ const MAIN_NAV = [
   { to: "/suppliers", label: "Suppliers", icon: Truck, testid: "nav-suppliers" },
   { to: "/finance", label: "Finance", icon: Wallet, testid: "nav-finance" },
   { to: "/reports", label: "Reports", icon: BarChart3, testid: "nav-reports" },
+];
+
+const ESTIMATING_NAV = [
+  { to: "/estimating/assemblies", label: "Assemblies", icon: Layers, testid: "nav-assemblies" },
+  { to: "/estimating/price-books", label: "Price Books", icon: BookOpen, testid: "nav-price-books" },
 ];
 
 const ADMIN_NAV = [
@@ -45,7 +50,7 @@ const linkClass = ({ isActive }) =>
       : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
   );
 
-function NavContent({ onNavigate, isSensitive }) {
+function NavContent({ onNavigate, isSensitive, isManage }) {
   return (
     <nav className="flex flex-col gap-0.5 py-2" data-testid="sidebar-nav">
       {MAIN_NAV.map((item) => (
@@ -54,6 +59,17 @@ function NavContent({ onNavigate, isSensitive }) {
           {item.label}
         </NavLink>
       ))}
+      {isManage && (
+        <>
+          <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Estimating</div>
+          {ESTIMATING_NAV.map((item) => (
+            <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate} data-testid={item.testid}>
+              <item.icon className="h-4 w-4" />
+              {item.label}
+            </NavLink>
+          ))}
+        </>
+      )}
       {isSensitive && (
         <>
           <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Administration</div>
@@ -83,6 +99,7 @@ function Brand() {
 
 export default function AppShell() {
   const { user, logout, isSensitive } = useAuth();
+  const isManage = ["owner", "administrator", "office"].includes(user?.role);
   const [open, setOpen] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   const navigate = useNavigate();
@@ -124,7 +141,7 @@ export default function AppShell() {
     <div className="App flex min-h-screen bg-background">
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-border bg-white md:flex" data-testid="desktop-sidebar">
         <Brand />
-        <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} /></div>
+        <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} isManage={isManage} /></div>
         <UserFooter />
       </aside>
 
@@ -136,7 +153,7 @@ export default function AppShell() {
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0">
             <Brand />
-            <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} onNavigate={() => setOpen(false)} /></div>
+            <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} isManage={isManage} onNavigate={() => setOpen(false)} /></div>
             <UserFooter />
           </SheetContent>
         </Sheet>

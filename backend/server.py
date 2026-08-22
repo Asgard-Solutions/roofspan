@@ -61,6 +61,8 @@ app.include_router(leads.router)
 app.include_router(customers.router)
 app.include_router(inspections.router)
 app.include_router(estimates.router)
+from routers import estimating as estimating_router
+app.include_router(estimating_router.router)
 app.include_router(quotes.router)
 app.include_router(invoices.router)
 app.include_router(jobs.router)

@@ -1,0 +1,66 @@
+{
+  "summary": "Full frontend + integration testing of the Estimating Modernization phase (Assemblies, Price Books, dedicated Estimate Editor at /estimates/:id, Cost/Markup RBAC, catalog & assembly line addition, cost-refresh preview, quote generation, single-package accept, multi-package Good/Better/Best accept, invoice creation). All 13 targeted features verified end-to-end against real backend. No blocking bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "tests_executed": {
+    "sidebar_rbac": [
+      "Owner sees new 'ESTIMATING' sidebar section with nav-assemblies + nav-price-books",
+      "Sales user does NOT see ESTIMATING section (nav-assemblies count=0, nav-price-books count=0)"
+    ],
+    "assemblies": [
+      "Assemblies page loaded (page-assemblies)",
+      "Created 'QA Roof 962273' with 2 items (material-linked via ai-material-0, labor toggled via ai-labor-1), quantity_factor via ai-factor — row appears in assemblies-table with v1",
+      "Edited assembly and saved — version bumped to v2",
+      "toggle-assembly-<id> deactivate/reactivate works (no errors)"
+    ],
+    "price_books": [
+      "Seeded 'Standard' price book present with Default badge and 'Default price book' description",
+      "Created 'Builder 962307' via add-pricebook-button",
+      "make-default-<Builder> promoted Builder to Default; Standard row switched to 'Make default' — confirmed only one default at a time",
+      "Opened Entries dialog (edit-entries-<id>), added markup entry (pb-add-entry) targeting a material with rule=markup value=25, saved via pb-save-entries — entry count = 1",
+      "Restored Standard as default at end of test"
+    ],
+    "estimate_editor": [
+      "createDraftEstimate on Lead 5d97d4da... -> POST /api/estimates then navigate to /estimates/aeca9f5b... (page-estimate-editor rendered)",
+      "Add Custom Line via estimate-add-item -> add-custom-line — el-desc-0/el-measured-0/el-waste-0/el-cost-0/el-markup-0 all editable",
+      "Waste calc: measured=31.5, waste=12 -> el-qty-0 = 35.28 (exact expected). Measured field is NOT overwritten by waste.",
+      "Markup calc: cost=100, markup=20 -> el-sell-0 auto-becomes 120; el-total-0 = $4,233.60 (exact expected)",
+      "Reverse calc: setting el-sell-0=150 recomputes el-markup-0 to 50 (exact expected)",
+      "Summary panel (owner): summary-cost=$3,528.00, summary-gp=$705.60, summary-gm=16.67%, summary-selling=$4,233.60, summary-total=$4,233.60 — matches server calc",
+      "estimate-save PUT with If-Match version; reload shows selling=$4,233.60, total=$4,233.60 (persisted)",
+      "Add from Product Catalog (add-from-catalog) opens product-picker with 69 add buttons; picker-add-<id> adds a material line",
+      "Add Assembly (add-assembly) opens assembly-picker; selected assembly + qty=2 + assembly-expand appended 2 lines (each showing assembly name badge under description e.g. 'QA Arch Roof · ...')",
+      "Cost Refresh: estimate-cost-refresh opens cost-refresh-dialog listing catalog-linked lines; refresh-apply is disabled when no changes; refresh-recalc checkbox visible. No auto-apply.",
+      "estimate-generate-quote created QUO-#### and navigated back to lead detail; quote appears with total"
+    ],
+    "quote_acceptance": [
+      "Single-package quote: accept-quote-<id> opens accept-dialog with NO accept-package-block; confirm-accept records acceptance and shows create-invoice-<id>",
+      "create-invoice-<id> creates invoice successfully (invoice count incremented)",
+      "Multi-package quote via POST /api/quotes with multi_package:true + Good/Best packages returned 201; on Lead detail, quote-packages-<qid> renders quote-package-<pkgId> rows for Good ($1,000) and Best ($2,000)",
+      "accept-quote-<id> opens dialog showing accept-package-select; picking a package + confirm-accept marked quote accepted, accepted package highlighted with border-green class, create-invoice button appeared, Job created (toast 'Quote accepted — Job created')"
+    ],
+    "rbac_sales": [
+      "Sales user on estimate editor (EST-0042): el-cost-0 count=0, el-markup-0 count=0, summary-cost/gp/gm count=0 — HIDDEN as required",
+      "Sales user sees summary-selling ($4,233.60) and summary-total ($4,233.60) only",
+      "estimate-cost-refresh button HIDDEN for sales",
+      "Backend: GET /api/estimates returns can_see_cost=false to sales; POST /api/estimating/price-books returns 403 for sales (RBAC enforced server-side)"
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_estimating_modernization.py (pre-existing)"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "estimating.py services.compute_line handles markup vs margin vs fixed pricing cleanly; comments clearly explain markup!=margin. Good.",
+    "estimates.py._can_see_cost gates cost fields, cost_summary, and cost-refresh endpoints — verified UI hides matching testids for sales.",
+    "estimating.py._clear_other_defaults enforces single default price book — verified in UI.",
+    "assembly version bump on update is correct; existing estimates preserve their snapshot via stored assembly_version.",
+    "Minor (non-blocking): EstimateEditor addProduct sets selling_unit_price=cost (0% markup) when adding from catalog picker — for sales role this shows $0 selling until an owner edits it. Consider defaulting to price_from_markup with a shop-wide default markup or applying the Default price book. Not a bug in this phase since Price Book application to editor lines isn't in scope."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not directly retested (backend was already green per agent context); RBAC 403 spot-checked", "frontend": "100% (13/13 features)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; Sales sales1_38f545f9@example.com / Sales1#2026",
+  "seed_data_creation": "Assembly 'QA Roof 962273 v2' (active); Price Book 'Builder 962307' (active, with 1 markup entry, NOT default); Estimate EST-0042 on lead 5d97d4da (converted TEST_P3_Lead); QUO-0038 accepted single-package; QUO-0039 accepted multi-package (Good accepted); invoices created.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Estimating Modernization phase is fully green. All data-testids used: nav-assemblies, nav-price-books, page-assemblies, add-assembly-button, assembly-form, assembly-name, assembly-basis, ai-material-<i>, ai-desc-<i>, ai-factor-<i>, ai-labor-<i>, assembly-save, assemblies-table, assembly-row-<id>, edit-assembly-<id>, toggle-assembly-<id>, page-price-books, add-pricebook-button, pricebook-form, pricebook-name, pricebook-save, pricebooks-table, pricebook-row-<id>, make-default-<id>, edit-entries-<id>, pb-add-entry, pb-material-<i>, pb-rule-<i>, pb-value-<i>, pb-save-entries, new-estimate-button (LeadDetail), page-estimate-editor, estimate-add-item, add-custom-line, add-from-catalog, add-assembly, el-desc-<i>, el-measured-<i>, el-waste-<i>, el-qty-<i>, el-cost-<i>, el-markup-<i>, el-sell-<i>, el-total-<i>, product-picker, picker-search, picker-add-<id>, assembly-picker, assembly-select, assembly-qty, assembly-expand, estimate-cost-refresh, cost-refresh-dialog, refresh-recalc, refresh-apply, summary-cost/gp/gm/selling/total, estimate-save, estimate-generate-quote, quote-packages-<qid>, quote-package-<pkgId>, accept-quote-<id>, accept-package-select, accept-package-block, confirm-accept, create-invoice-<id>. Sales token cannot see cost testids and cannot POST /api/estimating/price-books (403).",
+  "rca of the issue": "N/A — no failures."
+}

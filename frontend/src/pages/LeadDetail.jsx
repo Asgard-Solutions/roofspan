@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -35,6 +35,7 @@ const statusColor = { new: "bg-blue-50 text-blue-700", working: "bg-amber-50 tex
 
 export default function LeadDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const isManage = MANAGE.includes(user?.role);
 
@@ -53,6 +54,7 @@ export default function LeadDetail() {
   const [acceptOpen, setAcceptOpen] = useState(false);
   const [acceptTarget, setAcceptTarget] = useState(null);
   const [acceptName, setAcceptName] = useState("");
+  const [acceptPackage, setAcceptPackage] = useState("");
   const [assignable, setAssignable] = useState([]);
   const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -114,16 +116,23 @@ export default function LeadDetail() {
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
+  const createDraftEstimate = async () => {
+    try {
+      const { data } = await api.post("/estimates", { lead_id: id, customer_id: lead.customer_id, property_id: lead.property_id, inspection_id: inspections[0]?.id, tax_rate: 0, items: [] });
+      navigate(`/estimates/${data.id}`);
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
   const generateQuote = async (estId) => {
     try { await api.post("/quotes", { estimate_id: estId }); toast.success("Quote generated"); load(); }
     catch (e) { toast.error(apiError(e)); }
   };
   const sendQuote = async (q) => { try { await api.put(`/quotes/${q.id}`, { status: "sent" }); toast.success("Quote marked sent"); load(); } catch (e) { toast.error(apiError(e)); } };
   const declineQuote = async (q) => { try { await api.post(`/quotes/${q.id}/decline`); toast.success("Quote declined"); load(); } catch (e) { toast.error(apiError(e)); } };
-  const openAccept = (q) => { setAcceptTarget(q); setAcceptName(lead?.name || ""); setAcceptOpen(true); };
+  const openAccept = (q) => { setAcceptTarget(q); setAcceptName(lead?.name || ""); setAcceptPackage(q.multi_package && q.packages?.length ? q.packages[q.packages.length - 1].id : ""); setAcceptOpen(true); };
   const confirmAccept = async () => {
     setBusy(true);
-    try { const { data } = await api.post(`/quotes/${acceptTarget.id}/accept`, { acceptance_name: acceptName }); toast.success(`Quote accepted — Job created`); setAcceptOpen(false); load(); }
+    try { await api.post(`/quotes/${acceptTarget.id}/accept`, { acceptance_name: acceptName, package_id: acceptPackage || null }); toast.success(`Quote accepted — Job created`); setAcceptOpen(false); load(); }
     catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const createInvoice = async (q) => {
@@ -203,14 +212,17 @@ export default function LeadDetail() {
 
         {/* Estimates */}
         <Section icon={FileText} title="Estimates" testid="section-estimates"
-          action={<Button size="sm" variant="outline" disabled={!lead.customer_id} onClick={() => setEstOpen(true)} data-testid="new-estimate-button"><Plus className="h-4 w-4" /> New</Button>}>
+          action={<Button size="sm" variant="outline" disabled={!lead.customer_id} onClick={createDraftEstimate} data-testid="new-estimate-button"><Plus className="h-4 w-4" /> New</Button>}>
           {!lead.customer_id && <p className="mb-2 text-xs text-amber-600">Create a customer first.</p>}
           {estimates.length === 0 ? <p className="text-sm text-slate-500">No estimates yet.</p> : (
             <div className="space-y-2">
               {estimates.map((e) => (
                 <div key={e.id} className="flex items-center justify-between rounded border border-border p-2 text-sm" data-testid={`estimate-${e.id}`}>
-                  <div><span className="font-medium text-slate-900">{e.number}</span> · <span className="tabular-nums">{money(e.total)}</span></div>
-                  <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Quote</Button>
+                  <div><span className="font-medium text-slate-900">{e.number}</span> · <span className="tabular-nums">{money(e.total)}</span> <Badge className={statusColor[e.status] || ""} variant="secondary">{e.status}</Badge></div>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => navigate(`/estimates/${e.id}`)} data-testid={`edit-estimate-${e.id}`}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Quote</Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -228,6 +240,16 @@ export default function LeadDetail() {
                     <span className="tabular-nums font-semibold">{money(q.total)}</span>
                   </div>
                   {q.accepted_by && <div className="mt-1 text-xs text-green-600">Accepted by {q.acceptance_name || "customer"} · {shortDate(q.accepted_at)}</div>}
+                  {q.multi_package && q.packages?.length > 0 && (
+                    <div className="mt-2 grid gap-1.5" data-testid={`quote-packages-${q.id}`}>
+                      {q.packages.map((p) => (
+                        <div key={p.id} className={`flex items-center justify-between rounded border px-2 py-1 text-xs ${q.accepted_package_id === p.id ? "border-green-300 bg-green-50" : "border-border"}`} data-testid={`quote-package-${p.id}`}>
+                          <span className="font-medium text-slate-700">{p.name}{q.accepted_package_id === p.id ? " · accepted" : ""}</span>
+                          <span className="tabular-nums">{money(p.total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="mt-2 flex flex-wrap gap-2">
                     {q.status === "draft" && <Button size="sm" variant="outline" onClick={() => sendQuote(q)} data-testid={`send-quote-${q.id}`}><Send className="h-3.5 w-3.5" /> Send</Button>}
                     {isManage && q.status !== "accepted" && q.status !== "declined" && <Button size="sm" onClick={() => openAccept(q)} data-testid={`accept-quote-${q.id}`}><Check className="h-3.5 w-3.5" /> Accept</Button>}
@@ -299,7 +321,16 @@ export default function LeadDetail() {
         <DialogContent data-testid="accept-dialog">
           <DialogHeader><DialogTitle>Accept quote {acceptTarget?.number}</DialogTitle><DialogDescription>This records acceptance and creates a Job.</DialogDescription></DialogHeader>
           <div className="space-y-1.5"><Label>Customer acceptance name</Label><Input value={acceptName} onChange={(e) => setAcceptName(e.target.value)} data-testid="accept-name" /></div>
-          <DialogFooter><Button variant="outline" onClick={() => setAcceptOpen(false)}>Cancel</Button><Button onClick={confirmAccept} disabled={busy} data-testid="confirm-accept">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Accept & create job"}</Button></DialogFooter>
+          {acceptTarget?.multi_package && acceptTarget?.packages?.length > 0 && (
+            <div className="space-y-1.5" data-testid="accept-package-block">
+              <Label>Package accepted</Label>
+              <Select value={acceptPackage} onValueChange={setAcceptPackage}>
+                <SelectTrigger data-testid="accept-package-select"><SelectValue placeholder="Choose package" /></SelectTrigger>
+                <SelectContent>{acceptTarget.packages.map((p) => <SelectItem key={p.id} value={p.id}>{p.name} · {money(p.total)}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => setAcceptOpen(false)}>Cancel</Button><Button onClick={confirmAccept} disabled={busy || (acceptTarget?.multi_package && !acceptPackage)} data-testid="confirm-accept">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Accept & create job"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -254,6 +254,35 @@ class Estimate(Base):
 class EstimateLineItem(_LineItem, Base):
     __tablename__ = "estimate_line_items"
     estimate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("estimates.id", ondelete="CASCADE"), index=True)
+    # --- Estimating Modernization: catalog linkage (nullable — custom lines still work) ---
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True, index=True)
+    supplier_material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_materials.id", ondelete="SET NULL"), nullable=True)
+    line_kind: Mapped[str] = mapped_column(String(24), default="custom", nullable=False)  # custom | material | labor | assembly
+    # cost components (per estimate unit)
+    base_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)          # snapshot supplier cost / estimate unit
+    material_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    labor_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    equipment_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    subcontract_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    # quantities (measured vs waste-adjusted vs order)
+    measured_quantity: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    waste_percent: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    order_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)          # in purchase UOM
+    purchase_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    conversion_factor: Mapped[float | None] = mapped_column(Float, nullable=True)       # estimate-unit → purchase-unit
+    # pricing
+    markup_percent: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    selling_unit_price: Mapped[float] = mapped_column(Float, default=0, nullable=False)  # customer price / unit (mirrors unit_price)
+    # cost snapshot provenance
+    cost_source_supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    cost_source_supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    supplier_item_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cost_source: Mapped[str | None] = mapped_column(String(24), nullable=True)           # live | cached | manual
+    cost_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # assembly provenance (snapshot)
+    assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    assembly_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assembly_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class Quote(Base):
@@ -275,6 +304,8 @@ class Quote(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     acceptance_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    multi_package: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    accepted_package_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -284,6 +315,79 @@ class Quote(Base):
 class QuoteLineItem(_LineItem, Base):
     __tablename__ = "quote_line_items"
     quote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"), index=True)
+    package_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("quote_packages.id", ondelete="CASCADE"), nullable=True, index=True)
+    # internal-only cost snapshot (NEVER exposed on customer-facing output)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    total_unit_cost: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    markup_percent: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+
+
+class QuotePackage(Base):
+    __tablename__ = "quote_packages"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    quote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="", nullable=False)  # e.g. Good / Better / Best (user-defined)
+    tier: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    subtotal: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    tax: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    total: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class Assembly(Base):
+    __tablename__ = "assemblies"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    unit_basis: Mapped[str] = mapped_column(String(32), default="SQ", nullable=False)  # e.g. per 1 SQ
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AssemblyItem(Base):
+    __tablename__ = "assembly_items"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    assembly_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("assemblies.id", ondelete="CASCADE"), index=True)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    quantity_factor: Mapped[float] = mapped_column(Float, default=1, nullable=False)  # qty per 1 unit_basis
+    unit: Mapped[str] = mapped_column(String(32), default="ea", nullable=False)
+    waste_override: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_labor: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class PriceBook(Base):
+    __tablename__ = "price_books"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class PriceBookEntry(Base):
+    __tablename__ = "price_book_entries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    price_book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("price_books.id", ondelete="CASCADE"), index=True)
+    target_type: Mapped[str] = mapped_column(String(24), default="material", nullable=False)  # material | labor | assembly
+    material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), nullable=True)
+    assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("assemblies.id", ondelete="CASCADE"), nullable=True)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)  # for labor/service entries
+    rule_type: Mapped[str] = mapped_column(String(16), default="markup", nullable=False)  # fixed | markup | margin
+    fixed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    markup_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    margin_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class Job(Base):

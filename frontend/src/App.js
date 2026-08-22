@@ -15,6 +15,9 @@ import JobDetail from "@/pages/JobDetail";
 import Inventory from "@/pages/Inventory";
 import ProductCatalog from "@/pages/ProductCatalog";
 import MaterialDetail from "@/pages/MaterialDetail";
+import EstimateEditor from "@/pages/EstimateEditor";
+import Assemblies from "@/pages/Assemblies";
+import PriceBooks from "@/pages/PriceBooks";
 import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
 import Placeholder from "@/pages/Placeholder";
@@ -53,6 +56,9 @@ function App() {
             <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
             <Route path="/suppliers" element={<Suppliers />} />
+            <Route path="/estimates/:id" element={<EstimateEditor />} />
+            <Route path="/estimating/assemblies" element={<Assemblies />} />
+            <Route path="/estimating/price-books" element={<PriceBooks />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/reports" element={<Placeholder title="Reports" />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
