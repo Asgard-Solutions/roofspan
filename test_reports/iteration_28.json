@@ -1,0 +1,37 @@
+{
+  "summary": "Iter_28: End-to-end verification of the ABC Supply 'Delivery Address Review & Editor' enhancement and the just-fixed OPTIONAL-override regression. Wrote /app/backend/tests/test_abc_supply_delivery_api.py (8 tests, 7 PASS + 1 SKIP for env-only reason). Also ran the full ABC P1-P4 unit regression (31/31 pass). Frontend Playwright flow drove the full UI: Owner login -> Inventory -> Purchase Orders -> open PO-0204 (fresh seeded ABC PO) -> ABC Order panel shows data-testid='abc-delivery-review' with 'Edit Delivery Address' link -> click opens 'abc-delivery-editor' modal with all 9 fields (delivery-name/line1/line2/city/state/postal/contact-name/contact-phone/instructions) -> filled line1='500 Testing Way', city='Austin', state='TX', postal='78701' -> 'Use This Delivery Address' saves and Deliver-To review reflects edits -> abc-submit-order returns confirmed with toast 'Submitted to ABC — MOCK-CONF-10005'; reopening the panel shows 'abc-order-status' (Submitted / MOCK-CONF-10005 / shipments / Refresh) AND 'abc-submitted-delivery' displaying the exact edited address (500 Testing Way, Austin, TX 78701). Backend confirms GET /api/purchase-orders/{id}.abc_delivery snapshot matches edited values exactly; abc_ship_to_number remained 1163698. Both regression edge cases pass: (a) empty/omitted/blank-string delivery override => 'confirmed' (NOT validation_failed), (b) partial override (only line1) => 'validation_failed' with errors naming missing city/state/ZIP. All 11 review items verified.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "abc-submit from panel", "issue": "After clicking Submit and receiving 'confirmed', the OPEN AbcOrderPanel does NOT re-render into the submitted-status view — it keeps showing the review view with a small 'Submitted' badge next to the button. User must close and reopen the panel to see abc-order-status and abc-submitted-delivery. Not a regression (pre-existing behavior for the whole panel; abc-submitted-delivery only renders inside abc-order-status which is gated on `submitted = !!po.external_confirmation_number` from the parent-passed po prop, which is not refreshed after submit). Minor UX polish opportunity.", "affected_selectors": ["[data-testid=\"abc-order-status\"]", "[data-testid=\"abc-submitted-delivery\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_delivery_api.py",
+    "/app/test_reports/pytest/delivery_iter28.xml"
+  ],
+  "action_items": [
+    "OPTIONAL UX polish: refresh the PO in AbcOrderPanel after a successful abc-submit so the panel auto-switches to the submitted view (with abc-submitted-delivery) without requiring a close/reopen. Not a bug — closing/reopening works — but would improve first-time UX."
+  ],
+  "critical_code_review_comments": [
+    "purchasing.py:385 — `delivery = _normalize_delivery({**(await _default_delivery(db, po)), **(payload.delivery or {})})` — merge is right but if the client sends `line1=''` intentionally to CLEAR a default coming from the linked job, the empty string will overwrite the default, which is actually the desired behavior for 'no override'. Confirm this is the intended product rule; documenting it in the panel copy would help future maintainers.",
+    "purchasing.py:414 — audit log `abc.order.delivery_override` uses `bool(payload.delivery)` which is True even for empty {} sent by the frontend when the user just clicked Edit then Cancel. Consider gating on `any(v.strip() for v in delivery.values() if isinstance(v,str))` for cleaner audit signal.",
+    "AbcOrderPanel.jsx: the modal-inside-modal for the delivery editor (Dialog inside Dialog) works but stacking-order edge cases can occur on some browsers; consider using a single Dialog with conditional content OR moving the editor to a Sheet.",
+    "AbcOrderPanel.jsx:20 `submitted = !!po.external_confirmation_number` — after submit the local `po` prop isn't updated; consider adding an `onSubmitted` callback or a local refetch to auto-switch views (see integration_issues above)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_supply_delivery_api.py (new)"
+  ],
+  "success_rate": {
+    "backend": "7/8 (100% of runnable — 1 skipped only because there's no direct POST /api/properties endpoint in this codebase; code-review confirms _default_delivery is READ-ONLY on Property/Customer so mutation is impossible) + 31/31 ABC P1-P4 unit regression = PASS",
+    "frontend": "7/7 UI checks (panel opens, delivery-review present, editor opens with all fields, fields fill and save, review updates, submit confirms, submitted-delivery snapshot matches on reopen) = 100%"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Created PO-0204 (ABC Supply, ship-to 1163698, branch 18, 1 line MOCK-SHINGLE-ARCH-WW x10) via API for the UI flow, then submitted it with an edited delivery override (500 Testing Way, Austin, TX 78701) — MOCK-CONF-10005. Backend test module also creates ~7 short-lived TEST_DELIVERY_* POs per run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Delivery enhancement + optional-override regression fix verified end-to-end. Regression suite to run for this area: `cd /app/backend && PYTHONPATH=/app/backend pytest tests/test_abc_supply_delivery_api.py -o addopts='' -v` (7 pass + 1 skip in ~4s). One skip is env-only (no direct POST /api/properties endpoint; the delivery code path is read-only against Property/Customer). Frontend regression: seed a fresh ABC PO via API, open Inventory > Purchase Orders, click 'Submit to ABC' on the new row, verify abc-delivery-review + abc-edit-delivery + abc-delivery-editor + delivery-save flow, then reopen the ABC Order button to see abc-submitted-delivery. Note: mock _MOCK_ORDERS in-memory store resets on backend reload.",
+  "rca of the issue": "N/A — the regression fix in _validate_delivery (backend/routers/purchasing.py:292-305, treats override as optional; only requires full set when any address field is provided) is confirmed working. Both edge cases in the review request pass: empty override => confirmed; partial override => validation_failed with per-field errors."
+}

@@ -210,5 +210,6 @@ class POOut(BaseModel):
     abc_normalized_status: Optional[str] = None
     abc_submitted_at: Optional[datetime] = None
     abc_last_sync_at: Optional[datetime] = None
+    abc_delivery: Optional[dict] = None
     pricing_warning: Optional[str] = None
     items: List[POLineOut] = []

@@ -3,6 +3,8 @@ import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { money } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Loader2, Send, RefreshCw, AlertTriangle, CheckCircle2, XCircle, HelpCircle, Truck } from "lucide-react";
@@ -17,6 +19,8 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [result, setResult] = useState(null);
   const [detail, setDetail] = useState(null);
   const [activity, setActivity] = useState({ events: [], invoices: [] });
+  const [delivery, setDelivery] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
 
   const submitted = !!po?.external_confirmation_number;
   const unknown = result?.status === "unknown";
@@ -32,6 +36,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit-review`, {});
       setReview(data);
+      setDelivery(data.delivery || {});
       setSubKey(crypto.randomUUID());
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   }, [po, submitted]);
@@ -45,7 +50,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit`, {
         submission_key: subKey,
         accept_price_changes: !!(review?.price_changes?.length),
-        delivery: { name: po.number },
+        delivery: delivery || { name: po.number },
       });
       setResult(data);
       if (data.status === "confirmed" || data.status === "already_submitted") { toast.success(`Submitted to ABC — ${data.confirmation_number}`); onChanged && onChanged(); }
@@ -91,6 +96,16 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
               {po.abc_submitted_at && <div className="flex items-center justify-between"><span className="text-slate-400">Submitted</span><span>{new Date(po.abc_submitted_at).toLocaleString()}</span></div>}
               {po.abc_last_sync_at && <div className="flex items-center justify-between"><span className="text-slate-400">Last checked</span><span>{new Date(po.abc_last_sync_at).toLocaleString()}</span></div>}
             </div>
+            {po.abc_delivery?.line1 && (
+              <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-submitted-delivery">
+                <div className="mb-1 font-medium text-slate-700">Delivery Address</div>
+                <div className="text-slate-600">{po.abc_delivery.name}</div>
+                <div className="text-slate-600">{po.abc_delivery.line1}{po.abc_delivery.line2 ? `, ${po.abc_delivery.line2}` : ""}</div>
+                <div className="text-slate-600">{po.abc_delivery.city}, {po.abc_delivery.state} {po.abc_delivery.postal}</div>
+                <div className="mt-1 text-xs text-slate-400">This is the address sent to ABC. Changing RoofSpan job information does not modify the submitted ABC Supply order.</div>
+              </div>
+            )}
+
             {detail?.shipments?.length > 0 && (
               <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-order-shipments">
                 <div className="mb-1 flex items-center gap-1 font-medium text-slate-700"><Truck className="h-4 w-4" /> Shipments</div>
@@ -130,6 +145,18 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 <div className="mt-2 flex justify-between border-t border-amber-200 pt-2 font-medium"><span>Updated ABC Total</span><span className="tabular-nums">{money(review.updated_total)}</span></div>
               </div>
             )}
+            <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-delivery-review">
+              <div className="mb-1 flex items-center justify-between"><span className="font-medium text-slate-700">Deliver To</span><Button size="sm" variant="ghost" onClick={() => setEditOpen(true)} data-testid="abc-edit-delivery">Edit Delivery Address</Button></div>
+              {delivery && (delivery.line1 ? (
+                <div className="text-slate-600">
+                  <div>{delivery.name}</div>
+                  <div>{delivery.line1}{delivery.line2 ? `, ${delivery.line2}` : ""}</div>
+                  <div>{delivery.city}{delivery.city ? ", " : ""}{delivery.state} {delivery.postal}</div>
+                  {delivery.contact_name && <div className="mt-1 text-xs text-slate-400">Contact: {delivery.contact_name}{delivery.contact_phone ? ` · ${delivery.contact_phone}` : ""}</div>}
+                  {delivery.instructions && <div className="text-xs text-slate-400">Instructions: {delivery.instructions}</div>}
+                </div>
+              ) : <div className="text-slate-500">No delivery override — materials ship to the ABC Ship-To account's default address. Click <span className="font-medium">Edit Delivery Address</span> to deliver elsewhere.</div>)}
+            </div>
             <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-order-review">
               {(review.review?.lines || []).map((l, i) => (
                 <div key={i} className="flex justify-between text-slate-600"><span>{l.abc_item_number} · {l.quantity} {l.uom}</span><span className="tabular-nums">{money(l.line_total)}</span></div>
@@ -158,6 +185,27 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
           {result?.status === "confirmed" && <span className="flex items-center gap-1 text-sm text-green-700"><CheckCircle2 className="h-4 w-4" /> Submitted</span>}
         </DialogFooter>
       </DialogContent>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-md" data-testid="abc-delivery-editor">
+          <DialogHeader><DialogTitle>Edit Delivery Address</DialogTitle><DialogDescription>Where materials should physically be delivered. This does not change the ABC Ship-To account, job, or customer records.</DialogDescription></DialogHeader>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2 space-y-1"><Label className="text-xs">Delivery Name</Label><Input value={delivery?.name || ""} onChange={(e) => setDelivery({ ...delivery, name: e.target.value })} data-testid="delivery-name" /></div>
+            <div className="col-span-2 space-y-1"><Label className="text-xs">Address Line 1</Label><Input value={delivery?.line1 || ""} onChange={(e) => setDelivery({ ...delivery, line1: e.target.value })} data-testid="delivery-line1" /></div>
+            <div className="col-span-2 space-y-1"><Label className="text-xs">Address Line 2</Label><Input value={delivery?.line2 || ""} onChange={(e) => setDelivery({ ...delivery, line2: e.target.value })} data-testid="delivery-line2" /></div>
+            <div className="space-y-1"><Label className="text-xs">City</Label><Input value={delivery?.city || ""} onChange={(e) => setDelivery({ ...delivery, city: e.target.value })} data-testid="delivery-city" /></div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1"><Label className="text-xs">State</Label><Input value={delivery?.state || ""} onChange={(e) => setDelivery({ ...delivery, state: e.target.value })} data-testid="delivery-state" /></div>
+              <div className="space-y-1"><Label className="text-xs">ZIP</Label><Input value={delivery?.postal || ""} onChange={(e) => setDelivery({ ...delivery, postal: e.target.value })} data-testid="delivery-postal" /></div>
+            </div>
+            <div className="space-y-1"><Label className="text-xs">Contact Name</Label><Input value={delivery?.contact_name || ""} onChange={(e) => setDelivery({ ...delivery, contact_name: e.target.value })} data-testid="delivery-contact-name" /></div>
+            <div className="space-y-1"><Label className="text-xs">Contact Phone</Label><Input value={delivery?.contact_phone || ""} onChange={(e) => setDelivery({ ...delivery, contact_phone: e.target.value })} data-testid="delivery-contact-phone" /></div>
+            <div className="col-span-2 space-y-1"><Label className="text-xs">Delivery Instructions</Label><Input value={delivery?.instructions || ""} onChange={(e) => setDelivery({ ...delivery, instructions: e.target.value })} data-testid="delivery-instructions" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={() => setEditOpen(false)} data-testid="delivery-save">Use This Delivery Address</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </Dialog>
   );
 }

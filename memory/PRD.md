@@ -61,6 +61,13 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - **NEEDS ABC DOC/SANDBOX VERIFICATION**: ORDER_INVOICED secret transport; live payload/status variations; order-history & template paths; real Sandbox credentials + production webhook registration.
   - **ABC Supply integration (Phases 1–4) COMPLETE.**
 
+- **[2026-06] Delivery Address Review & Editor COMPLETE & TESTED** — Enhancement:
+  - ABC Order panel (`AbcOrderPanel.jsx`) shows a "Deliver To" review (`abc-delivery-review`) + edit modal (`abc-delivery-editor`, 9 fields). Physical delivery override defaults from the linked Job's Property/Customer via `_default_delivery()` (READ-ONLY — never mutates Job/Property/Customer), is snapshotted into `abc_order_submissions.delivery`, exposed on `POOut.abc_delivery`, and shown on submitted orders (`abc-submitted-delivery`).
+  - **Delivery override is OPTIONAL** (`_validate_delivery`, purchasing.py): empty override → order falls back to the ABC Ship-To account's registered address (submit builder omits `ship_to.address`); a PARTIAL override requires the full street/city/state/ZIP set (else `validation_failed`). Ship-To account is never changed by editing the delivery destination.
+  - Fixed regression where delivery was hard-required at submit (broke "ship to Ship-To default" orders and P3/P4 fixtures with no linked job).
+  - Tests: new `tests/test_abc_supply_delivery_api.py` (7 pass + 1 env-only skip) + 31/31 ABC unit regression + 7/7 frontend UI flow (iteration_28). NOTE: ABC HTTP suites share an in-memory mock store — run one file at a time (serial), not under xdist.
+  - Optional future polish (pre-existing, not a regression): auto-switch the open panel to the submitted view after a confirmed submit without close/reopen.
+
 
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.

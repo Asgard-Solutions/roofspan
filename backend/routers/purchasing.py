@@ -37,6 +37,13 @@ async def _out(db: AsyncSession, po: PurchaseOrder) -> POOut:
     warning = None
     if unresolved:
         warning = f"{unresolved} ABC Supply item{'s' if unresolved != 1 else ''} do not currently have pricing."
+    abc_delivery = None
+    if po.integration_provider == "abc_supply":
+        sub = (await db.execute(select(AbcOrderSubmission).where(
+            AbcOrderSubmission.purchase_order_id == po.id, AbcOrderSubmission.status.in_(["confirmed", "unknown"]))
+            .order_by(AbcOrderSubmission.attempted_at.desc()))).scalars().first()
+        if sub:
+            abc_delivery = sub.delivery
     return POOut(
         id=str(po.id), number=po.number, supplier_id=str(po.supplier_id) if po.supplier_id else None,
         supplier_name=supplier_name, job_id=str(po.job_id) if po.job_id else None, status=po.status,
@@ -45,6 +52,7 @@ async def _out(db: AsyncSession, po: PurchaseOrder) -> POOut:
         external_order_number=po.external_order_number, external_confirmation_number=po.external_confirmation_number,
         external_tracking_id=po.external_tracking_id, abc_order_status=po.abc_order_status,
         abc_normalized_status=po.abc_normalized_status, abc_submitted_at=po.abc_submitted_at, abc_last_sync_at=po.abc_last_sync_at,
+        abc_delivery=abc_delivery,
         pricing_warning=warning,
         items=[POLineOut(id=str(i.id), material_id=str(i.material_id) if i.material_id else None, description=i.description,
                          quantity=i.quantity, unit=i.unit, unit_cost=i.unit_cost, line_total=i.line_total,
@@ -244,6 +252,59 @@ def _is_dimensional(line: POLineItem) -> bool:
     return bool(v) and ("value" in v)
 
 
+async def _default_delivery(db: AsyncSession, po: PurchaseOrder) -> dict:
+    """Default the PHYSICAL delivery address from the RoofSpan job's property/customer.
+    This is order-specific; it never modifies job/property/customer records and is independent
+    of the ABC Ship-To account (which controls eligibility/pricing, not the delivery destination)."""
+    from models import Job, Property, Customer
+    d = {"name": "", "line1": "", "line2": "", "city": "", "state": "", "postal": "", "country": "USA",
+         "contact_name": "", "contact_phone": "", "instructions": ""}
+    if not po.job_id:
+        return d
+    job = await db.get(Job, po.job_id)
+    if not job:
+        return d
+    if job.property_id:
+        prop = await db.get(Property, job.property_id)
+        if prop:
+            d.update({"line1": prop.address_line1 or "", "line2": prop.address_line2 or "",
+                      "city": prop.city or "", "state": prop.state or "", "postal": prop.zip_code or ""})
+    if job.customer_id:
+        cust = await db.get(Customer, job.customer_id)
+        if cust:
+            d["name"] = cust.name or ""
+            d["contact_name"] = cust.name or ""
+            d["contact_phone"] = cust.phone or ""
+    d["name"] = d["name"] or job.number
+    return d
+
+
+def _normalize_delivery(d: dict | None) -> dict:
+    d = d or {}
+    return {k: (str(v).strip() if v is not None else "") for k, v in {
+        "name": d.get("name"), "line1": d.get("line1"), "line2": d.get("line2"), "city": d.get("city"),
+        "state": d.get("state"), "postal": d.get("postal"), "country": d.get("country") or "USA",
+        "contact_name": d.get("contact_name"), "contact_phone": d.get("contact_phone"),
+        "instructions": d.get("instructions"), "requested_date": d.get("requested_date"),
+    }.items()}
+
+
+def _validate_delivery(d: dict) -> list[str]:
+    """Validate the PHYSICAL delivery override. The override is optional: when no address fields are
+    supplied the order falls back to the ABC Ship-To account's registered delivery address (the submit
+    builder omits ship_to.address). Only when the user provides a partial address do we require the full
+    set so we never send ABC an incomplete override."""
+    addr_fields = ("line1", "line2", "city", "state", "postal")
+    provided = any((d.get(f) or "").strip() for f in addr_fields)
+    if not provided:
+        return []
+    errs = []
+    for field, label in (("line1", "street address"), ("city", "city"), ("state", "state"), ("postal", "ZIP code")):
+        if not (d.get(field) or "").strip():
+            errs.append(f"Delivery address is missing a {label}.")
+    return errs
+
+
 @router.post("/{po_id}/abc-submit-review")
 async def abc_submit_review(po_id: str, payload: AbcSubmitReviewIn, request: Request,
                             user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
@@ -264,6 +325,9 @@ async def abc_submit_review(po_id: str, payload: AbcSubmitReviewIn, request: Req
     updated_total = round(sum((priced.get(str(x.id), {}).get("unit_price") or x.unit_cost or 0) * x.quantity for x in abc_items), 2)
     await log_action(db, user=user, action="abc.order.review", entity_type="purchase_order", entity_id=po.id,
                      detail={"errors": len(errors), "changes": len(changes)}, request=request)
+    existing_sub = (await db.execute(select(AbcOrderSubmission).where(
+        AbcOrderSubmission.purchase_order_id == po.id, AbcOrderSubmission.status.in_(["confirmed", "unknown"])))).scalars().first()
+    delivery = (existing_sub.delivery if (existing_sub and existing_sub.delivery) else await _default_delivery(db, po))
     return {
         "ok": not errors,
         "already_submitted": already,
@@ -272,6 +336,7 @@ async def abc_submit_review(po_id: str, payload: AbcSubmitReviewIn, request: Req
         "previous_total": prev_total,
         "updated_total": updated_total,
         "prices_verified_at": datetime.now(timezone.utc).isoformat(),
+        "delivery": delivery,
         "review": {
             "po_number": po.number, "ship_to_number": po.abc_ship_to_number, "branch_number": po.abc_branch_number,
             "estimated_total": po.total,
@@ -316,6 +381,9 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
 
     # MANDATORY fresh pricing immediately before submit.
     errors, changes, abc_items, priced = await _validate_and_price(db, po, request, apply_changes=payload.accept_price_changes)
+    # Physical delivery address: default from the job/property, overlaid with any reviewed override.
+    delivery = _normalize_delivery({**(await _default_delivery(db, po)), **(payload.delivery or {})})
+    errors = errors + _validate_delivery(delivery)
     if errors:
         await db.commit()
         return {"status": "validation_failed", "errors": errors}
@@ -330,7 +398,7 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     # Create the durable submission record (unique submission_key guards concurrent duplicates).
     if not sub:
         sub = AbcOrderSubmission(purchase_order_id=po.id, submission_key=payload.submission_key, status="pending",
-                                 delivery=payload.delivery, created_by=user.email,
+                                 delivery=delivery, created_by=user.email,
                                  request_fingerprint=f"{po.id}:{len(abc_items)}:{po.total}")
         db.add(sub)
         try:
@@ -342,11 +410,13 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     else:
         sub.status = "pending"
         sub.attempted_at = datetime.now(timezone.utc)
+        sub.delivery = delivery
+    await log_action(db, user=user, action="abc.order.delivery_override", entity_type="purchase_order", entity_id=po.id,
+                     detail={"override": bool(payload.delivery)}, request=request)
     await log_action(db, user=user, action="abc.order.submit_attempt", entity_type="purchase_order", entity_id=po.id,
                      detail={"key": payload.submission_key, "lines": len(abc_items)}, request=request)
 
     # Build the ABC order payload.
-    delivery = payload.delivery or {}
     contacts = []
     if delivery.get("contact_name"):
         contacts.append({"name": delivery["contact_name"], "functionCode": "SM", "email": delivery.get("contact_email", ""),
