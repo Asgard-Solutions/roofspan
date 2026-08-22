@@ -406,6 +406,7 @@ class ReceiveLine(BaseModel):
 
 class ReceiveIn(BaseModel):
     items: List[ReceiveLine] = []
+    location_id: Optional[str] = None
 
 
 class POOut(BaseModel):

@@ -64,6 +64,8 @@ app.include_router(estimates.router)
 from routers import estimating as estimating_router
 app.include_router(estimating_router.router)
 app.include_router(quotes.router)
+from routers import inventory_ops as inventory_ops_router
+app.include_router(inventory_ops_router.router)
 app.include_router(invoices.router)
 app.include_router(jobs.router)
 app.include_router(operations.router)

@@ -18,11 +18,13 @@ class ReserveIn(BaseModel):
 
 
 async def _plan_row(db, jm):
+    from services import inventory_ops as iops
     m = await db.get(Material, jm.material_id)
     roll = await jp.rollup(db, jm)
+    cons = await iops.job_material_consumption(db, jm.material_id, jm.job_id)
     return {"id": str(jm.id), "material_id": str(jm.material_id), "material_name": m.name if m else "?",
             "unit": jm.unit or (m.unit if m else "ea"), "notes": jm.notes,
-            "assembly_name": jm.assembly_name,
+            "assembly_name": jm.assembly_name, "waste": cons["waste"], "net_used": cons["net_used"],
             "preferred_supplier": (await _pref_name(db, jm.material_id)),
             "best_known_cost": await _best_cost(db, jm.material_id), **roll}
 
@@ -125,6 +127,10 @@ async def update_job(job_id: str, payload: JobPatch, request: Request, user: Use
         raise HTTPException(status_code=422, detail=f"Status must be one of {valid}")
     for k, v in data.items():
         setattr(j, k, v)
+    # Slice 10: auto-release remaining reservations when a job is completed/cancelled (idempotent, no On Hand change)
+    if data.get("status") in ("completed", "cancelled"):
+        from services import inventory_ops as ops
+        await ops.auto_release_reservations(db, j, user.email)
     await db.commit()
     await log_action(db, user=user, action="job.update", entity_type="job", entity_id=j.id, detail=payload.model_dump(exclude_unset=True, mode="json"), request=request)
     return await get_job(job_id, user, db)

@@ -611,6 +611,11 @@ async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_
             po = await db.get(PurchaseOrder, po_id)
             return await _out(db, po)
 
+    from services import inventory_ops as ops
+    recv_loc_id = payload.location_id
+    if not recv_loc_id:
+        dl = await ops.default_location(db)
+        recv_loc_id = dl.id if dl else None
     for line in payload.items:
         item = await db.get(POLineItem, line.po_item_id)
         if not item or item.po_id != po.id:
@@ -622,8 +627,12 @@ async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_
         if item.material_id:
             m = (await db.execute(select(Material).where(Material.id == item.material_id).with_for_update())).scalar_one_or_none()
             if m:
-                m.quantity_on_hand = round(m.quantity_on_hand + line.quantity, 3)
-                db.add(InventoryTxn(material_id=m.id, delta=line.quantity, reason="receipt", po_id=po.id, created_by=user.email))
+                if recv_loc_id:
+                    await ops.add_at_location(db, m, recv_loc_id, line.quantity)  # updates balance + company On Hand once
+                else:
+                    m.quantity_on_hand = round(m.quantity_on_hand + line.quantity, 3)
+                db.add(InventoryTxn(material_id=m.id, delta=line.quantity, reason="receipt", po_id=po.id,
+                                    destination_location_id=recv_loc_id, created_by=user.email))
 
     items = (await db.execute(select(POLineItem).where(POLineItem.po_id == po.id))).scalars().all()
     fully = all(i.received_quantity >= i.quantity - 1e-9 for i in items)

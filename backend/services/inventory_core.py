@@ -18,7 +18,7 @@ TXN_TYPES = [
     "adjustment",  # legacy generic type retained for backward compatibility
 ]
 # PO statuses that count toward On Order (not yet fully received, not cancelled).
-_OPEN_PO_STATUSES = ("draft", "submitted", "ordered", "confirmed", "partially_received", "acknowledged", "picking", "shipped")
+_OPEN_PO_STATUSES = ("draft", "ready_for_review", "submitted", "ordered", "confirmed", "acknowledged", "scheduled", "partially_received", "picking", "shipped")
 
 
 async def ensure_supplier(db: AsyncSession, name: str, integration_provider: str | None = None) -> Supplier:

@@ -1,0 +1,38 @@
+{
+  "summary": "Advanced Inventory Operations (locations, balances, transfer, issue/return/waste, cycle count, auto-release, receive-to-location) end-to-end verified. Backend pytest 9/9 (advanced_inventory) + 1/1 (RBAC sales lockdown) = 10/10 green. UI 14/14 checks green: Locations page + create + default protection, Transfer keeps company On Hand unchanged & splits balances across locations, same source=destination rejected, JobMaterialPlan has Issued/NetUsed columns + Issue/Return/Waste actions, PO receive dialog shows recv-location selector.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_advanced_inventory.py",
+    "/app/backend/tests/test_inventory_ops_rbac.py",
+    "/app/test_reports/pytest/adv_inv_iter37.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "InventoryLocations.jsx: rows list initial load is slightly slow due to two sequential API calls in useEffect; consider Promise.all(locations, materials) for faster paint (took ~3s to render 8 rows in headless browser).",
+    "Transfer dialog stays open on backend error which is correct for retry, but the toast is the only cue — consider inline error text below xfer-qty for accessibility.",
+    "PurchaseOrderDetail: recv-location defaults to default location correctly. Confirmed po-mark-ordered button is present on draft POs (addresses previous iteration's code-review note).",
+    "JobMaterialPlan: new Issued/NetUsed columns render with tabular-nums; waste shown separately as '(+N waste)' — matches spec.",
+    "Locations page: default location correctly hides the deactivate toggle (verified via row HTML)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_inventory_ops_rbac.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026. Sales users created per-test via /api/users (owner token).",
+  "seed_data_creation": "Backend RBAC test creates ephemeral sales user TEST_sales_<uuid>@example.com. UI transfer test moved 2 units of TEST_Mat_Nails_19aabb (id 009406db-...) from Main Warehouse to a QA yard: Main 29 / QA 2 / company on_hand still 31.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suites: test_advanced_inventory.py (9), test_inventory_ops_rbac.py (1), test_job_material_automation.py (6), phase5 (7). Key material for visibility tests: TEST_Mat_Nails_19aabb (id 009406db-5045-4fa0-b243-32cf504d3eb5, on_hand=31). Default location id ab643921-9323-4302-83b9-a3def52baff3 (Main Warehouse). Ordered PO for receive UI: 0d87e848-0904-4b52-96ce-d22631a93e50. Frontend token in localStorage key 'roofspan_token'. Locations page requires ~3s wait after page-locations selector before rows render.",
+  "verified_flows": [
+    "Owner login + navigate to Inventory > Locations via locations-button",
+    "Locations table renders default Main Warehouse (Default badge, no deactivate) + custom yards",
+    "Create new yard location via add-location-button → location-type select → location-save",
+    "Transfer via transfer-dialog: material + source + dest + qty → xfer-confirm closes dialog; company On Hand unchanged; sum(location balances) == On Hand; balances split across 2+ locations",
+    "Same source==destination transfer: dialog stays open (backend 400) — no accidental noop",
+    "Job page shows plan-table with plan-issued-<id> and plan-netused-<id> columns; plan-actions-<id> dropdown exposes issue-/return-/waste- items",
+    "PurchaseOrderDetail on ordered PO: po-receive opens po-receive-dialog with recv-location default 'Main Warehouse (warehouse)' + recv-qty-<lineId> + recv-confirm",
+    "RBAC: sales role receives 401/403 on POST /inventory/locations, /inventory/transfer, /inventory/issue, /inventory/return, /inventory/disposition, /inventory/cycle-count while GET /inventory/locations & /inventory/balances remain 200",
+    "Backend regression: 9/9 advanced_inventory + prior job-material-automation still green"
+  ]
+}

@@ -7,6 +7,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
@@ -29,7 +31,11 @@ export default function PurchaseOrderDetail() {
   const [po, setPo] = useState(null);
   const [recvOpen, setRecvOpen] = useState(false);
   const [recv, setRecv] = useState({});
+  const [recvLoc, setRecvLoc] = useState("");
+  const [locations, setLocations] = useState([]);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api.get("/inventory/locations", { params: { active: true } }).then((r) => { setLocations(r.data); const d = r.data.find((l) => l.is_default) || r.data[0]; if (d) setRecvLoc(d.id); }).catch(() => {}); }, []);
 
   const load = useCallback(async () => {
     try { const { data } = await api.get(`/purchase-orders/${id}`); setPo(data); }
@@ -43,7 +49,7 @@ export default function PurchaseOrderDetail() {
     const items = Object.entries(recv).filter(([, q]) => Number(q) > 0).map(([po_item_id, q]) => ({ po_item_id, quantity: Number(q) }));
     if (!items.length) { toast.error("Enter quantities to receive"); return; }
     setBusy(true);
-    try { await api.post(`/purchase-orders/${id}/receive`, { items }); toast.success("Received"); setRecvOpen(false); load(); }
+    try { await api.post(`/purchase-orders/${id}/receive`, { items, location_id: recvLoc || null }); toast.success("Received"); setRecvOpen(false); load(); }
     catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const cancel = async () => { try { await api.post(`/purchase-orders/${id}/status`, { status: "cancelled" }); toast.success("PO cancelled"); load(); } catch (e) { toast.error(apiError(e)); } };
@@ -127,7 +133,11 @@ export default function PurchaseOrderDetail() {
 
       <Dialog open={recvOpen} onOpenChange={setRecvOpen}>
         <DialogContent data-testid="po-receive-dialog">
-          <DialogHeader><DialogTitle>Receive items</DialogTitle><DialogDescription>Enter received quantities. Partial receipts are supported and update inventory On Hand.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Receive items</DialogTitle><DialogDescription>Enter received quantities. Partial receipts are supported and update inventory On Hand at the selected location.</DialogDescription></DialogHeader>
+          <div className="mb-2 space-y-1"><Label className="text-xs">Receive to location</Label>
+            <Select value={recvLoc} onValueChange={setRecvLoc}><SelectTrigger data-testid="recv-location"><SelectValue placeholder="Location" /></SelectTrigger>
+              <SelectContent>{locations.map((l) => <SelectItem key={l.id} value={l.id}>{l.name} ({l.type})</SelectItem>)}</SelectContent></Select>
+          </div>
           <div className="space-y-2">
             {(po.items || []).map((i) => {
               const remaining = Math.max((i.quantity || 0) - (i.received_quantity || 0), 0);

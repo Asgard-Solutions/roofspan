@@ -9,7 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Boxes, Wand2, Lock, Unlock, ShoppingCart, Loader2, Eye, Star, AlertTriangle } from "lucide-react";
+import { Boxes, Wand2, Lock, Unlock, ShoppingCart, Loader2, Eye, Star, AlertTriangle, MoreHorizontal, ArrowDownToLine, Undo2, Trash2 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Label } from "@/components/ui/label";
 
 const READINESS = {
   ready: { label: "Ready", cls: "bg-green-50 text-green-700" },
@@ -28,6 +30,23 @@ export default function JobMaterialPlan({ jobId, canManage }) {
   const [plan, setPlan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState(null);
+  const [locations, setLocations] = useState([]);
+  const [move, setMove] = useState(null); // { kind, row, quantity, location_id }
+
+  useEffect(() => { api.get("/inventory/locations", { params: { active: true } }).then((r) => setLocations(r.data)).catch(() => {}); }, []);
+
+  const submitMove = async () => {
+    const { kind, row, quantity, location_id } = move;
+    if (!location_id || !(Number(quantity) > 0)) { toast.error("Enter a location and quantity"); return; }
+    setBusy(true);
+    try {
+      if (kind === "issue") await api.post("/inventory/issue", { material_id: row.material_id, location_id, quantity: Number(quantity), job_id: jobId });
+      else if (kind === "return") await api.post("/inventory/return", { material_id: row.material_id, location_id, quantity: Number(quantity), job_id: jobId });
+      else await api.post("/inventory/disposition", { material_id: row.material_id, location_id, quantity: Number(quantity), kind, job_id: jobId, reason: "Job disposition" });
+      toast.success(`${kind === "issue" ? "Issued" : kind === "return" ? "Returned" : kind} ${quantity} ${row.unit}`);
+      setMove(null); load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
 
   const load = useCallback(async () => {
     try { const { data } = await api.get(`/jobs/${jobId}/material-plan`); setPlan(data); }
@@ -94,6 +113,7 @@ export default function JobMaterialPlan({ jobId, canManage }) {
               <TableHead>Material</TableHead><TableHead className="text-right">Required</TableHead><TableHead className="text-right">Reserved</TableHead>
               <TableHead className="text-right">Available</TableHead><TableHead className="text-right">Shortage</TableHead>
               <TableHead className="text-right">Ordered</TableHead><TableHead className="text-right">Received</TableHead>
+              <TableHead className="text-right">Issued</TableHead><TableHead className="text-right">Net Used</TableHead>
               <TableHead>Status</TableHead><TableHead />
             </TableRow></TableHeader>
             <TableBody>
@@ -109,11 +129,25 @@ export default function JobMaterialPlan({ jobId, canManage }) {
                   <TableCell className={`text-right tabular-nums ${m.shortage > 0 ? "font-semibold text-red-600" : "text-slate-400"}`} data-testid={`plan-shortage-${m.id}`}>{m.shortage}</TableCell>
                   <TableCell className="text-right tabular-nums">{m.ordered}</TableCell>
                   <TableCell className="text-right tabular-nums">{m.received}</TableCell>
+                  <TableCell className="text-right tabular-nums" data-testid={`plan-issued-${m.id}`}>{m.issued}</TableCell>
+                  <TableCell className="text-right tabular-nums" data-testid={`plan-netused-${m.id}`}>{m.net_used}{m.waste > 0 ? <span className="ml-1 text-xs text-red-500" title="Waste">(+{m.waste} waste)</span> : ""}</TableCell>
                   <TableCell><Readiness status={m.status} testid={`plan-status-${m.id}`} /></TableCell>
                   <TableCell className="text-right">
-                    {canManage && (m.reserved > 0
-                      ? <Button size="sm" variant="ghost" onClick={() => release(m)} data-testid={`release-${m.id}`}><Unlock className="h-4 w-4" /> Release</Button>
-                      : <Button size="sm" variant="ghost" disabled={m.available <= 0} onClick={() => reserve(m)} data-testid={`reserve-${m.id}`}><Lock className="h-4 w-4" /> Reserve</Button>)}
+                    {canManage && (
+                      <div className="flex items-center justify-end gap-1">
+                        {m.reserved > 0
+                          ? <Button size="sm" variant="ghost" onClick={() => release(m)} data-testid={`release-${m.id}`}><Unlock className="h-4 w-4" /></Button>
+                          : <Button size="sm" variant="ghost" disabled={m.available <= 0} onClick={() => reserve(m)} data-testid={`reserve-${m.id}`}><Lock className="h-4 w-4" /></Button>}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" data-testid={`plan-actions-${m.id}`}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setMove({ kind: "issue", row: m, quantity: Math.max(m.reserved || 0, 0) || 1, location_id: locations[0]?.id || "" })} data-testid={`issue-${m.id}`}><ArrowDownToLine className="mr-2 h-4 w-4" /> Issue materials</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setMove({ kind: "return", row: m, quantity: 1, location_id: locations[0]?.id || "" })} data-testid={`return-${m.id}`}><Undo2 className="mr-2 h-4 w-4" /> Return to stock</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setMove({ kind: "waste", row: m, quantity: 1, location_id: locations[0]?.id || "" })} data-testid={`waste-${m.id}`}><Trash2 className="mr-2 h-4 w-4" /> Waste / Damage</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -140,6 +174,23 @@ export default function JobMaterialPlan({ jobId, canManage }) {
             {proposal.rows.length === 0 && <p className="text-sm text-slate-400">No shortages.</p>}
           </div>}
           <DialogFooter><Button variant="outline" onClick={() => setProposal(null)}>Cancel</Button><Button onClick={createPOs} disabled={busy} data-testid="proposal-create-pos">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft PO(s)"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!move} onOpenChange={(o) => !o && setMove(null)}>
+        <DialogContent className="max-w-md" data-testid="movement-dialog">
+          <DialogHeader><DialogTitle>{move?.kind === "issue" ? "Issue materials" : move?.kind === "return" ? "Return to stock" : "Waste / Damage"}</DialogTitle><DialogDescription>{move?.row?.material_name} — {move?.kind === "issue" ? "reduces physical stock & consumes reservation" : move?.kind === "return" ? "increases stock at destination" : "reduces physical stock (recorded as waste/damage)"}.</DialogDescription></DialogHeader>
+          {move && <div className="space-y-3">
+            <div className="space-y-1"><Label className="text-xs">{move.kind === "return" ? "Return to location" : "Location"}</Label>
+              <Select value={move.location_id} onValueChange={(v) => setMove({ ...move, location_id: v })}>
+                <SelectTrigger data-testid="move-location"><SelectValue placeholder="Select location" /></SelectTrigger>
+                <SelectContent>{locations.map((l) => <SelectItem key={l.id} value={l.id}>{l.name} ({l.type})</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1"><Label className="text-xs">Quantity ({move.row.unit})</Label><Input type="number" value={move.quantity} onChange={(e) => setMove({ ...move, quantity: e.target.value })} data-testid="move-qty" /></div>
+            {move.kind === "issue" && move.row.reserved > 0 && <p className="text-xs text-slate-500">Reserved {move.row.reserved} will be consumed first.</p>}
+          </div>}
+          <DialogFooter><Button variant="outline" onClick={() => setMove(null)}>Cancel</Button><Button onClick={submitMove} disabled={busy} data-testid="move-confirm">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

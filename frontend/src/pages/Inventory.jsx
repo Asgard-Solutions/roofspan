@@ -128,6 +128,7 @@ export default function Inventory() {
             {canManage && <div className="mb-4 flex flex-wrap items-center gap-2">
               <Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Create custom</Button>
               <Button variant="outline" onClick={() => navigate("/inventory/catalog")} data-testid="abc-catalog-button"><PackageSearch className="h-4 w-4" /> Product Catalog</Button>
+              <Button variant="outline" onClick={() => navigate("/inventory/locations")} data-testid="locations-button"><Boxes className="h-4 w-4" /> Locations</Button>
               <Button variant="outline" onClick={() => { setCsvPreview(null); setCsvRows([]); setCsvOpen(true); }} data-testid="import-csv-button"><Upload className="h-4 w-4" /> Import CSV</Button>
               <ReorderSuggestions onCreated={load} />
             </div>}
