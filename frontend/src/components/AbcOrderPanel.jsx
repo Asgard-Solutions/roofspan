@@ -21,9 +21,20 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [activity, setActivity] = useState({ events: [], invoices: [] });
   const [delivery, setDelivery] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
+  // Local authoritative copy of the PO so the panel can transition to the submitted view
+  // immediately after submit (refetched from the backend) without a close/reopen.
+  const [poState, setPoState] = useState(po);
+  useEffect(() => { setPoState(po); }, [po]);
 
-  const submitted = !!po?.external_confirmation_number;
+  const submitted = !!poState?.external_confirmation_number;
   const unknown = result?.status === "unknown";
+
+  const refetchPO = useCallback(async () => {
+    if (!po?.id) return null;
+    const { data } = await api.get(`/purchase-orders/${po.id}`);
+    setPoState(data);
+    return data;
+  }, [po?.id]);
 
   const loadActivity = useCallback(async () => {
     if (!po?.id) return;
@@ -53,7 +64,13 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         delivery: delivery || { name: po.number },
       });
       setResult(data);
-      if (data.status === "confirmed" || data.status === "already_submitted") { toast.success(`Submitted to ABC — ${data.confirmation_number}`); onChanged && onChanged(); }
+      if (data.status === "confirmed" || data.status === "already_submitted") {
+        toast.success(`Submitted to ABC — ${data.confirmation_number}`);
+        // Refetch the persisted PO so the panel immediately renders the submitted-order view
+        // (ABC identifiers + the exact stored delivery snapshot). Backend/PostgreSQL is authoritative.
+        await refetchPO();
+        onChanged && onChanged();
+      }
       else if (data.status === "price_changed") { toast.warning("ABC pricing changed — review the new prices."); setReview((r) => ({ ...r, price_changes: data.price_changes, previous_total: data.previous_total, updated_total: data.updated_total })); }
       else if (data.status === "validation_failed") toast.error("Order cannot be submitted — resolve the listed issues.");
       else if (data.status === "unknown") toast.error("Submission status unknown — verify the ABC order.");
@@ -80,8 +97,8 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl" data-testid="abc-order-panel">
         <DialogHeader>
-          <DialogTitle>ABC Supply Order — {po?.number}</DialogTitle>
-          <DialogDescription>Ship-To {po?.abc_ship_to_number} · Branch {po?.abc_branch_number}</DialogDescription>
+          <DialogTitle>ABC Supply Order — {poState?.number}</DialogTitle>
+          <DialogDescription>Ship-To {poState?.abc_ship_to_number} · Branch {poState?.abc_branch_number}</DialogDescription>
         </DialogHeader>
 
         {loading && <div className="p-6 text-sm text-slate-400"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> Working…</div>}
@@ -90,19 +107,24 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         {submitted && !loading && (
           <div className="space-y-3" data-testid="abc-order-status">
             <div className="rounded-md border border-border bg-slate-50 p-4 text-sm">
-              <div className="flex items-center justify-between"><span className="text-slate-400">ABC Confirmation</span><span className="font-medium">{po.external_confirmation_number}</span></div>
-              {po.external_order_number && <div className="flex items-center justify-between"><span className="text-slate-400">Order #</span><span className="font-medium">{po.external_order_number}</span></div>}
-              <div className="flex items-center justify-between"><span className="text-slate-400">Status</span><Badge className={norm[po.abc_normalized_status] || "bg-slate-100 text-slate-600"} variant="secondary">{po.abc_order_status || "Submitted"}</Badge></div>
-              {po.abc_submitted_at && <div className="flex items-center justify-between"><span className="text-slate-400">Submitted</span><span>{new Date(po.abc_submitted_at).toLocaleString()}</span></div>}
-              {po.abc_last_sync_at && <div className="flex items-center justify-between"><span className="text-slate-400">Last checked</span><span>{new Date(po.abc_last_sync_at).toLocaleString()}</span></div>}
+              <div className="flex items-center justify-between"><span className="text-slate-400">ABC Confirmation</span><span className="font-medium" data-testid="abc-confirmation-number">{poState.external_confirmation_number}</span></div>
+              {poState.external_order_number && <div className="flex items-center justify-between"><span className="text-slate-400">Order #</span><span className="font-medium" data-testid="abc-order-number">{poState.external_order_number}</span></div>}
+              <div className="flex items-center justify-between"><span className="text-slate-400">Status</span><Badge className={norm[poState.abc_normalized_status] || "bg-slate-100 text-slate-600"} variant="secondary" data-testid="abc-order-status-badge">{poState.abc_order_status || "Submitted"}</Badge></div>
+              {poState.abc_submitted_at && <div className="flex items-center justify-between"><span className="text-slate-400">Submitted</span><span>{new Date(poState.abc_submitted_at).toLocaleString()}</span></div>}
+              {poState.abc_last_sync_at && <div className="flex items-center justify-between"><span className="text-slate-400">Last checked</span><span>{new Date(poState.abc_last_sync_at).toLocaleString()}</span></div>}
             </div>
-            {po.abc_delivery?.line1 && (
+            {poState.abc_delivery?.line1 ? (
               <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-submitted-delivery">
                 <div className="mb-1 font-medium text-slate-700">Delivery Address</div>
-                <div className="text-slate-600">{po.abc_delivery.name}</div>
-                <div className="text-slate-600">{po.abc_delivery.line1}{po.abc_delivery.line2 ? `, ${po.abc_delivery.line2}` : ""}</div>
-                <div className="text-slate-600">{po.abc_delivery.city}, {po.abc_delivery.state} {po.abc_delivery.postal}</div>
+                <div className="text-slate-600">{poState.abc_delivery.name}</div>
+                <div className="text-slate-600">{poState.abc_delivery.line1}{poState.abc_delivery.line2 ? `, ${poState.abc_delivery.line2}` : ""}</div>
+                <div className="text-slate-600">{poState.abc_delivery.city}, {poState.abc_delivery.state} {poState.abc_delivery.postal}</div>
                 <div className="mt-1 text-xs text-slate-400">This is the address sent to ABC. Changing RoofSpan job information does not modify the submitted ABC Supply order.</div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-submitted-delivery-default">
+                <div className="mb-1 font-medium text-slate-700">Delivery Address</div>
+                <div className="text-slate-500">No delivery override was supplied — this order ships to the ABC Ship-To account's default address.</div>
               </div>
             )}
 

@@ -1,0 +1,31 @@
+{
+  "summary": "FRONTEND-only enhancement verified: ABC Order Panel now auto-refreshes to the submitted view immediately after a successful abc-submit WITHOUT the user closing/reopening the Purchase Order. All FIVE submit outcomes tested end-to-end through the real UI (Playwright) with backend snapshot verification: (1) HAPPY PATH with delivery override => panel transitions immediately to abc-order-status showing MOCK-CONF-10010, Submitted badge, Refresh ABC status button, submit button gone, and abc-submitted-delivery block containing the EXACT edited address ('123 Refresh Ave', Dallas, TX 75201) that matches abc_order_submissions.delivery snapshot from the backend; (2) NO-OVERRIDE HAPPY PATH => immediate transition, abc-submitted-delivery-default shown with the correct copy 'this order ships to the ABC Ship-To account's default address', backend abc_delivery has empty address fields as expected; (3) PRICE-CHANGED => 1st Submit stays in review with abc-price-changes shown (no status view), 2nd click 'Accept pricing & submit' -> immediate auto-refresh to submitted view with new MOCK-CONF, price-changes gone; (4) UNKNOWN (MOCK-TIMEOUT) => panel does NOT transition; abc-unknown UI + abc-verify-order button rendered; submit button becomes disabled; (5) FAILED (MOCK-REJECT) => panel stays in review/error state with 'ABC Supply rejected the request' message; abc-order-status is NOT rendered. Backend snapshot verification via GET /api/purchase-orders/{id}: happy_ok=True (abc_delivery.line1='123 Refresh Ave', city='Dallas', state='TX', postal='75201', abc_ship_to_number unchanged at '1163698', external_confirmation_number set), noovr_ok=True (abc_delivery address fields empty, confirmation set). Delivery snapshot is served straight from the persisted AbcOrderSubmission.delivery (NOT reconstructed from Job/Property). All data-testids required by the review request are present and correctly gated. Generic (non-ABC) PO create + receive endpoints still work (create 201, receive 200) — no regression from this frontend-only change.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_delivery_api.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AbcOrderPanel.jsx:29 — `submitted = !!poState?.external_confirmation_number` now correctly derives from the LOCAL poState which is refetched after a confirmed submit; this is the fix that enables auto-refresh. Verified in UI.",
+    "AbcOrderPanel.jsx:67-73 — Only 'confirmed' and 'already_submitted' outcomes call refetchPO(), so UNKNOWN/FAILED/VALIDATION_FAILED correctly do NOT transition to the submitted view. Verified in UI.",
+    "AbcOrderPanel.jsx:27 — `useEffect(() => setPoState(po), [po])` keeps local state in sync when the parent passes an updated PO (e.g., after onChanged() triggers a reload). Correct.",
+    "AbcOrderPanel.jsx:116 — Submitted delivery gate `poState.abc_delivery?.line1` cleanly discriminates 'override submitted' vs 'default ship-to' by presence of a non-empty line1. Matches backend behavior where no-override submissions persist all-empty delivery strings. Robust.",
+    "Minor UX polish opportunity (non-blocking): after auto-refresh, refreshStatus() is NOT called automatically (only loadActivity + refreshStatus happen when the panel opens with submitted=true from the start). Right now the submitted view uses `poState.abc_normalized_status` (already 'processing' from the backend after successful submit) plus the confirmation identifiers — which is enough. Optional: also call refreshStatus() after refetchPO() to pre-populate abc-order-shipments immediately for post-submit views."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (frontend-only round; backend GET verification 100% PASS for happy & no-override snapshots)",
+    "frontend": "6/6 (100%) — happy_path, no_override, price_changed (accept & submit), unknown, failed, generic PO regression create+receive"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Created ~12 short-lived ABC POs via API during Playwright runs (PO-0212 through PO-0229) covering all 5 mock outcome triggers (MOCK-SHINGLE-ARCH-WW normal, MOCK-SHINGLE-ARCH-WW stale price, MOCK-TIMEOUT, MOCK-REJECT) + 1 generic non-ABC PO (PO-0228) for regression. Also had to POST /api/integrations/abc/disconnect + /connect (follow 302) mid-test because the ABC mock OAuth token expired between iter_28 and iter_29 (status was 'reconnect_required'); this is expected behavior of the sandbox mock and not a bug.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auto-refresh polish is complete and verified end-to-end. When re-testing this area, remember: (a) ABC mock OAuth tokens can expire (~1h) so the ABC integration may show status 'reconnect_required' — re-run POST /api/integrations/abc/connect + follow the 302 authorize->callback chain; (b) the mock in-memory order store resets on backend reload, so old confirmation numbers seen in the UI table may not resolve if you try refresh-status; (c) all five outcomes now render CORRECT UI immediately after Submit — no close/reopen needed. Test hooks: abc-order-panel, abc-order-status, abc-confirmation-number, abc-order-number (only when present in ABC response), abc-order-status-badge, abc-submitted-delivery (override case), abc-submitted-delivery-default (no-override case), abc-refresh-status, abc-submit-order (gone in submitted view), abc-unknown, abc-verify-order, abc-price-changes, abc-delivery-review, abc-edit-delivery, abc-delivery-editor, delivery-save.",
+  "rca of the issue": "N/A — this round was a UX polish (auto-refresh) not a bug fix. The previous close/reopen requirement flagged in iter_28 (integration_issues) is RESOLVED by the new local poState + refetchPO() pattern in AbcOrderPanel.jsx (lines 24-37, 67-73). Behavior verified against all 5 backend submit outcomes."
+}

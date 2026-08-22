@@ -68,6 +68,11 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - Tests: new `tests/test_abc_supply_delivery_api.py` (7 pass + 1 env-only skip) + 31/31 ABC unit regression + 7/7 frontend UI flow (iteration_28). NOTE: ABC HTTP suites share an in-memory mock store — run one file at a time (serial), not under xdist.
   - Optional future polish (pre-existing, not a regression): auto-switch the open panel to the submitted view after a confirmed submit without close/reopen.
 
+- **[2026-06] ABC Order Panel Auto-Refresh COMPLETE & TESTED** — Frontend-only UX:
+  - `AbcOrderPanel.jsx` now keeps a local `poState` (synced from the `po` prop) and refetches `GET /api/purchase-orders/{id}` right after a confirmed/already_submitted submit, deriving `submitted` from it. The panel transitions to the submitted view IMMEDIATELY (confirmation #, order #, status badge, submitted timestamp, and the exact persisted `abc_order_submissions.delivery` snapshot) with no close/reopen.
+  - No-override submissions show `abc-submitted-delivery-default` (ships to ABC Ship-To default); overrides show the exact snapshot (never reconstructed from Job/Property). Unknown → renders `abc-unknown` immediately (no transition); failed/validation_failed → stays in review/error; price_changed → accept → immediate submitted view. Duplicate protection/pricing/delivery validation unchanged.
+  - Tests: iteration_29 — 6/6 frontend checks (all 5 submit outcomes + generic PO regression), backend snapshot verification 100%, 38+1skip ABC unit regression green. Zero issues.
+
 
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.
