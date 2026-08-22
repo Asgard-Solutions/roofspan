@@ -94,7 +94,15 @@ class MaterialListItemOut(MaterialOut):
     # supplier context
     primary_supplier_name: Optional[str] = None   # user-selected preferred supplier
     primary_supplier_cost: Optional[float] = None
+    primary_supplier_provider: Optional[str] = None
+    primary_supplier_status: Optional[str] = None      # priced | live | cached | manual | unavailable
+    primary_supplier_updated_at: Optional[datetime] = None
     best_known_cost: Optional[float] = None        # lowest active supplier cost (labeled separately)
+    best_supplier_name: Optional[str] = None
+    best_supplier_provider: Optional[str] = None
+    best_supplier_status: Optional[str] = None
+    best_supplier_updated_at: Optional[datetime] = None
+    supplier_count: int = 0
 
 
 class MaterialFacetsOut(BaseModel):
@@ -350,6 +358,7 @@ class POLineOut(POLineIn):
 
 
 class POIn(BaseModel):
+    supplier_id: Optional[str] = None
     supplier_name: Optional[str] = None
     job_id: Optional[str] = None
     expected_date: Optional[datetime] = None

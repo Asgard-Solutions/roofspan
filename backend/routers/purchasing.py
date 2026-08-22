@@ -78,7 +78,13 @@ async def list_pos(job_id: str | None = Query(None), status: str | None = Query(
 
 @router.post("", response_model=POOut, status_code=201)
 async def create_po(payload: POIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    supplier = await _find_or_create_supplier(db, payload.supplier_name)
+    supplier = None
+    if payload.supplier_id:
+        supplier = await db.get(Supplier, payload.supplier_id)
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+    if supplier is None:
+        supplier = await _find_or_create_supplier(db, payload.supplier_name)
     number = await next_number(db, "po", "PO")
     total = round(sum((it.quantity or 0) * (it.unit_cost or 0) for it in payload.items), 2)
     po = PurchaseOrder(number=number, supplier_id=supplier.id if supplier else None, job_id=payload.job_id,

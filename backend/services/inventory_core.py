@@ -134,6 +134,23 @@ async def best_known_cost(db: AsyncSession, material_id) -> float | None:
     return float(val) if val is not None else None
 
 
+async def best_known_supplier_material(db: AsyncSession, material_id) -> SupplierMaterial | None:
+    """The active supplier mapping with the lowest known cost (labeled separately from preferred)."""
+    return (await db.execute(
+        select(SupplierMaterial).where(
+            SupplierMaterial.material_id == material_id, SupplierMaterial.active.is_(True),
+            SupplierMaterial.current_cost.isnot(None))
+        .order_by(SupplierMaterial.current_cost.asc()).limit(1)
+    )).scalars().first()
+
+
+async def supplier_material_count(db: AsyncSession, material_id) -> int:
+    return int((await db.execute(
+        select(func.count()).select_from(SupplierMaterial).where(
+            SupplierMaterial.material_id == material_id, SupplierMaterial.active.is_(True))
+    )).scalar() or 0)
+
+
 async def preferred_supplier_material(db: AsyncSession, material_id) -> SupplierMaterial | None:
     return (await db.execute(
         select(SupplierMaterial).where(SupplierMaterial.material_id == material_id,

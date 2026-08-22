@@ -46,13 +46,32 @@ def _mat_out(m: Material) -> MaterialOut:
 
 
 async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
+    from integrations.supplier_connectors import capabilities_for  # noqa: F401
     qty = await inv_core.compute_quantities(db, m)
     pref = await inv_core.preferred_supplier_material(db, m.id)
-    pref_name = None
-    if pref and pref.supplier_id:
-        s = await db.get(Supplier, pref.supplier_id)
-        pref_name = s.name if s else None
-    best = await inv_core.best_known_cost(db, m.id)
+    pref_name = pref_provider = pref_status = pref_updated = None
+    if pref:
+        if pref.supplier_id:
+            s = await db.get(Supplier, pref.supplier_id)
+            pref_name = s.name if s else None
+            pref_provider = (s.integration_provider if s else None) or pref.integration_provider
+        else:
+            pref_provider = pref.integration_provider
+        pref_status = pref.price_status or ("manual" if not pref_provider or pref_provider == "manual" else None)
+        pref_updated = pref.price_updated_at
+    best_sm = await inv_core.best_known_supplier_material(db, m.id)
+    best = best_sm.current_cost if best_sm else None
+    best_name = best_provider = best_status = best_updated = None
+    if best_sm:
+        if best_sm.supplier_id:
+            bs = await db.get(Supplier, best_sm.supplier_id)
+            best_name = bs.name if bs else None
+            best_provider = (bs.integration_provider if bs else None) or best_sm.integration_provider
+        else:
+            best_provider = best_sm.integration_provider
+        best_status = best_sm.price_status or ("manual" if not best_provider or best_provider == "manual" else None)
+        best_updated = best_sm.price_updated_at
+    count = await inv_core.supplier_material_count(db, m.id)
     return MaterialListItemOut(
         id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
         active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
@@ -62,7 +81,11 @@ async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
         on_hand=qty["on_hand"], reserved=qty["reserved"], available=qty["available"],
         on_order=qty["on_order"], required=qty["required"], projected=qty["projected"],
         primary_supplier_name=pref_name, primary_supplier_cost=(pref.current_cost if pref else None),
-        best_known_cost=best,
+        primary_supplier_provider=pref_provider, primary_supplier_status=pref_status,
+        primary_supplier_updated_at=pref_updated,
+        best_known_cost=best, best_supplier_name=best_name, best_supplier_provider=best_provider,
+        best_supplier_status=best_status, best_supplier_updated_at=best_updated,
+        supplier_count=count,
     )
 
 
@@ -418,9 +441,20 @@ async def supplier_detail(supplier_id: str, user: User = Depends(get_current_use
         .where(SupplierMaterial.supplier_id == s.id)
     )).all()
     products = [{"id": str(sm.id), "material_id": str(sm.material_id), "material_name": mname,
-                 "supplier_item_number": sm.supplier_item_number, "current_cost": sm.current_cost,
+                 "supplier_item_number": sm.supplier_item_number, "supplier_uom": sm.supplier_uom,
+                 "current_cost": sm.current_cost, "price_status": sm.price_status,
+                 "price_updated_at": (sm.price_updated_at.isoformat() if sm.price_updated_at else None),
                  "is_preferred": sm.is_preferred, "active": sm.active} for sm, mname in sm_rows]
-    return {"supplier": _sup_out(s).model_dump(), "products": products}
+    # recent purchase orders for this supplier
+    po_rows = (await db.execute(
+        select(PurchaseOrder).where(PurchaseOrder.supplier_id == s.id)
+        .order_by(PurchaseOrder.created_at.desc()).limit(20)
+    )).scalars().all()
+    recent_pos = [{"id": str(p.id), "number": p.number, "status": p.status, "total": p.total,
+                   "job_id": (str(p.job_id) if p.job_id else None),
+                   "expected_date": (p.expected_date.isoformat() if p.expected_date else None),
+                   "created_at": (p.created_at.isoformat() if p.created_at else None)} for p in po_rows]
+    return {"supplier": _sup_out(s).model_dump(), "products": products, "purchase_orders": recent_pos}
 
 
 @router.patch("/suppliers/{supplier_id}", response_model=SupplierOut)

@@ -1,5 +1,5 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute, RequireSensitive } from "@/components/ProtectedRoute";
 import { Toaster } from "@/components/ui/sonner";
@@ -13,8 +13,9 @@ import Customers from "@/pages/Customers";
 import Jobs from "@/pages/Jobs";
 import JobDetail from "@/pages/JobDetail";
 import Inventory from "@/pages/Inventory";
-import AbcCatalog from "@/pages/AbcCatalog";
+import ProductCatalog from "@/pages/ProductCatalog";
 import MaterialDetail from "@/pages/MaterialDetail";
+import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
@@ -48,8 +49,10 @@ function App() {
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/jobs/:id" element={<JobDetail />} />
             <Route path="/inventory" element={<Inventory />} />
-            <Route path="/inventory/abc-catalog" element={<AbcCatalog />} />
+            <Route path="/inventory/catalog" element={<ProductCatalog />} />
+            <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
+            <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/reports" element={<Placeholder title="Reports" />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />

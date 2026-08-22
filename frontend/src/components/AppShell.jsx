@@ -10,7 +10,7 @@ import LocationResolutionProgress from "@/components/LocationResolutionProgress"
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
@@ -23,6 +23,7 @@ const MAIN_NAV = [
   { to: "/customers", label: "Customers", icon: Users2, testid: "nav-customers" },
   { to: "/jobs", label: "Jobs", icon: Hammer, testid: "nav-jobs" },
   { to: "/inventory", label: "Inventory", icon: Boxes, testid: "nav-inventory" },
+  { to: "/suppliers", label: "Suppliers", icon: Truck, testid: "nav-suppliers" },
   { to: "/finance", label: "Finance", icon: Wallet, testid: "nav-finance" },
   { to: "/reports", label: "Reports", icon: BarChart3, testid: "nav-reports" },
 ];
