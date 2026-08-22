@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Supplier, SupplierMaterial, Material, InventoryTxn, JobMaterial, POLineItem, PurchaseOrder
+from models import Supplier, SupplierMaterial, Material, InventoryTxn, JobMaterial, POLineItem, PurchaseOrder, Job
+
+# ... (module continues)
+_ACTIVE_JOB_STATUSES_EXCLUDED = ("completed", "cancelled", "closed", "archived", "lost")
 
 # Ledger transaction types (structured). delta sign convention: positive increases On Hand.
 TXN_TYPES = [
@@ -98,9 +101,11 @@ async def compute_quantities(db: AsyncSession, material: Material) -> dict:
     )).scalar() or 0
     reserved = abs(float(reserved_row))
 
-    # Required from job plans (exclude jobs that are cancelled/completed if a status exists on Job)
+    # Required from ACTIVE job plans (exclude completed/cancelled/closed/archived/lost jobs)
     required = float((await db.execute(
-        select(func.coalesce(func.sum(JobMaterial.planned_quantity), 0)).where(JobMaterial.material_id == material.id)
+        select(func.coalesce(func.sum(JobMaterial.planned_quantity), 0))
+        .select_from(JobMaterial).join(Job, Job.id == JobMaterial.job_id)
+        .where(JobMaterial.material_id == material.id, Job.status.notin_(_ACTIVE_JOB_STATUSES_EXCLUDED))
     )).scalar() or 0)
 
     on_order = float((await db.execute(

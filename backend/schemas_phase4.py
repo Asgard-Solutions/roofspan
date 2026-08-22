@@ -13,6 +13,22 @@ class MaterialIn(BaseModel):
     active: bool = True
     reorder_threshold: float = Field(default=0, ge=0)
     quantity_on_hand: float = Field(default=0, ge=0)
+    # master fields (all optional)
+    manufacturer: Optional[str] = None
+    brand: Optional[str] = None
+    product_family: Optional[str] = None
+    subcategory: Optional[str] = None
+    color: Optional[str] = None
+    size_variant: Optional[str] = None
+    purchase_unit: Optional[str] = None
+    conversion_factor: float = Field(default=1, gt=0)
+    coverage_amount: Optional[float] = None
+    coverage_unit: Optional[str] = None
+    weight: Optional[float] = None
+    upc: Optional[str] = None
+    manufacturer_part_number: Optional[str] = None
+    taxable: bool = True
+    image_url: Optional[str] = None
 
 
 class MaterialPatch(BaseModel):
@@ -23,6 +39,21 @@ class MaterialPatch(BaseModel):
     description: Optional[str] = None
     active: Optional[bool] = None
     reorder_threshold: Optional[float] = Field(default=None, ge=0)
+    manufacturer: Optional[str] = None
+    brand: Optional[str] = None
+    product_family: Optional[str] = None
+    subcategory: Optional[str] = None
+    color: Optional[str] = None
+    size_variant: Optional[str] = None
+    purchase_unit: Optional[str] = None
+    conversion_factor: Optional[float] = Field(default=None, gt=0)
+    coverage_amount: Optional[float] = None
+    coverage_unit: Optional[str] = None
+    weight: Optional[float] = None
+    upc: Optional[str] = None
+    manufacturer_part_number: Optional[str] = None
+    taxable: Optional[bool] = None
+    image_url: Optional[str] = None
 
 
 class MaterialOut(BaseModel):
@@ -40,10 +71,118 @@ class MaterialOut(BaseModel):
     abc_item_number: Optional[str] = None
 
 
+class QuantitiesOut(BaseModel):
+    on_hand: float
+    reserved: float
+    available: float
+    on_order: float
+    required: float
+    projected: float
+
+
+class MaterialListItemOut(MaterialOut):
+    manufacturer: Optional[str] = None
+    brand: Optional[str] = None
+    status: str = "active"
+    # operational quantities
+    on_hand: float = 0
+    reserved: float = 0
+    available: float = 0
+    on_order: float = 0
+    required: float = 0
+    projected: float = 0
+    # supplier context
+    primary_supplier_name: Optional[str] = None   # user-selected preferred supplier
+    primary_supplier_cost: Optional[float] = None
+    best_known_cost: Optional[float] = None        # lowest active supplier cost (labeled separately)
+
+
+class MaterialFacetsOut(BaseModel):
+    categories: List[str] = []
+    manufacturers: List[str] = []
+    suppliers: List[dict] = []  # {id, name}
+
+
+class TxnOut(BaseModel):
+    id: str
+    txn_type: str
+    delta: float
+    note: Optional[str] = None
+    po_id: Optional[str] = None
+    job_id: Optional[str] = None
+    location: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+
+class OpenPOLineOut(BaseModel):
+    po_id: str
+    po_number: str
+    status: str
+    quantity: float
+    received_quantity: float
+    remaining: float
+    unit_cost: float
+
+
+class JobRequirementOut(BaseModel):
+    job_id: str
+    job_title: Optional[str] = None
+    planned_quantity: float
+
+
+class MaterialDetailOut(BaseModel):
+    material: MaterialListItemOut
+    quantities: QuantitiesOut
+    suppliers: List[dict] = []
+    open_po_lines: List[OpenPOLineOut] = []
+    jobs: List[JobRequirementOut] = []
+    transactions: List[TxnOut] = []
+
+
 class AdjustIn(BaseModel):
     delta: float
-    reason: str = "adjustment"
+    reason: str = "manual_correction"
     note: Optional[str] = None
+    job_id: Optional[str] = None
+    location: Optional[str] = None
+
+
+class CsvImportRow(BaseModel):
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    manufacturer: Optional[str] = None
+    description: Optional[str] = None
+    reorder_threshold: Optional[float] = None
+    quantity_on_hand: Optional[float] = None
+
+
+class CsvPreviewIn(BaseModel):
+    rows: List[dict] = []
+
+
+class CsvPreviewRowOut(BaseModel):
+    row_number: int
+    action: str  # create | update | error
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    material_id: Optional[str] = None
+    changes: dict = {}
+    errors: List[str] = []
+
+
+class CsvPreviewOut(BaseModel):
+    rows: List[CsvPreviewRowOut] = []
+    create_count: int = 0
+    update_count: int = 0
+    error_count: int = 0
+
+
+class CsvCommitIn(BaseModel):
+    rows: List[dict] = []
+    confirm_updates: bool = False  # explicit confirmation required to apply updates
 
 
 # ---- Suppliers ----

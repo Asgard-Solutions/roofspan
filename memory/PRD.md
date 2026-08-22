@@ -93,6 +93,14 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
 - API: `GET /api/materials/{id}/suppliers`. Tests: `tests/test_inventory_core_slice1.py` (4 pass). Regression: ABC unit 31, catalog 13, api_integration 23, p2/p3/p4_api 44, delivery 7/1skip, phase5 subset — all green.
 - Remaining slices: 2) quantities+ledger types, 3) Materials list revamp+filters, 4) Material Detail page, 5) Add Material (Search/Custom/CSV)+adjustment dropdown, 6) preferred-supplier mgmt+Best Known Cost+full regression.
 
+### Slices 2–6 — COMPLETE & TESTED (2026-06)
+- Slice 2 Quantities & Ledger: `services/inventory_core.compute_quantities` (On Hand/Reserved/Available=OnHand−Reserved/On Order=Σmax(qty−received,0) on open POs/Required=active-job plans/Projected=OnHand+OnOrder−Required). Structured TXN_TYPES; `job_reservation` never reduces On Hand. Migration `b2c3d4e5f6a7` adds inventory_txns.job_id+location. Endpoint `GET /materials/{id}/quantities`.
+- Slice 3 Materials List 2.0: `GET /materials` returns quantities + preferred supplier + best_known_cost + status, with filters q/category/manufacturer/supplier_id/active/low_stock; `GET /materials/facets`. Frontend Inventory materials tab revamped (new columns + filter bar + row→detail).
+- Slice 4 Material Detail: `GET /materials/{id}/detail` (overview, quantities, suppliers, open POs, jobs, txn history). Frontend `MaterialDetail.jsx` at /inventory/materials/:id.
+- Slice 5 Add Material/CSV: 3-mode add (Create custom / Search supplier catalog / Import CSV). `POST /materials/import/preview` + `/commit` (create + update-by-SKU, preview of actions, confirm_updates required + UI checkbox — no silent overwrite).
+- Slice 6 Adjustment+Preferred: adjust reason is a structured dropdown + notes (validated ∈ TXN_TYPES). `POST /materials/{id}/suppliers/{sm_id}/prefer` (exactly one active preferred/material). Best Known Cost shown separately from preferred supplier.
+- Tests: `test_inventory_core_slice1.py` (4), `test_inventory_core_slice2_6.py` (9, incl. exact quantity math + reservation invariant + CSV confirm). Frontend testing_agent iteration_33 = 100% (10/10). Full ABC + business-workflow regression green.
+
 ## ABC branch selection fix (2026-06)
 - **Bug (live sandbox):** after connecting real ABC and choosing a Default Ship-To (Big Pine 2010466-2), the Default Branch dropdown was empty → couldn't save a branch → ABC Catalog blocked with "Select a Branch".
 - **Root cause:** `GET /branches?ship_to=` re-fetched the Ship-To DETAIL endpoint, whose response omits the branch list for some accounts (even though the account SEARCH result that populated the picker had branches).

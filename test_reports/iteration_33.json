@@ -1,0 +1,24 @@
+{
+  "summary": "Frontend-only validation of Inventory Core 2.0 UI (Slices 3-6). All 10 scripted checks PASSED. Materials tab renders new columns (Material, SKU, Category, Primary supplier, Cost, On hand, Reserved, Available, On order, Status); ABC-imported mock materials correctly show Primary supplier = 'ABC Supply'. Filters bar populates from /materials/facets (categories, manufacturers, suppliers) and low-stock toggle narrows the list (11 low). Row click navigates to Material Detail with all sections (overview + best-known-cost labeled separately, 6 quantity stat cards, supplier pricing w/ Preferred badge, open POs, jobs, transactions). Adjustment dropdown exposes the 12 transaction types; Manual Correction +2 raised On Hand 0->2 and Available 0->2; Job Reservation -1 kept On Hand=2 while Reserved 0->1 and Available 2->1 (KEY INVARIANT verified). CSV import preview shows create/update/error counts, and the new material is only inserted after explicit 'Confirm & import' click. ABC Supply Catalog nav, Purchase Orders tab, and ABC Supply Orders tab all render (no regression).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Inventory.jsx CSV commit sends confirm_updates:true unconditionally. Per spec 'no silent overwrite', this is fine because the preview UI IS the explicit confirm step (user must click Confirm & import) and the button is disabled until the preview loads. Consider adding a distinct UI affirmation when update_count > 0 (e.g., checkbox 'I understand N existing materials will be updated') for extra safety, but not blocking.",
+    "MaterialDetail.jsx uses label-derived data-testids (qty-on-hand from label 'On Hand'). Works today; if a label is ever renamed the testid changes. Consider decoupling by passing an explicit testid prop to Stat.",
+    "Inventory.jsx load() re-fires on every filter change without debounce, so rapid typing in material-search triggers many requests. Adding a 300ms debounce would reduce backend load."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% (10/10 scripted checks passed)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Adjusted Mock Ice and Water Barrier: On Hand +2 (manual_correction), Reserved +1 (job_reservation). Created 1 CSV material TEST_QA_Nails_<suffix> (SKU TSTNAIL-QA-<suffix>).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Inventory materials row is entire <tr> click -> /inventory/materials/:id; Adjust button uses stopPropagation. Adjust dialog reason is shadcn Select (role=option) with 12 txn types (initial_inventory, receive_po, job_reservation, job_issue, job_return, supplier_return, transfer, damage, waste, loss, cycle_count, manual_correction). Key invariant confirmed: job_reservation delta does NOT change on_hand (backend inventory_core.py). Detail testids: page-material-detail, detail-overview, best-known-cost, detail-inventory, qty-on-hand/reserved/available/on-order/required/projected, detail-suppliers, preferred-<smId>, prefer-<smId>, detail-open-pos, detail-jobs, detail-transactions. Login redirects to '/' not '/dashboard' (main app root).",
+  "rca_of_the_issue": "N/A - no bugs found."
+}
