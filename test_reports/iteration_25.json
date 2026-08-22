@@ -1,0 +1,66 @@
+{
+  "summary": "ABC Supply Phase 3 (Ordering & Order Tracking) end-to-end tested. Authored /app/backend/tests/test_abc_supply_p3_api.py (14 HTTP-integration cases) — ALL 14 PASS against the deployed preview URL against the local ABC mock, covering: pre-submit review OK, review-flags-unavailable, submit happy path (confirmed + MOCK-CONF-*), MANDATORY price refresh (price_changed then accepted), duplicate protection (same key + new key both -> already_submitted with the same confirmation), 4-way concurrent submit (exactly ONE confirmed), MOCK-REJECT -> failed, MOCK-TIMEOUT -> unknown -> unknown-on-retry (no auto-retry) -> reconcile -> reconciled, abc-refresh-status returns abc_status/normalized_status/order_number, orders/history + orders/{confirmation} + templates return Standard Reroof Kit, RBAC 403 for sales on all P3 endpoints, and regression (generic non-ABC PO create+status+receive still works; a submitted ABC PO is NOT auto-received). Frontend: verified via Playwright — 'ABC Supply Orders' tab (data-testid tab-abc-orders) lists submitted orders in abc-orders-table with Processing status. HOWEVER a CRITICAL frontend-backend integration bug was found: POOut does NOT expose external_confirmation_number / external_order_number / abc_order_status / abc_normalized_status / abc_submitted_at / abc_last_sync_at, so on the Purchase Orders tab every ABC PO (even already-confirmed 'ordered' ones like PO-0081..PO-0092) shows the button as 'Submit to ABC' instead of flipping to 'ABC Order', and the AbcOrderPanel status view (submitted = !!po.external_confirmation_number) never renders. Backend duplicate protection guards against a re-order, but the UX is broken.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/purchase-orders and /api/purchase-orders/{id}",
+        "issue": "POOut schema (backend/schemas_phase4.py:191 & _out() in backend/routers/purchasing.py:30) omits the ABC order-tracking fields the frontend depends on: external_confirmation_number, external_order_number, abc_order_status, abc_normalized_status, abc_submitted_at, abc_last_sync_at. Reproduced: after /abc-submit returns {status:'confirmed', confirmation_number:'MOCK-CONF-10009'} and PO.status becomes 'ordered', GET /api/purchase-orders/{id} returns all six of these ABC fields as null/absent. This breaks the Inventory > Purchase Orders view — the 'Submit to ABC' button (Inventory.jsx:124) never switches to 'ABC Order', and AbcOrderPanel status view (AbcOrderPanel.jsx:20) never activates.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Inventory.jsx > Purchase Orders tab",
+        "issue": "Rows for ABC POs already in status 'ordered' (with a stored MOCK-CONF confirmation) still show the primary action as 'Submit to ABC' rather than 'ABC Order'. Caused by the missing POOut fields above.",
+        "selector": "[data-testid^='abc-order-']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "AbcOrderPanel.jsx",
+        "issue": "abc-order-status view never renders for confirmed POs (submitted = !!po.external_confirmation_number is always false). Refresh button (abc-refresh-status) is not reachable via the panel.",
+        "selector": "[data-testid='abc-order-status']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "ABC submit -> PO row state update",
+        "issue": "After a successful POST /api/purchase-orders/{id}/abc-submit, the PO list refresh does not propagate the confirmation to the UI because the fields are stripped by POOut. Row still looks unsubmitted.",
+        "affected_selectors": ["[data-testid^='abc-order-']", "[data-testid='abc-order-panel']", "[data-testid='abc-order-status']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_p3_api.py",
+    "/app/test_reports/pytest/abc_p3_iter25.xml"
+  ],
+  "action_items": [
+    "Add external_confirmation_number, external_order_number, abc_order_status, abc_normalized_status, abc_submitted_at, abc_last_sync_at to POOut in /app/backend/schemas_phase4.py and populate them in _out() in /app/backend/routers/purchasing.py. This is required for the P3 UX (Submit-to-ABC -> ABC Order label swap, AbcOrderPanel status view, Refresh button) to function.",
+    "Consider whether the 'Receive' button should be hidden or disabled on ABC POs in status 'ordered' until ABC delivery is confirmed, to avoid receiving before delivery."
+  ],
+  "critical_code_review_comments": [
+    "POOut is out of sync with the PurchaseOrder model for the six new ABC-order fields (models.py migration c3f6a8b1d2e5) — schema drift; unit test on _out() would catch this.",
+    "abc_submit sets po.status='ordered' but relies on the frontend polling abc-refresh-status to fetch abc_order_status. Because status/normalized_status are already stored on the PO row after submit, exposing them via POOut would remove an unnecessary extra roundtrip.",
+    "abc-submit's price_changed branch: when a stored line has cost N and mock returns M, the response prev/updated totals treat unavailable lines as unit_cost*qty which can be misleading for lines that were 0. Minor UX nit — otherwise correct.",
+    "abc-reconcile matches by po.number against history's 'purchaseOrder' field (a truncated 20-char string sent via /orders). If PO numbers ever exceed 20 chars this will silently fail to match; the truncation happens in abc-submit (po.number[:20]). Consider echoing the truncated value or matching by requestId as a fallback.",
+    "The mock's in-memory _MOCK_ORDERS store resets on backend reload (documented). This is fine for tests but note it in the runbook so ops don't rely on it in preview."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_supply_p3_api.py (new)"
+  ],
+  "success_rate": {
+    "backend_p3_http": "14/14 (100%)",
+    "backend_p3_unit": "8/8 (100% — test_abc_supply_p3.py, previously authored)",
+    "frontend": "PARTIAL — ABC Supply Orders tab (tab-abc-orders) works and lists 9 submitted orders with Processing status; Purchase Orders 'Submit to ABC' button label/state does NOT reflect submitted status (see critical bug)."
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; Sales sales1_38f545f9@example.com / Sales1#2026 (RBAC 403 asserts on all P3 endpoints).",
+  "seed_data_creation": "Multiple ABC POs (PO-0077..PO-0092) created during test runs. One generic TEST_Generic_P3 PO (PO-0090) created and successfully receive-tested (status 'received'). No cleanup performed.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "P3 backend behaviour is fully validated with test_abc_supply_p3_api.py — re-run with `pytest tests/test_abc_supply_p3_api.py -o addopts=''` (disable xdist so tests share the mock order store in order). NOTE: the mock's _MOCK_ORDERS resets on backend reload, so run all 14 tests in one pass. After the POOut fix is applied by main agent, add regression assertions on external_confirmation_number/abc_order_status in the happy-path and concurrency tests (currently deferred via abc-refresh-status). Phase 4 webhooks not yet implemented — do NOT test.",
+  "rca of the issue": "POOut Pydantic schema (schemas_phase4.py:191) and its populator _out() (routers/purchasing.py:30) were not updated when migration c3f6a8b1d2e5 added the ABC order tracking columns to the PurchaseOrder model. As a result the DB is updated correctly on /abc-submit (verified: po.status='ordered', po.external_confirmation_number stored) but the API layer strips those fields from GET responses. Fix: extend POOut with the six Optional fields and pass po.external_confirmation_number, po.external_order_number, po.abc_order_status, po.abc_normalized_status, po.abc_submitted_at, po.abc_last_sync_at in _out()."
+}

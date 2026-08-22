@@ -14,7 +14,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
-import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2 } from "lucide-react";
+import AbcOrderPanel from "@/components/AbcOrderPanel";
+import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
@@ -33,6 +34,9 @@ export default function Inventory() {
   const [poOpen, setPoOpen] = useState(false);
   const [recvOpen, setRecvOpen] = useState(false);
   const [recvPo, setRecvPo] = useState(null);
+  const [abcOpen, setAbcOpen] = useState(false);
+  const [abcPo, setAbcPo] = useState(null);
+  const [abcHistory, setAbcHistory] = useState([]);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -40,6 +44,9 @@ export default function Inventory() {
     api.get("/purchase-orders").then((r) => setPos(r.data)).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
+  const loadAbcHistory = useCallback(() => {
+    api.get("/integrations/abc/orders/history").then((r) => setAbcHistory(r.data.orders || [])).catch(() => setAbcHistory([]));
+  }, []);
 
   const lowCount = materials.filter((m) => m.low_stock).length;
 
@@ -67,6 +74,7 @@ export default function Inventory() {
           <TabsList data-testid="inventory-tabs">
             <TabsTrigger value="materials" data-testid="tab-materials">Materials</TabsTrigger>
             <TabsTrigger value="pos" data-testid="tab-pos">Purchase Orders</TabsTrigger>
+            <TabsTrigger value="abc-orders" data-testid="tab-abc-orders" onClick={loadAbcHistory}>ABC Supply Orders</TabsTrigger>
           </TabsList>
 
           <TabsContent value="materials" className="mt-6">
@@ -112,10 +120,34 @@ export default function Inventory() {
                           </Select>
                         ) : <Badge className={sc[po.status] || ""} variant="secondary">{po.status.replace("_", " ")}</Badge>}
                       </TableCell>
-                      {canManage && <TableCell><Button size="sm" variant="outline" disabled={po.status === "cancelled" || po.status === "received"} onClick={() => { setRecvPo(po); setRecvOpen(true); }} data-testid={`receive-${po.id}`}><PackageCheck className="h-4 w-4" /> Receive</Button></TableCell>}
+                      {canManage && <TableCell><div className="flex gap-2">
+                        {po.integration_provider === "abc_supply" && <Button size="sm" variant="outline" onClick={() => { setAbcPo(po); setAbcOpen(true); }} data-testid={`abc-order-${po.id}`}><Send className="h-4 w-4" /> {po.external_confirmation_number ? "ABC Order" : "Submit to ABC"}</Button>}
+                        <Button size="sm" variant="outline" disabled={po.status === "cancelled" || po.status === "received"} onClick={() => { setRecvPo(po); setRecvOpen(true); }} data-testid={`receive-${po.id}`}><PackageCheck className="h-4 w-4" /> Receive</Button>
+                      </div></TableCell>}
                     </TableRow>
                   ))}
                   {pos.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No purchase orders yet.</TableCell></TableRow>}
+                </TableBody>
+              </Table>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="abc-orders" className="mt-6" data-testid="abc-orders-tab">
+            <div className="overflow-x-auto rounded-md border border-border bg-white">
+              <Table data-testid="abc-orders-table">
+                <TableHeader><TableRow><TableHead>Order #</TableHead><TableHead>Confirmation</TableHead><TableHead>PO #</TableHead><TableHead>Status</TableHead><TableHead>Delivery</TableHead><TableHead>Total</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {abcHistory.map((o, i) => (
+                    <TableRow key={i} data-testid={`abc-order-row-${i}`}>
+                      <TableCell className="font-medium text-slate-900">{o.orderNumber || "—"}</TableCell>
+                      <TableCell className="text-slate-600">{o.confirmationNumber}</TableCell>
+                      <TableCell className="text-slate-600">{o.purchaseOrder || "—"}</TableCell>
+                      <TableCell><Badge className="bg-blue-50 text-blue-700" variant="secondary">{o.status}</Badge></TableCell>
+                      <TableCell className="text-slate-500">{o.deliveryStatus || "—"}</TableCell>
+                      <TableCell className="tabular-nums">{money(o.total || 0)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {abcHistory.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No ABC Supply orders yet. Submit an ABC purchase order to see it here.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
@@ -155,6 +187,7 @@ export default function Inventory() {
 
       <PODialog open={poOpen} onOpenChange={setPoOpen} onCreated={load} />
       <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={load} />
+      <AbcOrderPanel open={abcOpen} onOpenChange={setAbcOpen} po={abcPo} onChanged={load} />
     </div>
   );
 }

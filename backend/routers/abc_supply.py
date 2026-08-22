@@ -503,3 +503,37 @@ async def price(payload: AbcPriceIn, request: Request,
     await log_action(db, user=user, action="abc.price.lookup", entity_type="abc_integration", entity_id=str(row.id),
                      detail={"count": len(result)}, request=request)
     return {"lines": result}
+
+
+# --------------------------- orders: history / detail / templates (Phase 3, read-only) ---------------------------
+@router.get("/orders/history")
+async def order_history(request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from integrations.abc_supply import orders as abc_orders
+    row = await _get_or_create(db)
+    client = await _connected_client(db, request)
+    try:
+        orders = await abc_orders.get_order_history(client, ship_to=row.default_ship_to_number, branch=row.default_branch_number)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    return {"orders": orders}
+
+
+@router.get("/orders/{confirmation_number}")
+async def order_detail(confirmation_number: str, request: Request,
+                       user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from integrations.abc_supply import orders as abc_orders
+    client = await _connected_client(db, request)
+    try:
+        return await abc_orders.get_order_by_confirmation(client, confirmation_number)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+
+
+@router.get("/templates")
+async def order_templates(request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from integrations.abc_supply import orders as abc_orders
+    client = await _connected_client(db, request)
+    try:
+        return {"templates": await abc_orders.list_templates(client)}
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)

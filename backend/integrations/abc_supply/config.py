@@ -29,9 +29,8 @@ ACCOUNT_PREFIX = "/api/account/v1"
 LOCATION_PREFIX = "/api/location/v1"
 PRODUCT_PREFIX = "/api/product/v1"
 PRICING_PREFIX = "/api/pricing/v2"  # verified: POST /api/pricing/v2/prices
-# NEEDS ABC DOC/SANDBOX VERIFICATION: order/notification service path prefixes are not explicitly
-# stated on the public docs (only the resource names /orders, /webhooks). Isolated here.
-ORDER_PREFIX = "/api/order/v1"
+ORDER_PREFIX = "/api/order/v2"      # verified: POST /orders, GET /orders/{orderNumber}, GET /orders?confirmationNumber=
+# NEEDS ABC DOC/SANDBOX VERIFICATION: notification service path prefix (resource /webhooks only). Isolated here.
 NOTIFICATION_PREFIX = "/api/notification/v1"
 
 # Scopes (source: authorization-methods). User (auth-code) token requests offline_access to obtain a

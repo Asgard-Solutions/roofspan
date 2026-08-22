@@ -415,6 +415,14 @@ class PurchaseOrder(Base):
     integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply"
     abc_ship_to_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     abc_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # ABC order (Phase 3) — set only after an ABC order is submitted.
+    external_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_confirmation_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_tracking_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_order_status: Mapped[str | None] = mapped_column(String(48), nullable=True)  # raw ABC status
+    abc_normalized_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    abc_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    abc_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -544,3 +552,25 @@ class AbcAccountLink(Base):
     branches: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     home_branch_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AbcOrderSubmission(Base):
+    """Durable ABC order submission record — the backbone of duplicate/idempotency/unknown-state handling.
+
+    `submission_key` is unique (also sent to ABC as requestId). Only one confirmed submission may exist
+    per purchase order. status: pending | confirmed | failed | unknown."""
+    __tablename__ = "abc_order_submissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    submission_key: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    abc_confirmation_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_tracking_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    delivery: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)

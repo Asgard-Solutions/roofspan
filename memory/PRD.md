@@ -43,6 +43,15 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - Tests: 9 P2 unit + 14 P2 HTTP integration; **55/55 backend + full frontend flow pass** (iteration_24). RBAC (sales 403) + generic-PO regression green.
   - **NEEDS ABC DOC/SANDBOX VERIFICATION**: order/notification path prefixes; product image URLs (future release per docs); recent/frequent/favorite endpoints not implemented (out of P2 need).
 
+- **[2026-06] Phase 3 COMPLETE & TESTED** — Ordering & Order Tracking:
+  - Order API (`orders.py`, `/api/order/v2`): `POST /orders` (array body; `requestId`=submission_key), `GET /orders/{n}` & `?confirmationNumber=`; order history/templates (paths NEEDS VERIFICATION, mocked).
+  - Submit flow (`purchasing.py`): `abc-submit-review` (validate + MANDATORY fresh price), `abc-submit` (row-lock + re-price + block on change unless accepted + idempotent by submission_key + persist identifiers + PO→ordered), `abc-refresh-status`, `abc-reconcile`. Statuses: confirmed|price_changed|validation_failed|already_submitted|pending|failed|unknown.
+  - Duplicate/concurrency: `abc_order_submissions` (submission_key UNIQUE), one confirmed per PO, `SELECT FOR UPDATE` (verified 4-way concurrent → 1 order). Unknown-state (transport/502-504) preserved, never auto-retried; reconcile via history. Receiving/inventory unchanged.
+  - PO order fields + migration `c3f6a8b1d2e5`; POOut exposes them (fix in iteration_26). UI: `AbcOrderPanel.jsx` (review→price-change→submit→status/refresh/reconcile) + "ABC Supply Orders" history tab.
+  - Tests: 8 P3 unit + 14 P3 HTTP integration; **all pass; frontend flow pass (iteration_26)**. RBAC + generic-PO/receiving regression green. 89 ABC backend tests total.
+  - **NEEDS ABC DOC/SANDBOX VERIFICATION**: order-history & template endpoint paths/filters; notification path prefix; real Sandbox credentials.
+  - Remaining: **P4** Notification webhooks via Relay (ORDER_UPDATE/ORDER_INVOICED, idempotent, pull-based status already done).
+
 
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.

@@ -168,6 +168,17 @@ class RefreshPriceOut(BaseModel):
     message: Optional[str] = None
 
 
+class AbcSubmitReviewIn(BaseModel):
+    apply_price_changes: bool = False
+
+
+class AbcSubmitIn(BaseModel):
+    submission_key: str = Field(min_length=8, max_length=80)
+    accept_price_changes: bool = False
+    delivery: Optional[dict] = None
+    delivery_service: str = "OTG"  # ABC delivery service enum (e.g. OTG: Our Truck Ground)
+
+
 class ReceiveLine(BaseModel):
     po_item_id: str
     quantity: float = Field(gt=0)
@@ -192,5 +203,12 @@ class POOut(BaseModel):
     integration_provider: Optional[str] = None
     abc_ship_to_number: Optional[str] = None
     abc_branch_number: Optional[str] = None
+    external_order_number: Optional[str] = None
+    external_confirmation_number: Optional[str] = None
+    external_tracking_id: Optional[str] = None
+    abc_order_status: Optional[str] = None
+    abc_normalized_status: Optional[str] = None
+    abc_submitted_at: Optional[datetime] = None
+    abc_last_sync_at: Optional[datetime] = None
     pricing_warning: Optional[str] = None
     items: List[POLineOut] = []

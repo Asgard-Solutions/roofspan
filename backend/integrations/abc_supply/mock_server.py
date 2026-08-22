@@ -48,11 +48,16 @@ def _require_bearer(authorization: str | None) -> dict:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     info = _ACCESS_TOKENS.get(token)
-    if not info:
-        raise HTTPException(status_code=401, detail="Invalid or unknown token")
-    if info["expires_at"] < time.time():
-        raise HTTPException(status_code=401, detail="Token expired")
-    return info
+    if info:
+        if info["expires_at"] < time.time():
+            raise HTTPException(status_code=401, detail="Token expired")
+        return info
+    # Reload-resilient: the mock's in-memory token store is cleared on hot reload, but tokens persisted
+    # (encrypted) in RoofSpan's DB remain valid by timestamp. Accept any well-formed mock token so the
+    # dev flow survives restarts. (Real token expiry/refresh is exercised by the unit tests.)
+    if token.startswith("mock-"):
+        return {"expires_at": time.time() + ACCESS_TTL, "scope": ""}
+    raise HTTPException(status_code=401, detail="Invalid or unknown token")
 
 
 # ---------------- OAuth ----------------
@@ -254,11 +259,27 @@ _MOCK_ITEMS = [
         "images": [], "hierarchy": {"productGroup": {"label": "Underlayment", "category": {"label": "Roofing Accessories"}}},
         "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
     },
+    {  # priceable, but ABC place-order REJECTS this item (tests order rejection)
+        "itemNumber": "MOCK-REJECT", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Reject-On-Order Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {  # priceable, but ABC place-order times out AFTER accepting (tests unknown-state + reconcile)
+        "itemNumber": "MOCK-TIMEOUT", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Timeout-On-Order Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+    },
 ]
 _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
     "MOCK-SHINGLE-ARCH-WW": 135.36,
     "MOCK-UNDERLAYMENT-30": 89.5,
     "MOCK-ICEWATER-BARRIER": 112.0,
+    "MOCK-REJECT": 9.99,
+    "MOCK-TIMEOUT": 4.5,
     # MOCK-DRIP-EDGE-DIM priced by length below; MOCK-RIDGE-CAP-NOPRICE intentionally 0.00 (unavailable)
 }
 
@@ -343,6 +364,116 @@ async def price_items(request: Request, authorization: str | None = Header(defau
         out_lines.append(base)
     return {"requestId": body.get("requestId"), "shipToNumber": body.get("shipToNumber"),
             "branchNumber": body.get("branchNumber"), "purpose": body.get("purpose"), "lines": out_lines}
+
+
+# ---------------- Order API (Phase 3, /api/order/v2) ----------------
+_MOCK_ORDERS: dict[str, dict] = {}   # confirmationNumber -> normalized-ish order record
+_MOCK_BY_REQID: dict[str, str] = {}  # requestId -> confirmationNumber
+
+
+def _order_record(conf: str, order_number: str, order: dict) -> dict:
+    branch = order.get("branchNumber")
+    lines = order.get("lines") or []
+    total = 0.0
+    for l in lines:
+        q = (l.get("orderedQty") or {}).get("value") or 0
+        up = (l.get("unitPrice") or {}).get("value") or 0
+        total += float(q) * float(up)
+    return {
+        "salesOrder": {"confirmationNumber": conf, "orderNumber": order_number,
+                       "purchaseOrder": order.get("purchaseOrder"), "createdDate": "2026-06-17",
+                       "orderType": "Delivery", "deliveryService": order.get("deliveryService"),
+                       "status": "Processing", "currency": order.get("currency", "USD")},
+        "dates": order.get("dates"),
+        "orderAmounts": {"subTotal": round(total, 2), "tax": 0.0, "total": round(total, 2)},
+        "shipTo": order.get("shipTo"),
+        "branch": {"number": branch, "name": f"ABC Supply - Branch {branch}", "storefront": "abc"},
+        "lines": lines,
+        "shipments": [{"shipmentNumber": f"{order_number}-1", "status": "Scheduled",
+                       "dates": {"deliveryRequestedOn": (order.get("dates") or {}).get("deliveryRequestedFor")},
+                       "deliveryHistory": [{"name": "Scheduled", "code": "AG", "localTime": "2026-06-17T09:00:00-05:00"}]}],
+    }
+
+
+@router.post("/api/order/v2/orders")
+async def place_order_mock(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    body = await request.json()
+    order = body[0] if isinstance(body, list) and body else (body if isinstance(body, dict) else {})
+    lines = order.get("lines") or []
+    req_id = order.get("requestId")
+    # Rejection scenario (documented error shape: 400 with per-order message).
+    if any(l.get("itemNumber") == "MOCK-REJECT" for l in lines):
+        return JSONResponse(status_code=400, content={
+            "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
+            "orders": [{"requestId": req_id, "message": "Order rejected: item MOCK-REJECT is not orderable at this branch."}]})
+    # Idempotency at the ABC layer: same requestId returns the same confirmation, never a new order.
+    if req_id and req_id in _MOCK_BY_REQID:
+        conf = _MOCK_BY_REQID[req_id]
+        return {"request": {"batchId": "B-DUP", "ordersReceived": 1, "ordersFailed": 0, "ordersSucceded": 1},
+                "orders": [{"requestId": req_id, "confirmationNumber": conf, "message": "Ordered successfully"}]}
+    seq = len(_MOCK_ORDERS) + 1
+    conf = f"MOCK-CONF-{10000 + seq}"
+    order_number = f"MOCK-ORDER-{20000 + seq}"
+    _MOCK_ORDERS[conf] = _order_record(conf, order_number, order)
+    if req_id:
+        _MOCK_BY_REQID[req_id] = conf
+    # Timeout-after-accept scenario: order IS recorded (reconcilable) but we return an ambiguous 504.
+    if any(l.get("itemNumber") == "MOCK-TIMEOUT" for l in lines):
+        return JSONResponse(status_code=504, content={"message": "Gateway timeout"})
+    return {"request": {"batchId": f"B{seq}", "receivedTime": "2026-06-17T09:00:00", "ordersReceived": 1,
+                        "ordersFailed": 0, "ordersSucceded": 1},
+            "orders": [{"requestId": req_id, "confirmationNumber": conf, "message": "Ordered successfully"}]}
+
+
+@router.get("/api/order/v2/orders/history")
+async def order_history_mock(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    orders = []
+    for rec in _MOCK_ORDERS.values():
+        so = rec["salesOrder"]
+        orders.append({"confirmationNumber": so["confirmationNumber"], "orderNumber": so["orderNumber"],
+                       "purchaseOrder": so["purchaseOrder"], "status": so["status"], "createdDate": so["createdDate"],
+                       "branch": rec["branch"], "total": rec["orderAmounts"]["total"],
+                       "deliveryStatus": rec["shipments"][0]["status"] if rec["shipments"] else None})
+    return {"orders": orders}
+
+
+@router.get("/api/order/v2/orders/{order_number}")
+async def get_order_by_number_mock(order_number: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    for rec in _MOCK_ORDERS.values():
+        if rec["salesOrder"]["orderNumber"] == order_number:
+            return rec
+    raise HTTPException(status_code=404, detail="Order not found")
+
+
+@router.get("/api/order/v2/orders")
+async def get_order_by_conf_mock(request: Request, confirmationNumber: str | None = None, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    rec = _MOCK_ORDERS.get(confirmationNumber or "")
+    if not rec:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return rec
+
+
+@router.get("/api/order/v2/templates")
+async def list_templates_mock(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    return {"templates": [
+        {"id": "MOCK-TMPL-1", "name": "Standard Reroof Kit", "lastUpdated": "2026-05-01",
+         "items": [{"itemNumber": "MOCK-SHINGLE-ARCH-WW", "quantity": 30, "uom": "SQ"},
+                   {"itemNumber": "MOCK-UNDERLAYMENT-30", "quantity": 3, "uom": "RL"},
+                   {"itemNumber": "MOCK-ICEWATER-BARRIER", "quantity": 2, "uom": "RL"}]},
+    ]}
+
+
+@router.get("/api/order/v2/templates/{template_id}")
+async def get_template_mock(template_id: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    return {"id": template_id, "name": "Standard Reroof Kit", "lastUpdated": "2026-05-01",
+            "items": [{"itemNumber": "MOCK-SHINGLE-ARCH-WW", "quantity": 30, "uom": "SQ"},
+                      {"itemNumber": "MOCK-UNDERLAYMENT-30", "quantity": 3, "uom": "RL"}]}
 
 
 # Standalone app (tests / manual runs).
