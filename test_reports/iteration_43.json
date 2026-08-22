@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend-only validation of the RoofSpan spec-closure (Purchasing/Inventory Intelligence on Dashboard + Inventory On-Hand report). All acceptance criteria PASS. Owner Dashboard renders the new 'Purchasing & Inventory' section with data-testid=purchasing-intelligence and all 7 required cards (card-inventory-value with $35,334.50 + 'Operational (MWAC)' subtitle, card-low-stock=3, card-reserved=45 with $0.00 sub, card-open-pos=436 with '$274,876.47 committed' sub, card-incoming=0, card-jobs-short=131, card-backordered=0). Action-required list rendered 25 clickable rows; first row navigated to /jobs/<id> with no error boundary. RBAC verified end-to-end for a freshly created sales user: /api/dashboard/purchasing returns cost_visible=false and inventory_value=null; on the UI, card-inventory-value is NOT rendered (count=0), and card-reserved / card-open-pos show operational counts only (no '$' and no 'committed' substring). All 6 operational counts still render for sales. Reports page (/reports) loads with all 4 costing tabs (Profitability / Material variance / Waste / Supplier impact); each tab renders an Export CSV button and shows data with no error boundaries -- no regression from the new /api/reports/inventory/on-hand endpoints. Regression smoke: /inventory, /suppliers, /inventory/catalog, /jobs (347 rows), first job detail (Costing section present), first PO detail (status/timeline text present), first estimate editor -- all load with zero error-boundary matches.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_details": {
+    "owner_purchasing_intelligence": "PASS - purchasing-intelligence visible; all 7 cards present with correct testids; 'Operational (MWAC)' label present on card-inventory-value; action-required shows 25 rows; first action navigates successfully with 0 error boundaries.",
+    "rbac_sales_dashboard": "PASS - Created sales user via POST /api/users (201). API /api/dashboard/purchasing for sales returned cost_visible=false, inventory_value=null. UI as sales: card-inventory-value count=0 (hidden); card-reserved text 'Reserved 45' (no $ / no committed); card-open-pos text 'Open POs 436' (no $ / no committed); operational counts (low-stock, incoming, jobs-short, backordered) all still render.",
+    "reports_page_regression": "PASS - /reports loads; 4 tabs (Profitability, Material variance, Waste, Supplier impact) all render Export CSV button; 0 error boundaries per tab. Supplier impact tab shows populated totals ($49,204.00 total received cost across 12 suppliers).",
+    "smoke_regression": "PASS - /inventory, /suppliers, /inventory/catalog, /jobs, /jobs/<id> (Costing text present), /purchase-orders/<id> (status/timeline text present, body_len=852), /estimates/<id> all load with 0 error-boundary elements.",
+    "note_route_shape": "Top-level list routes /estimates and /purchase-orders don't exist in the SPA (only detail routes /estimates/:id and /purchase-orders/:id are defined in App.js). This matches prior iteration_42's 'measurement noise' finding and is not a regression."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Dashboard.jsx PurchasingIntelligence gates the entire Inventory Value card on d.cost_visible (correct) and also gates the $-subtitles on card-reserved and card-open-pos (correct). RBAC is enforced in TWO layers -- backend omits the values (inventory_value:null) AND frontend hides the card -- which is the right defense-in-depth pattern.",
+    "Action-required rows use `data-testid={`action-${a.type}-${i}`}` which is a reasonable pattern but couples the testid to server-provided `a.type` string. Consider also exposing the action-required container with a stable count attribute (e.g., data-count) to simplify assertions.",
+    "No new UX/design issues. Cards, spacing, contrast, and lucide icons match existing Dashboard style."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026. New sales user created during this run: sales_t162f7dbf@example.com / SalesQA#2026 (role=sales).",
+  "seed_data_creation": "One sales user created via POST /api/users. No other data mutated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Spec-closure UI is signed off. Owner Dashboard exposes stable testids: purchasing-intelligence, card-inventory-value, card-low-stock, card-reserved, card-open-pos, card-incoming, card-jobs-short, card-backordered, action-required, action-<type>-<i>. RBAC contract: sales role -> cost_visible=false on /api/dashboard/purchasing and card-inventory-value is not rendered; card-reserved/card-open-pos strip $-subtitles. Note SPA has no list routes /estimates or /purchase-orders -- only detail routes; use API to fetch an id first when smoke-testing detail pages.",
+  "rca of the issue": "No issues found."
+}

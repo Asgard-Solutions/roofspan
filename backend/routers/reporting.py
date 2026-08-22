@@ -8,10 +8,62 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from models import User
-from core import require_roles, MANAGE_ROLES
+from core import require_roles, MANAGE_ROLES, get_current_user
 from services import job_costing as jc
+from services import dashboard as dash
+from services import inventory_core as inv_core
+from models import Material
 
 router = APIRouter(prefix="/api/reports/costing", tags=["reports-costing"])
+
+dashboard_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+@dashboard_router.get("/purchasing")
+async def purchasing_dashboard(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Operational counts visible to all internal roles; cost/value figures only for management roles.
+    include_cost = user.role in MANAGE_ROLES
+    return await dash.purchasing_dashboard(db, include_cost)
+
+
+inv_report_router = APIRouter(prefix="/api/reports/inventory", tags=["reports-inventory"])
+
+
+async def _on_hand_rows(db: AsyncSession, include_cost: bool):
+    from decimal import Decimal
+    mats = (await db.execute(__import__("sqlalchemy").select(Material).where(Material.active.is_(True)).order_by(Material.name))).scalars().all()
+    rows = []
+    for m in mats:
+        q = await inv_core.compute_quantities(db, m)
+        row = {"material": m.name, "sku": m.sku, "category": m.category, "unit": m.unit,
+               "on_hand": q["on_hand"], "reserved": q["reserved"], "available": q["available"],
+               "on_order": q["on_order"], "required": q["required"], "projected": q["projected"]}
+        if include_cost:
+            avg = float(m.avg_cost) if m.avg_cost is not None else None
+            row["avg_cost"] = avg
+            row["inventory_value"] = round((avg or 0) * q["on_hand"], 2) if avg is not None else None
+        rows.append(row)
+    return rows
+
+
+@inv_report_router.get("/on-hand")
+async def inventory_on_hand(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return {"rows": await _on_hand_rows(db, user.role in MANAGE_ROLES), "cost_visible": user.role in MANAGE_ROLES}
+
+
+@inv_report_router.get("/on-hand.csv")
+async def inventory_on_hand_csv(user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    import csv, io
+    rows = await _on_hand_rows(db, True)
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    w.writerow(["Material", "SKU", "Category", "Unit", "On Hand", "Reserved", "Available", "On Order", "Required", "Projected", "Avg Cost", "Inventory Value"])
+    for r in rows:
+        w.writerow([r["material"], r.get("sku"), r.get("category"), r["unit"], r["on_hand"], r["reserved"],
+                    r["available"], r["on_order"], r["required"], r["projected"], r.get("avg_cost"), r.get("inventory_value")])
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": 'attachment; filename="inventory_on_hand.csv"'})
 
 
 def _csv_response(filename: str, headers: list[str], rows: list[list]) -> StreamingResponse:
