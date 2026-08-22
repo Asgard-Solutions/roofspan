@@ -14,8 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
 import JobMaterialPlan from "@/components/JobMaterialPlan";
+import JobCosting from "@/components/JobCosting";
 import PhotoGallery from "@/components/PhotoGallery";
-import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck, Camera } from "lucide-react";
+import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck, Camera, DollarSign } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
@@ -163,6 +164,13 @@ export default function JobDetail() {
             </div>
           )}
         </Section>
+
+        {/* Actual Job Costing — cost & profitability (owner/administrator/office only) */}
+        {canManage && (
+          <Section icon={DollarSign} title="Costing" testid="section-job-costing">
+            <JobCosting jobId={id} canManage={canManage} />
+          </Section>
+        )}
 
         {/* Field Photos */}
         <Section icon={Camera} title="Field photos" testid="section-job-photos">

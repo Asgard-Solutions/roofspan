@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only validation of RoofSpan 'Actual Job Costing' phase (Costing section on Job Detail + Reports page + sales RBAC). All 7 requested flows PASS.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_details": {
+    "costing_section_render": "PASS - section-job-costing renders on JOB-0117 (id bf0f0a28...). costing-status-badge='Partial', costing-revenue=$60.00, costing-actual-total=$100.00, costing-actual-gp=-$40.00 (red + TrendingDown icon), costing-actual-margin=-66.7% (red). costing-summary-table shows all 7 categories with correct totals and gross-profit rows. costing-material-table shows 1 line ('UI Cost 988427') with Basis=Costed and +$10 variance (red = over-budget as expected).",
+    "add_manual_cost": "PASS - opened costing-add-cost dialog, picked category=equipment via costing-cat-select -> costing-cat-equipment, entered description + amount 123.45, saved via costing-save-cost; new row appeared in costing-manual-table.",
+    "delete_manual_cost": "PASS - clicked costing-del-<id> trash icon, row removed from costing-manual-table.",
+    "snapshot": "PASS - costing-snapshot-btn triggers success; costing-last-snapshot rendered with fresh timestamp '8/22/2026, 9:41:31 PM'.",
+    "data_quality_warnings": "Not reproducible on JOB-0117 (Partial status, cost basis is Costed). No warning banners expected here; UI code correctly gates costing-warn-nobaseline on no_estimate_baseline status and costing-warn-basis on material_actual.has_missing_cost_basis.",
+    "reports_page_owner": "PASS - /reports renders reports-page with all 4 tabs (tab-profitability, tab-material-variance, tab-waste, tab-supplier). Switching each tab loads the correct table: report-profitability-table, report-material-variance-table, report-waste-table, report-supplier-table. Supplier impact shows Total received cost $16,298.00 across 7 suppliers.",
+    "rbac_sales": "PASS - logged in as sales1_38f545f9@example.com. Navigating to /reports shows reports-restricted (Lock icon + 'restricted to management roles'); reports-page is NOT rendered. Sales sidebar has no Reports gate override needed since page is guarded client-side (and by backend). Jobs list for sales shows only 1 assigned job (RBAC visibility working)."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "JobCosting.jsx uses `enabled` gating via Tabs; useReport reloads only when active tab matches — good pattern.",
+    "Money formatter correctly colors negative GP/margin red and positive variance (over-budget) red via `invert` prop — matches spec.",
+    "Costing section is client-gated to owner/administrator/office in JobDetail.jsx; backend also enforces the same, so defense-in-depth is intact."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (per request)", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; Sales sales1_38f545f9@example.com / Sales1#2026",
+  "seed_data_creation": "None (used existing JOB-0117 seeded job). Temporarily created & then deleted a manual QA equipment cost during the flow test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Costing phase frontend fully verified. JOB-0117 is a reliable job for future costing regression (has material variance and a Labor manual cost). For data-quality warnings coverage: find a job whose baseline is not from an accepted quote to see costing-warn-nobaseline, and a job with issued material that lacks priced receipts to see costing-warn-basis."
+}

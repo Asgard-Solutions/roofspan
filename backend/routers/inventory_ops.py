@@ -216,10 +216,13 @@ async def transactions(material_id: str | None = Query(None), location_id: str |
     rows = (await db.execute(stmt)).all()
     # resolve location names
     locs = {str(l.id): l.name for l in (await db.execute(select(InventoryLocation))).scalars().all()}
+    see_cost = user.role in MANAGE_ROLES  # cost basis is hidden from Sales
     return {"transactions": [{
         "id": str(t.id), "created_at": t.created_at.isoformat() if t.created_at else None, "material_id": str(t.material_id),
         "material_name": n, "delta": t.delta, "reason": t.reason, "job_id": str(t.job_id) if t.job_id else None,
         "po_id": str(t.po_id) if t.po_id else None, "note": t.note, "created_by": t.created_by,
+        "unit_cost": (float(t.unit_cost) if t.unit_cost is not None else None) if see_cost else None,
+        "extended_cost": (float(t.extended_cost) if t.extended_cost is not None else None) if see_cost else None,
         "source_location": locs.get(str(t.source_location_id)) if t.source_location_id else None,
         "destination_location": locs.get(str(t.destination_location_id)) if t.destination_location_id else None,
     } for t, n in rows]}

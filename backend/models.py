@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer, Float, UniqueConstraint
+from decimal import Decimal
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer, Float, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -465,6 +466,9 @@ class Material(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     quantity_on_hand: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     reorder_threshold: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    # --- Actual Job Costing: Moving Weighted Average Cost (MWAC) unit cost basis ---
+    # None = no cost basis established yet (never invents a $0 basis). Recomputed only on receipts.
+    avg_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     # --- Master material identity (RoofSpan-owned; supplier-independent). All optional. ---
     manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -505,6 +509,11 @@ class InventoryTxn(Base):
     source_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("inventory_locations.id", ondelete="SET NULL"), nullable=True)
     destination_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("inventory_locations.id", ondelete="SET NULL"), nullable=True)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # --- Actual Job Costing: cost basis snapshot at transaction time (immutable once written) ---
+    # unit_cost = applicable MWAC (receipts) / snapshot (issue/waste) / return basis. NULL = no basis.
+    # extended_cost = unit_cost * delta (sign aligned with delta: receipt/return +, issue/waste -).
+    unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    extended_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -616,6 +625,47 @@ class JobMaterial(Base):
     assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     assembly_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ActualCostEntry(Base):
+    """Manual actual (non-material) cost recorded against a job: labor, equipment, subcontract,
+    permits, disposal, other. `amount` (NUMERIC(14,4)) is the authoritative total for the entry."""
+    __tablename__ = "actual_cost_entries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    category: Mapped[str] = mapped_column(String(24), nullable=False)  # labor|equipment|subcontract|permits|disposal|other
+    description: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)     # optional (e.g. hours)
+    unit_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)     # optional (e.g. $/hour)
+    incurred_on: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class JobCostSnapshot(Base):
+    """Immutable snapshot of a job's full costing (estimated vs actual) taken at completion (or manually).
+    Never mutated after creation — the historical record of a job's realized profitability."""
+    __tablename__ = "job_cost_snapshots"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    trigger: Mapped[str] = mapped_column(String(24), default="completion", nullable=False)  # completion|manual
+    baseline_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    costing_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    revenue: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    estimated_total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    actual_total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    estimated_gross_profit: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    actual_gross_profit: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    actual_gross_margin_percent: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
+    total_variance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
 
 
 class PurchaseOrder(Base):

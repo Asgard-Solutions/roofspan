@@ -627,12 +627,15 @@ async def receive(po_id: str, payload: ReceiveIn, request: Request, idempotency_
         if item.material_id:
             m = (await db.execute(select(Material).where(Material.id == item.material_id).with_for_update())).scalar_one_or_none()
             if m:
+                # MWAC: fold this receipt's exact unit cost into the moving average BEFORE adding qty.
+                uc, ext = ops.record_receipt_cost(m, line.quantity, item.unit_cost)
                 if recv_loc_id:
                     await ops.add_at_location(db, m, recv_loc_id, line.quantity)  # updates balance + company On Hand once
                 else:
                     m.quantity_on_hand = round(m.quantity_on_hand + line.quantity, 3)
                 db.add(InventoryTxn(material_id=m.id, delta=line.quantity, reason="receipt", po_id=po.id,
-                                    destination_location_id=recv_loc_id, created_by=user.email))
+                                    destination_location_id=recv_loc_id, unit_cost=uc, extended_cost=ext,
+                                    created_by=user.email))
 
     items = (await db.execute(select(POLineItem).where(POLineItem.po_id == po.id))).scalars().all()
     fully = all(i.received_quantity >= i.quantity - 1e-9 for i in items)

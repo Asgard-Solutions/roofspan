@@ -68,6 +68,8 @@ from routers import inventory_ops as inventory_ops_router
 app.include_router(inventory_ops_router.router)
 app.include_router(invoices.router)
 app.include_router(jobs.router)
+from routers import reporting as reporting_router
+app.include_router(reporting_router.router)
 app.include_router(operations.router)
 app.include_router(purchasing.router)
 app.include_router(cron.router)

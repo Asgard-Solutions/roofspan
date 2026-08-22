@@ -4,17 +4,34 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User
+from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User, ActualCostEntry, JobCostSnapshot
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase3 import JobOut
 from schemas_phase4 import JobPatch, JobMaterialIn, JobMaterialOut, JobDetailOut
 from services import job_planning as jp
+from services import job_costing as jc
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+COST_CATEGORIES = {"labor", "equipment", "subcontract", "permits", "disposal", "other"}
 
 
 class ReserveIn(BaseModel):
     quantity: float | None = None
+
+
+class ActualCostIn(BaseModel):
+    category: str
+    description: str = ""
+    amount: float | None = None
+    quantity: float | None = None
+    unit_rate: float | None = None
+    incurred_on: str | None = None
+    notes: str | None = None
+
+
+class SnapshotIn(BaseModel):
+    trigger: str = "manual"
 
 
 async def _plan_row(db, jm):
@@ -131,6 +148,9 @@ async def update_job(job_id: str, payload: JobPatch, request: Request, user: Use
     if data.get("status") in ("completed", "cancelled"):
         from services import inventory_ops as ops
         await ops.auto_release_reservations(db, j, user.email)
+    # Actual Job Costing: capture an IMMUTABLE cost snapshot when a job is marked completed.
+    if data.get("status") == "completed":
+        await jc.build_snapshot(db, j, "completion", user.email)
     await db.commit()
     await log_action(db, user=user, action="job.update", entity_type="job", entity_id=j.id, detail=payload.model_dump(exclude_unset=True, mode="json"), request=request)
     return await get_job(job_id, user, db)
@@ -239,3 +259,93 @@ async def job_purchase_proposal(job_id: str, user: User = Depends(require_roles(
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     return await jp.shortage_proposal(db, j)
+
+
+# --- Actual Job Costing (cost/profitability data — Sales role is NEVER granted access) ---
+@router.get("/{job_id}/costing")
+async def job_costing(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await jc.costing(db, j)
+
+
+@router.get("/{job_id}/actual-costs")
+async def list_actual_costs(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await jc.manual_actual_costs(db, j)
+
+
+@router.post("/{job_id}/actual-costs", status_code=201)
+async def add_actual_cost(job_id: str, payload: ActualCostIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from datetime import datetime as _dt
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    cat = (payload.category or "").strip().lower()
+    if cat not in COST_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"category must be one of {sorted(COST_CATEGORIES)}")
+    # amount is authoritative; derive from quantity*unit_rate only when amount omitted.
+    amount = payload.amount
+    if amount is None and payload.quantity is not None and payload.unit_rate is not None:
+        amount = float(payload.quantity) * float(payload.unit_rate)
+    if amount is None or amount < 0:
+        raise HTTPException(status_code=422, detail="amount (>= 0) is required")
+    incurred = None
+    if payload.incurred_on:
+        try:
+            incurred = _dt.fromisoformat(payload.incurred_on.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="incurred_on must be ISO date/datetime")
+    e = ActualCostEntry(job_id=j.id, category=cat, description=payload.description or "",
+                        amount=jc._q4(amount), quantity=jc._q4(payload.quantity) if payload.quantity is not None else None,
+                        unit_rate=jc._q4(payload.unit_rate) if payload.unit_rate is not None else None,
+                        incurred_on=incurred, notes=payload.notes, created_by=user.email)
+    db.add(e)
+    await db.commit()
+    await db.refresh(e)
+    await log_action(db, user=user, action="job.actual_cost.add", entity_type="job", entity_id=j.id,
+                     detail={"category": cat, "amount": float(e.amount)}, request=request)
+    return {"id": str(e.id), "category": e.category, "amount": float(e.amount)}
+
+
+@router.delete("/{job_id}/actual-costs/{entry_id}")
+async def delete_actual_cost(job_id: str, entry_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    e = await db.get(ActualCostEntry, entry_id)
+    if not e or str(e.job_id) != job_id:
+        raise HTTPException(status_code=404, detail="Cost entry not found")
+    await db.delete(e)
+    await db.commit()
+    await log_action(db, user=user, action="job.actual_cost.delete", entity_type="job", entity_id=job_id, request=request)
+    return {"ok": True}
+
+
+@router.get("/{job_id}/cost-snapshots")
+async def list_cost_snapshots(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(JobCostSnapshot).where(JobCostSnapshot.job_id == job_id)
+                             .order_by(JobCostSnapshot.created_at.desc()))).scalars().all()
+    return {"snapshots": [{
+        "id": str(s.id), "trigger": s.trigger, "costing_status": s.costing_status, "baseline_status": s.baseline_status,
+        "revenue": float(s.revenue) if s.revenue is not None else None,
+        "estimated_total_cost": float(s.estimated_total_cost) if s.estimated_total_cost is not None else None,
+        "actual_total_cost": float(s.actual_total_cost) if s.actual_total_cost is not None else None,
+        "actual_gross_profit": float(s.actual_gross_profit) if s.actual_gross_profit is not None else None,
+        "actual_gross_margin_percent": float(s.actual_gross_margin_percent) if s.actual_gross_margin_percent is not None else None,
+        "total_variance": float(s.total_variance) if s.total_variance is not None else None,
+        "created_by": s.created_by, "created_at": s.created_at.isoformat() if s.created_at else None,
+    } for s in rows]}
+
+
+@router.post("/{job_id}/cost-snapshots", status_code=201)
+async def create_cost_snapshot(job_id: str, payload: SnapshotIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    snap = await jc.build_snapshot(db, j, payload.trigger or "manual", user.email)
+    await db.commit()
+    await log_action(db, user=user, action="job.cost_snapshot.create", entity_type="job", entity_id=j.id,
+                     detail={"trigger": snap.trigger, "status": snap.costing_status}, request=request)
+    return {"id": str(snap.id), "trigger": snap.trigger, "costing_status": snap.costing_status,
+            "created_at": snap.created_at.isoformat() if snap.created_at else None}

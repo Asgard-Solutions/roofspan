@@ -9,14 +9,87 @@ Reservation ledger (reason=job_reservation) is unchanged from Job Automation and
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
+from decimal import Decimal, ROUND_HALF_UP
 
 from models import (Material, InventoryLocation, InventoryBalance, InventoryTxn, JobMaterial)
 
 DISPOSITION = {"waste", "damage", "loss"}
+Q4 = Decimal("0.0001")
 
 
 def _r3(v):
     return round(float(v or 0), 3)
+
+
+def _d(v):
+    """Coerce to Decimal (or None). Quantities/costs enter Decimal math via str to avoid float drift."""
+    if v is None:
+        return None
+    return v if isinstance(v, Decimal) else Decimal(str(v))
+
+
+def _q4(v):
+    if v is None:
+        return None
+    return _d(v).quantize(Q4, rounding=ROUND_HALF_UP)
+
+
+def record_receipt_cost(material: Material, qty, unit_cost):
+    """Update the material's Moving Weighted Average Cost (MWAC) for a receipt of `qty` at `unit_cost`.
+    MUST run BEFORE the receipt qty is added to on_hand (uses pre-receipt on_hand as the old weight).
+    An unpriced receipt (unit_cost None or <= 0) introduces no cost basis and leaves MWAC untouched.
+    Returns (unit_cost_dec, extended_cost_dec) for the ledger txn (both None when unpriced)."""
+    uc = _d(unit_cost)
+    if uc is None or uc <= 0:
+        return (None, None)
+    q = _d(qty)
+    old_oh = _d(material.quantity_on_hand or 0)
+    old_avg = _d(material.avg_cost)
+    if old_avg is None or old_oh <= 0:
+        new_avg = uc
+    else:
+        denom = old_oh + q
+        new_avg = ((old_oh * old_avg) + (q * uc)) / denom if denom > 0 else uc
+    material.avg_cost = _q4(new_avg)
+    return (_q4(uc), _q4(q * uc))
+
+
+def _consume_cost(material: Material, qty):
+    """Cost of removing `qty` at the material's current MWAC (issue / waste / damage / loss).
+    Returns (unit_cost_dec, extended_cost_dec) with extended_cost NEGATIVE (cost leaving inventory).
+    (None, None) when the material has no established cost basis (surfaced as Missing Cost Basis)."""
+    avg = _d(material.avg_cost)
+    if avg is None:
+        return (None, None)
+    q = _d(qty)
+    return (_q4(avg), _q4(-(q * avg)))
+
+
+async def outstanding_issued_avg_cost(db: AsyncSession, material_id, job_id):
+    """Weighted average unit cost of material currently issued-outstanding to a job
+    (Σ issued cost − Σ returned cost) / (issued qty − returned qty). Used to reverse cost on returns
+    without exact layer tracing. Returns Decimal or None (no traceable issued cost basis)."""
+    rows = (await db.execute(select(InventoryTxn.reason, InventoryTxn.delta, InventoryTxn.extended_cost).where(
+        InventoryTxn.material_id == material_id, InventoryTxn.job_id == job_id,
+        InventoryTxn.reason.in_(("job_issue", "job_return"))))).all()
+    net_qty = Decimal(0)
+    net_cost = Decimal(0)
+    saw_cost = False
+    for reason, delta, ext in rows:
+        qmag = abs(_d(delta) or Decimal(0))
+        if reason == "job_issue":
+            net_qty += qmag
+            if ext is not None:
+                net_cost += -_d(ext)  # issue ext is negative -> positive cost
+                saw_cost = True
+        else:  # job_return
+            net_qty -= qmag
+            if ext is not None:
+                net_cost -= _d(ext)   # return ext is positive -> reduces outstanding cost
+                saw_cost = True
+    if net_qty > 0 and saw_cost:
+        return _q4(net_cost / net_qty)
+    return None
 
 
 async def sync_default_balance(db: AsyncSession, material: Material):
@@ -97,9 +170,11 @@ async def transfer(db, material: Material, src_id, dst_id, qty: float, user_emai
 
 
 async def issue(db, material: Material, location_id, qty: float, job_id, user_email, allow_override=False):
-    """Issue to job: consume reservation first, reduce physical stock at location, increase Issued."""
+    """Issue to job: consume reservation first, reduce physical stock at location, increase Issued.
+    Snapshots the current MWAC as the job cost basis (final — never revalued if MWAC later changes)."""
     if qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be positive")
+    uc, ext = _consume_cost(material, qty)  # snapshot BEFORE removal (MWAC is unchanged by issuing)
     await remove_at_location(db, material, location_id, qty, allow_override=allow_override)
     # consume reservation (up to reserved) so Reserved drops and does not double-count
     if job_id:
@@ -109,16 +184,33 @@ async def issue(db, material: Material, location_id, qty: float, job_id, user_em
             db.add(InventoryTxn(material_id=material.id, delta=_r3(consume), reason="job_reservation",
                                 job_id=job_id, note="Reservation consumed by issue", created_by=user_email))
     db.add(InventoryTxn(material_id=material.id, delta=-_r3(qty), reason="job_issue", job_id=job_id,
-                        source_location_id=location_id, note="Issued to job", created_by=user_email))
+                        source_location_id=location_id, unit_cost=uc, extended_cost=ext,
+                        note="Issued to job", created_by=user_email))
     await db.flush()
 
 
 async def return_to_stock(db, material: Material, location_id, qty: float, job_id, user_email, reason=None):
     if qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be positive")
+    # Reverse cost using the weighted average of what is currently issued-outstanding to the job.
+    basis = await outstanding_issued_avg_cost(db, material.id, job_id) if job_id else None
+    if basis is None:
+        basis = _d(material.avg_cost)  # fall back to current MWAC when no traceable issued cost
+    q = _d(qty)
+    # Returning material to inventory re-introduces cost basis -> fold back into MWAC (like a receipt).
+    if basis is not None and basis > 0:
+        old_oh = _d(material.quantity_on_hand or 0)
+        old_avg = _d(material.avg_cost)
+        if old_avg is None or old_oh <= 0:
+            material.avg_cost = _q4(basis)
+        else:
+            material.avg_cost = _q4(((old_oh * old_avg) + (q * basis)) / (old_oh + q))
     await add_at_location(db, material, location_id, qty)
+    uc = _q4(basis) if basis is not None else None
+    ext = _q4(q * basis) if basis is not None else None
     db.add(InventoryTxn(material_id=material.id, delta=_r3(qty), reason="job_return", job_id=job_id,
-                        destination_location_id=location_id, note=reason or "Returned from job", created_by=user_email))
+                        destination_location_id=location_id, unit_cost=uc, extended_cost=ext,
+                        note=reason or "Returned from job", created_by=user_email))
     await db.flush()
 
 
@@ -127,9 +219,11 @@ async def disposition(db, material: Material, location_id, qty: float, kind: str
         raise HTTPException(status_code=400, detail="kind must be waste, damage, or loss")
     if qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be positive")
+    uc, ext = _consume_cost(material, qty)  # cost tracked separately from productive issue
     await remove_at_location(db, material, location_id, qty, allow_override=allow_override)
     db.add(InventoryTxn(material_id=material.id, delta=-_r3(qty), reason=kind, job_id=job_id,
-                        source_location_id=location_id, note=reason or f"{kind}", created_by=user_email))
+                        source_location_id=location_id, unit_cost=uc, extended_cost=ext,
+                        note=reason or f"{kind}", created_by=user_email))
     await db.flush()
 
 

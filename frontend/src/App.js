@@ -23,6 +23,7 @@ import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
 import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
+import Reports from "@/pages/Reports";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
@@ -65,7 +66,7 @@ function App() {
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
             <Route path="/finance" element={<Finance />} />
-            <Route path="/reports" element={<Placeholder title="Reports" />} />
+            <Route path="/reports" element={<Reports />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />
             <Route path="/admin/audit" element={<RequireSensitive><AuditLog /></RequireSensitive>} />
