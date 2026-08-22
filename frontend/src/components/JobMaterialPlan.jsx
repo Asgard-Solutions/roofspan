@@ -81,11 +81,19 @@ export default function JobMaterialPlan({ jobId, canManage }) {
     setBusy(true);
     try {
       for (const [sid, lines] of Object.entries(groups)) {
+        const opt0 = lines[0].suppliers.find((o) => o.supplier_id === sid) || {};
+        const isAbc = opt0.integration_provider === "abc_supply";
         await api.post("/purchase-orders", { supplier_id: sid, job_id: jobId,
+          integration_provider: isAbc ? "abc_supply" : null,
           items: lines.map((r) => { const opt = r.suppliers.find((o) => o.supplier_id === sid) || {};
-            return { material_id: r.material_id, description: r.material_name, quantity: Number(r.quantity), unit: r.unit, unit_cost: opt.current_cost || 0 }; }) });
+            const abc = opt.integration_provider === "abc_supply";
+            return { material_id: r.material_id, description: r.material_name, quantity: Number(r.quantity), unit: r.unit, unit_cost: opt.current_cost || 0,
+              integration_provider: abc ? "abc_supply" : null,
+              abc_item_number: abc ? opt.supplier_item_number : null,
+              abc_uom: abc ? opt.supplier_uom : null }; }) });
       }
-      toast.success(`Created ${Object.keys(groups).length} draft PO(s)`); setProposal(null); load();
+      const anyAbc = rows.some((r) => (r.suppliers.find((o) => o.supplier_id === r.supplier_id) || {}).integration_provider === "abc_supply");
+      toast.success(`Created ${Object.keys(groups).length} draft PO(s)${anyAbc ? " — open ABC PO(s) to review & submit" : ""}`); setProposal(null); load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 

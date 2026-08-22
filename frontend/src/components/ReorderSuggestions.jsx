@@ -27,10 +27,14 @@ export default function ReorderSuggestions({ onCreated }) {
     if (!picked.length) { toast.error("No suggestions with a preferred supplier selected"); return; }
     setBusy(true);
     try {
+      const { data: suppliers } = await api.get("/suppliers", { params: { active: true } });
+      const provById = Object.fromEntries(suppliers.map((s) => [s.id, s.integration_provider]));
       const groups = {};
       picked.forEach((r) => { (groups[r.preferred_supplier_id] = groups[r.preferred_supplier_id] || []).push(r); });
       for (const [sid, lines] of Object.entries(groups)) {
-        await api.post("/purchase-orders", { supplier_id: sid, items: lines.map((r) => ({ material_id: r.material_id, description: r.material_name, quantity: Number(r.quantity), unit: r.unit, unit_cost: r.best_known_cost || 0 })) });
+        const isAbc = provById[sid] === "abc_supply";
+        await api.post("/purchase-orders", { supplier_id: sid, integration_provider: isAbc ? "abc_supply" : null,
+          items: lines.map((r) => ({ material_id: r.material_id, description: r.material_name, quantity: Number(r.quantity), unit: r.unit, unit_cost: r.best_known_cost || 0, integration_provider: isAbc ? "abc_supply" : null })) });
       }
       toast.success(`Created ${Object.keys(groups).length} draft PO(s)`); setOpen(false); onCreated && onCreated();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }

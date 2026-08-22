@@ -17,6 +17,7 @@ import ProductCatalog from "@/pages/ProductCatalog";
 import MaterialDetail from "@/pages/MaterialDetail";
 import PurchaseOrderDetail from "@/pages/PurchaseOrderDetail";
 import InventoryLocations from "@/pages/InventoryLocations";
+import InventoryTransactions from "@/pages/InventoryTransactions";
 import EstimateEditor from "@/pages/EstimateEditor";
 import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
@@ -55,7 +56,8 @@ function App() {
             <Route path="/jobs/:id" element={<JobDetail />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/inventory/catalog" element={<ProductCatalog />} />
-            <Route path="/inventory/locations" element={<InventoryLocations />} />            <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
+            <Route path="/inventory/locations" element={<InventoryLocations />} />
+            <Route path="/inventory/transactions" element={<InventoryTransactions />} />            <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
             <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />

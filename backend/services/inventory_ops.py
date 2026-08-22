@@ -19,6 +19,21 @@ def _r3(v):
     return round(float(v or 0), 3)
 
 
+async def sync_default_balance(db: AsyncSession, material: Material):
+    """Ensure sum(location balances) == material.quantity_on_hand by absorbing any difference
+    into the default location. Keeps the company==Σlocations invariant for create/import/manual-adjust paths."""
+    total = (await db.execute(select(func.coalesce(func.sum(InventoryBalance.quantity_on_hand), 0)).where(
+        InventoryBalance.material_id == material.id))).scalar() or 0
+    diff = _r3((material.quantity_on_hand or 0) - float(total))
+    if abs(diff) < 1e-9:
+        return
+    loc = await default_location(db)
+    if not loc:
+        return
+    b = await _balance(db, material.id, loc.id)
+    b.quantity_on_hand = _r3(b.quantity_on_hand + diff)
+
+
 async def default_location(db: AsyncSession) -> InventoryLocation:
     loc = (await db.execute(select(InventoryLocation).where(InventoryLocation.is_default.is_(True)))).scalars().first()
     if not loc:

@@ -161,6 +161,9 @@ async def create_material(payload: MaterialIn, request: Request, user: User = De
     data["name"] = await _assert_unique_material_name(db, data["name"])
     m = Material(**data, created_by=user.email)
     db.add(m)
+    await db.flush()
+    from services import inventory_ops as _iops
+    await _iops.sync_default_balance(db, m)
     await db.commit()
     await db.refresh(m)
     await log_action(db, user=user, action="material.create", entity_type="material", entity_id=m.id, request=request)
@@ -252,6 +255,9 @@ async def adjust_material(material_id: str, payload: AdjustIn, request: Request,
         m.quantity_on_hand = new_qty
     db.add(InventoryTxn(material_id=m.id, delta=payload.delta, reason=payload.reason, note=payload.note,
                         job_id=(payload.job_id or None), location=payload.location, created_by=user.email))
+    if affects_on_hand:
+        from services import inventory_ops as _iops
+        await _iops.sync_default_balance(db, m)
     await db.commit()
     await db.refresh(m)
     await log_action(db, user=user, action="inventory.adjust", entity_type="material", entity_id=m.id, detail={"delta": payload.delta, "reason": payload.reason, "on_hand": m.quantity_on_hand}, request=request)
@@ -389,6 +395,12 @@ async def csv_commit(payload: CsvCommitIn, request: Request, user: User = Depend
                          created_by=user.email)
             db.add(m)
             created += 1
+    await db.flush()
+    from services import inventory_ops as _iops
+    from models import Material as _M
+    fresh = (await db.execute(select(_M).where(_M.quantity_on_hand > 0))).scalars().all()
+    for _m in fresh:
+        await _iops.sync_default_balance(db, _m)
     await db.commit()
     await log_action(db, user=user, action="material.csv_import", entity_type="material", entity_id=None,
                      detail={"created": created, "updated": updated, "skipped": skipped}, request=request)

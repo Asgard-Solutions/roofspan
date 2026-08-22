@@ -28,11 +28,15 @@ export default function MaterialDetail() {
   const { user } = useAuth();
   const canManage = MANAGE.includes(user?.role);
   const [d, setD] = useState(null);
+  const [balances, setBalances] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const { data } = await api.get(`/materials/${id}/detail`); setD(data); }
+    try {
+      const { data } = await api.get(`/materials/${id}/detail`); setD(data);
+      const b = await api.get("/inventory/balances", { params: { material_id: id } }); setBalances(b.data.balances);
+    }
     catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
@@ -75,6 +79,20 @@ export default function MaterialDetail() {
             <Stat label="On Order" value={q.on_order} accent="text-blue-600" />
             <Stat label="Required" value={q.required} />
             <Stat label="Projected" value={q.projected} accent={q.projected < 0 ? "text-red-600" : "text-slate-900"} />
+          </div>
+          <div className="mt-4 rounded-md border border-border bg-white p-4" data-testid="detail-by-location">
+            <h4 className="mb-2 text-xs font-semibold uppercase text-slate-400">Inventory by location</h4>
+            <div className="max-w-sm space-y-1 text-sm">
+              {balances.length === 0 ? <p className="text-slate-400">No stock on hand at any location.</p> : balances.map((b) => (
+                <div key={b.location_id} className="flex items-center justify-between" data-testid={`loc-balance-${b.location_id}`}>
+                  <span className="text-slate-700">{b.location_name} <span className="text-xs text-slate-400">({b.location_type})</span></span>
+                  <span className="tabular-nums">{b.quantity_on_hand}</span>
+                </div>
+              ))}
+              <div className="mt-1 flex items-center justify-between border-t border-border pt-1 font-semibold">
+                <span>Total On Hand</span><span className="tabular-nums" data-testid="loc-balance-total">{Math.round(balances.reduce((s, b) => s + b.quantity_on_hand, 0) * 1000) / 1000}</span>
+              </div>
+            </div>
           </div>
         </section>
 

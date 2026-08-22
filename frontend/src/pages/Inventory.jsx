@@ -17,7 +17,7 @@ import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
 import ReorderSuggestions from "@/components/ReorderSuggestions";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
-import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search } from "lucide-react";
+import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search, History } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
@@ -129,6 +129,7 @@ export default function Inventory() {
               <Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Create custom</Button>
               <Button variant="outline" onClick={() => navigate("/inventory/catalog")} data-testid="abc-catalog-button"><PackageSearch className="h-4 w-4" /> Product Catalog</Button>
               <Button variant="outline" onClick={() => navigate("/inventory/locations")} data-testid="locations-button"><Boxes className="h-4 w-4" /> Locations</Button>
+              <Button variant="outline" onClick={() => navigate("/inventory/transactions")} data-testid="transactions-button"><History className="h-4 w-4" /> Transactions</Button>
               <Button variant="outline" onClick={() => { setCsvPreview(null); setCsvRows([]); setCsvOpen(true); }} data-testid="import-csv-button"><Upload className="h-4 w-4" /> Import CSV</Button>
               <ReorderSuggestions onCreated={load} />
             </div>}

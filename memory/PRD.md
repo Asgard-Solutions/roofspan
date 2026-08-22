@@ -168,6 +168,16 @@ Goal flow: Supplier Cost → RoofSpan Material → Estimate → Waste/UOM/Assemb
 - **Tests**: `tests/test_estimating_modernization.py` 12 pass (calc math incl 31.5+12%→35.28, markup≠margin, ceil order qty, waste summary, default price book, assembly expand+version bump, quote cost-hidden snapshot, multi-package accept, cost-refresh no-autoapply, legacy custom line). Regression: phase3 14, phase5 7, supplier framework 3, inventory core 13+6 — all green (hardening's DB-invariant test must run in isolation due to a cross-file async event-loop teardown artifact). Frontend testing_agent iteration_35 = 100% (13/13 features), zero bugs.
 - **Known limitations**: Price Book rules are managed but NOT yet auto-applied to editor lines (adding a catalog product defaults selling_unit_price=snapshot cost until markup/price set) — candidate next enhancement. Job Material Automation / Smart Purchasing NOT started (deferred per instruction).
 
+## Advanced Inventory Completion Pass — DONE & TESTED (2026-06)
+Finished deferred operational UI + the ABC integration gap; fixed an integrity gap.
+- **Cycle Count UI**: guided count inside Location detail (`start-cycle-count` → editable counts + live variance → posts via `/inventory/cycle-count`, server-authoritative, refreshes balances).
+- **Stock By Location** on Material Detail (`detail-by-location`): per-location on-hand + Total that equals company On Hand; existing On Hand/Reserved/Available/On Order/Required/Projected retained.
+- **Inventory Transactions** page `/inventory/transactions` (filters material/location/type; clickable job/PO links) — over existing `/inventory/transactions`.
+- **ABC PO from job shortage & Reorder**: proposal/reorder now pass `integration_provider="abc_supply"` + per-line ABC metadata when the chosen supplier is ABC (capability-driven, no name-matching). Resulting PO is `integration_provider=abc_supply`, stays draft (never auto-submitted); PO detail shows "Review & submit in ABC" entry to the existing ABC panel. Verified by test `test_abc_provider_po_recognized_and_draft`.
+- **Integrity fix**: materials created/imported/manually-adjusted now keep `Σ(InventoryBalance) == Material.quantity_on_hand` via `inventory_ops.sync_default_balance` (called from material create, CSV import, and on-hand adjust). One-time reconcile healed 84 existing materials.
+- **Tests**: Advanced Inventory 11 (incl. ABC-draft-recognition + transaction-history-capture), Inventory Core slice1 4 + hardening 6, Estimating/Supplier/Core 24 — all pass. Frontend testing_agent iteration_38 = 100% of the 6 new UI surfaces, zero UI bugs.
+- **Still DEFERRED (transparent)**: PO status-history timeline table (Slice 4) and receiving photo attachments (Slice 5) were NOT implemented this pass (chose not to add the additive status-history model / attachment wiring under budget). Actual Job Costing NOT started.
+
 ## Git workflow (legacy note)
 User develops on remote `Asgard-Solutions/roofspan`; use "Save to GitHub". Preserve `.git`/`.emergent`.
 

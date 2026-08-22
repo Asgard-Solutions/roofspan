@@ -65,6 +65,7 @@ export default function PurchaseOrderDetail() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <Button variant="ghost" size="sm" onClick={() => navigate(-1)} data-testid="po-back"><ArrowLeft className="h-4 w-4" /> Back</Button>
           <div className="flex flex-wrap gap-2">
+            {canManage && isAbc && ["draft", "ready_for_review"].includes(po.status) && po.job_id && <Button size="sm" onClick={() => navigate(`/jobs/${po.job_id}`)} data-testid="po-abc-review"><Truck className="h-4 w-4" /> Review &amp; submit in ABC</Button>}
             {canManage && !isAbc && po.status === "draft" && <Button size="sm" onClick={() => setStatus("ordered")} data-testid="po-mark-ordered"><Truck className="h-4 w-4" /> Mark ordered</Button>}
             {canReceive && <Button size="sm" onClick={openReceive} data-testid="po-receive"><PackageCheck className="h-4 w-4" /> Receive</Button>}
             {canManage && po.status !== "cancelled" && po.status !== "received" && <Button size="sm" variant="outline" onClick={cancel} data-testid="po-cancel"><Ban className="h-4 w-4" /> Cancel</Button>}

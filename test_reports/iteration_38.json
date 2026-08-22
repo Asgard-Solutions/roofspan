@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend verification of the Advanced Inventory completion pass. All 6 new UI surfaces work end-to-end: Cycle Count (dialog opens with 63 lines, variance recomputes live, submit posts through /api/inventory/cycle-count, dialog closes, zero-variance path shows 'No variances to post' toast without any API call); Inventory Transactions page (139 rows initial, filters material/location/type all present and reload rows — type=cycle_count returned 5 rows including the ones just posted); Material Detail 'Inventory by location' block with 5 loc-balance rows and loc-balance-total, all 6 quantity stat cards (On Hand, Reserved, Available, On Order, Required, Projected) still render; ABC PO from job shortage — proposal dialog opened for job f1a74066..., supplier dropdown showed 'ABC Supply ★' (preferred star present), created a draft PO PO-0351 with integration_provider=abc_supply status=draft, and on the PO detail page 'po-abc-review' button is shown INSTEAD OF 'po-mark-ordered', integration card renders; Reorder Suggestions dialog loads (1 suggestion, manual supplier).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/inventory/balances vs material.quantity_on_hand", "issue": "Data drift: 2 of 64 materials have sum(inventory_balances.quantity_on_hand) != materials.quantity_on_hand — 'Mock Aluminum Drip Edge (dimensional - length required)' has on_hand=24 but sum of location balances = 19 (missing 5), and 'CSV New 20f6bb' has on_hand=7 but sum=0. This makes the new 'Total On Hand' vs summary On Hand stat visibly disagree on those material detail pages. Likely seed/import path not writing inventory_balances rows, or a prior transfer/adjustment leaked. Not a code bug in the new UI itself."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Investigate the 2 materials where materials.quantity_on_hand doesn't equal sum(inventory_balances). Options: (a) run a one-off backfill that seeds/repairs inventory_balances for legacy materials so the by-location total equals the summary On Hand, or (b) treat the summary On Hand as a derived read from inventory_balances so drift can't happen."
+  ],
+  "critical_code_review_comments": [
+    "MaterialDetail.jsx computes loc-balance-total by summing the returned balances client-side rather than trusting a server-computed total — this is fine, but it makes any data drift immediately visible to users. Consider having /materials/:id/detail return balances_total to keep numbers self-consistent server-side.",
+    "InventoryLocations.jsx cycle-count dialog: the Counted input is an uncontrolled string being parsed with Number(l.counted); if a user clears the field the variance shows -{system} and clicking submit posts a counted_quantity of 0 (a full write-off). Consider disabling submit while any counted is empty/NaN and showing an inline error.",
+    "JobMaterialPlan.createPOs sends per-item integration_provider only when the option matches abc_supply — good; but if the user manually picks the ABC supplier for a line that has no ABC option (rare), abc_item_number/abc_uom will be null and the created PO will still be integration_provider=abc_supply. Backend seems to accept this, but consider validating that ABC lines have both abc_item_number and abc_uom before posting.",
+    "InventoryTransactions.jsx: 'From'/'To' columns display source/destination location names, but the backend field naming in ledger entries is reason=transfer with two location refs — verify empty display '—' for non-transfer types is intentional (currently shows '—' for issues/returns/receipts which have only one location). Minor UX improvement: show the single location in whichever column applies (e.g., 'To' for receipt, 'From' for issue) so users don't have to expand a row.",
+    "ReorderSuggestions.jsx fetches /suppliers just to look up integration_provider for the ABC branch decision — consider extending /inventory/reorder-suggestions to include the preferred supplier's integration_provider so this extra roundtrip goes away."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (not tested this pass)", "frontend": "100% of the 6 new UI surfaces green"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "During cycle-count test, one +1 adjustment was posted to a material at the first location in the list (dbf28cdf... material). Also created draft PO PO-0351 (integration_provider=abc_supply, status=draft, job f1a74066-c022-4700-bc47-81ebc04c5748).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New pages verified: /inventory/transactions (page-inventory-transactions), cycle-count-dialog inside location-detail, detail-by-location block on /inventory/materials/:id, po-abc-review button on ABC draft POs. Job with ABC-eligible shortage available for future ABC-flow tests: f1a74066-c022-4700-bc47-81ebc04c5748. Recent ABC draft PO: PO-0351 (id faeb77ed-bf24-49c1-a0e0-269272eda601). Data drift observed on materials 'Mock Aluminum Drip Edge (dimensional - length required)' (id 2c625084-c648-4797-9dda-e22649d348d2, on_hand 24 vs sum-balances 19) and 'CSV New 20f6bb' (on_hand 7 vs sum-balances 0)."
+}

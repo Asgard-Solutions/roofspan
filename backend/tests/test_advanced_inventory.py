@@ -158,3 +158,32 @@ def test_auto_release_on_cancel_idempotent():
     requests.patch(f"{API}/jobs/{job}", headers=h, timeout=20, json={"status": "cancelled"})
     p2 = requests.get(f"{API}/jobs/{job}/material-plan", headers=h, timeout=20).json()["materials"][0]
     assert p2["reserved"] == 0
+
+
+def test_abc_provider_po_recognized_and_draft():
+    """A PO created with integration_provider=abc_supply is recognized as ABC and stays draft (not submitted)."""
+    h = _h()
+    sup = requests.get(f"{API}/suppliers", headers=h, timeout=20).json()
+    abc = next(s for s in sup if s["integration_provider"] == "abc_supply")
+    d = requests.get(f"{API}/materials", headers=h, timeout=20).json()
+    mid = d[0]["id"]
+    r = requests.post(f"{API}/purchase-orders", headers=h, timeout=20, json={
+        "supplier_id": abc["id"], "integration_provider": "abc_supply",
+        "items": [{"material_id": mid, "description": "x", "quantity": 2, "unit": "ea", "unit_cost": 10,
+                   "integration_provider": "abc_supply", "abc_item_number": "ABC-1"}]})
+    assert r.status_code == 201, r.text
+    po = r.json()
+    assert po["integration_provider"] == "abc_supply"
+    assert po["status"] == "draft"          # never auto-submitted
+
+
+def test_transaction_history_captures_movements():
+    h = _h()
+    mid = _stocked_material(h)
+    loc = _default_loc(h)
+    requests.post(f"{API}/inventory/disposition", headers=h, timeout=20, json={
+        "material_id": mid, "location_id": loc, "quantity": 1, "kind": "waste", "reason": "hist test"})
+    txns = requests.get(f"{API}/inventory/transactions", headers=h, params={"material_id": mid, "reason": "waste"}, timeout=20).json()
+    assert len(txns["transactions"]) >= 1
+    t = txns["transactions"][0]
+    assert t["reason"] == "waste" and t["material_name"] and t["source_location"]
