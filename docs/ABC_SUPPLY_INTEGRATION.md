@@ -161,6 +161,24 @@ ABC_MOCK_ENABLED=1 uvicorn integrations.abc_supply.mock_server:mock_app --port 8
 
 **Mock**: `POST /orders` (success, idempotent-by-requestId, `MOCK-REJECT`→400, `MOCK-TIMEOUT`→records-then-504), `GET /orders/{n}` & `?confirmationNumber=`, `/orders/history`, `/templates`. Synthetic ids `MOCK-CONF-*`, `MOCK-ORDER-*`.
 
+## Phase 4 — Notifications & Relay Webhook Ingress (implemented, MOCK VERIFIED)
+
+**Notification API** (`integrations/abc_supply/notifications.py`, verified `/api/notification/v2/webhooks`): `POST/GET/GET{id}/PATCH/DELETE`. One integration-level webhook (type `ORDER`, events `ORDER_UPDATE`,`ORDER_INVOICED`) managed with the **Client Credentials** token (`notification.read/write`) and reconciled (reuse/patch, max 5). Secret stored AES-GCM encrypted, never logged/returned.
+
+**Public ingress** (`routers/abc_webhooks.py`, `POST /api/webhooks/abc/orders`): authenticates the ABC secret (constant-time) via dedicated validators — `verify_order_update_event` (Authorization header) and `verify_order_invoiced_event` (Authorization OR `webhookDetails[].apiKey` — **NEEDS ABC SANDBOX VERIFICATION**), computes an `event_key`, dedupes at transport, routes by strong identifiers (order/confirmation/PO number) to an installation, durably queues (encrypted minimal payload), ACKs ABC, then delivers.
+
+**Routing index** `abc_order_routes` (installation_id, abc order/confirmation, RoofSpan PO number, po_id) — registered after a successful Phase 3 submit. Events with no strong match → `routing_status=unmatched` (never guessed, retained for reconciliation).
+
+**Durable queue** `abc_webhook_deliveries` (received→queued→delivering→delivered→failed→dead_letter, bounded attempts). Office offline → event queued; `POST /integrations/abc/notifications/reconnect` flushes once each after reconnect. `simulate-offline` toggles the install online flag.
+
+**Local processing** (`_process_delivery`): idempotent via `abc_notification_events` (unique event_key); ORDER_UPDATE updates `abc_order_status`(raw)/`abc_normalized_status`/`external_order_number`/`external_tracking_id`/`abc_last_sync_at` with an out-of-order timestamp guard; ORDER_INVOICED stores `abc_invoice_events` metadata (no AP). **Never** auto-receives inventory or marks the PO received.
+
+**Data boundary**: central/transport tables hold only registration/routing/queue metadata; local PostgreSQL remains authoritative for PO/invoice business state. (In this single-process desktop build the Relay ingress and Office processor coexist; production separation is a deployment concern.)
+
+**UI**: `AbcOrderPanel` shows pushed status, "Updates are received automatically", ABC Activity history, and ABC Invoice metadata; the manual "Refresh ABC status" remains. Registration status shown in the panel via `/notifications/status` (secret never exposed).
+
+**Audit**: `abc.notification.received/rejected/unmatched/register`, `abc.order.webhook_update`, `abc.invoice.webhook_received`. **Migration** `d4a7b2c8e1f6`. Tests: 6 P4 unit + HTTP curl-verified flows (auth reject, valid update, duplicate, offline→reconnect→deliver-once, invoiced, unmatched); ABC suite total green.
+
 ## NEEDS ABC DOC / SANDBOX VERIFICATION
 
 - **Order/Notification** service path **prefixes** (`/api/order/v1`, `/api/notification/v1`) are inferred

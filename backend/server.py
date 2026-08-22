@@ -20,6 +20,7 @@ from routers import auth, users, audit, integrations, settings, territories, pro
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, building_tiles, licensing as licensing_router
 from routers import abc_supply
+from routers import abc_webhooks
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -47,6 +48,8 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(abc_supply.router)
+app.include_router(abc_webhooks.public_router)
+app.include_router(abc_webhooks.admin_router)
 app.include_router(integrations.router)
 app.include_router(settings.router)
 app.include_router(territories.router)

@@ -30,8 +30,7 @@ LOCATION_PREFIX = "/api/location/v1"
 PRODUCT_PREFIX = "/api/product/v1"
 PRICING_PREFIX = "/api/pricing/v2"  # verified: POST /api/pricing/v2/prices
 ORDER_PREFIX = "/api/order/v2"      # verified: POST /orders, GET /orders/{orderNumber}, GET /orders?confirmationNumber=
-# NEEDS ABC DOC/SANDBOX VERIFICATION: notification service path prefix (resource /webhooks only). Isolated here.
-NOTIFICATION_PREFIX = "/api/notification/v1"
+NOTIFICATION_PREFIX = "/api/notification/v2"  # verified: /api/notification/v2/webhooks
 
 # Scopes (source: authorization-methods). User (auth-code) token requests offline_access to obtain a
 # refresh token. Pricing is ONLY available with a user token for Third-Party Aggregators.

@@ -16,9 +16,15 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [subKey, setSubKey] = useState("");
   const [result, setResult] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [activity, setActivity] = useState({ events: [], invoices: [] });
 
   const submitted = !!po?.external_confirmation_number;
   const unknown = result?.status === "unknown";
+
+  const loadActivity = useCallback(async () => {
+    if (!po?.id) return;
+    try { const { data } = await api.get(`/integrations/abc/notifications/events/${po.id}`); setActivity(data); } catch (e) { /* none */ }
+  }, [po?.id]);
 
   const loadReview = useCallback(async () => {
     if (!po || submitted) return;
@@ -31,7 +37,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   }, [po, submitted]);
 
   useEffect(() => { if (open && po && !submitted) loadReview(); }, [open, po, submitted, loadReview]);
-  useEffect(() => { if (open && submitted) refreshStatus(); /* eslint-disable-next-line */ }, [open, submitted]);
+  useEffect(() => { if (open && submitted) { refreshStatus(); loadActivity(); } /* eslint-disable-next-line */ }, [open, submitted]);
 
   const submit = async () => {
     setSubmitting(true); setResult(null);
@@ -91,8 +97,20 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 {detail.shipments.map((s, i) => <div key={i} className="text-slate-500">{s.shipment_number}: {s.status}{s.latest_delivery_event ? ` · ${s.latest_delivery_event}` : ""}{s.delivered_on ? ` · delivered ${s.delivered_on}` : ""}</div>)}
               </div>
             )}
-            <p className="text-xs text-slate-400">Editing this PO in RoofSpan does not modify the submitted ABC order. Receiving materials still uses the existing Receive workflow.</p>
-            <Button variant="outline" onClick={refreshStatus} data-testid="abc-refresh-status"><RefreshCw className="h-4 w-4" /> Refresh ABC status</Button>
+            <p className="text-xs text-slate-400">Updates are received automatically from ABC Supply. Editing this PO in RoofSpan does not modify the submitted ABC order. Receiving materials still uses the existing Receive workflow.</p>
+            {activity.invoices?.length > 0 && (
+              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800" data-testid="abc-invoice">
+                <div className="font-medium">ABC Invoice</div>
+                {activity.invoices.map((iv, i) => <div key={i}>Invoice #: {iv.invoice_number}{iv.invoice_date ? ` · ${iv.invoice_date}` : ""}{iv.is_credit_memo ? " · Credit memo" : ""}</div>)}
+              </div>
+            )}
+            {activity.events?.length > 0 && (
+              <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-activity">
+                <div className="mb-1 font-medium text-slate-700">ABC Activity</div>
+                {activity.events.map((e, i) => <div key={i} className="text-slate-500">{new Date(e.received_at).toLocaleString()} — {e.event_type === "ORDER_INVOICED" ? "Invoiced" : (e.abc_status || "Order update")}</div>)}
+              </div>
+            )}
+            <Button variant="outline" onClick={() => { refreshStatus(); loadActivity(); }} data-testid="abc-refresh-status"><RefreshCw className="h-4 w-4" /> Refresh ABC status</Button>
           </div>
         )}
 

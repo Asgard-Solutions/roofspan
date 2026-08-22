@@ -574,3 +574,85 @@ class AbcOrderSubmission(Base):
     delivery: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+# ---------- ABC Supply Notifications / Webhooks (Phase 4) ----------
+
+class AbcWebhookRegistration(Base):
+    """Central integration metadata for the single ABC webhook (secret encrypted). Allowed central
+    exception: the public receiver must authenticate ABC before it knows which install owns the order."""
+    __tablename__ = "abc_webhook_registrations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment: Mapped[str] = mapped_column(String(16), default="sandbox", nullable=False)
+    webhook_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="not_registered", nullable=False)
+    events: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AbcOrderRoute(Base):
+    """Routing index (transport metadata only): maps ABC order/confirmation/PO number to a local install."""
+    __tablename__ = "abc_order_routes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    installation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    abc_order_number: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    abc_confirmation_number: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    roofspan_po_number: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AbcWebhookDelivery(Base):
+    """Durable transport queue for authenticated events awaiting delivery to a local install.
+    Minimal encrypted payload only — NOT an authoritative business store. Bounded retry."""
+    __tablename__ = "abc_webhook_deliveries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_key: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    installation_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    abc_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_confirmation_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    roofspan_po_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="received", nullable=False)  # received|queued|delivering|delivered|failed|dead_letter
+    routing_status: Mapped[str] = mapped_column(String(16), default="matched", nullable=False)  # matched|unmatched
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AbcNotificationEvent(Base):
+    """Local idempotency + audit of processed ABC events (per install). Unique event_key."""
+    __tablename__ = "abc_notification_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_key: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    abc_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_confirmation_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
+    abc_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="processed", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AbcInvoiceEvent(Base):
+    """Local invoice-event linking metadata (NOT full AP). Associated with a local PO."""
+    __tablename__ = "abc_invoice_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
+    abc_invoice_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_invoice_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    abc_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abc_purchase_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_credit_memo: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_rebill: Mapped[bool] = mapped_column(Boolean, default=False)
+    event_received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    payload_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)

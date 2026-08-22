@@ -411,6 +411,12 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     po.abc_last_sync_at = now
     po.status = "ordered"
     po.order_date = po.order_date or now
+    # Register the minimal routing index so the Relay can map future ABC webhooks to this installation.
+    from models import AbcOrderRoute
+    import os as _os
+    db.add(AbcOrderRoute(installation_id=_os.environ.get("ABC_INSTALLATION_ID", "install-local"),
+                         abc_confirmation_number=sub.abc_confirmation_number, abc_order_number=None,
+                         roofspan_po_number=po.number, purchase_order_id=po.id))
     await db.commit()
     await log_action(db, user=user, action="abc.order.submitted", entity_type="purchase_order", entity_id=po.id,
                      detail={"confirmation": sub.abc_confirmation_number}, request=request)

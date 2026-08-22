@@ -1,0 +1,34 @@
+{
+  "summary": "ABC Supply Phase 4 (Notifications + Public Relay Webhook Ingress) end-to-end verification against deployed backend. Wrote /app/backend/tests/test_abc_supply_p4_api.py (16 tests, ALL PASS) covering: (1) webhook register+reconcile (single webhook_id MOCK-WEBHOOK-1, has_secret=true, events=[ORDER_UPDATE,ORDER_INVOICED], secret never exposed on /status), (2) public ingress auth 401 for missing/wrong Authorization AND 200 without JWT when secret is correct, (3) ORDER_UPDATE routes to PO by purchaseOrderNumber, updates abc_order_status='Scheduled' + abc_normalized_status='scheduled', (4) IDEMPOTENCY: identical eventId returns {duplicate:true} and PO is NOT mutated twice, (5) OFFLINE->RECONNECT: simulate-offline=false + POST event => queued (PO status unchanged) => reconnect returns delivered>=1 and PO becomes Shipped; re-reconnect returns delivered=0 (delivered-once), (6) NO AUTO-RECEIVING (CRITICAL): after Shipped, PO.status stays 'ordered' (NOT received/partially_received) and every line.received_quantity=0 — Receiving still requires manual workflow, (7) ORDER_INVOICED via Authorization header AND via data.apiKey both work (docs-ambiguity handled), invoice appears in /events/{po_id}, (8) Unmatched purchaseOrderNumber => routing='unmatched' and no PO mutated, (9) RBAC: sales user gets 403 on register/status/reconnect. Ran full regression: 74/74 pass (p1 10, p2 9, p2_api 14, p3 7, p3_api 14, p4 5, relay 15). Frontend verified via Playwright on PO-0097 (which had the full webhook lifecycle): abc-order-panel opens with abc-order-status showing 'Shipped'+MOCK-CONF-10001, abc-invoice shows MOCK-INVOICE-555 & 556 with dates, abc-activity lists all 6 events (Acknowledged->Scheduled->Picking->Shipped->Invoiced x2), auto-update note present, abc-refresh-status clickable and functional. All 11 review items PASS.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_supply_p4_api.py",
+    "/app/backend/tests/test_abc_supply_p4.py",
+    "/app/test_reports/pytest/p4_iter27.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "abc_webhooks.py:197 — chained ternary on api_key extraction is hard to read: `data.get('apiKey') or (data.get('webhookDetails') or [{}])[0].get('apiKey') if isinstance(data.get('webhookDetails'), list) else data.get('apiKey')`. Precedence works but a small helper `_extract_api_key(data)` would improve readability and testability.",
+    "_ONLINE flag is a module-level in-memory dict (routers/abc_webhooks.py:45). Acceptable for the single-process desktop mock (explicitly documented), but multi-worker deployments would lose 'offline' state across workers — flag for the eventual real Relay/multi-node build.",
+    "AbcOrderPanel.jsx:26 swallows all errors from /events/{po_id} silently (`catch (e) { /* none */ }`). If the endpoint 500s, the panel will look fine but silently miss activity/invoice — consider logging or a subtle toast.",
+    "purchasing.py:368 truncates PO number to 20 chars when building the ABC payload (`po.number[:20]`). If PO numbers ever exceed 20 chars, the webhook match on purchaseOrderNumber could still succeed (matches full local number) but the ABC-side echo may differ; leaving as noted in iter_26."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_supply_p4_api.py (new)"
+  ],
+  "success_rate": {
+    "backend": "16/16 P4 API + 74/74 full ABC+Relay regression = 100%",
+    "frontend": "6/6 P4 UI checks (panel opens, status view, invoice section, activity section, auto-update note, refresh button) = 100%"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 ; Sales sales1_38f545f9@example.com / Sales1#2026 (both from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Test fixture creates a fresh ABC PO per module run (MOCK-SHINGLE-ARCH-WW, ship-to 1163698, branch 18) and submits it to register an AbcOrderRoute; also produced PO-0097 which has the full ORDER_UPDATE(Acknowledged/Scheduled/Picking/Shipped) + ORDER_INVOICED x2 lifecycle applied — useful for future UI regression.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 4 is fully implemented and verified. Regression suite command: `cd /app/backend && PYTHONPATH=/app/backend pytest tests/test_abc_supply_p1.py tests/test_abc_supply_p2.py tests/test_abc_supply_p2_api.py tests/test_abc_supply_p3.py tests/test_abc_supply_p3_api.py tests/test_abc_supply_p4.py tests/test_abc_supply_p4_api.py tests/test_relay.py -o addopts=''` (74 pass in ~19s + 16 P4 API in ~5s). Note: mock in-memory stores (_MOCK_WEBHOOKS, _MOCK_ORDERS) reset on backend reload — so on any restart the webhook needs to be re-registered before firing events (the P4 API test module fixture handles this automatically each run). Public ingress URL: POST {REACT_APP_BACKEND_URL}/api/webhooks/abc/orders with header `Authorization: MOCK-WEBHOOK-SECRET-<webhook_id>`.",
+  "rca of the issue": "N/A — no bugs found. Phase 4 implementation is correct and complete."
+}

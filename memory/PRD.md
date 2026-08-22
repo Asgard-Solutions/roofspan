@@ -52,6 +52,15 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - **NEEDS ABC DOC/SANDBOX VERIFICATION**: order-history & template endpoint paths/filters; notification path prefix; real Sandbox credentials.
   - Remaining: **P4** Notification webhooks via Relay (ORDER_UPDATE/ORDER_INVOICED, idempotent, pull-based status already done).
 
+- **[2026-06] Phase 4 COMPLETE & TESTED (MOCK VERIFIED)** — Notifications & Relay Webhook Ingress:
+  - Notification API (`notifications.py`, verified `/api/notification/v2/webhooks`): register/list/get/patch/delete; ONE integration webhook (client-credentials), reconciled, max-5 respected, secret AES-GCM encrypted.
+  - Public ingress `POST /api/webhooks/abc/orders` (`routers/abc_webhooks.py`): constant-time secret auth (ORDER_UPDATE Authorization; ORDER_INVOICED Authorization OR apiKey — NEEDS SANDBOX VERIFICATION), strong-identifier routing, durable encrypted queue, ACK then deliver.
+  - Tables (migration `d4a7b2c8e1f6`): `abc_webhook_registrations`, `abc_order_routes` (registered on Phase-3 submit), `abc_webhook_deliveries` (offline→reconnect deliver-once, bounded retry, dead_letter), `abc_notification_events` (local idempotency, out-of-order guard), `abc_invoice_events`.
+  - No auto-receiving/inventory changes; local PG authoritative; central holds transport metadata only. UI: `AbcOrderPanel` push status + ABC Activity + Invoice + auto-update note.
+  - Tests: 6 P4 unit + 16 P4 API; **74/74 full ABC+Relay regression, 6/6 UI checks (iteration_27), zero issues.**
+  - **NEEDS ABC DOC/SANDBOX VERIFICATION**: ORDER_INVOICED secret transport; live payload/status variations; order-history & template paths; real Sandbox credentials + production webhook registration.
+  - **ABC Supply integration (Phases 1–4) COMPLETE.**
+
 
 ## DB schema (key tables)
 `subscriptions`, `billing_events`, `pairing_tokens`, `device_credentials`.

@@ -476,6 +476,57 @@ async def get_template_mock(template_id: str, request: Request, authorization: s
                       {"itemNumber": "MOCK-UNDERLAYMENT-30", "quantity": 3, "uom": "RL"}]}
 
 
+# ---------------- Notification API (Phase 4, /api/notification/v2/webhooks) ----------------
+_MOCK_WEBHOOKS: dict[str, dict] = {}
+
+
+@router.post("/api/notification/v2/webhooks")
+async def register_webhook_mock(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    body = await request.json()
+    if len(_MOCK_WEBHOOKS) >= 5:
+        raise HTTPException(status_code=400, detail="Maximum of 5 webhooks per application")
+    wid = f"MOCK-WEBHOOK-{len(_MOCK_WEBHOOKS) + 1}"
+    rec = {"id": wid, "name": body.get("name"), "type": body.get("type"), "events": body.get("events"),
+           "url": body.get("url"), "status": "REGISTERED", "secret": f"MOCK-WEBHOOK-SECRET-{wid}"}
+    _MOCK_WEBHOOKS[wid] = rec
+    return rec
+
+
+@router.get("/api/notification/v2/webhooks")
+async def list_webhooks_mock(request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    # secrets are only returned at registration time in real ABC; omit here on list
+    return {"webhooks": [{k: v for k, v in w.items() if k != "secret"} for w in _MOCK_WEBHOOKS.values()]}
+
+
+@router.get("/api/notification/v2/webhooks/{webhook_id}")
+async def get_webhook_mock(webhook_id: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    w = _MOCK_WEBHOOKS.get(webhook_id)
+    if not w:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    return {k: v for k, v in w.items() if k != "secret"}
+
+
+@router.patch("/api/notification/v2/webhooks/{webhook_id}")
+async def patch_webhook_mock(webhook_id: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    w = _MOCK_WEBHOOKS.get(webhook_id)
+    if not w:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    body = await request.json()
+    w.update({k: body[k] for k in ("name", "events", "url") if k in body})
+    return {k: v for k, v in w.items() if k != "secret"}
+
+
+@router.delete("/api/notification/v2/webhooks/{webhook_id}")
+async def delete_webhook_mock(webhook_id: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    _MOCK_WEBHOOKS.pop(webhook_id, None)
+    return JSONResponse(status_code=204, content=None)
+
+
 # Standalone app (tests / manual runs).
 mock_app = FastAPI(title="Mock ABC Supply")
 mock_app.include_router(router)
