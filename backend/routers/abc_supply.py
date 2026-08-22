@@ -30,6 +30,7 @@ from integrations.abc_supply import locations as abc_locations
 from integrations.abc_supply import products as abc_products
 from integrations.abc_supply import pricing as abc_pricing
 from integrations.abc_supply import catalog as abc_catalog
+from services import inventory_core as inv_core
 from integrations.abc_supply.exceptions import AbcError, AbcAuthError, AbcNotConfigured
 from integrations.abc_supply.schemas import (
     AbcConfigUpdate, AbcSecretUpdate, AbcDefaultsUpdate, AbcStatusOut, AbcConnectOut,
@@ -793,7 +794,15 @@ async def catalog_add_to_inventory(item_number: str, payload: AbcAddToInventoryI
     if existing:
         if not cat.material_id:
             cat.material_id = existing.id
-            await db.commit()
+        # Ensure the ABC supplier mapping exists for this (possibly pre-existing) material.
+        sup = await inv_core.ensure_supplier(db, "ABC Supply", integration_provider="abc_supply")
+        await inv_core.upsert_supplier_material(
+            db, material_id=existing.id, supplier_id=sup.id, integration_provider="abc_supply",
+            external_item_id=item_number, supplier_item_number=item_number,
+            supplier_description=cat.description, supplier_uom=cat.unit_of_measure,
+            availability_status=("available" if (cat.branch_numbers and row.default_branch_number in [str(b) for b in cat.branch_numbers]) else None),
+            meta={"family_id": cat.family_id, "brand": cat.brand, "manufacturer": cat.manufacturer})
+        await db.commit()
         return AbcAddToInventoryOut(material_id=str(existing.id), material_name=existing.name, created=False,
                                     already_linked=True, abc_item_number=item_number)
 
@@ -817,6 +826,15 @@ async def catalog_add_to_inventory(item_number: str, payload: AbcAddToInventoryI
     await db.commit()
     await db.refresh(mat)
     cat.material_id = mat.id
+    # Create the generic ABC supplier↔material mapping (source of truth going forward; preferred if first).
+    sup = await inv_core.ensure_supplier(db, "ABC Supply", integration_provider="abc_supply")
+    await inv_core.upsert_supplier_material(
+        db, material_id=mat.id, supplier_id=sup.id, integration_provider="abc_supply",
+        external_item_id=item_number, supplier_item_number=item_number,
+        supplier_description=cat.description, supplier_uom=cat.unit_of_measure,
+        availability_status=("available" if (cat.branch_numbers and row.default_branch_number in [str(b) for b in cat.branch_numbers]) else None),
+        meta={"family_id": cat.family_id, "family_name": cat.family_name, "manufacturer": cat.manufacturer,
+              "brand": cat.brand, "is_dimensional": cat.is_dimensional})
     await db.commit()
     await log_action(db, user=user, action="abc.catalog.add_to_inventory", entity_type="material", entity_id=mat.id,
                      detail={"abc_item_number": item_number}, request=request)

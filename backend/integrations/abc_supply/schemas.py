@@ -178,3 +178,22 @@ class AbcAddToInventoryOut(BaseModel):
     created: bool
     already_linked: bool
     abc_item_number: str
+
+
+class SupplierMaterialOut(BaseModel):
+    id: str
+    material_id: str
+    supplier_id: Optional[str] = None
+    supplier_name: Optional[str] = None
+    integration_provider: Optional[str] = None
+    external_item_id: Optional[str] = None
+    supplier_item_number: Optional[str] = None
+    supplier_description: Optional[str] = None
+    supplier_uom: Optional[str] = None
+    current_cost: Optional[float] = None
+    price_status: Optional[str] = None
+    price_updated_at: Optional[datetime] = None
+    availability_status: Optional[str] = None
+    lead_time_days: Optional[int] = None
+    is_preferred: bool = False
+    active: bool = True

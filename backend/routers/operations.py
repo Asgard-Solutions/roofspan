@@ -5,9 +5,10 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Material, InventoryTxn, Supplier, User
+from models import Material, InventoryTxn, Supplier, SupplierMaterial, User
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase4 import MaterialIn, MaterialPatch, MaterialOut, AdjustIn, SupplierIn, SupplierOut
+from integrations.abc_supply.schemas import SupplierMaterialOut
 
 router = APIRouter(prefix="/api", tags=["operations"])
 
@@ -92,6 +93,27 @@ async def adjust_material(material_id: str, payload: AdjustIn, request: Request,
     await db.refresh(m)
     await log_action(db, user=user, action="inventory.adjust", entity_type="material", entity_id=m.id, detail={"delta": payload.delta, "reason": payload.reason, "on_hand": new_qty}, request=request)
     return _mat_out(m)
+
+@router.get("/materials/{material_id}/suppliers", response_model=list[SupplierMaterialOut])
+async def material_suppliers(material_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(SupplierMaterial, Supplier.name)
+        .outerjoin(Supplier, Supplier.id == SupplierMaterial.supplier_id)
+        .where(SupplierMaterial.material_id == material_id)
+        .order_by(SupplierMaterial.is_preferred.desc())
+    )).all()
+    return [
+        SupplierMaterialOut(
+            id=str(sm.id), material_id=str(sm.material_id), supplier_id=(str(sm.supplier_id) if sm.supplier_id else None),
+            supplier_name=sname, integration_provider=sm.integration_provider, external_item_id=sm.external_item_id,
+            supplier_item_number=sm.supplier_item_number, supplier_description=sm.supplier_description,
+            supplier_uom=sm.supplier_uom, current_cost=sm.current_cost, price_status=sm.price_status,
+            price_updated_at=sm.price_updated_at, availability_status=sm.availability_status,
+            lead_time_days=sm.lead_time_days, is_preferred=sm.is_preferred, active=sm.active,
+        ) for sm, sname in rows
+    ]
+
+
 
 
 # ---- Suppliers (minimal) ----

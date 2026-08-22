@@ -361,7 +361,23 @@ class Material(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     quantity_on_hand: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     reorder_threshold: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    # Vendor linkage (nullable; only set for materials imported from a vendor catalog such as ABC Supply).
+    # --- Master material identity (RoofSpan-owned; supplier-independent). All optional. ---
+    manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    product_family: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subcategory: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    color: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_variant: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    purchase_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)   # purchase UoM
+    conversion_factor: Mapped[float] = mapped_column(Float, default=1, nullable=False)  # purchase→base
+    coverage_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    coverage_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    upc: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manufacturer_part_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    taxable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    image_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    # Vendor linkage (LEGACY — kept for backward compat only; SupplierMaterial is the source of truth).
     # ABC branch AVAILABILITY is never written to quantity_on_hand — these fields are identity only.
     vendor: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "ABC Supply"
     abc_item_number: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -394,7 +410,38 @@ class Supplier(Base):
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply" | None(manual)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SupplierMaterial(Base):
+    """Generic supplier↔material mapping. Source of truth for supplier-specific identity/pricing/
+    availability so the core Material stays supplier-independent. ABC Supply is one provider; SRS/Beacon/
+    manual can be added without touching Material. `is_preferred` marks the user-selected primary
+    supplier (at most one active preferred per material — enforced in the service layer)."""
+    __tablename__ = "supplier_materials"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), index=True, nullable=False)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), index=True, nullable=True)
+    integration_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "abc_supply" | "manual"
+    external_item_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    supplier_item_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    supplier_description: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    supplier_uom: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    conversion_factor: Mapped[float] = mapped_column(Float, default=1, nullable=False)
+    manufacturer_part_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    branch_context: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    current_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    price_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    availability_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    availability_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    is_preferred: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class JobMaterial(Base):
