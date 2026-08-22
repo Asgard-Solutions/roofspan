@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, Link2, Unlink, RefreshCw, Building2, ShieldCheck, Eye, EyeOff,
+  Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, Link2, Unlink, RefreshCw, Building2, ShieldCheck, Eye, EyeOff, Copy, AlertTriangle,
 } from "lucide-react";
 
 const STATUS_BADGE = {
@@ -130,6 +130,11 @@ export default function AbcSupply() {
     catch (e) { setTestResult({ ok: false, message: apiError(e) }); } finally { setTesting(false); }
   };
 
+  const copyRedirect = async (value) => {
+    try { await navigator.clipboard.writeText(value); toast.success("Redirect URI copied"); }
+    catch { toast.error("Could not copy — select and copy manually"); }
+  };
+
   const saveDefaults = async () => {
     setBusy(true);
     try {
@@ -191,6 +196,19 @@ export default function AbcSupply() {
             </div>
           )}
           {!status.has_client_id && <p className="text-sm text-amber-700" data-testid="abc-config-required">Configure your ABC Client ID and Client Secret below before connecting.</p>}
+
+          {/* Redirect URI registration callout — the #1 cause of ABC's "redirect_uri must be a Login redirect URI" 400 */}
+          {!connected && !status.is_mock && status.redirect_uri_effective && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="abc-redirect-callout">
+              <div className="mb-1 flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> Before connecting: register this Redirect URI with ABC</div>
+              <p className="text-amber-800">In your <span className="font-medium">ABC Developer Portal</span> application, add this <span className="font-medium">exact</span> value under <span className="font-medium">OAuth 2.0 Redirect URI(s)</span>. It must match byte-for-byte — same scheme (<span className="font-mono">http</span>), host (<span className="font-mono">127.0.0.1</span>, not <span className="font-mono">localhost</span>), port, path, and no trailing slash.</p>
+              <div className="mt-2 flex items-center gap-2">
+                <code className="flex-1 overflow-x-auto rounded border border-amber-200 bg-white px-3 py-2 font-mono text-xs text-slate-800" data-testid="abc-redirect-callout-value">{status.redirect_uri_effective}</code>
+                <Button variant="outline" size="sm" onClick={() => copyRedirect(status.redirect_uri_effective)} data-testid="abc-copy-redirect-callout"><Copy className="h-4 w-4" /> Copy</Button>
+              </div>
+              <p className="mt-2 text-xs text-amber-700">If ABC still returns a 400 after saving, wait a moment and retry — or ask ABC API Support to confirm the portal value propagated to their Okta client.</p>
+            </div>
+          )}
         </Section>
 
         {/* Account & branch defaults */}
@@ -265,7 +283,10 @@ export default function AbcSupply() {
           <div className="space-y-1.5">
             <Label>OAuth Redirect URI</Label>
             <Input value={redirectUri} onChange={(e) => setRedirectUri(e.target.value)} placeholder={status.redirect_uri_effective} className="font-mono" data-testid="abc-redirect-uri" />
-            <p className="text-xs text-slate-400">Register this exact URL with ABC. Effective: <span className="font-mono">{status.redirect_uri_effective}</span></p>
+            <p className="flex items-center gap-1.5 text-xs text-slate-400">
+              Register this exact URL with ABC. Effective: <span className="font-mono text-slate-600">{status.redirect_uri_effective}</span>
+              <button type="button" onClick={() => copyRedirect(status.redirect_uri_effective)} className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800" data-testid="abc-copy-redirect-field"><Copy className="h-3.5 w-3.5" /> Copy</button>
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label>Webhook Public URL</Label>
