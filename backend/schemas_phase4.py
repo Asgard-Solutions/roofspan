@@ -161,6 +161,7 @@ class CsvImportRow(BaseModel):
 
 class CsvPreviewIn(BaseModel):
     rows: List[dict] = []
+    csv_text: Optional[str] = None  # raw CSV text (parsed server-side with a standards-compliant parser)
 
 
 class CsvPreviewRowOut(BaseModel):
@@ -178,10 +179,12 @@ class CsvPreviewOut(BaseModel):
     create_count: int = 0
     update_count: int = 0
     error_count: int = 0
+    header_errors: List[str] = []
 
 
 class CsvCommitIn(BaseModel):
     rows: List[dict] = []
+    csv_text: Optional[str] = None
     confirm_updates: bool = False  # explicit confirmation required to apply updates
 
 

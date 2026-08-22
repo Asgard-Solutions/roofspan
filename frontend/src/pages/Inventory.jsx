@@ -93,16 +93,15 @@ export default function Inventory() {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
-    const rows = parseCsv(text);
-    setCsvRows(rows);
+    setCsvRows(text);
     setCsvAck(false);
-    try { const { data } = await api.post("/materials/import/preview", { rows }); setCsvPreview(data); }
+    try { const { data } = await api.post("/materials/import/preview", { csv_text: text }); setCsvPreview(data); }
     catch (err) { toast.error(apiError(err)); }
   };
   const commitCsv = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/materials/import/commit", { rows: csvRows, confirm_updates: true });
+      const { data } = await api.post("/materials/import/commit", { csv_text: csvRows, confirm_updates: true });
       toast.success(`Imported: ${data.created} created, ${data.updated} updated`);
       setCsvOpen(false); setCsvPreview(null); setCsvRows([]); load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }

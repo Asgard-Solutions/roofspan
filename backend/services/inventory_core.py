@@ -71,15 +71,18 @@ async def upsert_supplier_material(db: AsyncSession, *, material_id, supplier_id
 
 async def set_preferred_supplier(db: AsyncSession, material_id, supplier_material_id) -> SupplierMaterial:
     """Mark one mapping preferred; clear preferred on all other active mappings for the material.
-    Enforces at most one active preferred supplier per material."""
+    Clears others FIRST and flushes, then sets the chosen one — so the DB partial-unique index
+    (one active preferred per material) is never transiently violated."""
     rows = (await db.execute(select(SupplierMaterial).where(SupplierMaterial.material_id == material_id))).scalars().all()
-    chosen = None
+    chosen = next((r for r in rows if str(r.id) == str(supplier_material_id)), None)
+    if not chosen:
+        return None
     for r in rows:
-        if str(r.id) == str(supplier_material_id):
-            r.is_preferred = True
-            chosen = r
-        elif r.is_preferred:
+        if r is not chosen and r.is_preferred:
             r.is_preferred = False
+    await db.flush()
+    chosen.is_preferred = True
+    await db.flush()
     return chosen
 
 

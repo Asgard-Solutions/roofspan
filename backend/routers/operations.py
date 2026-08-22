@@ -215,7 +215,37 @@ async def set_preferred(material_id: str, sm_id: str, request: Request, user: Us
 
 
 # ---- CSV import (create + update-by-SKU with explicit preview/confirm) ----
+import csv as _csv
+import io as _io
+
 _CSV_FIELDS = ("name", "category", "unit", "manufacturer", "description", "reorder_threshold", "quantity_on_hand")
+_CSV_KNOWN_HEADERS = ("sku",) + _CSV_FIELDS
+
+
+def _parse_csv_text(text: str) -> tuple[list[dict], list[str]]:
+    """Standards-compliant CSV parse (quoted fields, commas inside quotes, escaped "" quotes, CRLF/LF,
+    UTF-8). Returns (rows, header_errors)."""
+    if text is None:
+        return [], ["No CSV content provided."]
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")  # strip UTF-8 BOM
+    reader = _csv.DictReader(_io.StringIO(text))
+    headers = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
+    errors: list[str] = []
+    if not headers:
+        return [], ["CSV has no header row."]
+    if "sku" not in headers and "name" not in headers:
+        errors.append("CSV header must include at least 'sku' or 'name'.")
+    rows: list[dict] = []
+    for raw in reader:
+        row = {}
+        for k, v in raw.items():
+            if k is None:
+                continue
+            row[(k or "").strip().lower()] = (v.strip() if isinstance(v, str) else v)
+        if any((v not in (None, "")) for v in row.values()):
+            rows.append(row)
+    return rows, errors
 
 
 def _coerce_num(v):
@@ -225,7 +255,7 @@ def _coerce_num(v):
         return None
 
 
-async def _csv_diff(db: AsyncSession, rows: list[dict]) -> CsvPreviewOut:
+async def _csv_diff(db: AsyncSession, rows: list[dict], header_errors: list[str] | None = None) -> CsvPreviewOut:
     out_rows: list[CsvPreviewRowOut] = []
     creates = updates = errors = 0
     for i, raw in enumerate(rows, start=1):
@@ -245,9 +275,8 @@ async def _csv_diff(db: AsyncSession, rows: list[dict]) -> CsvPreviewOut:
                     oldv = getattr(existing, f, None)
                     if newv is not None and newv != oldv:
                         changes[f] = {"from": oldv, "to": newv}
-            action = "update"
             updates += 1
-            out_rows.append(CsvPreviewRowOut(row_number=i, action=action, sku=sku, name=name or existing.name,
+            out_rows.append(CsvPreviewRowOut(row_number=i, action="update", sku=sku, name=name or existing.name,
                                              material_id=str(existing.id), changes=changes, errors=row_errors))
         elif row_errors:
             errors += 1
@@ -255,21 +284,32 @@ async def _csv_diff(db: AsyncSession, rows: list[dict]) -> CsvPreviewOut:
         else:
             creates += 1
             out_rows.append(CsvPreviewRowOut(row_number=i, action="create", sku=sku, name=name, changes={}))
-    return CsvPreviewOut(rows=out_rows, create_count=creates, update_count=updates, error_count=errors)
+    return CsvPreviewOut(rows=out_rows, create_count=creates, update_count=updates, error_count=errors,
+                         header_errors=(header_errors or []))
+
+
+def _rows_from_payload(payload) -> tuple[list[dict], list[str]]:
+    if getattr(payload, "csv_text", None):
+        return _parse_csv_text(payload.csv_text)
+    return payload.rows, []
 
 
 @router.post("/materials/import/preview", response_model=CsvPreviewOut)
 async def csv_preview(payload: CsvPreviewIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    return await _csv_diff(db, payload.rows)
+    rows, header_errors = _rows_from_payload(payload)
+    return await _csv_diff(db, rows, header_errors)
 
 
 @router.post("/materials/import/commit")
 async def csv_commit(payload: CsvCommitIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    preview = await _csv_diff(db, payload.rows)
+    rows, header_errors = _rows_from_payload(payload)
+    if header_errors:
+        raise HTTPException(status_code=400, detail="; ".join(header_errors))
+    preview = await _csv_diff(db, rows)
     if preview.update_count > 0 and not payload.confirm_updates:
         raise HTTPException(status_code=409, detail="This import updates existing materials. Re-submit with confirm_updates=true to apply.")
     created = updated = skipped = 0
-    for pr, raw in zip(preview.rows, payload.rows):
+    for pr, raw in zip(preview.rows, rows):
         if pr.action == "error":
             skipped += 1
             continue
@@ -296,6 +336,9 @@ async def csv_commit(payload: CsvCommitIn, request: Request, user: User = Depend
     await log_action(db, user=user, action="material.csv_import", entity_type="material", entity_id=None,
                      detail={"created": created, "updated": updated, "skipped": skipped}, request=request)
     return {"created": created, "updated": updated, "skipped": skipped}
+
+
+
 
 
 
