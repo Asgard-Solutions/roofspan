@@ -129,8 +129,24 @@ export default function LeadDetail() {
   };
   const sendQuote = async (q) => { try { await api.put(`/quotes/${q.id}`, { status: "sent" }); toast.success("Quote marked sent"); load(); } catch (e) { toast.error(apiError(e)); } };
   const declineQuote = async (q) => { try { await api.post(`/quotes/${q.id}/decline`); toast.success("Quote declined"); load(); } catch (e) { toast.error(apiError(e)); } };
-  const deleteEstimate = async (e) => { if (!window.confirm(`Delete estimate ${e.number}? This cannot be undone.`)) return; try { await api.delete(`/estimates/${e.id}`); toast.success("Estimate deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
-  const deleteQuote = async (q) => { if (!window.confirm(`Delete quote ${q.number}? This cannot be undone.`)) return; try { await api.delete(`/quotes/${q.id}`); toast.success("Quote deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
+  const duplicateEstimate = async (e) => {
+    try { const { data } = await api.post(`/estimates/${e.id}/duplicate`); toast.success(`Duplicated as ${data.number}`); load(); }
+    catch (err) { toast.error(apiError(err)); }
+  };
+  const deleteEstimate = (e) => {
+    setEstimates((prev) => prev.filter((x) => x.id !== e.id));
+    const t = setTimeout(async () => {
+      try { await api.delete(`/estimates/${e.id}`); load(); } catch (err) { toast.error(apiError(err)); load(); }
+    }, 5000);
+    toast(`Estimate ${e.number} deleted`, { duration: 5000, action: { label: "Undo", onClick: () => { clearTimeout(t); toast.success("Restored"); load(); } } });
+  };
+  const deleteQuote = (q) => {
+    setQuotes((prev) => prev.filter((x) => x.id !== q.id));
+    const t = setTimeout(async () => {
+      try { await api.delete(`/quotes/${q.id}`); load(); } catch (err) { toast.error(apiError(err)); load(); }
+    }, 5000);
+    toast(`Quote ${q.number} deleted`, { duration: 5000, action: { label: "Undo", onClick: () => { clearTimeout(t); toast.success("Restored"); load(); } } });
+  };
   const downloadProposal = async (q) => {
     try {
       const res = await api.get(`/quotes/${q.id}/proposal.pdf`, { responseType: "blob" });
@@ -231,6 +247,7 @@ export default function LeadDetail() {
                   <div><span className="font-medium text-slate-900">{e.number}</span> · <span className="tabular-nums">{money(e.total)}</span> <Badge className={statusColor[e.status] || ""} variant="secondary">{e.status}</Badge></div>
                   <div className="flex items-center gap-1">
                     <Button size="sm" variant="ghost" onClick={() => navigate(`/estimates/${e.id}`)} data-testid={`edit-estimate-${e.id}`}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => duplicateEstimate(e)} data-testid={`duplicate-estimate-${e.id}`}><FileText className="h-4 w-4" /> Duplicate</Button>
                     <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Quote</Button>
                     {isManage && <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={() => deleteEstimate(e)} data-testid={`delete-estimate-${e.id}`}><Trash2 className="h-4 w-4" /></Button>}
                   </div>

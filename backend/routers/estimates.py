@@ -240,6 +240,32 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
     return await _out(db, e, user)
 
 
+@router.post("/{estimate_id}/duplicate", response_model=EstimateOut, status_code=201)
+async def duplicate_estimate(estimate_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Copy an estimate (header + all line items, preserving their snapshots) into a brand-new draft."""
+    src = await db.get(Estimate, estimate_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    number = await next_number(db, "estimate", "EST")
+    dup = Estimate(number=number, lead_id=src.lead_id, customer_id=src.customer_id, property_id=src.property_id,
+                   inspection_id=src.inspection_id, status="draft", tax_rate=src.tax_rate,
+                   subtotal=src.subtotal, tax=src.tax, total=src.total,
+                   notes=(f"{src.notes} (copy)" if src.notes else "Copy of " + src.number),
+                   price_book_id=src.price_book_id, created_by=user.email)
+    db.add(dup)
+    await db.flush()
+    src_lines = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == src.id)
+                                  .order_by(EstimateLineItem.sort))).scalars().all()
+    skip = {"id", "estimate_id"}
+    for li in src_lines:
+        data = {c.name: getattr(li, c.name) for c in EstimateLineItem.__table__.columns if c.name not in skip}
+        db.add(EstimateLineItem(estimate_id=dup.id, **data))
+    await db.commit()
+    await db.refresh(dup)
+    await log_action(db, user=user, action="estimate.duplicate", entity_type="estimate", entity_id=dup.id, detail={"source": str(src.id), "number": number}, request=request)
+    return await _out(db, dup, user)
+
+
 async def _has_accepted_quote(db: AsyncSession, estimate_id) -> bool:
     n = (await db.execute(select(func.count()).select_from(Quote).where(
         Quote.estimate_id == estimate_id, Quote.status == "accepted"))).scalar() or 0
