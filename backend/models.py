@@ -998,3 +998,34 @@ class AbcCatalogSync(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+# ---------- Canvass Sections (Sales Area Assignment) ----------
+class CanvassSection(Base):
+    """A polygon inside an existing Territory used to group properties and assign field work
+    to a salesperson. Additive to Territory — does NOT replace or alter Territory semantics."""
+    __tablename__ = "canvass_sections"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    territory_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("territories.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    color: Mapped[str] = mapped_column(String(16), default="#2563EB", nullable=False)
+    geometry: Mapped[dict] = mapped_column(JSONB, nullable=False)  # GeoJSON Polygon
+    assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class CanvassSectionProperty(Base):
+    """Relationship-only membership of a Property in a CanvassSection. No property data copied."""
+    __tablename__ = "canvass_section_properties"
+    __table_args__ = (UniqueConstraint("section_id", "property_id", name="uq_canvass_section_property"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    section_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("canvass_sections.id", ondelete="CASCADE"), nullable=False, index=True)
+    property_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+

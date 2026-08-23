@@ -46,3 +46,35 @@ def enclosing_radius_miles(geometry: dict) -> float:
     minlng, minlat, maxlng, maxlat = bbox(geometry)
     corners = [(minlng, minlat), (minlng, maxlat), (maxlng, minlat), (maxlng, maxlat)]
     return min(100.0, max(haversine_miles(clng, clat, cx, cy) for cx, cy in corners) or 0.5)
+
+
+def unique_ring_points(geometry: dict) -> int:
+    """Count distinct vertices in the polygon's outer ring (ignoring the closing duplicate)."""
+    ring = _ring(geometry)
+    pts = ring[:-1] if len(ring) > 1 and ring[0] == ring[-1] else ring
+    return len({(round(p[0], 9), round(p[1], 9)) for p in pts})
+
+
+def is_valid_polygon(geometry: dict) -> bool:
+    """Structural GeoJSON Polygon validation with at least three unique points."""
+    if not isinstance(geometry, dict) or geometry.get("type") != "Polygon":
+        return False
+    coords = geometry.get("coordinates")
+    if not coords or not isinstance(coords, list) or not coords[0] or not isinstance(coords[0], list):
+        return False
+    ring = coords[0]
+    if len(ring) < 4:
+        return False
+    try:
+        if not all(len(p) >= 2 and all(isinstance(c, (int, float)) for c in p[:2]) for p in ring):
+            return False
+    except TypeError:
+        return False
+    return unique_ring_points(geometry) >= 3
+
+
+def polygon_fully_contained(inner: dict, outer: dict) -> bool:
+    """True when every vertex of `inner`'s outer ring lies inside `outer` (point-in-polygon)."""
+    ring = _ring(inner)
+    pts = ring[:-1] if len(ring) > 1 and ring[0] == ring[-1] else ring
+    return all(point_in_polygon(p[0], p[1], outer) for p in pts)

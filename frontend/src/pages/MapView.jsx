@@ -36,6 +36,7 @@ export default function MapView() {
   const loadedRef = useRef(false);
   const drawing = useRef(false);
   const drawPts = useRef([]);
+  const canvassGeom = useRef(null);
   const vertexMarkers = useRef([]);
   const routeMarkers = useRef([]);
   const zipForTerritory = useRef(null);
@@ -71,6 +72,16 @@ export default function MapView() {
   const [importOpen, setImportOpen] = useState(false);
   const [sheetId, setSheetId] = useState(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sections, setSections] = useState([]);
+  const [selectedSectionId, setSelectedSectionId] = useState(null);
+  const [sectionPropIds, setSectionPropIds] = useState(null);
+  const [isCanvassDrawing, setIsCanvassDrawing] = useState(false);
+  const [canvassOpen, setCanvassOpen] = useState(false);
+  const [canvassPreview, setCanvassPreview] = useState(null);
+  const [canvassName, setCanvassName] = useState("");
+  const [canvassColor, setCanvassColor] = useState(COLORS[0]);
+  const [canvassRepId, setCanvassRepId] = useState("");
+  const [savingSection, setSavingSection] = useState(false);
 
   const selected = territories.find((t) => t.id === selectedId);
 
@@ -302,6 +313,10 @@ export default function MapView() {
         map.addLayer({ id: "terr-fill", type: "fill", source: "territories", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.18, 0.06] } });
         map.addLayer({ id: "terr-line", type: "line", source: "territories", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3, 1.5] } });
 
+        map.addSource("canvass-sections", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "canvass-section-fill", type: "fill", source: "canvass-sections", paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["get", "selected"], 0.28, 0.12] } });
+        map.addLayer({ id: "canvass-section-line", type: "line", source: "canvass-sections", paint: { "line-color": ["get", "color"], "line-width": ["case", ["get", "selected"], 3.5, 2], "line-dasharray": [1, 0] } });
+
         map.addSource("properties", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({
           id: "prop-points", type: "circle", source: "properties", layout: { visibility: "none" },
@@ -353,10 +368,125 @@ export default function MapView() {
     setTerritorySource(list, t.id);
     fitToTerritory(t);
     loadProperties(t.id);
+    setSelectedSectionId(null);
+    setSectionPropIds(null);
+    loadSections(t.id);
   };
 
-  const handleImportComplete = useCallback(async () => {
-    const list = await loadTerritories();
+  const setCanvassSource = useCallback((list, selId) => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("canvass-sections")) return;
+    map.getSource("canvass-sections").setData({
+      type: "FeatureCollection",
+      features: (list || []).filter((s) => s.geometry).map((s) => ({
+        type: "Feature", geometry: s.geometry,
+        properties: { id: s.id, color: s.color, selected: s.id === selId },
+      })),
+    });
+  }, []);
+
+  const loadSections = useCallback(async (territoryId) => {
+    if (!territoryId) { setSections([]); setCanvassSource([], null); return; }
+    try {
+      const { data } = await api.get(`/canvass-sections?territory_id=${territoryId}`);
+      setSections(data);
+      setCanvassSource(data, null);
+    } catch (e) { setSections([]); }
+    try { const r = await api.get("/users/assignable"); setReps(r.data); } catch (e) { /* noop */ }
+  }, [setCanvassSource]);
+
+  const clearSection = useCallback(() => {
+    setSelectedSectionId(null);
+    setSectionPropIds(null);
+    setCanvassSource(sections, null);
+  }, [sections, setCanvassSource]);
+
+  const selectSection = useCallback(async (s) => {
+    setSelectedSectionId(s.id);
+    setCanvassSource(sections, s.id);
+    const ring = s.geometry?.coordinates?.[0] || [];
+    if (ring.length && mapRef.current) {
+      const b = ring.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(ring[0], ring[0]));
+      mapRef.current.fitBounds(b, { padding: 70, duration: 600 });
+    }
+    try {
+      const { data } = await api.get(`/canvass-sections/${s.id}/properties`);
+      setSectionPropIds(new Set(data.map((p) => p.id)));
+    } catch (e) { toast.error(apiError(e)); }
+  }, [sections, setCanvassSource]);
+
+  const startCanvassDraw = () => {
+    if (!selectedId) { toast.error("Select a Territory first"); return; }
+    drawing.current = true;
+    drawPts.current = [];
+    zipForTerritory.current = null;
+    setIsCanvassDrawing(true);
+    setIsDrawing(true);
+    setDrawCount(0);
+    updateDrawSource();
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = "crosshair";
+    toast.info("Click the map to outline the Canvass Section");
+  };
+
+  const finishCanvassDraw = async () => {
+    if (drawPts.current.length < 3) { toast.error("Add at least 3 points to form a section"); return; }
+    drawing.current = false;
+    setIsDrawing(false);
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = "";
+    const ring = [...drawPts.current, drawPts.current[0]];
+    const geometry = { type: "Polygon", coordinates: [ring] };
+    canvassGeom.current = geometry;
+    try {
+      const { data } = await api.post("/canvass-sections/preview", { territory_id: selectedId, geometry });
+      setCanvassPreview(data);
+      setCanvassName(""); setCanvassColor(COLORS[0]); setCanvassRepId("");
+      setCanvassOpen(true);
+    } catch (e) {
+      toast.error(apiError(e));
+      cancelDraw();
+    }
+  };
+
+  const saveCanvassSection = async () => {
+    if (!canvassName.trim()) { toast.error("Name the section"); return; }
+    if (canvassPreview?.conflict_count > 0) { toast.error("Resolve overlapping properties before saving"); return; }
+    setSavingSection(true);
+    try {
+      await api.post("/canvass-sections", {
+        territory_id: selectedId, name: canvassName.trim(), color: canvassColor,
+        geometry: canvassGeom.current, assigned_user_id: canvassRepId || null,
+      });
+      toast.success("Canvass Section created");
+      setCanvassOpen(false);
+      setIsCanvassDrawing(false);
+      drawPts.current = []; setDrawCount(0); updateDrawSource();
+      await loadSections(selectedId);
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      if (e?.response?.status === 409) toast.error(typeof d === "object" ? d.message : "Overlap conflict — resolve and try again");
+      else toast.error(apiError(e));
+    } finally { setSavingSection(false); }
+  };
+
+  const deleteSection = async (s) => {
+    if (!window.confirm(`Delete Canvass Section "${s.name}"? Properties, visits and leads are kept.`)) return;
+    try {
+      await api.delete(`/canvass-sections/${s.id}`);
+      toast.success("Section deleted (properties preserved)");
+      if (selectedSectionId === s.id) clearSection();
+      await loadSections(selectedId);
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
+  const reassignSection = async (s, userId) => {
+    try {
+      await api.put(`/canvass-sections/${s.id}`, { assigned_user_id: userId || null });
+      toast.success("Section reassigned");
+      await loadSections(selectedId);
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
+  const handleImportComplete = useCallback(async () => {    const list = await loadTerritories();
     if (selectedId) {
       setTerritorySource(list, selectedId);
       await loadProperties(selectedId);
@@ -365,10 +495,11 @@ export default function MapView() {
 
   const filteredFeatures = useMemo(() => features.filter((f) => {
     const p = f.properties || {};
+    if (sectionPropIds && !sectionPropIds.has(p.id)) return false;
     if (occFilter !== "all" && p.occupancy !== occFilter) return false;
     if (contactableOnly && !p.contactable) return false;
     return true;
-  }), [features, occFilter, contactableOnly]);
+  }), [features, occFilter, contactableOnly, sectionPropIds]);
 
   // Rebuild the main-thread cluster index whenever the loaded property set or user filter changes.
   // This is the missing link that previously left superRef empty while the UI reported thousands of
@@ -537,6 +668,7 @@ export default function MapView() {
     drawing.current = true;
     drawPts.current = [];
     zipForTerritory.current = null;
+    setIsCanvassDrawing(false);
     setIsDrawing(true);
     setDrawCount(0);
     updateDrawSource();
@@ -548,6 +680,7 @@ export default function MapView() {
     drawing.current = false;
     drawPts.current = [];
     setIsDrawing(false);
+    setIsCanvassDrawing(false);
     setDrawCount(0);
     updateDrawSource();
     if (mapRef.current) mapRef.current.getCanvas().style.cursor = "";
@@ -658,7 +791,7 @@ export default function MapView() {
               {routeInfo && canManage && <Button size="sm" className="w-full" onClick={openAssign} data-testid="assign-route-button"><UserPlus className="h-4 w-4" /> Assign route to rep</Button>}
             </div>
 
-            {canManage && <div className="border-b border-border p-4">{!isDrawing ? <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button"><PencilRuler className="h-4 w-4" /> Draw new territory</Button> : <div className="space-y-2"><div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div><div className="flex gap-2"><Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button><Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button></div></div>}</div>}
+            {canManage && !isCanvassDrawing && <div className="border-b border-border p-4">{!isDrawing ? <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button"><PencilRuler className="h-4 w-4" /> Draw new territory</Button> : <div className="space-y-2"><div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div><div className="flex gap-2"><Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button><Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button></div></div>}</div>}
 
             <div className="p-2">
               {territories.length === 0 && <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>}
@@ -674,6 +807,51 @@ export default function MapView() {
             </div>
           </div>
 
+          {selected && (
+            <div className="border-t border-border px-5 py-4" data-testid="canvass-sections-panel">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Canvass Sections</span>
+                {selectedSectionId && <button className="text-xs font-medium text-blue-600" onClick={clearSection} data-testid="clear-section-button">Show all</button>}
+              </div>
+              {sections.length === 0 ? (
+                <div className="text-xs text-slate-400" data-testid="canvass-empty">No canvass sections yet. Draw a section to assign part of this territory to a salesperson.</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {sections.map((s) => (
+                    <div key={s.id} className={`rounded-md border p-2 ${selectedSectionId === s.id ? "border-slate-900 bg-slate-50" : "border-border"}`} data-testid={`section-item-${s.id}`}>
+                      <button className="flex w-full items-center gap-2 text-left" onClick={() => selectSection(s)} data-testid={`select-section-${s.id}`}>
+                        <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: s.color }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-slate-800">{s.name}</span>
+                          <span className="block text-xs text-slate-500">{s.assigned_user_name || "Unassigned"} · {s.property_count} properties</span>
+                        </span>
+                      </button>
+                      {canManage && selectedSectionId === s.id && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <select value={s.assigned_user_id || ""} onChange={(e) => reassignSection(s, e.target.value)} className="h-8 flex-1 rounded border border-input bg-white px-2 text-xs" data-testid={`reassign-section-${s.id}`}>
+                            <option value="">Unassigned</option>
+                            {reps.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                          </select>
+                          <button className="text-xs font-medium text-red-600" onClick={() => deleteSection(s)} data-testid={`delete-section-${s.id}`}>Delete</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {canManage && (isCanvassDrawing ? (
+                <div className="mt-3 space-y-2">
+                  <div className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-800">Drawing section… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map.</div>
+                  <div className="flex gap-2">
+                    <Button onClick={finishCanvassDraw} className="flex-1" data-testid="finish-canvass-button"><Check className="h-4 w-4" /> Finish</Button>
+                    <Button variant="outline" onClick={cancelDraw} data-testid="cancel-canvass-button"><X className="h-4 w-4" /></Button>
+                  </div>
+                </div>
+              ) : (
+                <Button variant="outline" className="mt-3 w-full" onClick={startCanvassDraw} data-testid="draw-canvass-button"><PencilRuler className="h-4 w-4" /> Draw Canvass Section</Button>
+              ))}
+            </div>
+          )}
           {selected && <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary"><span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1"><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-600" /> Owned</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Rented</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> Unknown</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Do Not Knock</span></div></div>}
         </div>
 
@@ -685,6 +863,31 @@ export default function MapView() {
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}><DialogContent data-testid="assign-route-dialog"><DialogHeader><DialogTitle>Assign this route</DialogTitle><DialogDescription>Save the {builtRoute.length}-stop walking route and assign it to a sales rep for canvassing.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Route name</Label><Input value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="e.g. North Austin route" data-testid="route-name-input" /></div><div className="space-y-1.5"><Label>Assign to rep</Label><select value={routeRepId} onChange={(e) => setRouteRepId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm" data-testid="route-rep-select"><option value="">Unassigned (assign later)</option>{reps.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>)}</select></div><div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">{builtRoute.length} stops{routeInfo ? ` · ~${routeInfo.miles} mi walking` : ""}</div></div><DialogFooter><Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button><Button onClick={saveRoute} disabled={savingRoute} data-testid="save-route-button">{savingRoute ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UserPlus className="h-4 w-4" /> {routeRepId ? "Assign route" : "Save route"}</>}</Button></DialogFooter></DialogContent></Dialog>
 
       {selected && <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={handleImportComplete} />}
+
+      <Dialog open={canvassOpen} onOpenChange={(o) => { if (!o) { setCanvassOpen(false); cancelDraw(); } }}>
+        <DialogContent data-testid="canvass-section-dialog">
+          <DialogHeader><DialogTitle>New Canvass Section</DialogTitle><DialogDescription>Name it, pick a color, and assign a rep. A property may belong to only one active Canvass Section per Territory.</DialogDescription></DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-4 gap-2 text-center text-[11px] text-slate-500">
+              <div className="rounded bg-slate-50 p-2"><div className="text-lg font-semibold text-slate-800" data-testid="preview-property-count">{canvassPreview?.property_count ?? 0}</div>In polygon</div>
+              <div className="rounded bg-emerald-50 p-2"><div className="text-lg font-semibold text-emerald-700" data-testid="preview-available-count">{canvassPreview?.available_count ?? 0}</div>Available</div>
+              <div className="rounded bg-red-50 p-2"><div className="text-lg font-semibold text-red-700" data-testid="preview-conflict-count">{canvassPreview?.conflict_count ?? 0}</div>Conflicts</div>
+              <div className="rounded bg-amber-50 p-2"><div className="text-lg font-semibold text-amber-700" data-testid="preview-dnk-count">{canvassPreview?.do_not_knock_count ?? 0}</div>Do Not Knock</div>
+            </div>
+            {canvassPreview?.conflict_count > 0 && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-800" data-testid="conflict-list">
+                <div className="font-semibold">Resolve the overlap before saving — these properties already belong to another section:</div>
+                <ul className="mt-1 max-h-28 space-y-0.5 overflow-auto">{canvassPreview.conflicts.map((c) => <li key={c.property_id}>{c.address} → <b>{c.section_name}</b>{c.assigned_user_name ? ` (${c.assigned_user_name})` : ""}</li>)}</ul>
+                <div className="mt-1">Adjust the polygon to exclude them, then draw again.</div>
+              </div>
+            )}
+            <div className="space-y-1.5"><Label>Section name</Label><Input value={canvassName} onChange={(e) => setCanvassName(e.target.value)} placeholder="e.g. 73010 - Section A" data-testid="canvass-name-input" /></div>
+            <div className="space-y-1.5"><Label>Color</Label><div className="flex gap-2">{COLORS.map((c) => <button key={c} onClick={() => setCanvassColor(c)} className={`h-7 w-7 rounded-md border-2 ${canvassColor === c ? "border-slate-900" : "border-transparent"}`} style={{ backgroundColor: c }} data-testid={`canvass-color-${c}`} />)}</div></div>
+            <div className="space-y-1.5"><Label>Assigned Rep</Label><select value={canvassRepId} onChange={(e) => setCanvassRepId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm" data-testid="canvass-rep-select"><option value="">Unassigned</option>{reps.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>)}</select></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => { setCanvassOpen(false); cancelDraw(); }}>Cancel</Button><Button onClick={saveCanvassSection} disabled={savingSection || (canvassPreview?.conflict_count > 0)} data-testid="save-canvass-button">{savingSection ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create Section</>}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <PropertySheet propertyId={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} onChanged={() => loadProperties(selectedId)} />
     </div>
   );

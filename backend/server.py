@@ -76,6 +76,8 @@ app.include_router(operations.router)
 app.include_router(purchasing.router)
 app.include_router(cron.router)
 app.include_router(admin_ops.router)
+from routers import canvass as canvass_router
+app.include_router(canvass_router.router)
 app.include_router(mobile.router)
 app.include_router(licensing_router.router)
 if licensing_config.LICENSING_MODE == "dev":

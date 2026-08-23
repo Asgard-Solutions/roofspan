@@ -5,14 +5,14 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, UploadFile, File, Form
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from fastapi.responses import Response
 
 from db import get_db
-from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User
+from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from offsite_backup import put_object, get_object
 
@@ -295,3 +295,61 @@ async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(requir
     j.assigned_user_id = uuid.UUID(payload.user_id) if payload.user_id else None
     await db.commit()
     return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}
+
+
+# ---------- Canvass Sections (mobile field assignment; server-authoritative visibility) ----------
+def _sales_only(user: User) -> bool:
+    return user.role == "sales"
+
+
+async def _visible_sections(db: AsyncSession, user: User):
+    """Sales see only their own active sections. Management see all active sections."""
+    stmt = select(CanvassSection).where(CanvassSection.active.is_(True))
+    if _sales_only(user):
+        stmt = stmt.where(CanvassSection.assigned_user_id == user.id)
+    return (await db.execute(stmt.order_by(CanvassSection.created_at.desc()))).scalars().all()
+
+
+@router.get("/canvass-sections")
+async def mobile_canvass_sections(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    sections = await _visible_sections(db, user)
+    out = []
+    for s in sections:
+        count = (await db.execute(
+            select(func.count(CanvassSectionProperty.id)).where(CanvassSectionProperty.section_id == s.id)
+        )).scalar_one()
+        out.append({
+            "id": str(s.id), "territory_id": str(s.territory_id), "name": s.name,
+            "color": s.color, "geometry": s.geometry, "property_count": count,
+        })
+    return {"sections": out}
+
+
+async def _authorize_section(db: AsyncSession, section_id: str, user: User) -> CanvassSection:
+    s = await db.get(CanvassSection, section_id)
+    if not s or not s.active:
+        raise HTTPException(status_code=404, detail="Canvass Section not found")
+    # Server-authoritative isolation: a sales user may only access their OWN assigned section.
+    if _sales_only(user) and s.assigned_user_id != user.id:
+        raise HTTPException(status_code=403, detail="You are not assigned to this canvass section")
+    return s
+
+
+@router.get("/canvass-sections/{section_id}/properties")
+async def mobile_canvass_section_properties(section_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    s = await _authorize_section(db, section_id, user)
+    rows = (await db.execute(
+        select(Property).join(CanvassSectionProperty, CanvassSectionProperty.property_id == Property.id)
+        .where(CanvassSectionProperty.section_id == s.id,
+               Property.latitude.isnot(None), Property.longitude.isnot(None))
+    )).scalars().all()
+    features = [{
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [p.longitude, p.latitude]},
+        "properties": {
+            "id": str(p.id), "address": p.formatted_address, "do_not_knock": p.do_not_knock,
+            "property_type": p.property_type, "owner_occupied": p.owner_occupied,
+        },
+    } for p in rows]
+    return {"section_id": str(s.id), "type": "FeatureCollection", "features": features}
+
