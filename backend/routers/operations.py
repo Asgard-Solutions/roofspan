@@ -11,7 +11,7 @@ from schemas_phase4 import (
     MaterialIn, MaterialPatch, MaterialOut, MaterialListItemOut, MaterialFacetsOut, QuantitiesOut,
     MaterialDetailOut, TxnOut, OpenPOLineOut, JobRequirementOut, AdjustIn, SupplierIn, SupplierOut,
     SupplierPatch, ManualSupplierMaterialIn, ManualSupplierMaterialPatch, PriceHistoryOut,
-    CsvPreviewIn, CsvPreviewOut, CsvPreviewRowOut, CsvCommitIn,
+    CsvPreviewIn, CsvPreviewOut, CsvPreviewRowOut, CsvCommitIn, MaterialBulkUpdate,
 )
 from integrations.abc_supply.schemas import SupplierMaterialOut
 from services import inventory_core as inv_core
@@ -252,6 +252,32 @@ async def delete_material(material_id: str, request: Request, user: User = Depen
     await db.commit()
     await log_action(db, user=user, action="material.delete", entity_type="material", entity_id=material_id, request=request)
     return {"deleted": True, "id": material_id}
+
+
+@router.post("/materials/bulk-update")
+async def bulk_update_materials(payload: MaterialBulkUpdate, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Apply the same field change(s) to many materials at once. Only the fields explicitly present in
+    the request body are applied (so you can clear a value by sending it as null)."""
+    fields = payload.model_fields_set - {"ids"}
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="No materials selected")
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    updated = 0
+    for mid in payload.ids:
+        m = await db.get(Material, mid)
+        if not m:
+            continue
+        if "category" in fields:
+            m.category = payload.category or None
+        if "standard_cost" in fields:
+            m.standard_cost = payload.standard_cost
+        if "reorder_threshold" in fields:
+            m.reorder_threshold = payload.reorder_threshold or 0
+        updated += 1
+    await db.commit()
+    await log_action(db, user=user, action="material.bulk_update", entity_type="material", entity_id=None, detail={"count": updated, "fields": list(fields)}, request=request)
+    return {"updated": updated}
 
 
 @router.get("/materials/{material_id}/quantities", response_model=QuantitiesOut)

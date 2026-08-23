@@ -49,19 +49,27 @@ export default function ReorderSuggestions({ onCreated }) {
           {loading ? <div className="py-8 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" /></div> : rows.length === 0 ? (
             <p className="py-6 text-center text-sm text-slate-400" data-testid="reorder-empty">No reorder needed — projected stock covers all thresholds.</p>
           ) : (
-            <div className="rounded-md border border-border">
-              <Table><TableHeader><TableRow><TableHead className="w-8" /><TableHead>Material</TableHead><TableHead className="text-right">Projected</TableHead><TableHead className="text-right">Threshold</TableHead><TableHead className="text-right w-24">Order Qty</TableHead><TableHead>Preferred</TableHead></TableRow></TableHeader>
-                <TableBody>{rows.map((r, i) => (
-                  <TableRow key={r.material_id} data-testid={`reorder-row-${r.material_id}`}>
-                    <TableCell><input type="checkbox" checked={r.include} onChange={(e) => setRows((rs) => rs.map((x, idx) => idx === i ? { ...x, include: e.target.checked } : x))} data-testid={`reorder-include-${i}`} /></TableCell>
-                    <TableCell className="font-medium text-slate-800">{r.material_name}</TableCell>
-                    <TableCell className="text-right tabular-nums">{r.projected} {r.unit}</TableCell>
-                    <TableCell className="text-right tabular-nums text-slate-500">{r.reorder_threshold}</TableCell>
-                    <TableCell><Input type="number" value={r.quantity} onChange={(e) => setRows((rs) => rs.map((x, idx) => idx === i ? { ...x, quantity: e.target.value } : x))} className="h-8" data-testid={`reorder-qty-${i}`} /></TableCell>
-                    <TableCell className="text-sm">{r.preferred_supplier || <span className="text-amber-600">none</span>}</TableCell>
-                  </TableRow>
-                ))}</TableBody>
-              </Table>
+            <div className="space-y-4">
+              {Object.entries(rows.reduce((acc, r, idx) => { const k = r.preferred_supplier_id || "__none__"; (acc[k] = acc[k] || { name: r.preferred_supplier, items: [] }).items.push({ ...r, idx }); return acc; }, {})).map(([sid, grp]) => (
+                <div key={sid} className="rounded-md border border-border" data-testid={`reorder-group-${sid}`}>
+                  <div className={`flex items-center justify-between px-3 py-2 text-sm font-semibold ${sid === "__none__" ? "bg-amber-50 text-amber-700" : "bg-slate-50 text-slate-700"}`}>
+                    <span>{sid === "__none__" ? "No preferred supplier (cannot order)" : grp.name}</span>
+                    <span className="text-xs font-normal text-slate-500">{grp.items.length} item(s){sid !== "__none__" ? " → 1 draft PO" : ""}</span>
+                  </div>
+                  <Table><TableHeader><TableRow><TableHead className="w-8" /><TableHead>Material</TableHead><TableHead className="text-right">Projected</TableHead><TableHead className="text-right">Threshold</TableHead><TableHead className="w-24 text-right">Order Qty</TableHead><TableHead className="text-right">Est. cost</TableHead></TableRow></TableHeader>
+                    <TableBody>{grp.items.map((r) => (
+                      <TableRow key={r.material_id} data-testid={`reorder-row-${r.material_id}`}>
+                        <TableCell><input type="checkbox" checked={r.include} disabled={sid === "__none__"} onChange={(e) => setRows((rs) => rs.map((x, idx) => idx === r.idx ? { ...x, include: e.target.checked } : x))} data-testid={`reorder-include-${r.idx}`} /></TableCell>
+                        <TableCell className="font-medium text-slate-800">{r.material_name}</TableCell>
+                        <TableCell className="text-right tabular-nums">{r.projected} {r.unit}</TableCell>
+                        <TableCell className="text-right tabular-nums text-slate-500">{r.reorder_threshold}</TableCell>
+                        <TableCell><Input type="number" value={r.quantity} onChange={(e) => setRows((rs) => rs.map((x, idx) => idx === r.idx ? { ...x, quantity: e.target.value } : x))} className="h-8" data-testid={`reorder-qty-${r.idx}`} /></TableCell>
+                        <TableCell className="text-right tabular-nums text-slate-500">{r.best_known_cost != null ? money((Number(r.quantity) || 0) * r.best_known_cost) : "—"}</TableCell>
+                      </TableRow>
+                    ))}</TableBody>
+                  </Table>
+                </div>
+              ))}
             </div>
           )}
           <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Close</Button><Button onClick={createDraft} disabled={busy || rows.length === 0} data-testid="reorder-create-po">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft PO(s)"}</Button></DialogFooter>

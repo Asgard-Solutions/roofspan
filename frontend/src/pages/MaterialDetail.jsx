@@ -29,6 +29,22 @@ function Stat({ label, value, accent }) {
   );
 }
 
+function Sparkline({ points }) {
+  if (!points || points.length < 2) return null;
+  const w = 240, h = 40, pad = 4;
+  const min = Math.min(...points), max = Math.max(...points);
+  const span = max - min || 1;
+  const step = (w - pad * 2) / (points.length - 1);
+  const coords = points.map((v, i) => [pad + i * step, h - pad - ((v - min) / span) * (h - pad * 2)]);
+  const d = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-10 w-full" preserveAspectRatio="none" data-testid="price-sparkline">
+      <path d={d} fill="none" stroke="#4f46e5" strokeWidth="1.5" />
+      {coords.map((c, i) => <circle key={i} cx={c[0]} cy={c[1]} r="1.8" fill="#4f46e5" />)}
+    </svg>
+  );
+}
+
 export default function MaterialDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -45,6 +61,7 @@ export default function MaterialDetail() {
   const [suppliers, setSuppliers] = useState([]);
   const [supOpen, setSupOpen] = useState(false);
   const [supForm, setSupForm] = useState({});
+  const [supHistory, setSupHistory] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,8 +115,13 @@ export default function MaterialDetail() {
       load();
     } catch (e) { toast.error(apiError(e)); }
   };
-  const openAddSupplier = () => { setSupForm({ sm_id: null, supplier_id: "", supplier_item_number: "", supplier_uom: "", current_cost: "" }); setSupOpen(true); };
-  const openEditSupplier = (s) => { setSupForm({ sm_id: s.id, supplier_id: s.supplier_id || "", supplier_name: s.supplier_name, supplier_item_number: s.supplier_item_number || "", supplier_uom: s.supplier_uom || "", current_cost: s.current_cost ?? "" }); setSupOpen(true); };
+  const openAddSupplier = () => { setSupHistory([]); setSupForm({ sm_id: null, supplier_id: "", supplier_item_number: "", supplier_uom: "", current_cost: "" }); setSupOpen(true); };
+  const openEditSupplier = (s) => {
+    setSupHistory([]);
+    setSupForm({ sm_id: s.id, supplier_id: s.supplier_id || "", supplier_name: s.supplier_name, supplier_item_number: s.supplier_item_number || "", supplier_uom: s.supplier_uom || "", current_cost: s.current_cost ?? "" });
+    setSupOpen(true);
+    api.get(`/supplier-materials/${s.id}/price-history`).then((r) => setSupHistory(r.data || [])).catch(() => setSupHistory([]));
+  };
   const saveSupplier = async () => {
     if (!supForm.sm_id && !supForm.supplier_id) { toast.error("Select a supplier"); return; }
     setBusy(true);
@@ -345,6 +367,24 @@ export default function MaterialDetail() {
               <div className="space-y-1.5"><Label>UoM</Label><Input value={supForm.supplier_uom || ""} onChange={(e) => setSupForm({ ...supForm, supplier_uom: e.target.value })} data-testid="supplier-uom" /></div>
             </div>
             <div className="space-y-1.5"><Label>Unit cost</Label><Input type="number" value={supForm.current_cost} onChange={(e) => setSupForm({ ...supForm, current_cost: e.target.value })} placeholder="—" data-testid="supplier-cost" /></div>
+            {supForm.sm_id && (
+              <div className="rounded-md border border-border bg-slate-50 p-3" data-testid="supplier-price-history">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Cost history</div>
+                {supHistory.length === 0 ? <p className="text-xs text-slate-400">No recorded cost changes yet.</p> : (
+                  <>
+                    <Sparkline points={supHistory.map((h) => h.cost).filter((c) => c != null).reverse()} />
+                    <div className="mt-2 max-h-32 space-y-1 overflow-y-auto">
+                      {supHistory.map((h) => (
+                        <div key={h.id} className="flex items-center justify-between text-xs" data-testid={`price-point-${h.id}`}>
+                          <span className="text-slate-500">{shortDate(h.created_at)}{h.source ? ` · ${h.source}` : ""}</span>
+                          <span className="font-medium tabular-nums text-slate-700">{h.cost != null ? money(h.cost) : "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setSupOpen(false)}>Cancel</Button><Button onClick={saveSupplier} disabled={busy} data-testid="supplier-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}</Button></DialogFooter>
         </DialogContent>

@@ -286,6 +286,13 @@ class ManualSupplierMaterialPatch(BaseModel):
     notes: Optional[str] = None
 
 
+class MaterialBulkUpdate(BaseModel):
+    ids: list[str]
+    category: Optional[str] = None
+    standard_cost: Optional[float] = None
+    reorder_threshold: Optional[float] = None
+
+
 class PriceHistoryOut(BaseModel):
     id: str
     cost: Optional[float] = None

@@ -17,7 +17,7 @@ import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
 import ReorderSuggestions from "@/components/ReorderSuggestions";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
-import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search, History } from "lucide-react";
+import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search, History, Trash2, X } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
@@ -36,6 +36,9 @@ export default function Inventory() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editId, setEditId] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulk, setBulk] = useState({ set_category: false, category: "", set_standard_cost: false, standard_cost: "", set_reorder: false, reorder_threshold: "" });
   const [adjOpen, setAdjOpen] = useState(false);
   const [adjTarget, setAdjTarget] = useState(null);
   const [adj, setAdj] = useState({ delta: 0, reason: "manual_correction", note: "" });
@@ -111,6 +114,24 @@ export default function Inventory() {
       toast.success("Material updated"); setEditOpen(false); load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
+  const deleteMaterial = async (m) => {
+    if (!window.confirm(`Delete "${m.name}"? This cannot be undone.`)) return;
+    try { await api.delete(`/materials/${m.id}`); toast.success("Material deleted"); setSelected((s) => { const n = new Set(s); n.delete(m.id); return n; }); load(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const toggleSelect = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleSelectAll = (ids, checked) => setSelected((s) => { const n = new Set(s); ids.forEach((id) => checked ? n.add(id) : n.delete(id)); return n; });
+  const openBulk = () => { setBulk({ set_category: false, category: "", set_standard_cost: false, standard_cost: "", set_reorder: false, reorder_threshold: "" }); setBulkOpen(true); };
+  const saveBulk = async () => {
+    const body = { ids: Array.from(selected) };
+    if (bulk.set_category) body.category = bulk.category || null;
+    if (bulk.set_standard_cost) body.standard_cost = bulk.standard_cost === "" ? null : Number(bulk.standard_cost);
+    if (bulk.set_reorder) body.reorder_threshold = bulk.reorder_threshold === "" ? 0 : Number(bulk.reorder_threshold);
+    if (Object.keys(body).length === 1) { toast.error("Pick at least one field to change"); return; }
+    setBusy(true);
+    try { const { data } = await api.post("/materials/bulk-update", body); toast.success(`Updated ${data.updated} material(s)`); setBulkOpen(false); setSelected(new Set()); load(); }
+    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
   const doAdjust = async () => {
     try { await api.post(`/materials/${adjTarget.id}/adjust`, { delta: Number(adj.delta) || 0, reason: adj.reason, note: adj.note || null }); toast.success("Inventory adjusted"); setAdjOpen(false); load(); }
     catch (e) { toast.error(apiError(e)); }
@@ -177,12 +198,20 @@ export default function Inventory() {
               <Select value={filters.active} onValueChange={(v) => setFilters({ ...filters, active: v })}><SelectTrigger className="w-32" data-testid="filter-active"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent></Select>
               <Button variant={filters.low_stock ? "default" : "outline"} size="sm" onClick={() => setFilters({ ...filters, low_stock: !filters.low_stock })} data-testid="filter-low-stock"><AlertTriangle className="h-4 w-4" /> Low stock</Button>
             </div>
+            {canManage && selected.size > 0 && (
+              <div className="mb-3 flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2" data-testid="bulk-action-bar">
+                <span className="text-sm font-medium text-indigo-800" data-testid="bulk-selected-count">{selected.size} selected</span>
+                <Button size="sm" variant="outline" onClick={openBulk} data-testid="bulk-edit-button">Bulk edit</Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="bulk-clear"><X className="h-3.5 w-3.5" /> Clear</Button>
+              </div>
+            )}
             <div className="overflow-x-auto rounded-md border border-border bg-white">
               <Table data-testid="materials-table">
-                <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>SKU</TableHead><TableHead>Category</TableHead><TableHead>Primary supplier</TableHead><TableHead>Cost</TableHead><TableHead>Price</TableHead><TableHead>On hand</TableHead><TableHead>Reserved</TableHead><TableHead>Available</TableHead><TableHead>On order</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
+                <TableHeader><TableRow>{canManage && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={materials.length > 0 && materials.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(materials.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}<TableHead>Material</TableHead><TableHead>SKU</TableHead><TableHead>Category</TableHead><TableHead>Primary supplier</TableHead><TableHead>Cost</TableHead><TableHead>Price</TableHead><TableHead>On hand</TableHead><TableHead>Reserved</TableHead><TableHead>Available</TableHead><TableHead>On order</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
                 <TableBody>
                   {materials.map((m) => (
                     <TableRow key={m.id} data-testid={`material-row-${m.id}`} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/inventory/materials/${m.id}`)}>
+                      {canManage && <TableCell onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} data-testid={`bulk-select-${m.id}`} /></TableCell>}
                       <TableCell className="font-medium text-slate-900">{m.name}<ChevronRight className="ml-1 inline h-3.5 w-3.5 text-slate-300" /></TableCell>
                       <TableCell className="text-slate-500 font-mono text-xs">{m.sku || "—"}</TableCell>
                       <TableCell className="text-slate-500">{m.category || "—"}</TableCell>
@@ -194,10 +223,10 @@ export default function Inventory() {
                       <TableCell className="tabular-nums font-medium">{m.available}</TableCell>
                       <TableCell className="tabular-nums text-slate-500">{m.on_order}</TableCell>
                       <TableCell>{!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge> : m.low_stock ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Low</Badge> : <Badge variant="secondary" className="bg-green-50 text-green-700">OK</Badge>}</TableCell>
-                      {canManage && <TableCell><div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}><Button size="sm" variant="outline" onClick={() => openEdit(m)} data-testid={`edit-${m.id}`}>Edit</Button><Button size="sm" variant="outline" onClick={() => { setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button></div></TableCell>}
+                      {canManage && <TableCell><div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}><Button size="sm" variant="outline" onClick={() => openEdit(m)} data-testid={`edit-${m.id}`}>Edit</Button><Button size="sm" variant="outline" onClick={() => { setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button><Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => deleteMaterial(m)} data-testid={`delete-${m.id}`}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>}
                     </TableRow>
                   ))}
-                  {materials.length === 0 && <TableRow><TableCell colSpan={12} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
+                  {materials.length === 0 && <TableRow><TableCell colSpan={13} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
@@ -309,6 +338,31 @@ export default function Inventory() {
           <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={saveEdit} disabled={busy} data-testid="inv-edit-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent data-testid="bulk-edit-dialog">
+          <DialogHeader><DialogTitle>Bulk edit {selected.size} material(s)</DialogTitle><DialogDescription>Tick a field to change it for every selected material. Unticked fields are left untouched.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={bulk.set_category} onChange={(e) => setBulk({ ...bulk, set_category: e.target.checked })} data-testid="bulk-set-category" />
+              <Label className="w-32">Category</Label>
+              <Input value={bulk.category} disabled={!bulk.set_category} onChange={(e) => setBulk({ ...bulk, category: e.target.value })} placeholder="New category" data-testid="bulk-category" />
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={bulk.set_standard_cost} onChange={(e) => setBulk({ ...bulk, set_standard_cost: e.target.checked })} data-testid="bulk-set-standard-cost" />
+              <Label className="w-32">Standard cost</Label>
+              <Input type="number" value={bulk.standard_cost} disabled={!bulk.set_standard_cost} onChange={(e) => setBulk({ ...bulk, standard_cost: e.target.value })} placeholder="—" data-testid="bulk-standard-cost" />
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={bulk.set_reorder} onChange={(e) => setBulk({ ...bulk, set_reorder: e.target.checked })} data-testid="bulk-set-reorder" />
+              <Label className="w-32">Reorder threshold</Label>
+              <Input type="number" value={bulk.reorder_threshold} disabled={!bulk.set_reorder} onChange={(e) => setBulk({ ...bulk, reorder_threshold: e.target.value })} placeholder="0" data-testid="bulk-reorder" />
+            </div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button><Button onClick={saveBulk} disabled={busy} data-testid="bulk-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply to selected"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
 
       <Dialog open={adjOpen} onOpenChange={setAdjOpen}>
         <DialogContent data-testid="adjust-dialog">
