@@ -160,6 +160,10 @@ async def on_startup():
     # are background/idempotent so users do not need to delete or re-import territories.
     asyncio.create_task(cleanup_duplicates_then_refresh_locations())
 
+    # In-process scheduled auto-backup (user-configurable time; file-based, survives restores).
+    from services import backup as _backup_svc
+    asyncio.create_task(_backup_svc.scheduler_loop())
+
     logger.info("RoofSpan Office backend ready")
 
 

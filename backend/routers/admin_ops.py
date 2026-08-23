@@ -54,6 +54,11 @@ class RestoreIn(BaseModel):
     filename: str
 
 
+class ScheduleIn(BaseModel):
+    enabled: bool
+    time: str
+
+
 async def _auth_admin(request: Request) -> User:
     """Authenticate an admin using a short-lived DB session (closed immediately).
 
@@ -156,6 +161,14 @@ async def restore_backup(payload: RestoreIn, request: Request):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Backup not found.")
     import traceback, logging
+    # Auto safety backup FIRST — captures the current state so a mistaken restore can be undone.
+    # Abort the restore if it cannot be created, so the user is never left without an undo point.
+    try:
+        safety = await backup_svc.create_backup(suffix="_safety")
+    except Exception as e:
+        logging.getLogger("roofspan").error("safety backup failed: %s", e)
+        raise HTTPException(status_code=500,
+                            detail=f"Could not create a safety backup before restoring, so the restore was aborted: {e}")
     try:
         await engine.dispose()
         try:
@@ -166,11 +179,39 @@ async def restore_backup(payload: RestoreIn, request: Request):
         # written before the restore would be reverted by the restore itself).
         async with SessionLocal() as db:
             await log_action(db, user=user, action="backup.restore", entity_type="backup",
-                             entity_id=payload.filename, request=request)
+                             entity_id=payload.filename, detail={"safety_backup": safety["filename"]}, request=request)
     except HTTPException:
         raise
     except Exception as e:
         logging.getLogger("roofspan").error("restore failed: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Restore failed: {type(e).__name__}: {e}")
-    return {"ok": True, "filename": payload.filename,
+    return {"ok": True, "filename": payload.filename, "safety_backup": safety["filename"],
             "message": "Database restored. Please reload the app and sign in again."}
+
+
+@router.get("/backups/schedule")
+async def get_backup_schedule(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    return {"schedule": backup_svc.get_schedule(), "state": backup_svc.get_schedule_state()}
+
+
+@router.put("/backups/schedule")
+async def set_backup_schedule(payload: ScheduleIn, request: Request,
+                              user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    try:
+        sched = backup_svc.set_schedule(payload.enabled, payload.time)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    async with SessionLocal() as db:
+        await log_action(db, user=user, action="backup.schedule.update", entity_type="config",
+                         entity_id="backup_schedule", detail=sched, request=request)
+    return {"schedule": sched, "state": backup_svc.get_schedule_state()}
+
+
+@router.post("/backups/schedule/run-now")
+async def run_scheduled_now(request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    """Run the automatic backup immediately and update its status (used to retry a failed one)."""
+    state = await backup_svc.run_scheduled_backup()
+    async with SessionLocal() as db:
+        await log_action(db, user=user, action="backup.schedule.run", entity_type="backup",
+                         entity_id=state.get("last_file"), detail={"status": state.get("last_status")}, request=request)
+    return {"schedule": backup_svc.get_schedule(), "state": state}

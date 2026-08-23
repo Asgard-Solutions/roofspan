@@ -3,6 +3,8 @@ import { api, apiError, API_BASE, getToken } from "@/lib/api";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -10,6 +12,7 @@ import {
 import {
   RefreshCw, CheckCircle2, XCircle, MinusCircle, DatabaseBackup,
   Download, Upload, RotateCcw, Loader2, HardDriveDownload, CloudUpload, Cloud, AlertTriangle,
+  CalendarClock, Play,
 } from "lucide-react";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -55,6 +58,10 @@ export default function BackupStatus() {
   const [restoreTarget, setRestoreTarget] = useState(null);
   const [restoring, setRestoring] = useState(false);
   const [offsiting, setOffsiting] = useState(null);
+  const [schedule, setSchedule] = useState({ enabled: false, time: "02:00" });
+  const [schedState, setSchedState] = useState({});
+  const [savingSched, setSavingSched] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
   const fileRef = useRef(null);
 
   const load = useCallback(() => {
@@ -62,6 +69,7 @@ export default function BackupStatus() {
     Promise.all([
       api.get("/admin/backup-status").then((r) => setData(r.data)).catch(() => {}),
       api.get("/admin/backups").then((r) => setBackups(r.data.backups || [])).catch(() => {}),
+      api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); }).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -119,8 +127,37 @@ export default function BackupStatus() {
     }
   };
 
-  const copyOffsite = async (filename) => {
-    setOffsiting(filename);
+  const saveSchedule = async (next) => {
+    const body = next || schedule;
+    setSavingSched(true);
+    try {
+      const r = await api.put("/admin/backups/schedule", body);
+      setSchedule(r.data.schedule);
+      setSchedState(r.data.state || {});
+      toast.success(body.enabled ? `Automatic backup scheduled for ${body.time} daily.` : "Automatic backup turned off.");
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingSched(false);
+    }
+  };
+
+  const runScheduledNow = async () => {
+    setRunningNow(true);
+    try {
+      const r = await api.post("/admin/backups/schedule/run-now");
+      setSchedState(r.data.state || {});
+      if (r.data.state?.last_status === "OK") toast.success("Automatic backup ran successfully.");
+      else toast.error(`Backup failed: ${r.data.state?.last_error || "unknown error"}`);
+      load();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setRunningNow(false);
+    }
+  };
+
+  const copyOffsite = async (filename) => {    setOffsiting(filename);
     try {
       await api.post("/admin/backups/offsite", { filename });
       toast.success("Backup copied off-site.");
@@ -201,6 +238,54 @@ export default function BackupStatus() {
               {uploading ? "Importing…" : "Import backup file"}
             </Button>
           </div>
+        </div>
+
+        {/* Scheduled automatic backups */}
+        <div className="max-w-3xl rounded-md border border-border bg-white p-5" data-testid="backup-schedule-card">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <CalendarClock className="h-4 w-4 text-slate-500" /> Automatic backups
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Run a full backup automatically every day at a time you choose. We'll show whether the last automatic backup succeeded or failed.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <Switch checked={schedule.enabled} onCheckedChange={(v) => saveSchedule({ ...schedule, enabled: v })} disabled={savingSched} data-testid="schedule-enabled-switch" />
+              {schedule.enabled ? "On" : "Off"}
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500">Daily at</span>
+              <Input type="time" value={schedule.time} onChange={(e) => setSchedule({ ...schedule, time: e.target.value })} className="w-32" data-testid="schedule-time-input" />
+              <Button variant="outline" size="sm" onClick={() => saveSchedule()} disabled={savingSched} data-testid="schedule-save-button">
+                {savingSched ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save time
+              </Button>
+            </div>
+            <Button variant="outline" size="sm" onClick={runScheduledNow} disabled={runningNow} data-testid="schedule-run-now-button">
+              {runningNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run now
+            </Button>
+          </div>
+          {/* Last automatic backup status — stays "failed" until a successful run */}
+          {schedState.last_status ? (
+            <div className={`mt-4 flex items-start gap-2 rounded-md border p-3 text-sm ${schedState.last_status === "OK" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`} data-testid="schedule-status">
+              {schedState.last_status === "OK"
+                ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />}
+              <div>
+                <div className={`font-semibold ${schedState.last_status === "OK" ? "text-emerald-800" : "text-red-800"}`} data-testid="schedule-status-label">
+                  {schedState.last_status === "OK" ? "Last automatic backup succeeded" : "Last automatic backup FAILED"}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {schedState.last_run_at ? new Date(schedState.last_run_at).toLocaleString() : ""}
+                  {schedState.last_file ? ` · ${schedState.last_file}` : ""}
+                </div>
+                {schedState.last_status !== "OK" && schedState.last_error && (
+                  <div className="mt-1 text-xs text-red-700">{schedState.last_error} — please try "Run now" until it succeeds.</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 text-xs text-slate-400" data-testid="schedule-status-none">No automatic backup has run yet.</div>
+          )}
         </div>
 
         {/* Backups list */}

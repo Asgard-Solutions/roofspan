@@ -8,15 +8,20 @@ so a single dump is a complete, self-contained backup of the app's data.
 import os
 import re
 import glob
+import json
 import asyncio
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse, unquote
 
 BACKUP_DIR = os.environ.get("ROOFSPAN_BACKUP_DIR", "/data/db/roofspan_backups")
+SCHEDULE_FILE = os.path.join(BACKUP_DIR, "schedule.json")
+SCHED_STATE_FILE = os.path.join(BACKUP_DIR, "schedule_state.json")
 # Only files matching this pattern are ever listed / downloaded / restored.
 SAFE_NAME = re.compile(r"^roofspan_[A-Za-z0-9_\-]+\.dump$")
 # pg custom-format dumps begin with this magic marker.
 PG_DUMP_MAGIC = b"PGDMP"
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
 def _conn():
@@ -87,12 +92,15 @@ async def copy_offsite(path: str) -> str:
     return obj
 
 
-async def create_backup() -> dict:
-    """Run pg_dump (custom format) into a fresh timestamped file. Atomic (.partial -> mv)."""
+async def create_backup(suffix: str = "") -> dict:
+    """Run pg_dump (custom format) into a fresh timestamped file. Atomic (.partial->mv).
+
+    `suffix` tags special backups (e.g. "_safety" taken automatically before a restore).
+    """
     os.makedirs(BACKUP_DIR, exist_ok=True)
     c = _conn()
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = os.path.join(BACKUP_DIR, f"roofspan_{ts}.dump")
+    out = os.path.join(BACKUP_DIR, f"roofspan_{ts}{suffix}.dump")
     tmp = out + ".partial"
     proc = await asyncio.create_subprocess_exec(
         "pg_dump", "-h", c["host"], "-p", c["port"], "-U", c["user"],
@@ -165,3 +173,80 @@ def save_upload(raw_name: str, data: bytes) -> dict:
         "size_bytes": st.st_size,
         "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
     }
+
+
+# ---- Scheduled auto-backup (file-based so it survives DB restores) ----
+DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00"}
+
+
+def _read_json(path: str, default: dict) -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return dict(default)
+
+
+def _write_json(path: str, data: dict):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    tmp = path + ".partial"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def get_schedule() -> dict:
+    s = _read_json(SCHEDULE_FILE, DEFAULT_SCHEDULE)
+    return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00")}
+
+
+def set_schedule(enabled: bool, time_str: str) -> dict:
+    if not _TIME_RE.match(time_str or ""):
+        raise ValueError("Time must be in 24-hour HH:MM format.")
+    sched = {"enabled": bool(enabled), "time": time_str}
+    _write_json(SCHEDULE_FILE, sched)
+    return sched
+
+
+def get_schedule_state() -> dict:
+    return _read_json(SCHED_STATE_FILE, {})
+
+
+async def run_scheduled_backup(attempt_date: str | None = None) -> dict:
+    ad = attempt_date or datetime.now().date().isoformat()
+    try:
+        info = await create_backup()
+        state = {"last_status": "OK", "last_run_at": info["created_at"],
+                 "last_file": info["filename"], "last_error": None, "last_attempt_date": ad}
+    except Exception as e:
+        state = {"last_status": "FAIL", "last_run_at": datetime.now(timezone.utc).isoformat(),
+                 "last_file": None, "last_error": str(e)[:300], "last_attempt_date": ad}
+        logging.getLogger("roofspan").error("scheduled backup FAILED: %s", e)
+    _write_json(SCHED_STATE_FILE, state)
+    return state
+
+
+async def _scheduler_tick():
+    sched = get_schedule()
+    if not sched.get("enabled"):
+        return
+    m = _TIME_RE.match(sched.get("time", ""))
+    if not m:
+        return
+    hh, mm = int(m.group(1)), int(m.group(2))
+    now = datetime.now()  # local machine time (== user's time on a desktop install)
+    scheduled = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    today = now.date().isoformat()
+    # Run once per day, at or after the scheduled time (catch-up if the app was off at that minute).
+    if now >= scheduled and get_schedule_state().get("last_attempt_date") != today:
+        await run_scheduled_backup(attempt_date=today)
+
+
+async def scheduler_loop():
+    await asyncio.sleep(20)  # let startup settle
+    while True:
+        try:
+            await _scheduler_tick()
+        except Exception:
+            logging.getLogger("roofspan").exception("backup scheduler tick error")
+        await asyncio.sleep(60)
