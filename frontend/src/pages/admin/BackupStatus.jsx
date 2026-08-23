@@ -9,8 +9,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   RefreshCw, CheckCircle2, XCircle, MinusCircle, DatabaseBackup,
-  Download, Upload, RotateCcw, Loader2, HardDriveDownload,
+  Download, Upload, RotateCcw, Loader2, HardDriveDownload, CloudUpload, Cloud, AlertTriangle,
 } from "lucide-react";
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function fmtSize(n) {
   if (n == null) return "—";
@@ -52,6 +54,7 @@ export default function BackupStatus() {
   const [uploading, setUploading] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState(null);
   const [restoring, setRestoring] = useState(false);
+  const [offsiting, setOffsiting] = useState(null);
   const fileRef = useRef(null);
 
   const load = useCallback(() => {
@@ -116,8 +119,20 @@ export default function BackupStatus() {
     }
   };
 
-  const doRestore = async () => {
-    if (!restoreTarget) return;
+  const copyOffsite = async (filename) => {
+    setOffsiting(filename);
+    try {
+      await api.post("/admin/backups/offsite", { filename });
+      toast.success("Backup copied off-site.");
+      load();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setOffsiting(null);
+    }
+  };
+
+  const doRestore = async () => {    if (!restoreTarget) return;
     setRestoring(true);
     try {
       await api.post("/admin/backups/restore", { filename: restoreTarget });
@@ -129,6 +144,11 @@ export default function BackupStatus() {
       setRestoring(false);
     }
   };
+
+  const newest = backups[0]?.created_at ? new Date(backups[0].created_at).getTime() : null;
+  const ageMs = newest ? Date.now() - newest : null;
+  const stale = !loading && (newest === null || (ageMs != null && ageMs > WEEK_MS));
+  const staleDays = ageMs != null ? Math.floor(ageMs / (24 * 60 * 60 * 1000)) : null;
 
   return (
     <div>
@@ -143,6 +163,25 @@ export default function BackupStatus() {
         }
       />
       <div className="space-y-6 p-6 sm:p-8">
+        {stale && (
+          <div className="flex max-w-3xl items-start justify-between gap-4 rounded-md border border-amber-200 bg-amber-50 p-4" data-testid="backup-stale-banner">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <div className="text-sm font-semibold text-amber-900">
+                  {newest === null ? "You have no backups yet" : `Your last backup is ${staleDays} day${staleDays === 1 ? "" : "s"} old`}
+                </div>
+                <div className="text-xs text-amber-700">
+                  We recommend creating a fresh backup at least once a week so you never lose recent work.
+                </div>
+              </div>
+            </div>
+            <Button size="sm" onClick={createBackup} disabled={creating} className="shrink-0 bg-amber-600 hover:bg-amber-700" data-testid="backup-stale-create">
+              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <DatabaseBackup className="h-4 w-4" />}
+              {creating ? "Creating…" : "Create backup now"}
+            </Button>
+          </div>
+        )}
         {/* Create + Import actions */}
         <div className="max-w-3xl rounded-md border border-border bg-white p-5" data-testid="backup-actions-card">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -179,12 +218,23 @@ export default function BackupStatus() {
               {backups.map((b) => (
                 <div key={b.filename} className="flex flex-wrap items-center justify-between gap-3 py-3" data-testid={`backup-item-${b.filename}`}>
                   <div className="min-w-0">
-                    <div className="truncate font-mono text-xs font-medium text-slate-900" data-testid="backup-filename">{b.filename}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-mono text-xs font-medium text-slate-900" data-testid="backup-filename">{b.filename}</span>
+                      {b.offsite && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700" data-testid={`offsite-badge-${b.filename}`}>
+                          <Cloud className="h-3 w-3" /> Off-site
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-slate-400">{new Date(b.created_at).toLocaleString()} · {fmtSize(b.size_bytes)}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => downloadBackup(b.filename)} data-testid={`download-backup-${b.filename}`}>
                       <Download className="h-4 w-4" /> Download
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => copyOffsite(b.filename)} disabled={offsiting === b.filename} data-testid={`offsite-backup-${b.filename}`}>
+                      {offsiting === b.filename ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
+                      {b.offsite ? "Re-copy off-site" : "Copy off-site"}
                     </Button>
                     <Button variant="outline" size="sm" className="border-red-200 text-red-700 hover:bg-red-50" onClick={() => setRestoreTarget(b.filename)} data-testid={`restore-backup-${b.filename}`}>
                       <RotateCcw className="h-4 w-4" /> Restore

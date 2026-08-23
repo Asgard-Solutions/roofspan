@@ -60,9 +60,31 @@ def list_backups() -> list[dict]:
             "filename": os.path.basename(path),
             "size_bytes": st.st_size,
             "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            "offsite": os.path.exists(path + ".offsite"),
         })
     out.sort(key=lambda x: x["created_at"], reverse=True)
     return out
+
+
+async def copy_offsite(path: str) -> str:
+    """Push a local backup file to off-pod object storage. Returns the stored object path.
+
+    Reuses the same off-site transport as the nightly backup. Runs the blocking upload in a
+    worker thread and records a local '<file>.offsite' marker on success.
+    """
+    import offsite_backup
+    basename = os.path.basename(path)
+    with open(path, "rb") as f:
+        data = f.read()
+
+    def _do():
+        res = offsite_backup.put_object(offsite_backup._object_path(basename), data)
+        return res.get("path") or offsite_backup._object_path(basename)
+
+    obj = await asyncio.to_thread(_do)
+    with open(path + ".offsite", "w") as f:
+        f.write(obj)
+    return obj
 
 
 async def create_backup() -> dict:

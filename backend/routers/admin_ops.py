@@ -123,6 +123,26 @@ async def upload_backup(request: Request, file: UploadFile = File(...),
     return info
 
 
+@router.post("/backups/offsite")
+async def offsite_backup_copy(payload: RestoreIn, request: Request,
+                             user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    try:
+        path = backup_svc.resolve_path(payload.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Backup not found.")
+    try:
+        object_path = await backup_svc.copy_offsite(path)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Off-site copy failed: {e}")
+    async with SessionLocal() as db:
+        await log_action(db, user=user, action="backup.offsite", entity_type="backup",
+                         entity_id=payload.filename, detail={"object_path": object_path}, request=request)
+    return {"ok": True, "filename": payload.filename, "object_path": object_path}
+
+
+
 @router.post("/backups/restore")
 async def restore_backup(payload: RestoreIn, request: Request):
     # NOTE: authenticate with a SHORT-LIVED session (not require_roles) so that no DB
