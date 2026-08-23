@@ -337,3 +337,7 @@ Removed all Emergent PRODUCTION dependencies so RoofSpan builds/runs on a plain 
 - **Frontend:** Edit (MaterialDetail + Inventory) and Create forms relabeled to **Cost** / **Price** with helper text ("Leave Price blank to auto-calculate from the Price Book. Entering a Price overrides it, flagged Custom."). Inventory list Price cell + Material-Detail Price card show an amber **Custom** badge and "Custom price — manual override (ignores Price Book)" when overridden. Estimate picker already consumes `effective_price` so overrides flow into estimates automatically.
 - **Verified (curl + UI):** cost-only → auto price (custom False); add Price 99 → price 99 custom True; clear Price → back to PB auto; price-only-no-cost → price shows custom True with cost None; UI shows Cost $40 / Price $75 + Custom badge on list & detail, and relabeled Cost/Price fields in edit. Test materials cleaned up.
 
+
+## Reset-to-Auto price button — DONE & VERIFIED (2026-06)
+- Material Detail Price card now shows a one-tap **"Use Price Book price"** button (`reset-price-auto`, MANAGE roles) whenever the price is custom. It PATCHes `default_sell_price:null`, clearing the manual override so pricing returns to the Default-Price-Book calculation.
+- Verified (UI): custom $88 → click → toast "Price reset — now calculated from the Price Book", Custom badge removed, price reverts to computed (frontend-only; reuses existing PATCH). Test material cleaned up.

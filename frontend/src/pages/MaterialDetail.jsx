@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2, Sparkles } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
@@ -143,6 +143,10 @@ export default function MaterialDetail() {
     try { await api.delete(`/materials/${id}`); toast.success("Material deleted"); navigate("/inventory"); }
     catch (e) { toast.error(apiError(e)); }
   };
+  const resetToAuto = async () => {
+    try { await api.patch(`/materials/${id}`, { default_sell_price: null }); toast.success("Price reset — now calculated from the Price Book"); load(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
 
   if (loading || !d) return <div className="p-10 text-center text-slate-400" data-testid="material-detail-loading"><Loader2 className="mx-auto h-6 w-6 animate-spin" /></div>;
   const m = d.material; const q = d.quantities;
@@ -197,6 +201,9 @@ export default function MaterialDetail() {
                   ? (!canManage ? "Price unavailable" : (m.effective_cost == null ? "No cost basis — price unavailable" : (m.price_book_id ? "No matching price rule" : "No default price book set")))
                   : `Price Book: ${m.price_book_name || "—"}${m.matched_rule_label ? ` · Rule: ${m.matched_rule_label}` : ""}`)}
             </div>
+            {canManage && m.price_is_custom && (
+              <Button size="sm" variant="outline" className="mt-2" onClick={resetToAuto} data-testid="reset-price-auto"><Sparkles className="h-3.5 w-3.5" /> Use Price Book price</Button>
+            )}
           </div>
         </section>
 
