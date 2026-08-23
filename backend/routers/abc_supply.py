@@ -794,6 +794,12 @@ async def catalog_add_to_inventory(item_number: str, payload: AbcAddToInventoryI
     if existing:
         if not cat.material_id:
             cat.material_id = existing.id
+        # Backfill master identity from the ABC catalog when the material is missing it (never
+        # clobber a value the user already curated).
+        if cat.manufacturer and not existing.manufacturer:
+            existing.manufacturer = cat.manufacturer
+        if cat.brand and not existing.brand:
+            existing.brand = cat.brand
         # Ensure the ABC supplier mapping exists for this (possibly pre-existing) material.
         sup = await inv_core.ensure_supplier(db, "ABC Supply", integration_provider="abc_supply")
         await inv_core.upsert_supplier_material(
@@ -815,6 +821,7 @@ async def catalog_add_to_inventory(item_number: str, payload: AbcAddToInventoryI
     mat = Material(
         name=name, sku=item_number, category=cat.category, unit=(cat.unit_of_measure or "each"),
         description=cat.description, active=True, quantity_on_hand=0, reorder_threshold=0,
+        manufacturer=cat.manufacturer, brand=cat.brand,
         vendor="ABC Supply", abc_item_number=item_number, abc_catalog_item_id=cat.id,
         abc_uom=cat.unit_of_measure,
         abc_metadata={"family_id": cat.family_id, "family_name": cat.family_name, "manufacturer": cat.manufacturer,

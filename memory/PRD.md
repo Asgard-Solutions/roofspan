@@ -263,3 +263,14 @@ Removed all Emergent PRODUCTION dependencies so RoofSpan builds/runs on a plain 
 - **Verified end-to-end (curl + preview UI):** full receive (10/10) → PO `received`, on-hand 10; partial (4/10) → `partially_received`, on-hand 4; remainder (6/10) → `received`, on-hand 10. Preview PO tab shows the `received` badge.
 - **Fork env recovery:** this forked pod came up with a fresh PostgreSQL (role `roofspan` + DB missing). Bootstrapped role/DB, started postgres + supervisor, raised inotify watch limit; migrations then applied to head.
 - **STILL PENDING (from prior handoff, not yet started):** the broader "Material Create Form + Full Material CRUD" work (create-form fields SKU/Purchase UOM/Conversion/Standard Cost/Default Sell Price; Material Detail Edit/Deactivate/Delete with safe-delete + edit-safety; Sales cost-gating). Migration prerequisite is now DONE.
+
+
+## ABC Catalog manufacturer/brand mapping bug fix — DONE & VERIFIED (2026-06)
+- **Report:** "manufacturer is not showing up on the ABC catalog after sync, and isn't set on items when adding to / updating inventory."
+- **Root cause A (wrong field names):** `map_catalog_fields` read `item.get("manufacturer")` / `item.get("brand")`, but the REAL ABC Product API item payload has **no** such keys. Per ABC docs (confirmed via integration_expert): manufacturer = top-level `item.supplierName`; brand = nested `hierarchy.productGroup.category.productType.materialComposition.warranty.brandLine.label`. So on real ABC both mapped to `None` → blank in catalog.
+- **Root cause B:** `catalog_add_to_inventory` stuffed manufacturer only into `abc_metadata` and **never set the top-level `Material.manufacturer`/`brand` columns** — so added materials showed no manufacturer; the existing-link path didn't update it either.
+- **Fix (backend only):**
+  - `integrations/abc_supply/catalog.py`: new `_manufacturer()` (`supplierName` → legacy `manufacturer` fallback), `_brand()`/`_brand_line()` (deep-guarded `brandLine.label`→description→name, fallback to `brand`/manufacturer). `map_catalog_fields` uses them.
+  - `routers/abc_supply.py::catalog_add_to_inventory`: new materials now set `manufacturer=cat.manufacturer, brand=cat.brand`; existing-link path backfills `manufacturer`/`brand` only when missing (never clobbers user-curated values).
+  - `integrations/abc_supply/mock_server.py`: mock items updated to the real schema (`supplierName` + a nested `brandLine` on the shingle) so the pathway is exercised.
+- **Verified end-to-end (mock, curl):** catalog sync → shingle shows mfr `MockBrand` / brand `MockBrand Timberline HD`; add-to-inventory fresh create AND existing-link backfill both populate `Material.manufacturer`/`brand`; mapping unit-checked for real ABC (`supplierName=GAF`, `brandLine.label=GAF Timberline HD`), legacy fallback, and sparse/missing-hierarchy (no 500). ProductCatalog UI already has Manufacturer column + manufacturers facet → now populated automatically. No migration needed.

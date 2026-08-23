@@ -46,6 +46,29 @@ def _branch_numbers(item: dict) -> list[str]:
     return []
 
 
+def _brand_line(item: dict) -> dict:
+    """The ABC brand lives deep in the product hierarchy: productGroup > category > productType >
+    materialComposition > warranty > brandLine. Guard every level (any may be missing/null)."""
+    node = item.get("hierarchy") or {}
+    for key in ("productGroup", "category", "productType", "materialComposition", "warranty", "brandLine"):
+        node = (node or {}).get(key) or {}
+        if not isinstance(node, dict):
+            return {}
+    return node
+
+
+def _manufacturer(item: dict) -> str | None:
+    """Real ABC exposes the manufacturer as `supplierName` (top-level). Fall back to legacy/mock keys."""
+    return item.get("supplierName") or item.get("manufacturer")
+
+
+def _brand(item: dict) -> str | None:
+    """Real ABC brand = brandLine.label (prefer label over name, which carries a numeric suffix)."""
+    bl = _brand_line(item)
+    brand = bl.get("label") or bl.get("description") or bl.get("name")
+    return brand or item.get("brand") or _manufacturer(item)
+
+
 def map_catalog_fields(item: dict) -> dict:
     """Translate one raw ABC product item into local `abc_catalog_items` column values."""
     hier = item.get("hierarchy") or {}
@@ -60,8 +83,8 @@ def map_catalog_fields(item: dict) -> dict:
     return {
         "abc_item_number": str(item.get("itemNumber") or ""),
         "description": item.get("itemDescription"),
-        "manufacturer": item.get("manufacturer"),
-        "brand": item.get("brand") or item.get("manufacturer"),
+        "manufacturer": _manufacturer(item),
+        "brand": _brand(item),
         "category": category,
         "family_id": item.get("familyId"),
         "family_name": item.get("familyName"),

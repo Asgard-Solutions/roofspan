@@ -237,8 +237,10 @@ _MOCK_ITEMS = [
         "status": "Active", "color": {"name": "Weathered Wood", "code": "384", "description": "Product Color"},
         "uoms": [{"name": "Square", "code": "SQ", "description": "estimate"}, {"name": "Bundle", "code": "BD", "description": "stocking"}],
         "images": [{"assetId": "mock-shingle-arch-ww", "type": "PrimaryProductImage", "href": "http://127.0.0.1:8001/api/abc-mock/api/product/v1/items/mock-shingle-arch-ww/images"}],
-        "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Steep Slope Roofing"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Steep Slope Roofing",
+            "productType": {"label": "Fiberglass Laminated Shingles", "materialComposition": {"label": "Asphalt Composition Shingles",
+                "warranty": {"label": "Dimensional Shingles", "brandLine": {"code": "3232", "label": "MockBrand Timberline HD", "name": "MockBrand Timberline HD - 003232"}}}}}}},
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
     {
         "itemNumber": "MOCK-UNDERLAYMENT-30", "familyId": "PFam_MOCK_UNDER",
@@ -246,7 +248,7 @@ _MOCK_ITEMS = [
         "itemDescription": "Mock Synthetic Roofing Underlayment 30 (10 sq roll)", "status": "Active",
         "uoms": [{"name": "Roll", "code": "RL", "description": "stocking"}],
         "images": [], "hierarchy": {"productGroup": {"label": "Underlayment", "category": {"label": "Roofing Accessories"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18"],  # NOT available at 409
+        "supplierName": "MockBrand", "branchNumbers": ["18"],  # NOT available at 409
     },
     {
         "itemNumber": "MOCK-DRIP-EDGE-DIM", "familyId": "PFam_MOCK_DRIP",
@@ -254,7 +256,7 @@ _MOCK_ITEMS = [
         "itemDescription": "Mock Aluminum Drip Edge (dimensional - length required)", "status": "Active",
         "uoms": [{"name": "Piece", "code": "PC", "description": "stocking"}],
         "images": [], "hierarchy": {"productGroup": {"label": "Metal", "category": {"label": "Roofing Accessories"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
     {
         "itemNumber": "MOCK-RIDGE-CAP-NOPRICE", "familyId": "PFam_MOCK_RIDGE",
@@ -262,7 +264,7 @@ _MOCK_ITEMS = [
         "itemDescription": "Mock Hip & Ridge Cap Shingles (branch pricing not entered)", "status": "Active",
         "uoms": [{"name": "Bundle", "code": "BD", "description": "stocking"}],
         "images": [], "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Hip & Ridge"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
     {
         "itemNumber": "MOCK-ICEWATER-BARRIER", "familyId": "PFam_MOCK_IW",
@@ -270,21 +272,21 @@ _MOCK_ITEMS = [
         "itemDescription": "Mock Ice and Water Barrier Membrane (2 sq roll)", "status": "Active",
         "uoms": [{"name": "Roll", "code": "RL", "description": "stocking"}],
         "images": [], "hierarchy": {"productGroup": {"label": "Underlayment", "category": {"label": "Roofing Accessories"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
     {  # priceable, but ABC place-order REJECTS this item (tests order rejection)
         "itemNumber": "MOCK-REJECT", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
         "isDimensional": False, "itemDescription": "Mock Reject-On-Order Test Item", "status": "Active",
         "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
         "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
     {  # priceable, but ABC place-order times out AFTER accepting (tests unknown-state + reconcile)
         "itemNumber": "MOCK-TIMEOUT", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
         "isDimensional": False, "itemDescription": "Mock Timeout-On-Order Test Item", "status": "Active",
         "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
         "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
-        "manufacturer": "MockBrand", "branchNumbers": ["18", "409"],
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
 ]
 _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
@@ -357,7 +359,7 @@ _MOCK_DISCONTINUED = {
     "isDimensional": False, "itemDescription": "Mock Discontinued Shingle (no longer stocked)",
     "status": "Inactive", "uoms": [{"name": "Bundle", "code": "BD", "description": "stocking"}], "images": [],
     "hierarchy": {"productGroup": {"label": "Steep Slope Products", "category": {"label": "Steep Slope Roofing"}}},
-    "manufacturer": "MockBrand", "branchNumbers": ["18"],
+    "supplierName": "MockBrand", "branchNumbers": ["18"],
 }
 
 
