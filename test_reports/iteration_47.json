@@ -1,0 +1,19 @@
+{
+  "summary": "Verified fix for 'Generate Quote from Estimate produces $0 total' bug at API and full UI level. Ran 4 pytest cases covering the primary bug, measured_quantity/unit_price fallback, multi-line summation, and accepted-quote guardrails (all passed). Then executed full UI flow: login as owner -> open lead 487c6557 -> New Estimate -> Add Custom Line (qty=3, sell=$100 -> line total $300, summary $300) -> Save -> Generate Quote -> QUO-0401 created with subtotal=$300, total=$300, item qty=3, sell=100, line_total=300. Bug is FIXED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_quote_from_estimate.py", "/app/test_reports/pytest/quote_bug.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "quotes.py _line_out returns selling_unit_price=i.unit_price (fine since customer view mirrors unit_price=sell), but if the model ever splits unit_price (cost) from selling_unit_price on QuoteLineItem, that mapping should be updated.",
+    "Estimate->Quote fallback logic in create_quote is now resilient (qty from quantity|measured_quantity; price from selling_unit_price|unit_price|line_total/qty). Consider centralizing this normalization (e.g., in a helper on EstimateLineItem) to prevent similar drift in duplicate/quote endpoints."
+  ],
+  "updated_files": ["/app/backend/tests/test_quote_from_estimate.py"],
+  "success_rate": {"backend": "100% (4/4)", "frontend": "100% (E2E flow verified)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Created test estimates EST-0473..EST-0479 and quotes QUO-0397..QUO-0401 on lead 487c6557-a3ff-416e-b444-68b54e4f5096. QUO-0400 was accepted (regression check).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression tests live in /app/backend/tests/test_quote_from_estimate.py and depend on seeded lead 487c6557-a3ff-416e-b444-68b54e4f5096. Use `pytest -n 0` (pytest.ini forces xdist which errors with -p no:xdist).",
+  "rca of the issue": "Estimate line items store measured quantity and selling price in variably-populated fields (quantity vs measured_quantity, selling_unit_price vs unit_price). Previously routers/quotes.py create_quote read only i.quantity and i.selling_unit_price when snapshotting the estimate; when those were 0/None (e.g., only measured_quantity filled or price stored in unit_price), the generated quote lines saved qty*sell=0*0=0, yielding a $0 quote. Fix: fall back to measured_quantity for qty, unit_price for price, then derive price = line_total/qty if still zero. Verified via pytest + real UI flow: 3 × $100 estimate now yields $300 quote (was $0)."
+}

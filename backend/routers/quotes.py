@@ -120,12 +120,20 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
             raise HTTPException(status_code=404, detail="Estimate not found")
         est_items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == est.id).order_by(EstimateLineItem.sort))).scalars().all()
         from schemas_phase3 import LineItemIn
-        # snapshot customer selling price + internal cost from estimate
-        items = [LineItemIn(description=i.description, quantity=i.quantity, unit=i.unit,
-                            unit_price=i.selling_unit_price or i.unit_price, selling_unit_price=i.selling_unit_price or i.unit_price,
-                            material_id=str(i.material_id) if i.material_id else None,
-                            base_cost=calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost),
-                            markup_percent=i.markup_percent) for i in est_items]
+        # snapshot customer selling price + internal cost from estimate. Be resilient to which field
+        # actually holds the value (quantity vs measured_quantity; selling_unit_price vs unit_price;
+        # or derive price from line_total) so the quote never comes through as 0 when the estimate has data.
+        items = []
+        for i in est_items:
+            qty = i.quantity if i.quantity not in (None, 0) else (i.measured_quantity or 0)
+            price = i.selling_unit_price if i.selling_unit_price not in (None, 0) else (i.unit_price or 0)
+            if (not price) and i.line_total and qty:
+                price = round(float(i.line_total) / float(qty), 4)
+            items.append(LineItemIn(description=i.description, quantity=qty, unit=i.unit,
+                                    unit_price=price, selling_unit_price=price,
+                                    material_id=str(i.material_id) if i.material_id else None,
+                                    base_cost=calc.unit_cost(i.material_cost, i.labor_cost, i.equipment_cost, i.subcontract_cost),
+                                    markup_percent=i.markup_percent))
         tax_rate = est.tax_rate
         lead_id = lead_id or (str(est.lead_id) if est.lead_id else None)
         customer_id = customer_id or (str(est.customer_id) if est.customer_id else None)
