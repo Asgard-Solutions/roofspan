@@ -1,0 +1,28 @@
+{
+  "summary": "Verified frontend-only label fix: ABC Supply Live Catalog table header now reads 'Cost' (not 'Price'). Regression check on Inventory Materials table confirmed both 'Cost' and 'Price' headers still present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_details": {
+    "catalog_table_headers": ["Product", "Item #", "Manufacturer", "UoM", "Category", "Availability", "Cost", ""],
+    "has_cost_header": true,
+    "has_price_header": false,
+    "materials_table_headers": ["", "Material", "SKU", "Category", "Primary supplier", "Cost", "Price", "On hand", "Reserved", "Available", "On order", "Status", ""],
+    "materials_regression_ok": true,
+    "abc_source_option_found": "ABC Supply · Live catalog (testid: catalog-source-b76e8ad0-463d-465e-aaae-39057e7acc8d)",
+    "note": "ABC Supply not connected in this env; catalog body shows mock items with '—' or 'By length' cost values, which is expected. Header label is the important check and passes."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"frontend": "100%"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (owner)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ABC Supply Live catalog column label bug fixed and verified. Table header row: Product, Item #, Manufacturer, UoM, Category, Availability, Cost. Materials tab still has both Cost and Price as intended."
+}

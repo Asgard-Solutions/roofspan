@@ -341,3 +341,8 @@ Removed all Emergent PRODUCTION dependencies so RoofSpan builds/runs on a plain 
 ## Reset-to-Auto price button — DONE & VERIFIED (2026-06)
 - Material Detail Price card now shows a one-tap **"Use Price Book price"** button (`reset-price-auto`, MANAGE roles) whenever the price is custom. It PATCHes `default_sell_price:null`, clearing the manual override so pricing returns to the Default-Price-Book calculation.
 - Verified (UI): custom $88 → click → toast "Price reset — now calculated from the Price Book", Custom badge removed, price reverts to computed (frontend-only; reuses existing PATCH). Test material cleaned up.
+
+## ABC Live Catalog column relabel Price -> Cost — DONE & VERIFIED by testing_agent (2026-06)
+- Bug: the ABC Supply Live catalog table (Inventory -> Product Catalog -> select the "... · Live catalog" source) labeled the pricing column "Price", but ABC pricing is the supplier COST to the contractor.
+- Fix (frontend-only, ProductCatalog.jsx): renamed that `<TableHead>` from "Price" to "Cost"; added data-testid `catalog-cost-{itemNumber}` to the cost cell.
+- Verified (testing_agent iteration_45.json, 100%): catalog-table headers = [Product, Item #, Manufacturer, UoM, Category, Availability, Cost] — has Cost, no Price. Regression OK: Inventory Materials tab still shows BOTH Cost and Price (intentional). ABC not live-connected in env so body shows mock/—, header is the check and passes.

@@ -177,7 +177,7 @@ function AbcCatalogSource({ supplierName }) {
             <TableRow>
               <TableHead>Product</TableHead><TableHead>Item #</TableHead><TableHead>Manufacturer</TableHead>
               <TableHead>UoM</TableHead><TableHead>Category</TableHead><TableHead>Availability</TableHead>
-              <TableHead>Price</TableHead><TableHead></TableHead>
+              <TableHead>Cost</TableHead><TableHead></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -192,7 +192,7 @@ function AbcCatalogSource({ supplierName }) {
                 <TableCell className="text-sm">{item.unit_of_measure || "—"}</TableCell>
                 <TableCell className="text-sm">{item.category || "—"}</TableCell>
                 <TableCell>{availabilityBadge(item)}</TableCell>
-                <TableCell>{priceCell(item)}</TableCell>
+                <TableCell data-testid={`catalog-cost-${item.item_number}`}>{priceCell(item)}</TableCell>
                 <TableCell className="text-right">
                   {item.in_inventory ? (
                     <div className="flex items-center justify-end gap-1">
