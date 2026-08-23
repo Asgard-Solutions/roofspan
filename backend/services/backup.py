@@ -176,7 +176,7 @@ def save_upload(raw_name: str, data: bytes) -> dict:
 
 
 # ---- Scheduled auto-backup (file-based so it survives DB restores) ----
-DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00"}
+DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False}
 
 
 def _read_json(path: str, default: dict) -> dict:
@@ -197,13 +197,14 @@ def _write_json(path: str, data: dict):
 
 def get_schedule() -> dict:
     s = _read_json(SCHEDULE_FILE, DEFAULT_SCHEDULE)
-    return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00")}
+    return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00"),
+            "offsite": bool(s.get("offsite", False))}
 
 
-def set_schedule(enabled: bool, time_str: str) -> dict:
+def set_schedule(enabled: bool, time_str: str, offsite: bool = False) -> dict:
     if not _TIME_RE.match(time_str or ""):
         raise ValueError("Time must be in 24-hour HH:MM format.")
-    sched = {"enabled": bool(enabled), "time": time_str}
+    sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite)}
     _write_json(SCHEDULE_FILE, sched)
     return sched
 
@@ -218,9 +219,22 @@ async def run_scheduled_backup(attempt_date: str | None = None) -> dict:
         info = await create_backup()
         state = {"last_status": "OK", "last_run_at": info["created_at"],
                  "last_file": info["filename"], "last_error": None, "last_attempt_date": ad}
+        # Auto off-site copy (when enabled) so the daily backup survives a machine failure.
+        if get_schedule().get("offsite"):
+            try:
+                await copy_offsite(resolve_path(info["filename"]))
+                state["offsite_status"] = "OK"
+                state["offsite_error"] = None
+            except Exception as e:
+                state["offsite_status"] = "FAIL"
+                state["offsite_error"] = str(e)[:300]
+                logging.getLogger("roofspan").error("scheduled off-site copy FAILED: %s", e)
+        else:
+            state["offsite_status"] = None
     except Exception as e:
         state = {"last_status": "FAIL", "last_run_at": datetime.now(timezone.utc).isoformat(),
-                 "last_file": None, "last_error": str(e)[:300], "last_attempt_date": ad}
+                 "last_file": None, "last_error": str(e)[:300], "last_attempt_date": ad,
+                 "offsite_status": None}
         logging.getLogger("roofspan").error("scheduled backup FAILED: %s", e)
     _write_json(SCHED_STATE_FILE, state)
     return state

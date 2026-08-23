@@ -58,7 +58,7 @@ export default function BackupStatus() {
   const [restoreTarget, setRestoreTarget] = useState(null);
   const [restoring, setRestoring] = useState(false);
   const [offsiting, setOffsiting] = useState(null);
-  const [schedule, setSchedule] = useState({ enabled: false, time: "02:00" });
+  const [schedule, setSchedule] = useState({ enabled: false, time: "02:00", offsite: false });
   const [schedState, setSchedState] = useState({});
   const [savingSched, setSavingSched] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
@@ -264,6 +264,10 @@ export default function BackupStatus() {
               {runningNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run now
             </Button>
           </div>
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <Switch checked={schedule.offsite} onCheckedChange={(v) => saveSchedule({ ...schedule, offsite: v })} disabled={savingSched} data-testid="schedule-offsite-switch" />
+            <span className="flex items-center gap-1.5"><Cloud className="h-4 w-4 text-slate-400" /> Also copy each automatic backup off-site (protects you if this machine fails)</span>
+          </label>
           {/* Last automatic backup status — stays "failed" until a successful run */}
           {schedState.last_status ? (
             <div className={`mt-4 flex items-start gap-2 rounded-md border p-3 text-sm ${schedState.last_status === "OK" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`} data-testid="schedule-status">
@@ -280,6 +284,14 @@ export default function BackupStatus() {
                 </div>
                 {schedState.last_status !== "OK" && schedState.last_error && (
                   <div className="mt-1 text-xs text-red-700">{schedState.last_error} — please try "Run now" until it succeeds.</div>
+                )}
+                {schedState.last_status === "OK" && schedState.offsite_status && (
+                  <div className={`mt-1 flex items-center gap-1.5 text-xs ${schedState.offsite_status === "OK" ? "text-emerald-700" : "text-amber-700"}`} data-testid="schedule-offsite-status">
+                    <Cloud className="h-3.5 w-3.5" />
+                    {schedState.offsite_status === "OK"
+                      ? "Off-site copy succeeded"
+                      : `Off-site copy failed: ${schedState.offsite_error || "unknown error"}`}
+                  </div>
                 )}
               </div>
             </div>

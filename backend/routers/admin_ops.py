@@ -57,6 +57,7 @@ class RestoreIn(BaseModel):
 class ScheduleIn(BaseModel):
     enabled: bool
     time: str
+    offsite: bool = False
 
 
 async def _auth_admin(request: Request) -> User:
@@ -198,7 +199,7 @@ async def get_backup_schedule(user: User = Depends(require_roles(*SENSITIVE_ROLE
 async def set_backup_schedule(payload: ScheduleIn, request: Request,
                               user: User = Depends(require_roles(*SENSITIVE_ROLES))):
     try:
-        sched = backup_svc.set_schedule(payload.enabled, payload.time)
+        sched = backup_svc.set_schedule(payload.enabled, payload.time, payload.offsite)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     async with SessionLocal() as db:
