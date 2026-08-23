@@ -257,7 +257,7 @@ export default function Inventory() {
                       <TableCell className="text-slate-500">{m.category || "—"}</TableCell>
                       <TableCell className="text-slate-600">{m.primary_supplier_name || "—"}</TableCell>
                       <TableCell className="tabular-nums text-slate-600" data-testid={`mat-cost-${m.id}`}>{m.effective_cost != null ? money(m.effective_cost) : "—"}</TableCell>
-                      <TableCell className="tabular-nums font-medium text-slate-800" data-testid={`mat-price-${m.id}`}>{m.effective_price != null ? money(m.effective_price) : "—"}</TableCell>
+                      <TableCell className="tabular-nums font-medium text-slate-800" data-testid={`mat-price-${m.id}`}>{m.effective_price != null ? <span className="inline-flex items-center gap-1">{money(m.effective_price)}{m.price_is_custom && <Badge variant="secondary" className="bg-amber-100 text-amber-700 px-1 py-0 text-[10px]" data-testid={`mat-price-custom-${m.id}`}>Custom</Badge>}</span> : "—"}</TableCell>
                       <TableCell className="tabular-nums font-medium">{m.on_hand}</TableCell>
                       <TableCell className="tabular-nums text-slate-500">{m.reserved}</TableCell>
                       <TableCell className="tabular-nums font-medium">{m.available}</TableCell>
@@ -343,9 +343,10 @@ export default function Inventory() {
             </div>
             <p className="text-xs text-slate-400 -mt-1">Conversion = how many stock UOM are in one purchase UOM (e.g. 1 pallet = 42 bundles → 42).</p>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Standard cost <span className="text-xs text-slate-400">(fallback)</span></Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="mat-standard-cost" /></div>
-              <div className="space-y-1.5"><Label>Default sell price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="—" data-testid="mat-sell-price" /></div>
+              <div className="space-y-1.5"><Label>Cost</Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="mat-standard-cost" /></div>
+              <div className="space-y-1.5"><Label>Price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="Auto from Price Book" data-testid="mat-sell-price" /></div>
             </div>
+            <p className="text-xs text-slate-400 -mt-1">Leave <b>Price</b> blank to auto-calculate from the Price Book. Entering a Price overrides it (flagged <b>Custom</b>).</p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Quantity on hand</Label><Input type="number" value={form.quantity_on_hand} onChange={(e) => setForm({ ...form, quantity_on_hand: e.target.value })} data-testid="mat-onhand" /></div>
               <div className="space-y-1.5"><Label>Reorder threshold</Label><Input type="number" value={form.reorder_threshold} onChange={(e) => setForm({ ...form, reorder_threshold: e.target.value })} data-testid="mat-threshold" /></div>
@@ -371,7 +372,7 @@ export default function Inventory() {
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5"><Label>Unit</Label><Input value={editForm.unit || ""} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })} data-testid="inv-edit-unit" /></div>
               <div className="space-y-1.5"><Label>Std cost</Label><Input type="number" value={editForm.standard_cost} onChange={(e) => setEditForm({ ...editForm, standard_cost: e.target.value })} data-testid="inv-edit-standard-cost" /></div>
-              <div className="space-y-1.5"><Label>Sell price</Label><Input type="number" value={editForm.default_sell_price} onChange={(e) => setEditForm({ ...editForm, default_sell_price: e.target.value })} data-testid="inv-edit-sell-price" /></div>
+              <div className="space-y-1.5"><Label>Price</Label><Input type="number" value={editForm.default_sell_price} onChange={(e) => setEditForm({ ...editForm, default_sell_price: e.target.value })} placeholder="Auto" data-testid="inv-edit-sell-price" /></div>
             </div>
             <div className="space-y-1.5"><Label>Reorder threshold</Label><Input type="number" value={editForm.reorder_threshold} onChange={(e) => setEditForm({ ...editForm, reorder_threshold: e.target.value })} data-testid="inv-edit-threshold" /></div>
           </div>

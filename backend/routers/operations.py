@@ -95,7 +95,7 @@ async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
         effective_price=(float(pr["effective_price"]) if pr["effective_price"] is not None else None),
         price_book_id=pr["price_book_id"], price_book_name=pr["price_book_name"],
         matched_rule_id=pr["matched_rule_id"], matched_rule_type=pr["matched_rule_type"],
-        matched_rule_label=pr["matched_rule_label"],
+        matched_rule_label=pr["matched_rule_label"], price_is_custom=pr.get("price_is_custom", False),
         standard_cost=(float(m.standard_cost) if m.standard_cost is not None else None),
         default_sell_price=(float(m.default_sell_price) if m.default_sell_price is not None else None),
     )

@@ -178,7 +178,15 @@ async def compute_material_pricing(db: AsyncSession, material: Material) -> dict
     provenance so the UI can explain both numbers. If no cost basis exists, price is None (never $0)."""
     out = await resolve_effective_cost(db, material)
     out.update({"effective_price": None, "price_book_id": None, "price_book_name": None,
-                "matched_rule_id": None, "matched_rule_type": None, "matched_rule_label": None})
+                "matched_rule_id": None, "matched_rule_type": None, "matched_rule_label": None,
+                "price_is_custom": False})
+    # Manual Price (default_sell_price) is an explicit override — it wins over any Price Book rule and
+    # is flagged custom. Shown even when there is no cost basis (the user set it deliberately).
+    if material.default_sell_price is not None:
+        out["effective_price"] = _q4(_d(material.default_sell_price))
+        out["price_is_custom"] = True
+        out["matched_rule_label"] = "Custom price (manual override)"
+        return out
     cost = out["effective_cost"]
     if cost is None:
         return out  # never fabricate a $0 price

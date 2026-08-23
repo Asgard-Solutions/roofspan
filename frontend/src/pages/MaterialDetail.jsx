@@ -188,12 +188,14 @@ export default function MaterialDetail() {
             </div>
           </div>}
           <div className="rounded-md border border-border bg-white p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-400">Price</div>
+            <div className="flex items-center gap-2"><div className="text-xs uppercase tracking-wide text-slate-400">Price</div>{m.price_is_custom && <Badge variant="secondary" className="bg-amber-100 text-amber-700" data-testid="price-custom-badge">Custom</Badge>}</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums text-indigo-700" data-testid="detail-effective-price">{m.effective_price != null ? money(m.effective_price) : "—"}</div>
             <div className="mt-1 text-xs text-slate-500" data-testid="detail-price-source">
-              {m.effective_price == null
-                ? (!canManage ? "Price unavailable" : (m.effective_cost == null ? "No cost basis — price unavailable" : (m.price_book_id ? "No matching price rule" : "No default price book set")))
-                : `Price Book: ${m.price_book_name || "—"}${m.matched_rule_label ? ` · Rule: ${m.matched_rule_label}` : ""}`}
+              {m.price_is_custom
+                ? "Custom price — manual override (ignores Price Book)"
+                : (m.effective_price == null
+                  ? (!canManage ? "Price unavailable" : (m.effective_cost == null ? "No cost basis — price unavailable" : (m.price_book_id ? "No matching price rule" : "No default price book set")))
+                  : `Price Book: ${m.price_book_name || "—"}${m.matched_rule_label ? ` · Rule: ${m.matched_rule_label}` : ""}`)}
             </div>
           </div>
         </section>
@@ -321,9 +323,10 @@ export default function MaterialDetail() {
               <div className="space-y-1.5"><Label>Reorder threshold</Label><Input type="number" value={form.reorder_threshold} onChange={(e) => setForm({ ...form, reorder_threshold: e.target.value })} data-testid="edit-threshold" /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Standard cost <span className="text-xs text-slate-400">(fallback)</span></Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="edit-standard-cost" /></div>
-              <div className="space-y-1.5"><Label>Default sell price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="—" data-testid="edit-sell-price" /></div>
+              <div className="space-y-1.5"><Label>Cost</Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="edit-standard-cost" /></div>
+              <div className="space-y-1.5"><Label>Price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="Auto from Price Book" data-testid="edit-sell-price" /></div>
             </div>
+            <p className="text-xs text-slate-400 -mt-1">Leave <b>Price</b> blank to auto-calculate it from the Price Book applied to Cost. Entering a Price overrides the Price Book and is flagged <b>Custom</b>.</p>
             <div className="space-y-1.5"><Label>Description</Label><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} data-testid="edit-description" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={saveEdit} disabled={busy} data-testid="edit-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}</Button></DialogFooter>

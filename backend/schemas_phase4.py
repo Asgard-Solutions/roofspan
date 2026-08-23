@@ -118,6 +118,7 @@ class MaterialListItemOut(MaterialOut):
     matched_rule_id: Optional[str] = None
     matched_rule_type: Optional[str] = None
     matched_rule_label: Optional[str] = None
+    price_is_custom: bool = False
     # Planning values (manual). standard_cost is a fallback cost; never MWAC.
     standard_cost: Optional[float] = None
     default_sell_price: Optional[float] = None
