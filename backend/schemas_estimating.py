@@ -54,9 +54,12 @@ class AssemblyExpandOut(BaseModel):
 # ---- Price Books ----
 class PriceBookEntryIn(BaseModel):
     id: Optional[str] = None
-    target_type: str = "material"     # material | labor | assembly
+    target_type: str = "material"     # material | supplier | manufacturer | category | default | labor | assembly
     material_id: Optional[str] = None
     assembly_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    manufacturer: Optional[str] = None
+    category: Optional[str] = None
     label: Optional[str] = None
     rule_type: str = "markup"         # fixed | markup | margin
     fixed_price: Optional[float] = None
@@ -69,6 +72,7 @@ class PriceBookEntryOut(PriceBookEntryIn):
     id: str
     material_name: Optional[str] = None
     assembly_name: Optional[str] = None
+    supplier_name: Optional[str] = None
     sort: int = 0
 
 

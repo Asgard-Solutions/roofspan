@@ -143,7 +143,7 @@ export default function Inventory() {
             </div>
             <div className="overflow-x-auto rounded-md border border-border bg-white">
               <Table data-testid="materials-table">
-                <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>SKU</TableHead><TableHead>Category</TableHead><TableHead>Primary supplier</TableHead><TableHead>Cost</TableHead><TableHead>On hand</TableHead><TableHead>Reserved</TableHead><TableHead>Available</TableHead><TableHead>On order</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>SKU</TableHead><TableHead>Category</TableHead><TableHead>Primary supplier</TableHead><TableHead>Cost</TableHead><TableHead>Price</TableHead><TableHead>On hand</TableHead><TableHead>Reserved</TableHead><TableHead>Available</TableHead><TableHead>On order</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
                 <TableBody>
                   {materials.map((m) => (
                     <TableRow key={m.id} data-testid={`material-row-${m.id}`} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/inventory/materials/${m.id}`)}>
@@ -151,7 +151,8 @@ export default function Inventory() {
                       <TableCell className="text-slate-500 font-mono text-xs">{m.sku || "—"}</TableCell>
                       <TableCell className="text-slate-500">{m.category || "—"}</TableCell>
                       <TableCell className="text-slate-600">{m.primary_supplier_name || "—"}</TableCell>
-                      <TableCell className="tabular-nums text-slate-600">{m.primary_supplier_cost != null ? money(m.primary_supplier_cost) : (m.best_known_cost != null ? money(m.best_known_cost) : "—")}</TableCell>
+                      <TableCell className="tabular-nums text-slate-600" data-testid={`mat-cost-${m.id}`}>{m.effective_cost != null ? money(m.effective_cost) : "—"}</TableCell>
+                      <TableCell className="tabular-nums font-medium text-slate-800" data-testid={`mat-price-${m.id}`}>{m.effective_price != null ? money(m.effective_price) : "—"}</TableCell>
                       <TableCell className="tabular-nums font-medium">{m.on_hand}</TableCell>
                       <TableCell className="tabular-nums text-slate-500">{m.reserved}</TableCell>
                       <TableCell className="tabular-nums font-medium">{m.available}</TableCell>
@@ -160,7 +161,7 @@ export default function Inventory() {
                       {canManage && <TableCell><Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button></TableCell>}
                     </TableRow>
                   ))}
-                  {materials.length === 0 && <TableRow><TableCell colSpan={11} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
+                  {materials.length === 0 && <TableRow><TableCell colSpan={12} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>

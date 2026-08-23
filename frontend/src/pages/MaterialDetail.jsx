@@ -12,6 +12,7 @@ import { ArrowLeft, Loader2, Star, CheckCircle2 } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const txnLabel = (t) => (t || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const costSourceLabel = (s) => ({ preferred_supplier: "Preferred Supplier", best_known_cost: "Best Known Cost", standard_cost: "Standard Cost", mwac: "Inventory Avg (MWAC)" }[s] || "—");
 
 function Stat({ label, value, accent }) {
   return (
@@ -66,6 +67,27 @@ export default function MaterialDetail() {
             <div><span className="text-slate-400">Reorder at</span><div className="tabular-nums">{m.reorder_threshold}</div></div>
             <div><span className="text-slate-400">Status</span><div>{m.active ? "Active" : "Inactive"}</div></div>
             <div className="col-span-2"><span className="text-slate-400">Best known cost</span> <span className="font-medium" data-testid="best-known-cost">{m.best_known_cost != null ? money(m.best_known_cost) : "—"}</span> <span className="text-xs text-slate-400">(lowest active supplier cost — not the preferred supplier)</span></div>
+          </div>
+        </section>
+
+        {/* Cost & Price */}
+        <section className="grid gap-3 sm:grid-cols-2" data-testid="detail-cost-price">
+          {canManage && <div className="rounded-md border border-border bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-400">Cost</div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900" data-testid="detail-effective-cost">{m.effective_cost != null ? money(m.effective_cost) : "—"}</div>
+            <div className="mt-1 text-xs text-slate-500" data-testid="detail-cost-source">
+              {m.effective_cost == null ? "Missing cost basis"
+                : `Source: ${costSourceLabel(m.effective_cost_source)}${m.effective_cost_supplier_name ? ` — ${m.effective_cost_supplier_name}` : ""}`}
+            </div>
+          </div>}
+          <div className="rounded-md border border-border bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-400">Price</div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums text-indigo-700" data-testid="detail-effective-price">{m.effective_price != null ? money(m.effective_price) : "—"}</div>
+            <div className="mt-1 text-xs text-slate-500" data-testid="detail-price-source">
+              {m.effective_price == null
+                ? (!canManage ? "Price unavailable" : (m.effective_cost == null ? "No cost basis — price unavailable" : (m.price_book_id ? "No matching price rule" : "No default price book set")))
+                : `Price Book: ${m.price_book_name || "—"}${m.matched_rule_label ? ` · Rule: ${m.matched_rule_label}` : ""}`}
+            </div>
           </div>
         </section>
 

@@ -29,6 +29,8 @@ class MaterialIn(BaseModel):
     manufacturer_part_number: Optional[str] = None
     taxable: bool = True
     image_url: Optional[str] = None
+    standard_cost: Optional[float] = None
+    default_sell_price: Optional[float] = None
 
 
 class MaterialPatch(BaseModel):
@@ -54,6 +56,8 @@ class MaterialPatch(BaseModel):
     manufacturer_part_number: Optional[str] = None
     taxable: Optional[bool] = None
     image_url: Optional[str] = None
+    standard_cost: Optional[float] = None
+    default_sell_price: Optional[float] = None
 
 
 class MaterialOut(BaseModel):
@@ -103,6 +107,20 @@ class MaterialListItemOut(MaterialOut):
     best_supplier_status: Optional[str] = None
     best_supplier_updated_at: Optional[datetime] = None
     supplier_count: int = 0
+    # --- Effective Cost + Default-Price-Book Price (computed live; never stored) ---
+    effective_cost: Optional[float] = None
+    effective_cost_source: Optional[str] = None        # preferred_supplier | best_known_cost | standard_cost | mwac
+    effective_cost_supplier_id: Optional[str] = None
+    effective_cost_supplier_name: Optional[str] = None
+    effective_price: Optional[float] = None
+    price_book_id: Optional[str] = None
+    price_book_name: Optional[str] = None
+    matched_rule_id: Optional[str] = None
+    matched_rule_type: Optional[str] = None
+    matched_rule_label: Optional[str] = None
+    # Planning values (manual). standard_cost is a fallback cost; never MWAC.
+    standard_cost: Optional[float] = None
+    default_sell_price: Optional[float] = None
 
 
 class MaterialFacetsOut(BaseModel):

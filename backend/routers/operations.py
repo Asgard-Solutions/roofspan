@@ -72,6 +72,8 @@ async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
         best_status = best_sm.price_status or ("manual" if not best_provider or best_provider == "manual" else None)
         best_updated = best_sm.price_updated_at
     count = await inv_core.supplier_material_count(db, m.id)
+    from services import pricing as pricing_svc
+    pr = await pricing_svc.compute_material_pricing(db, m)
     return MaterialListItemOut(
         id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
         active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
@@ -86,7 +88,33 @@ async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
         best_known_cost=best, best_supplier_name=best_name, best_supplier_provider=best_provider,
         best_supplier_status=best_status, best_supplier_updated_at=best_updated,
         supplier_count=count,
+        effective_cost=(float(pr["effective_cost"]) if pr["effective_cost"] is not None else None),
+        effective_cost_source=pr["effective_cost_source"],
+        effective_cost_supplier_id=pr["effective_cost_supplier_id"],
+        effective_cost_supplier_name=pr["effective_cost_supplier_name"],
+        effective_price=(float(pr["effective_price"]) if pr["effective_price"] is not None else None),
+        price_book_id=pr["price_book_id"], price_book_name=pr["price_book_name"],
+        matched_rule_id=pr["matched_rule_id"], matched_rule_type=pr["matched_rule_type"],
+        matched_rule_label=pr["matched_rule_label"],
+        standard_cost=(float(m.standard_cost) if m.standard_cost is not None else None),
+        default_sell_price=(float(m.default_sell_price) if m.default_sell_price is not None else None),
     )
+
+
+# Cost fields that must NEVER be returned to Sales (price stays visible).
+_COST_FIELDS_HIDDEN_FROM_SALES = (
+    "primary_supplier_cost", "best_known_cost", "effective_cost", "effective_cost_source",
+    "effective_cost_supplier_id", "effective_cost_supplier_name", "standard_cost",
+    "matched_rule_label",  # rule label can reveal the cost-source supplier; hide from sales
+)
+
+
+def _strip_cost_for_sales(item: MaterialListItemOut, user: User) -> MaterialListItemOut:
+    if user.role in MANAGE_ROLES:
+        return item
+    for f in _COST_FIELDS_HIDDEN_FROM_SALES:
+        setattr(item, f, None)
+    return item
 
 
 
@@ -138,7 +166,7 @@ async def list_materials(low_stock: bool | None = Query(None), q: str | None = Q
     if supplier_id:
         stmt = stmt.where(Material.id.in_(select(SupplierMaterial.material_id).where(SupplierMaterial.supplier_id == supplier_id)))
     rows = (await db.execute(stmt)).scalars().all()
-    out = [await _mat_list_item(db, m) for m in rows]
+    out = [_strip_cost_for_sales(await _mat_list_item(db, m), user) for m in rows]
     if low_stock:
         out = [m for m in out if m.low_stock]
     return out
@@ -213,6 +241,9 @@ async def material_detail(material_id: str, user: User = Depends(get_current_use
         price_updated_at=sm.price_updated_at, availability_status=sm.availability_status,
         lead_time_days=sm.lead_time_days, is_preferred=sm.is_preferred, active=sm.active,
     ).model_dump() for sm, sname in sm_rows]
+    if user.role not in MANAGE_ROLES:
+        for s in suppliers:
+            s["current_cost"] = None
     # open PO lines
     po_rows = (await db.execute(
         select(POLineItem, PurchaseOrder.number, PurchaseOrder.status)
@@ -235,7 +266,7 @@ async def material_detail(material_id: str, user: User = Depends(get_current_use
     txns = [TxnOut(id=str(t.id), txn_type=t.reason, delta=t.delta, note=t.note,
                    po_id=(str(t.po_id) if t.po_id else None), job_id=(str(t.job_id) if t.job_id else None),
                    location=t.location, created_by=t.created_by, created_at=t.created_at) for t in txn_rows]
-    return MaterialDetailOut(material=await _mat_list_item(db, m), quantities=QuantitiesOut(**qty),
+    return MaterialDetailOut(material=_strip_cost_for_sales(await _mat_list_item(db, m), user), quantities=QuantitiesOut(**qty),
                              suppliers=suppliers, open_po_lines=open_po, jobs=jobs, transactions=txns)
 
 

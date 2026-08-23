@@ -147,17 +147,22 @@ async def expand_assembly(assembly_id: str, quantity: float = Query(1), user: Us
 
 # ============================ Price Books ============================
 async def _pb_entry_out(db: AsyncSession, en: PriceBookEntry) -> PriceBookEntryOut:
-    mname = aname = None
+    mname = aname = sname = None
     if en.material_id:
         m = await db.get(Material, en.material_id); mname = m.name if m else None
     if en.assembly_id:
         a = await db.get(Assembly, en.assembly_id); aname = a.name if a else None
+    if en.supplier_id:
+        s = await db.get(Supplier, en.supplier_id); sname = s.name if s else None
     return PriceBookEntryOut(id=str(en.id), target_type=en.target_type,
                              material_id=str(en.material_id) if en.material_id else None,
                              assembly_id=str(en.assembly_id) if en.assembly_id else None,
+                             supplier_id=str(en.supplier_id) if en.supplier_id else None,
+                             manufacturer=en.manufacturer, category=en.category,
                              label=en.label, rule_type=en.rule_type, fixed_price=en.fixed_price,
                              markup_percent=en.markup_percent, margin_percent=en.margin_percent,
-                             active=en.active, sort=en.sort, material_name=mname, assembly_name=aname)
+                             active=en.active, sort=en.sort, material_name=mname, assembly_name=aname,
+                             supplier_name=sname)
 
 
 async def _pb_out(db: AsyncSession, pb: PriceBook) -> PriceBookOut:
@@ -226,7 +231,9 @@ async def set_price_book_entries(pb_id: str, entries: list[PriceBookEntryIn], re
     await db.execute(PriceBookEntry.__table__.delete().where(PriceBookEntry.price_book_id == pb.id))
     for idx, en in enumerate(entries):
         db.add(PriceBookEntry(price_book_id=pb.id, target_type=en.target_type, material_id=en.material_id or None,
-                              assembly_id=en.assembly_id or None, label=en.label, rule_type=en.rule_type,
+                              assembly_id=en.assembly_id or None, supplier_id=en.supplier_id or None,
+                              manufacturer=(en.manufacturer or None), category=(en.category or None),
+                              label=en.label, rule_type=en.rule_type,
                               fixed_price=en.fixed_price, markup_percent=en.markup_percent,
                               margin_percent=en.margin_percent, active=en.active, sort=idx))
     await db.commit(); await db.refresh(pb)

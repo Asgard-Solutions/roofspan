@@ -13,11 +13,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Plus, Trash2, BookOpen, Star } from "lucide-react";
 
-const emptyEntry = () => ({ target_type: "material", material_id: "", label: "", rule_type: "markup", fixed_price: "", markup_percent: "", margin_percent: "", active: true });
+const emptyEntry = () => ({ target_type: "material", material_id: "", supplier_id: "", manufacturer: "", category: "", label: "", rule_type: "markup", fixed_price: "", markup_percent: "", margin_percent: "", active: true });
 
 export default function PriceBooks() {
   const [rows, setRows] = useState([]);
   const [materials, setMaterials] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [facets, setFacets] = useState({ categories: [], manufacturers: [] });
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", active: true, is_default: false });
   const [entriesOpen, setEntriesOpen] = useState(null); // price book object
@@ -27,7 +29,12 @@ export default function PriceBooks() {
     try { const { data } = await api.get("/estimating/price-books"); setRows(data); }
     catch (e) { toast.error(apiError(e)); }
   }, []);
-  useEffect(() => { load(); api.get("/materials", { params: { active: true } }).then((r) => setMaterials(r.data)).catch(() => {}); }, [load]);
+  useEffect(() => {
+    load();
+    api.get("/materials", { params: { active: true } }).then((r) => setMaterials(r.data)).catch(() => {});
+    api.get("/suppliers", { params: { active: true } }).then((r) => setSuppliers(r.data)).catch(() => {});
+    api.get("/materials/facets").then((r) => setFacets(r.data)).catch(() => {});
+  }, [load]);
 
   const create = async () => {
     try { await api.post("/estimating/price-books", form); toast.success("Price book created"); setOpen(false); setForm({ name: "", description: "", active: true, is_default: false }); load(); }
@@ -36,11 +43,12 @@ export default function PriceBooks() {
   const makeDefault = async (pb) => { try { await api.patch(`/estimating/price-books/${pb.id}`, { is_default: true }); toast.success(`${pb.name} is now default`); load(); } catch (e) { toast.error(apiError(e)); } };
   const toggleActive = async (pb) => { try { await api.patch(`/estimating/price-books/${pb.id}`, { active: !pb.active }); load(); } catch (e) { toast.error(apiError(e)); } };
 
-  const openEntries = (pb) => { setEntriesOpen(pb); setEntries((pb.entries || []).map((e) => ({ target_type: e.target_type, material_id: e.material_id || "", label: e.label || "", rule_type: e.rule_type, fixed_price: e.fixed_price ?? "", markup_percent: e.markup_percent ?? "", margin_percent: e.margin_percent ?? "", active: e.active }))); };
+  const openEntries = (pb) => { setEntriesOpen(pb); setEntries((pb.entries || []).map((e) => ({ target_type: e.target_type, material_id: e.material_id || "", supplier_id: e.supplier_id || "", manufacturer: e.manufacturer || "", category: e.category || "", label: e.label || "", rule_type: e.rule_type, fixed_price: e.fixed_price ?? "", markup_percent: e.markup_percent ?? "", margin_percent: e.margin_percent ?? "", active: e.active }))); };
   const setEntry = (i, patch) => setEntries((es) => es.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
   const saveEntries = async () => {
     try {
-      const payload = entries.map((e) => ({ target_type: e.target_type, material_id: e.material_id || null, label: e.label || null, rule_type: e.rule_type,
+      const payload = entries.map((e) => ({ target_type: e.target_type, material_id: e.material_id || null, supplier_id: e.supplier_id || null,
+        manufacturer: e.manufacturer || null, category: e.category || null, label: e.label || null, rule_type: e.rule_type,
         fixed_price: e.fixed_price === "" ? null : Number(e.fixed_price), markup_percent: e.markup_percent === "" ? null : Number(e.markup_percent),
         margin_percent: e.margin_percent === "" ? null : Number(e.margin_percent), active: !!e.active }));
       await api.put(`/estimating/price-books/${entriesOpen.id}/entries`, payload);
@@ -50,7 +58,7 @@ export default function PriceBooks() {
 
   return (
     <div>
-      <PageHeader title="Price Books" description="Selling-price rules (fixed / markup / margin) per material, labor, or assembly." testid="page-price-books" />
+      <PageHeader title="Price Books" description="Selling-price rules (fixed / markup / margin) by item, supplier, manufacturer, category, or default — plus labor & assembly for estimates." testid="page-price-books" />
       <div className="p-6 sm:p-8">
         <div className="mb-4"><Button onClick={() => setOpen(true)} data-testid="add-pricebook-button"><Plus className="h-4 w-4" /> New price book</Button></div>
         <div className="rounded-md border border-border bg-white">
@@ -89,10 +97,18 @@ export default function PriceBooks() {
           <DialogHeader><DialogTitle>{entriesOpen?.name} — entries</DialogTitle><DialogDescription>Fixed price, markup %, or margin % per target.</DialogDescription></DialogHeader>
           <div className="space-y-2">
             {entries.map((e, i) => (
-              <div key={i} className="grid grid-cols-[110px_1fr_110px_100px_28px] items-center gap-2" data-testid={`pb-entry-${i}`}>
-                <Select value={e.target_type} onValueChange={(v) => setEntry(i, { target_type: v })}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="material">Material</SelectItem><SelectItem value="labor">Labor</SelectItem><SelectItem value="assembly">Assembly</SelectItem></SelectContent></Select>
+              <div key={i} className="grid grid-cols-[130px_1fr_110px_100px_28px] items-center gap-2" data-testid={`pb-entry-${i}`}>
+                <Select value={e.target_type} onValueChange={(v) => setEntry(i, { target_type: v, material_id: "", supplier_id: "", manufacturer: "", category: "" })}><SelectTrigger className="h-8" data-testid={`pb-target-${i}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="material">Item</SelectItem><SelectItem value="supplier">Supplier</SelectItem><SelectItem value="manufacturer">Manufacturer</SelectItem><SelectItem value="category">Category</SelectItem><SelectItem value="default">Default</SelectItem><SelectItem value="labor">Labor</SelectItem><SelectItem value="assembly">Assembly</SelectItem></SelectContent></Select>
                 {e.target_type === "material"
                   ? <Select value={e.material_id || "none"} onValueChange={(v) => setEntry(i, { material_id: v === "none" ? "" : v })}><SelectTrigger className="h-8" data-testid={`pb-material-${i}`}><SelectValue placeholder="Material" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="none">—</SelectItem>{materials.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent></Select>
+                  : e.target_type === "supplier"
+                  ? <Select value={e.supplier_id || "none"} onValueChange={(v) => setEntry(i, { supplier_id: v === "none" ? "" : v })}><SelectTrigger className="h-8" data-testid={`pb-supplier-${i}`}><SelectValue placeholder="Supplier" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="none">—</SelectItem>{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select>
+                  : e.target_type === "manufacturer"
+                  ? <Select value={e.manufacturer || "none"} onValueChange={(v) => setEntry(i, { manufacturer: v === "none" ? "" : v })}><SelectTrigger className="h-8" data-testid={`pb-manufacturer-${i}`}><SelectValue placeholder="Manufacturer" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="none">—</SelectItem>{(facets.manufacturers || []).map((mf) => <SelectItem key={mf} value={mf}>{mf}</SelectItem>)}</SelectContent></Select>
+                  : e.target_type === "category"
+                  ? <Select value={e.category || "none"} onValueChange={(v) => setEntry(i, { category: v === "none" ? "" : v })}><SelectTrigger className="h-8" data-testid={`pb-category-${i}`}><SelectValue placeholder="Category" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="none">—</SelectItem>{(facets.categories || []).map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+                  : e.target_type === "default"
+                  ? <div className="text-xs text-slate-400" data-testid={`pb-default-${i}`}>Applies to all materials (fallback)</div>
                   : <Input value={e.label} onChange={(ev) => setEntry(i, { label: ev.target.value })} placeholder="Label" className="h-8" data-testid={`pb-label-${i}`} />}
                 <Select value={e.rule_type} onValueChange={(v) => setEntry(i, { rule_type: v })}><SelectTrigger className="h-8" data-testid={`pb-rule-${i}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="markup">Markup %</SelectItem><SelectItem value="margin">Margin %</SelectItem></SelectContent></Select>
                 <Input type="number" className="h-8" data-testid={`pb-value-${i}`}

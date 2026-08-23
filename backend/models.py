@@ -384,9 +384,12 @@ class PriceBookEntry(Base):
     __tablename__ = "price_book_entries"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     price_book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("price_books.id", ondelete="CASCADE"), index=True)
-    target_type: Mapped[str] = mapped_column(String(24), default="material", nullable=False)  # material | labor | assembly
+    target_type: Mapped[str] = mapped_column(String(24), default="material", nullable=False)  # material | supplier | manufacturer | category | default | labor | assembly
     material_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="CASCADE"), nullable=True)
     assembly_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("assemblies.id", ondelete="CASCADE"), nullable=True)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)  # for labor/service entries
     rule_type: Mapped[str] = mapped_column(String(16), default="markup", nullable=False)  # fixed | markup | margin
     fixed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
