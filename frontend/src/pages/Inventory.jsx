@@ -32,7 +32,10 @@ export default function Inventory() {
   const [materials, setMaterials] = useState([]);
   const [pos, setPos] = useState([]);
   const [matOpen, setMatOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", category: "", unit: "each", reorder_threshold: 0, quantity_on_hand: 0 });
+  const [form, setForm] = useState({ name: "", sku: "", category: "", unit: "each", purchase_unit: "", conversion_factor: 1, reorder_threshold: 0, quantity_on_hand: 0, standard_cost: "", default_sell_price: "" });
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [editId, setEditId] = useState(null);
   const [adjOpen, setAdjOpen] = useState(false);
   const [adjTarget, setAdjTarget] = useState(null);
   const [adj, setAdj] = useState({ delta: 0, reason: "manual_correction", note: "" });
@@ -71,9 +74,42 @@ export default function Inventory() {
 
   const createMaterial = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    const conv = Number(form.conversion_factor);
+    if (form.purchase_unit && (!conv || conv <= 0)) { toast.error("Conversion must be greater than 0 when a purchase UOM is set"); return; }
     setBusy(true);
-    try { await api.post("/materials", { ...form, reorder_threshold: Number(form.reorder_threshold) || 0, quantity_on_hand: Number(form.quantity_on_hand) || 0 }); toast.success("Material added"); setMatOpen(false); setForm({ name: "", category: "", unit: "each", reorder_threshold: 0, quantity_on_hand: 0 }); load(); }
-    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+    try {
+      await api.post("/materials", {
+        name: form.name.trim(), sku: form.sku || null, category: form.category || null, unit: form.unit || "each",
+        purchase_unit: form.purchase_unit || null, conversion_factor: conv > 0 ? conv : 1,
+        reorder_threshold: Number(form.reorder_threshold) || 0, quantity_on_hand: Number(form.quantity_on_hand) || 0,
+        standard_cost: form.standard_cost === "" ? null : Number(form.standard_cost),
+        default_sell_price: form.default_sell_price === "" ? null : Number(form.default_sell_price),
+      });
+      toast.success("Material added"); setMatOpen(false);
+      setForm({ name: "", sku: "", category: "", unit: "each", purchase_unit: "", conversion_factor: 1, reorder_threshold: 0, quantity_on_hand: 0, standard_cost: "", default_sell_price: "" });
+      load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  const openEdit = (m) => {
+    setEditId(m.id);
+    setEditForm({ name: m.name || "", sku: m.sku || "", category: m.category || "", unit: m.unit || "each",
+      manufacturer: m.manufacturer || "", brand: m.brand || "", reorder_threshold: m.reorder_threshold ?? 0,
+      standard_cost: m.standard_cost ?? "", default_sell_price: m.default_sell_price ?? "" });
+    setEditOpen(true);
+  };
+  const saveEdit = async () => {
+    if (!editForm.name.trim()) { toast.error("Name is required"); return; }
+    setBusy(true);
+    try {
+      await api.patch(`/materials/${editId}`, {
+        name: editForm.name.trim(), sku: editForm.sku || null, category: editForm.category || null, unit: editForm.unit || "each",
+        manufacturer: editForm.manufacturer || null, brand: editForm.brand || null,
+        reorder_threshold: Number(editForm.reorder_threshold) || 0,
+        standard_cost: editForm.standard_cost === "" ? null : Number(editForm.standard_cost),
+        default_sell_price: editForm.default_sell_price === "" ? null : Number(editForm.default_sell_price),
+      });
+      toast.success("Material updated"); setEditOpen(false); load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const doAdjust = async () => {
     try { await api.post(`/materials/${adjTarget.id}/adjust`, { delta: Number(adj.delta) || 0, reason: adj.reason, note: adj.note || null }); toast.success("Inventory adjusted"); setAdjOpen(false); load(); }
@@ -158,7 +194,7 @@ export default function Inventory() {
                       <TableCell className="tabular-nums font-medium">{m.available}</TableCell>
                       <TableCell className="tabular-nums text-slate-500">{m.on_order}</TableCell>
                       <TableCell>{!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge> : m.low_stock ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Low</Badge> : <Badge variant="secondary" className="bg-green-50 text-green-700">OK</Badge>}</TableCell>
-                      {canManage && <TableCell><Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button></TableCell>}
+                      {canManage && <TableCell><div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}><Button size="sm" variant="outline" onClick={() => openEdit(m)} data-testid={`edit-${m.id}`}>Edit</Button><Button size="sm" variant="outline" onClick={() => { setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button></div></TableCell>}
                     </TableRow>
                   ))}
                   {materials.length === 0 && <TableRow><TableCell colSpan={12} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
@@ -225,11 +261,21 @@ export default function Inventory() {
       <Dialog open={matOpen} onOpenChange={setMatOpen}>
         <DialogContent data-testid="material-dialog">
           <DialogHeader><DialogTitle>Add material</DialogTitle><DialogDescription>Add a new material to the inventory catalog.</DialogDescription></DialogHeader>
-          <div className="space-y-3">
+          <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
             <div className="space-y-1.5"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="mat-name" /></div>
             <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>SKU</Label><Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} data-testid="mat-sku" /></div>
               <div className="space-y-1.5"><Label>Category</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} data-testid="mat-category" /></div>
-              <div className="space-y-1.5"><Label>Unit</Label><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="bundle / roll / each" data-testid="mat-unit" /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label>Stock UOM</Label><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="bundle / each" data-testid="mat-unit" /></div>
+              <div className="space-y-1.5"><Label>Purchase UOM</Label><Input value={form.purchase_unit} onChange={(e) => setForm({ ...form, purchase_unit: e.target.value })} placeholder="pallet / case" data-testid="mat-purchase-unit" /></div>
+              <div className="space-y-1.5"><Label>Conversion</Label><Input type="number" value={form.conversion_factor} onChange={(e) => setForm({ ...form, conversion_factor: e.target.value })} data-testid="mat-conversion" /></div>
+            </div>
+            <p className="text-xs text-slate-400 -mt-1">Conversion = how many stock UOM are in one purchase UOM (e.g. 1 pallet = 42 bundles → 42).</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Standard cost <span className="text-xs text-slate-400">(fallback)</span></Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="mat-standard-cost" /></div>
+              <div className="space-y-1.5"><Label>Default sell price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="—" data-testid="mat-sell-price" /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Quantity on hand</Label><Input type="number" value={form.quantity_on_hand} onChange={(e) => setForm({ ...form, quantity_on_hand: e.target.value })} data-testid="mat-onhand" /></div>
@@ -237,6 +283,30 @@ export default function Inventory() {
             </div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setMatOpen(false)}>Cancel</Button><Button onClick={createMaterial} disabled={busy} data-testid="mat-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add material"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent data-testid="inv-edit-dialog">
+          <DialogHeader><DialogTitle>Edit material</DialogTitle><DialogDescription>Update details. This never changes past estimates, quotes, POs, or job costs.</DialogDescription></DialogHeader>
+          <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+            <div className="space-y-1.5"><Label>Name</Label><Input value={editForm.name || ""} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} data-testid="inv-edit-name" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>SKU</Label><Input value={editForm.sku || ""} onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })} data-testid="inv-edit-sku" /></div>
+              <div className="space-y-1.5"><Label>Category</Label><Input value={editForm.category || ""} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} data-testid="inv-edit-category" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Manufacturer</Label><Input value={editForm.manufacturer || ""} onChange={(e) => setEditForm({ ...editForm, manufacturer: e.target.value })} data-testid="inv-edit-manufacturer" /></div>
+              <div className="space-y-1.5"><Label>Brand</Label><Input value={editForm.brand || ""} onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })} data-testid="inv-edit-brand" /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label>Unit</Label><Input value={editForm.unit || ""} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })} data-testid="inv-edit-unit" /></div>
+              <div className="space-y-1.5"><Label>Std cost</Label><Input type="number" value={editForm.standard_cost} onChange={(e) => setEditForm({ ...editForm, standard_cost: e.target.value })} data-testid="inv-edit-standard-cost" /></div>
+              <div className="space-y-1.5"><Label>Sell price</Label><Input type="number" value={editForm.default_sell_price} onChange={(e) => setEditForm({ ...editForm, default_sell_price: e.target.value })} data-testid="inv-edit-sell-price" /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Reorder threshold</Label><Input type="number" value={editForm.reorder_threshold} onChange={(e) => setEditForm({ ...editForm, reorder_threshold: e.target.value })} data-testid="inv-edit-threshold" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={saveEdit} disabled={busy} data-testid="inv-edit-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

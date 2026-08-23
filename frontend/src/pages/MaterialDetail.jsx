@@ -42,6 +42,9 @@ export default function MaterialDetail() {
   const [form, setForm] = useState({});
   const [adjOpen, setAdjOpen] = useState(false);
   const [adj, setAdj] = useState({ delta: 0, reason: "manual_correction", note: "" });
+  const [suppliers, setSuppliers] = useState([]);
+  const [supOpen, setSupOpen] = useState(false);
+  const [supForm, setSupForm] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,7 +54,7 @@ export default function MaterialDetail() {
     }
     catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   }, [id]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); api.get("/suppliers", { params: { active: true } }).then((r) => setSuppliers(r.data)).catch(() => {}); }, [load]);
 
   const makePreferred = async (smId) => {
     try { await api.post(`/materials/${id}/suppliers/${smId}/prefer`); toast.success("Preferred supplier updated"); load(); }
@@ -83,8 +86,30 @@ export default function MaterialDetail() {
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const toggleActive = async () => {
-    try { await api.patch(`/materials/${id}`, { active: !d.material.active }); toast.success(d.material.active ? "Material deactivated" : "Material reactivated"); load(); }
-    catch (e) { toast.error(apiError(e)); }
+    const wasActive = d.material.active;
+    try {
+      await api.patch(`/materials/${id}`, { active: !wasActive });
+      if (wasActive) {
+        toast.success("Material deactivated", { action: { label: "Undo", onClick: async () => {
+          try { await api.patch(`/materials/${id}`, { active: true }); toast.success("Reactivated"); load(); }
+          catch (e) { toast.error(apiError(e)); }
+        } } });
+      } else { toast.success("Material reactivated"); }
+      load();
+    } catch (e) { toast.error(apiError(e)); }
+  };
+  const openAddSupplier = () => { setSupForm({ sm_id: null, supplier_id: "", supplier_item_number: "", supplier_uom: "", current_cost: "" }); setSupOpen(true); };
+  const openEditSupplier = (s) => { setSupForm({ sm_id: s.id, supplier_id: s.supplier_id || "", supplier_name: s.supplier_name, supplier_item_number: s.supplier_item_number || "", supplier_uom: s.supplier_uom || "", current_cost: s.current_cost ?? "" }); setSupOpen(true); };
+  const saveSupplier = async () => {
+    if (!supForm.sm_id && !supForm.supplier_id) { toast.error("Select a supplier"); return; }
+    setBusy(true);
+    try {
+      const body = { supplier_item_number: supForm.supplier_item_number || null, supplier_uom: supForm.supplier_uom || null,
+        current_cost: supForm.current_cost === "" ? null : Number(supForm.current_cost) };
+      if (supForm.sm_id) await api.patch(`/supplier-materials/${supForm.sm_id}`, body);
+      else await api.post(`/supplier-materials`, { material_id: id, supplier_id: supForm.supplier_id, ...body });
+      toast.success("Supplier pricing saved"); setSupOpen(false); load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const doAdjust = async () => {
     setBusy(true);
@@ -180,9 +205,12 @@ export default function MaterialDetail() {
 
         {/* Supplier pricing */}
         <section className="rounded-md border border-border bg-white" data-testid="detail-suppliers">
-          <h3 className="border-b border-border p-3 text-sm font-semibold text-slate-700">Supplier pricing</h3>
+          <div className="flex items-center justify-between border-b border-border p-3">
+            <h3 className="text-sm font-semibold text-slate-700">Supplier pricing</h3>
+            {canManage && <Button size="sm" variant="outline" onClick={openAddSupplier} data-testid="add-supplier-button"><Pencil className="h-3.5 w-3.5" /> Add supplier</Button>}
+          </div>
           <Table>
-            <TableHeader><TableRow><TableHead>Supplier</TableHead><TableHead>Item #</TableHead><TableHead>UoM</TableHead><TableHead>Cost</TableHead><TableHead>Availability</TableHead><TableHead>Preferred</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Supplier</TableHead><TableHead>Item #</TableHead><TableHead>UoM</TableHead><TableHead>Cost</TableHead><TableHead>Availability</TableHead><TableHead>Preferred</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
             <TableBody>
               {d.suppliers.map((s) => (
                 <TableRow key={s.id} data-testid={`supplier-row-${s.id}`}>
@@ -196,9 +224,10 @@ export default function MaterialDetail() {
                       ? <Badge className="bg-indigo-50 text-indigo-700" variant="secondary" data-testid={`preferred-${s.id}`}><Star className="mr-1 h-3 w-3 fill-indigo-500 text-indigo-500" /> Preferred</Badge>
                       : (canManage && <Button size="sm" variant="outline" onClick={() => makePreferred(s.id)} data-testid={`prefer-${s.id}`}>Set preferred</Button>)}
                   </TableCell>
+                  {canManage && <TableCell><Button size="sm" variant="ghost" onClick={() => openEditSupplier(s)} data-testid={`edit-supplier-${s.id}`}><Pencil className="h-3.5 w-3.5" /></Button></TableCell>}
                 </TableRow>
               ))}
-              {d.suppliers.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No supplier mappings.</TableCell></TableRow>}
+              {d.suppliers.length === 0 && <TableRow><TableCell colSpan={canManage ? 7 : 6} className="text-center text-sm text-slate-400">No supplier mappings.</TableCell></TableRow>}
             </TableBody>
           </Table>
         </section>
@@ -295,6 +324,29 @@ export default function MaterialDetail() {
             <div className="space-y-1.5"><Label>Notes (optional)</Label><Input value={adj.note} onChange={(e) => setAdj({ ...adj, note: e.target.value })} data-testid="detail-adjust-note" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setAdjOpen(false)}>Cancel</Button><Button onClick={doAdjust} disabled={busy} data-testid="detail-adjust-save">Apply</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Supplier pricing dialog */}
+      <Dialog open={supOpen} onOpenChange={setSupOpen}>
+        <DialogContent data-testid="supplier-dialog">
+          <DialogHeader><DialogTitle>{supForm.sm_id ? `Edit supplier — ${supForm.supplier_name || ""}` : "Add supplier pricing"}</DialogTitle><DialogDescription>Supplier cost feeds the material's effective Cost (and Price via the Default Price Book).</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            {!supForm.sm_id && (
+              <div className="space-y-1.5"><Label>Supplier</Label>
+                <Select value={supForm.supplier_id || ""} onValueChange={(v) => setSupForm({ ...supForm, supplier_id: v })}>
+                  <SelectTrigger data-testid="supplier-select"><SelectValue placeholder="Select supplier" /></SelectTrigger>
+                  <SelectContent className="max-h-64">{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Supplier item #</Label><Input value={supForm.supplier_item_number || ""} onChange={(e) => setSupForm({ ...supForm, supplier_item_number: e.target.value })} data-testid="supplier-item-number" /></div>
+              <div className="space-y-1.5"><Label>UoM</Label><Input value={supForm.supplier_uom || ""} onChange={(e) => setSupForm({ ...supForm, supplier_uom: e.target.value })} data-testid="supplier-uom" /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Unit cost</Label><Input type="number" value={supForm.current_cost} onChange={(e) => setSupForm({ ...supForm, current_cost: e.target.value })} placeholder="—" data-testid="supplier-cost" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setSupOpen(false)}>Cancel</Button><Button onClick={saveSupplier} disabled={busy} data-testid="supplier-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
