@@ -132,6 +132,30 @@ export default function Inventory() {
     try { const { data } = await api.post("/materials/bulk-update", body); toast.success(`Updated ${data.updated} material(s)`); setBulkOpen(false); setSelected(new Set()); load(); }
     catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
+  const bulkDeactivate = async () => {
+    try { const { data } = await api.post("/materials/bulk-update", { ids: Array.from(selected), active: false }); toast.success(`Deactivated ${data.updated} material(s)`); setSelected(new Set()); load(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const bulkDelete = async () => {
+    if (!window.confirm(`Delete ${selected.size} material(s)? Items with history/stock will be skipped (you can deactivate those). This cannot be undone.`)) return;
+    try {
+      const { data } = await api.post("/materials/bulk-delete", { ids: Array.from(selected) });
+      if (data.blocked?.length) toast.warning(`Deleted ${data.deleted}; ${data.blocked.length} kept (have history/stock) — deactivate those instead`);
+      else toast.success(`Deleted ${data.deleted} material(s)`);
+      setSelected(new Set()); load();
+    } catch (e) { toast.error(apiError(e)); }
+  };
+  const FILTER_KEY = `roofspan.invFilters.${user?.id || "anon"}`;
+  const [savedFilters, setSavedFilters] = useState(() => { try { return JSON.parse(localStorage.getItem(`roofspan.invFilters.${user?.id || "anon"}`)) || []; } catch { return []; } });
+  const persistFilters = (next) => { setSavedFilters(next); localStorage.setItem(FILTER_KEY, JSON.stringify(next)); };
+  const saveCurrentFilter = () => {
+    const name = window.prompt("Name this filter (e.g. GAF low-stock)");
+    if (!name || !name.trim()) return;
+    persistFilters([...savedFilters.filter((f) => f.name !== name.trim()), { name: name.trim(), filters: { ...filters } }]);
+    toast.success("Filter saved");
+  };
+  const applySavedFilter = (name) => { const f = savedFilters.find((x) => x.name === name); if (f) setFilters({ ...f.filters }); };
+  const deleteSavedFilter = (name) => { persistFilters(savedFilters.filter((f) => f.name !== name)); toast.success("Filter removed"); };
   const doAdjust = async () => {
     try { await api.post(`/materials/${adjTarget.id}/adjust`, { delta: Number(adj.delta) || 0, reason: adj.reason, note: adj.note || null }); toast.success("Inventory adjusted"); setAdjOpen(false); load(); }
     catch (e) { toast.error(apiError(e)); }
@@ -197,11 +221,27 @@ export default function Inventory() {
               <Select value={filters.supplier_id} onValueChange={(v) => setFilters({ ...filters, supplier_id: v })}><SelectTrigger className="w-40" data-testid="filter-supplier"><SelectValue placeholder="Supplier" /></SelectTrigger><SelectContent><SelectItem value="all">All suppliers</SelectItem>{facets.suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select>
               <Select value={filters.active} onValueChange={(v) => setFilters({ ...filters, active: v })}><SelectTrigger className="w-32" data-testid="filter-active"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent></Select>
               <Button variant={filters.low_stock ? "default" : "outline"} size="sm" onClick={() => setFilters({ ...filters, low_stock: !filters.low_stock })} data-testid="filter-low-stock"><AlertTriangle className="h-4 w-4" /> Low stock</Button>
+              <div className="ml-auto flex items-center gap-2" data-testid="saved-filters">
+                {savedFilters.length > 0 && (
+                  <Select value="" onValueChange={applySavedFilter}>
+                    <SelectTrigger className="w-44" data-testid="saved-filter-select"><SelectValue placeholder="Saved filters" /></SelectTrigger>
+                    <SelectContent>{savedFilters.map((f) => (
+                      <div key={f.name} className="flex items-center justify-between pr-1">
+                        <SelectItem value={f.name} className="flex-1" data-testid={`saved-filter-${f.name}`}>{f.name}</SelectItem>
+                        <button className="px-1 text-slate-400 hover:text-red-600" onClick={(e) => { e.stopPropagation(); deleteSavedFilter(f.name); }} data-testid={`saved-filter-del-${f.name}`}><X className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}</SelectContent>
+                  </Select>
+                )}
+                <Button variant="outline" size="sm" onClick={saveCurrentFilter} data-testid="save-filter-button">Save filter</Button>
+              </div>
             </div>
             {canManage && selected.size > 0 && (
               <div className="mb-3 flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2" data-testid="bulk-action-bar">
                 <span className="text-sm font-medium text-indigo-800" data-testid="bulk-selected-count">{selected.size} selected</span>
                 <Button size="sm" variant="outline" onClick={openBulk} data-testid="bulk-edit-button">Bulk edit</Button>
+                <Button size="sm" variant="outline" onClick={bulkDeactivate} data-testid="bulk-deactivate-button"><PackageSearch className="h-3.5 w-3.5" /> Deactivate</Button>
+                <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={bulkDelete} data-testid="bulk-delete-button"><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
                 <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="bulk-clear"><X className="h-3.5 w-3.5" /> Clear</Button>
               </div>
             )}

@@ -218,10 +218,24 @@ async def update_material(material_id: str, payload: MaterialPatch, request: Req
 async def delete_material(material_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     """Safe delete: hard-delete ONLY when the material has no operational/historical references and no
     stock on hand. Otherwise reject (409) and tell the user to Deactivate instead — history stays intact."""
-    from models import EstimateLineItem, QuoteLineItem, AssemblyItem, PriceBookEntry, AbcCatalogItem
     m = await db.get(Material, material_id)
     if not m:
         raise HTTPException(status_code=404, detail="Material not found")
+    refs = await _material_delete_blockers(db, m)
+    if refs:
+        summary = ", ".join(f"{v} {k}" for k, v in refs.items())
+        raise HTTPException(status_code=409, detail=(
+            f"This material can't be deleted because it has history/references ({summary}). "
+            "Deactivate it instead to keep records intact."))
+    await db.delete(m)  # InventoryBalance rows cascade via FK
+    await db.commit()
+    await log_action(db, user=user, action="material.delete", entity_type="material", entity_id=material_id, request=request)
+    return {"deleted": True, "id": material_id}
+
+
+async def _material_delete_blockers(db: AsyncSession, m: Material) -> dict:
+    """Return a {label: count} map of references that block hard-deleting this material (empty = safe)."""
+    from models import EstimateLineItem, QuoteLineItem, AssemblyItem, PriceBookEntry, AbcCatalogItem
 
     async def _count(model, col):
         return int((await db.execute(select(func.count()).select_from(model).where(col == m.id))).scalar() or 0)
@@ -243,15 +257,29 @@ async def delete_material(material_id: str, request: Request, user: User = Depen
         c = await _count(model, col)
         if c:
             refs[label] = c
-    if refs:
-        summary = ", ".join(f"{v} {k}" for k, v in refs.items())
-        raise HTTPException(status_code=409, detail=(
-            f"This material can't be deleted because it has history/references ({summary}). "
-            "Deactivate it instead to keep records intact."))
-    await db.delete(m)  # InventoryBalance rows cascade via FK
+    return refs
+
+
+@router.post("/materials/bulk-delete")
+async def bulk_delete_materials(payload: MaterialBulkUpdate, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Safe bulk delete: deletes only materials with zero references/stock; the rest are reported as
+    blocked (so the caller can offer Deactivate). Never partially corrupts history."""
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="No materials selected")
+    deleted, blocked = [], []
+    for mid in payload.ids:
+        m = await db.get(Material, mid)
+        if not m:
+            continue
+        refs = await _material_delete_blockers(db, m)
+        if refs:
+            blocked.append({"id": str(m.id), "name": m.name, "reason": ", ".join(f"{v} {k}" for k, v in refs.items())})
+        else:
+            await db.delete(m)
+            deleted.append(str(m.id))
     await db.commit()
-    await log_action(db, user=user, action="material.delete", entity_type="material", entity_id=material_id, request=request)
-    return {"deleted": True, "id": material_id}
+    await log_action(db, user=user, action="material.bulk_delete", entity_type="material", entity_id=None, detail={"deleted": len(deleted), "blocked": len(blocked)}, request=request)
+    return {"deleted": len(deleted), "deleted_ids": deleted, "blocked": blocked}
 
 
 @router.post("/materials/bulk-update")
@@ -274,6 +302,8 @@ async def bulk_update_materials(payload: MaterialBulkUpdate, request: Request, u
             m.standard_cost = payload.standard_cost
         if "reorder_threshold" in fields:
             m.reorder_threshold = payload.reorder_threshold or 0
+        if "active" in fields and payload.active is not None:
+            m.active = payload.active
         updated += 1
     await db.commit()
     await log_action(db, user=user, action="material.bulk_update", entity_type="material", entity_id=None, detail={"count": updated, "fields": list(fields)}, request=request)

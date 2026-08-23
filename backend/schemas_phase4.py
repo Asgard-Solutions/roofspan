@@ -291,6 +291,7 @@ class MaterialBulkUpdate(BaseModel):
     category: Optional[str] = None
     standard_cost: Optional[float] = None
     reorder_threshold: Optional[float] = None
+    active: Optional[bool] = None
 
 
 class PriceHistoryOut(BaseModel):
