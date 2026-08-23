@@ -3,8 +3,32 @@ import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
-import { Users2, Activity, Contact, Map, Hammer, ArrowRight, Boxes, PackageOpen, ShoppingCart, Truck as TruckIcon, AlertTriangle, Warehouse } from "lucide-react";
+import { Users2, Activity, Contact, Map, Hammer, ArrowRight, Boxes, PackageOpen, ShoppingCart, Truck as TruckIcon, AlertTriangle, Warehouse, DatabaseBackup } from "lucide-react";
 import { money } from "@/lib/format";
+
+function BackupHealthBadge() {
+  const [h, setH] = useState(null);
+  useEffect(() => { api.get("/admin/backups/health").then((r) => setH(r.data)).catch(() => {}); }, []);
+  if (!h) return null;
+  const styles = {
+    ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    warn: "border-amber-200 bg-amber-50 text-amber-800",
+    error: "border-red-200 bg-red-50 text-red-800",
+  };
+  const dot = { ok: "bg-emerald-500", warn: "bg-amber-500", error: "bg-red-500" };
+  return (
+    <Link
+      to="/admin/backups"
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors hover:opacity-90 ${styles[h.level] || styles.warn}`}
+      data-testid="dashboard-backup-badge"
+      title="View backups"
+    >
+      <span className={`h-2 w-2 rounded-full ${dot[h.level] || dot.warn}`} />
+      <DatabaseBackup className="h-3.5 w-3.5" />
+      <span data-testid="dashboard-backup-badge-label">{h.label}</span>
+    </Link>
+  );
+}
 
 function Stat({ label, value, icon: Icon, testid }) {
   return (
@@ -81,6 +105,7 @@ export default function Dashboard() {
         title={`Welcome, ${firstName}`}
         description={data?.phase || "Office Phase 1 — Foundation"}
         testid="page-dashboard"
+        actions={isSensitive ? <BackupHealthBadge /> : null}
       />
       <div className="space-y-6 p-6 sm:p-8">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

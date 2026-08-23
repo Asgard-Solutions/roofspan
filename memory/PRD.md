@@ -386,3 +386,7 @@ Removed all Emergent PRODUCTION dependencies so RoofSpan builds/runs on a plain 
 - Added `offsite` flag to the backup schedule config. When enabled, `run_scheduled_backup()` copies each successful daily/auto backup off-site (via existing `copy_offsite`) and records `offsite_status` OK/FAIL + `offsite_error` in schedule_state.json (separate from the local `last_status`). `ScheduleIn.offsite` + `set_schedule(..., offsite)`.
 - UI: "Also copy each automatic backup off-site" Switch (`schedule-offsite-switch`) in the Automatic backups card; status box shows a green "Off-site copy succeeded" or amber "Off-site copy failed: …" line (`schedule-offsite-status`).
 - Verified: enabling offsite + Run now → local OK + offsite OK, newest backup shows offsite=true in list and "Off-site" badge in UI.
+
+## Dashboard Backup-Health Badge — DONE & VERIFIED (2026-06)
+- New `GET /api/admin/backups/health` (SENSITIVE_ROLES) returns a compact summary: `level` (ok/warn/error) + `label`, newest-backup age, count, scheduled + off-site status. Logic: no backups or scheduled FAIL → error; stale (>7d) or scheduled off-site FAIL → warn; else ok ("Backed up today"/"Backed up Nd ago").
+- Dashboard (`Dashboard.jsx`) shows a small color-coded pill badge in the header (owner/admin only, `dashboard-backup-badge`) that links to /admin/backups. Verified: green "Backed up today" pill renders; endpoint returns ok; Sales → 403. NOTE: Dashboard route is `/` (not `/dashboard`).

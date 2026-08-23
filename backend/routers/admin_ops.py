@@ -195,6 +195,40 @@ async def get_backup_schedule(user: User = Depends(require_roles(*SENSITIVE_ROLE
     return {"schedule": backup_svc.get_schedule(), "state": backup_svc.get_schedule_state()}
 
 
+@router.get("/backups/health")
+async def backup_health(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    """Compact backup-health summary for the Dashboard badge."""
+    from datetime import datetime, timezone
+    backups = backup_svc.list_backups()
+    state = backup_svc.get_schedule_state()
+    sched = backup_svc.get_schedule()
+    newest = backups[0]["created_at"] if backups else None
+    age_days = None
+    if newest:
+        try:
+            dt = datetime.fromisoformat(newest)
+            age_days = (datetime.now(timezone.utc) - dt).days
+        except Exception:
+            age_days = None
+    stale = newest is None or (age_days is not None and age_days > 7)
+    if newest is None:
+        level, label = "error", "No backups yet"
+    elif state.get("last_status") == "FAIL":
+        level, label = "error", "Automatic backup failed"
+    elif stale:
+        level, label = "warn", f"Last backup {age_days}d ago"
+    elif sched.get("offsite") and state.get("offsite_status") == "FAIL":
+        level, label = "warn", "Off-site copy failed"
+    else:
+        label = "Backed up today" if (age_days == 0) else f"Backed up {age_days}d ago"
+        level = "ok"
+    return {
+        "level": level, "label": label, "last_backup_at": newest, "age_days": age_days,
+        "count": len(backups), "scheduled_enabled": sched.get("enabled"),
+        "scheduled_status": state.get("last_status"), "offsite_status": state.get("offsite_status"),
+    }
+
+
 @router.put("/backups/schedule")
 async def set_backup_schedule(payload: ScheduleIn, request: Request,
                               user: User = Depends(require_roles(*SENSITIVE_ROLES))):
