@@ -474,6 +474,10 @@ class Material(Base):
     # --- Actual Job Costing: Moving Weighted Average Cost (MWAC) unit cost basis ---
     # None = no cost basis established yet (never invents a $0 basis). Recomputed only on receipts.
     avg_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    # Manual planning values (NOT MWAC): default/manual cost + default customer sell price. Never
+    # overwrite avg_cost (MWAC) and never alter historical estimate/quote/PO/job snapshots.
+    standard_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    default_sell_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     # --- Master material identity (RoofSpan-owned; supplier-independent). All optional. ---
     manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
