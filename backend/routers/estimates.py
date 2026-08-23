@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Estimate, EstimateLineItem, Material, Supplier, SupplierMaterial, User
+from models import Estimate, EstimateLineItem, Material, Supplier, SupplierMaterial, Quote, User
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_phase3 import EstimateIn, EstimateOut, LineItemOut
 from schemas_estimating import CostRefreshPreviewOut, CostRefreshRow, CostRefreshApplyIn
@@ -222,6 +222,8 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
     e = await db.get(Estimate, estimate_id)
     if not e:
         raise HTTPException(status_code=404, detail="Estimate not found")
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     enforce_version(e, if_match, "Estimate")
     if getattr(payload, "price_book_id", None) is not None:
         e.price_book_id = payload.price_book_id
@@ -236,6 +238,27 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
     await db.refresh(e)
     await log_action(db, user=user, action="estimate.update", entity_type="estimate", entity_id=e.id, request=request)
     return await _out(db, e, user)
+
+
+async def _has_accepted_quote(db: AsyncSession, estimate_id) -> bool:
+    n = (await db.execute(select(func.count()).select_from(Quote).where(
+        Quote.estimate_id == estimate_id, Quote.status == "accepted"))).scalar() or 0
+    return int(n) > 0
+
+
+@router.delete("/{estimate_id}")
+async def delete_estimate(estimate_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Delete an estimate unless it has an accepted quote (history stays intact). Line items cascade;
+    any non-accepted quotes keep their own snapshot (their estimate_id is set null)."""
+    e = await db.get(Estimate, estimate_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can't be deleted.")
+    await db.delete(e)
+    await db.commit()
+    await log_action(db, user=user, action="estimate.delete", entity_type="estimate", entity_id=estimate_id, request=request)
+    return {"deleted": True, "id": estimate_id}
 
 
 # ---- Slice 8: explicit cost refresh (never auto-applied) ----

@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LineItemsEditor, { computeTotals } from "@/components/LineItemsEditor";
 import PhotoGallery from "@/components/PhotoGallery";
-import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download } from "lucide-react";
+import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
@@ -129,6 +129,8 @@ export default function LeadDetail() {
   };
   const sendQuote = async (q) => { try { await api.put(`/quotes/${q.id}`, { status: "sent" }); toast.success("Quote marked sent"); load(); } catch (e) { toast.error(apiError(e)); } };
   const declineQuote = async (q) => { try { await api.post(`/quotes/${q.id}/decline`); toast.success("Quote declined"); load(); } catch (e) { toast.error(apiError(e)); } };
+  const deleteEstimate = async (e) => { if (!window.confirm(`Delete estimate ${e.number}? This cannot be undone.`)) return; try { await api.delete(`/estimates/${e.id}`); toast.success("Estimate deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
+  const deleteQuote = async (q) => { if (!window.confirm(`Delete quote ${q.number}? This cannot be undone.`)) return; try { await api.delete(`/quotes/${q.id}`); toast.success("Quote deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
   const downloadProposal = async (q) => {
     try {
       const res = await api.get(`/quotes/${q.id}/proposal.pdf`, { responseType: "blob" });
@@ -230,6 +232,7 @@ export default function LeadDetail() {
                   <div className="flex items-center gap-1">
                     <Button size="sm" variant="ghost" onClick={() => navigate(`/estimates/${e.id}`)} data-testid={`edit-estimate-${e.id}`}>Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Quote</Button>
+                    {isManage && <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={() => deleteEstimate(e)} data-testid={`delete-estimate-${e.id}`}><Trash2 className="h-4 w-4" /></Button>}
                   </div>
                 </div>
               ))}
@@ -265,6 +268,7 @@ export default function LeadDetail() {
                     {isManage && q.status !== "accepted" && q.status !== "declined" && <Button size="sm" onClick={() => openAccept(q)} data-testid={`accept-quote-${q.id}`}><Check className="h-3.5 w-3.5" /> Accept</Button>}
                     {isManage && q.status !== "accepted" && q.status !== "declined" && <Button size="sm" variant="ghost" onClick={() => declineQuote(q)} data-testid={`decline-quote-${q.id}`}><Ban className="h-3.5 w-3.5" /> Decline</Button>}
                     {isManage && q.status === "accepted" && <Button size="sm" variant="outline" onClick={() => createInvoice(q)} data-testid={`create-invoice-${q.id}`}><Receipt className="h-3.5 w-3.5" /> Create invoice</Button>}
+                    {isManage && q.status !== "accepted" && <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={() => deleteQuote(q)} data-testid={`delete-quote-${q.id}`}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>}
                   </div>
                 </div>
               ))}

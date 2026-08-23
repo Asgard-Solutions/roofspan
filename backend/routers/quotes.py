@@ -193,6 +193,21 @@ async def update_quote(quote_id: str, payload: QuoteUpdate, request: Request, if
     return await _out(db, q)
 
 
+@router.delete("/{quote_id}")
+async def delete_quote(quote_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Delete a quote unless it has been accepted (an accepted quote is contractually locked and may
+    have created a Job/Invoice). Packages and line items cascade."""
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    if q.status == "accepted":
+        raise HTTPException(status_code=409, detail="An accepted quote cannot be deleted.")
+    await db.delete(q)
+    await db.commit()
+    await log_action(db, user=user, action="quote.delete", entity_type="quote", entity_id=quote_id, request=request)
+    return {"deleted": True, "id": quote_id}
+
+
 @router.post("/{quote_id}/accept", response_model=QuoteAcceptResult)
 async def accept_quote(quote_id: str, payload: QuoteAccept, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     q = await db.get(Quote, quote_id)

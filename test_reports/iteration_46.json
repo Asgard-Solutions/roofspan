@@ -1,0 +1,36 @@
+{
+  "summary": "Verified Estimate/Quote full-CRUD + accepted-guard behavior on backend and Lead Detail UI. Backend: 6/6 pytest tests passed via public preview URL. UI: on /leads/{id}, red trash delete-estimate-{id} buttons render for every estimate; delete-quote-{id} button renders ONLY for non-accepted quotes; UI delete flow (confirm dialog -> API -> toast -> row removed) works. Server-side guards return the expected status codes (409/400) for accepted quote and its estimate.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_behaviors": [
+    "POST /api/estimates + GET/PUT/DELETE all 200 when no accepted quote exists.",
+    "DELETE /api/quotes/{id} on draft => 200; quote no longer returned by GET (404).",
+    "POST /api/quotes/{id}/accept => 200 and quote.status=='accepted'.",
+    "DELETE /api/quotes/{id} on accepted quote => 409 (as required).",
+    "PUT /api/quotes/{id} on accepted quote => 400 (as required).",
+    "DELETE /api/estimates/{id} when estimate has accepted quote => 409.",
+    "PUT /api/estimates/{id} when estimate has accepted quote => 409.",
+    "UI: data-testid=delete-estimate-{id} present on all estimate rows (owner role).",
+    "UI: data-testid=delete-quote-{id} present ONLY when q.status !== 'accepted'; hidden on accepted QUO-0393.",
+    "UI: window.confirm dialog accepted, DELETE fires, 'Quote deleted' / 'Estimate deleted' toast, row disappears after load()."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_crud_estimates_quotes_delete.py",
+    "/app/test_reports/pytest/crud_delete.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "estimates.delete_estimate uses db.delete(e) which will ORM-cascade EstimateLineItem rows; ensure any non-accepted Quote rows referencing this estimate_id have ON DELETE SET NULL (or nullable FK) so the delete does not fail with FK violation when a draft quote was previously generated from the estimate. Worth adding an explicit test for 'delete estimate that has a non-accepted quote' (not covered by current review request but recommended).",
+    "quotes.delete_quote cascades packages/line items via ORM; confirm cascade is configured on relationships (verified indirectly: draft-quote delete succeeded).",
+    "Frontend LeadDetail.jsx uses window.confirm — acceptable for MVP, but a shadcn AlertDialog would improve consistency."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_crud_estimates_quotes_delete.py (new)"
+  ],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% (all UI assertions passed)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Created a property + lead + customer + 3 estimates + 2 quotes (1 draft, 1 accepted -> Job created). Lead id: 487c6557-a3ff-416e-b444-68b54e4f5096. UI deleted 1 estimate and 1 draft quote; the accepted quote + its estimate + created job remain (locked and cannot be cleaned up by design).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Feature is fully working end-to-end. Suggested extension: test 'delete estimate that has a draft (non-accepted) quote' — spec says the draft quote should keep its snapshot (estimate_id set null). This edge case was NOT covered by the current review request."
+}

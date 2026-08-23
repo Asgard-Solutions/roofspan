@@ -346,3 +346,9 @@ Removed all Emergent PRODUCTION dependencies so RoofSpan builds/runs on a plain 
 - Bug: the ABC Supply Live catalog table (Inventory -> Product Catalog -> select the "... · Live catalog" source) labeled the pricing column "Price", but ABC pricing is the supplier COST to the contractor.
 - Fix (frontend-only, ProductCatalog.jsx): renamed that `<TableHead>` from "Price" to "Cost"; added data-testid `catalog-cost-{itemNumber}` to the cost cell.
 - Verified (testing_agent iteration_45.json, 100%): catalog-table headers = [Product, Item #, Manufacturer, UoM, Category, Availability, Cost] — has Cost, no Price. Regression OK: Inventory Materials tab still shows BOTH Cost and Price (intentional). ABC not live-connected in env so body shows mock/—, header is the check and passes.
+
+## Full CRUD on Estimates & Quotes (until accepted) — DONE & VERIFIED by testing_agent (2026-06)
+- Request: users can Create/Read/Update/Delete estimates and quotes as long as they are NOT accepted.
+- Backend: new `DELETE /api/estimates/{id}` and `DELETE /api/quotes/{id}` (FIELD_ROLES). Guards: quote delete 409 if status==accepted (edit already 400); estimate delete/edit 409 if it has an accepted quote (`_has_accepted_quote`). Line items/packages cascade; a draft quote referencing a deleted estimate survives (FK ON DELETE SET NULL -> estimate_id null).
+- Frontend (LeadDetail.jsx): red trash Delete on each estimate row (`delete-estimate-{id}`) and quote row (`delete-quote-{id}`, hidden when accepted), manager roles, window.confirm + toast + reload.
+- Verified: testing_agent iteration_46.json 100% (backend 6/6 pytest incl. accepted-guards return 409/400; UI delete flow + accepted-quote delete button hidden). Plus main-agent curl edge case: delete estimate with a DRAFT quote -> 200 and the draft quote survives with estimate_id=null. New test file tests/test_crud_estimates_quotes_delete.py.
