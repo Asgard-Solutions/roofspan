@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, MapPinned, PackageSearch, ChevronRight } from "lucide-react";
+import { Eye, EyeOff, Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, MapPinned, PackageSearch, ChevronRight, Copy } from "lucide-react";
 
 function IntegrationCard({ provider, label, help, keyLabel }) {
   const [data, setData] = useState(null);
@@ -216,11 +216,29 @@ function MarginPolicySettings() {
   );
 }
 
+function AboutCard() {
+  const [v, setV] = useState(null);
+  useEffect(() => { api.get("/version").then((r) => setV(r.data)).catch(() => {}); }, []);
+  const label = v ? `RoofSpan Office v${v.display_version || v.version}${v.channel && v.channel !== "stable" ? ` (${v.channel})` : ""}` : "…";
+  const copy = () => { navigator.clipboard?.writeText(label); toast.success("Version copied"); };
+  return (
+    <div className="mb-6 flex max-w-2xl flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-white p-4" data-testid="about-version">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Software version</div>
+        <div className="mt-0.5 font-mono text-sm font-medium text-slate-900" data-testid="settings-app-version">{label}</div>
+        <p className="mt-0.5 text-xs text-slate-500">Share this with RoofSpan support when reporting an issue.</p>
+      </div>
+      <Button variant="outline" size="sm" onClick={copy} data-testid="copy-version"><Copy className="h-4 w-4" /> Copy</Button>
+    </div>
+  );
+}
+
 export default function Settings() {
   return (
     <div>
       <PageHeader title="Settings" description="Manage integrations, maps, and company details." testid="page-settings" />
       <div className="p-6 sm:p-8">
+        <AboutCard />
         <Tabs defaultValue="integrations">
           <TabsList data-testid="settings-tabs"><TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger><TabsTrigger value="map" data-testid="tab-map">Map Configuration</TabsTrigger><TabsTrigger value="company" data-testid="tab-company">Company Profile</TabsTrigger></TabsList>
           <TabsContent value="integrations" className="mt-6 space-y-6">
