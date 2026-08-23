@@ -17,6 +17,8 @@ import PODialog from "@/components/PODialog";
 import ReceiveDialog from "@/components/ReceiveDialog";
 import ReorderSuggestions from "@/components/ReorderSuggestions";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
+import AbcOrderHistory from "@/components/AbcOrderHistory";
+import AbcTemplatesPanel from "@/components/AbcTemplatesPanel";
 import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search, History, Trash2, X } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
@@ -53,7 +55,6 @@ export default function Inventory() {
   const [recvPo, setRecvPo] = useState(null);
   const [abcOpen, setAbcOpen] = useState(false);
   const [abcPo, setAbcPo] = useState(null);
-  const [abcHistory, setAbcHistory] = useState([]);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -69,9 +70,6 @@ export default function Inventory() {
   }, [filters]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { api.get("/materials/facets").then((r) => setFacets(r.data)).catch(() => {}); }, []);
-  const loadAbcHistory = useCallback(() => {
-    api.get("/integrations/abc/orders/history").then((r) => setAbcHistory(r.data.orders || [])).catch(() => setAbcHistory([]));
-  }, []);
 
   const lowCount = materials.filter((m) => m.low_stock).length;
 
@@ -202,7 +200,8 @@ export default function Inventory() {
           <TabsList data-testid="inventory-tabs">
             <TabsTrigger value="materials" data-testid="tab-materials">Materials</TabsTrigger>
             <TabsTrigger value="pos" data-testid="tab-pos">Purchase Orders</TabsTrigger>
-            <TabsTrigger value="abc-orders" data-testid="tab-abc-orders" onClick={loadAbcHistory}>ABC Supply Orders</TabsTrigger>
+            <TabsTrigger value="abc-orders" data-testid="tab-abc-orders">ABC Supply Orders</TabsTrigger>
+            <TabsTrigger value="abc-templates" data-testid="tab-abc-templates">ABC Templates</TabsTrigger>
           </TabsList>
 
           <TabsContent value="materials" className="mt-6">
@@ -305,24 +304,11 @@ export default function Inventory() {
           </TabsContent>
 
           <TabsContent value="abc-orders" className="mt-6" data-testid="abc-orders-tab">
-            <div className="overflow-x-auto rounded-md border border-border bg-white">
-              <Table data-testid="abc-orders-table">
-                <TableHeader><TableRow><TableHead>Order #</TableHead><TableHead>Confirmation</TableHead><TableHead>PO #</TableHead><TableHead>Status</TableHead><TableHead>Delivery</TableHead><TableHead>Total</TableHead></TableRow></TableHeader>
-                <TableBody>
-                  {abcHistory.map((o, i) => (
-                    <TableRow key={i} data-testid={`abc-order-row-${i}`}>
-                      <TableCell className="font-medium text-slate-900">{o.orderNumber || "—"}</TableCell>
-                      <TableCell className="text-slate-600">{o.confirmationNumber}</TableCell>
-                      <TableCell className="text-slate-600">{o.purchaseOrder || "—"}</TableCell>
-                      <TableCell><Badge className="bg-blue-50 text-blue-700" variant="secondary">{o.status}</Badge></TableCell>
-                      <TableCell className="text-slate-500">{o.deliveryStatus || "—"}</TableCell>
-                      <TableCell className="tabular-nums">{money(o.total || 0)}</TableCell>
-                    </TableRow>
-                  ))}
-                  {abcHistory.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No ABC Supply orders yet. Submit an ABC purchase order to see it here.</TableCell></TableRow>}
-                </TableBody>
-              </Table>
-            </div>
+            <AbcOrderHistory />
+          </TabsContent>
+
+          <TabsContent value="abc-templates" className="mt-6" data-testid="abc-templates-tab">
+            <AbcTemplatesPanel />
           </TabsContent>
         </Tabs>
       </div>

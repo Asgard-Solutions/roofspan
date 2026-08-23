@@ -1,0 +1,28 @@
+{
+  "summary": "Verified ABC Supply v2 UI enhancements end-to-end. Backend epic suite (tests/test_abc_supply_epic.py) rerun: 6/6 pass. Frontend Playwright E2E covered: (1) ABC Templates tab lists templates (1 template row) with View + Convert actions; (2) Template detail dialog shows 2 lines with item#/desc/qty/uom/reference price and convert button; (3) Convert to PO via detail dialog created draft PO-1439 (status=draft, integration_provider=abc_supply, notes='From ABC template: Order template', 2 ABC-item lines, no external_confirmation_number); (4) Opening ABC Order Panel on the converted PO ran abc-submit-review, showed ABC price-change banner (34.50→135.36, 89.00→89.50) and 'Prices verified: 11:19:44 PM' proving fresh live pricing was fetched (template prices not trusted); (5) Options block visible with all new fields: abc-delivery-service, abc-requested-date, abc-appointment-time, abc-order-comments, abc-line-comment-* (2 line inputs); (6) Submit with delivery_service=OTB, requested_date=2026-09-15, appointment_time='09:00-12:00', order_comments and line comment succeeded — submitted view shows abc-confirmation-number=MOCK-CONF-10022, status=Submitted, financials (Subtotal/Tax/Total $4,329.30), branch, delivery service OTB, requested_for 2026-09-15; (7) ABC Supply Orders tab: history loaded (20 rows page 1, 1 row page 2, totalItems=21), 18 rows show abc-order-po-link-* to RoofSpan POs, 2 show 'Placed directly with ABC' (abc-order-external-*), pagination + date filter (2026-01-01→2026-12-31) work; (8) Order detail dialog shows amounts block, PO link (abc-order-detail-po-link) to the matched RoofSpan PO, shipments, and lines. All required data-testids resolved. Backend already covers 99-line block, idempotency/concurrency, unknown/reconcile, price-verified enforcement.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "PurchaseOrderDetail page", "issues": ["The 'Review & submit in ABC' button is gated on po.job_id being present (line 92 in PurchaseOrderDetail.jsx). Template-converted POs have no job_id, so users landing on /purchase-orders/{id} after Convert-to-PO have no way to open the ABC Order Panel from that page — they must go back to Inventory > Purchase Orders and click 'Submit to ABC'. Consider rendering AbcOrderPanel directly on PurchaseOrderDetail when integration_provider==abc_supply (or dropping the job_id gate) so the convert→submit flow is one continuous journey."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_abc_supply_epic.py"],
+  "action_items": [
+    "(Minor) Allow opening the ABC Order Panel directly from PurchaseOrderDetail for ABC POs without a job_id (currently only reachable via Inventory > Purchase Orders tab)."
+  ],
+  "critical_code_review_comments": [
+    "AbcTemplatesPanel: pagination 'next' is disabled purely on templates.length < itemsPerPage — if a page happens to return exactly itemsPerPage records the button will let the user go past the last page. Prefer using the server's total pages when available.",
+    "AbcOrderPanel loadReview() re-fetches on each open and can overwrite the user's requested_date/appointment_time typed into `delivery` if they hit Refresh; consider preserving unsaved user edits on refresh.",
+    "PurchaseOrderDetail: gating the ABC review button on po.job_id excludes template-converted POs; see design_issues above."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (6/6 epic tests)", "frontend": "100% (all critical flows pass)" },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created draft PO-1439 (id 12faca5a-e1e8-4d31-be0e-54c9d19576f2) via /api/purchase-orders/from-abc-template (template 97211) and then submitted it to ABC mock, receiving confirmation MOCK-CONF-10022.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ABC is already connected in mock (sandbox, defaults set: ship_to=1163698, branch=18). To exercise the ABC panel for a template-converted PO you must open it from Inventory > Purchase Orders (button testid abc-order-{po_id}), NOT from /purchase-orders/{id} (the Review&submit button there is gated on job_id). Backend regression: `pytest tests/test_abc_supply_epic.py -o addopts=''` from /app/backend (pytest.ini injects xdist).",
+  "rca of the issue": "n/a — feature validation, no defects found. Only one UX gap noted (ABC panel not reachable from PurchaseOrderDetail for jobless template-converted POs)."
+}

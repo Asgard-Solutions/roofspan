@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
 from sqlalchemy import select
@@ -23,7 +23,7 @@ async def record_status(db: AsyncSession, po: PurchaseOrder, normalized: str, *,
     db.add(PurchaseOrderStatusHistory(purchase_order_id=po.id, normalized_status=normalized,
                                       provider_status=provider, source=source, note=note, created_by=user_email))
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
-from schemas_phase4 import POIn, POStatusIn, ReceiveIn, POOut, POLineOut, RefreshPriceIn, RefreshPriceOut, AbcSubmitReviewIn, AbcSubmitIn
+from schemas_phase4 import POIn, POStatusIn, ReceiveIn, POOut, POLineOut, RefreshPriceIn, RefreshPriceOut, AbcSubmitReviewIn, AbcSubmitIn, AbcTemplateConvertIn
 from sales_common import next_number
 
 router = APIRouter(prefix="/api/purchase-orders", tags=["purchasing"])
@@ -133,6 +133,66 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
     return await _out(db, po)
 
 
+@router.post("/from-abc-template", response_model=POOut, status_code=201)
+async def create_po_from_abc_template(payload: AbcTemplateConvertIn, request: Request,
+                                      user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Convert an ABC order template into a NORMAL RoofSpan draft purchase order. This NEVER submits to
+    ABC — it only creates an editable RoofSpan PO. Template prices are copied as an initial estimate;
+    the mandatory fresh ABC pricing still runs at submit review/submit time."""
+    from routers import abc_supply as abc_router
+    from integrations.abc_supply import orders as abc_orders
+    from integrations.abc_supply.exceptions import AbcError
+
+    row = await abc_router._get_or_create(db)
+    ship_to = payload.ship_to_number or row.default_ship_to_number
+    branch = payload.branch_number or row.default_branch_number
+    if not ship_to or not branch:
+        raise HTTPException(status_code=400, detail="A default ABC Ship-To and branch are required (set them in Settings → ABC Supply, or pass them explicitly).")
+
+    client, _ = await _abc_client(db, request)
+    try:
+        raw = await abc_orders.get_template(client, payload.template_id)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    tpl = abc_orders.normalize_template(raw)
+    tpl_lines = [l for l in tpl["lines"] if l.get("item_number")]
+    if not tpl_lines:
+        raise HTTPException(status_code=400, detail="This ABC template has no orderable line items.")
+
+    supplier = (await db.execute(select(Supplier).where(Supplier.integration_provider == "abc_supply"))).scalars().first()
+    if not supplier:
+        supplier = await _find_or_create_supplier(db, "ABC Supply")
+
+    number = await next_number(db, "po", "PO")
+    po = PurchaseOrder(number=number, supplier_id=supplier.id if supplier else None, job_id=payload.job_id,
+                       status="draft", total=0, notes=payload.notes or f"From ABC template: {tpl['name'] or payload.template_id}",
+                       created_by=user.email, integration_provider="abc_supply",
+                       abc_ship_to_number=ship_to, abc_branch_number=branch)
+    db.add(po)
+    await db.flush()
+    total = 0.0
+    for idx, l in enumerate(tpl_lines):
+        qty = float(l.get("quantity") or 1)
+        est = float(l.get("unit_price") or 0)
+        # Template price is only an initial estimate — fresh ABC pricing is mandatory before submit,
+        # so the line is marked unavailable until the mandatory pricing check runs.
+        db.add(POLineItem(po_id=po.id, material_id=None, description=l.get("description") or l.get("item_number"),
+                          quantity=qty, unit=l.get("uom") or "each", unit_cost=est,
+                          line_total=round(qty * est, 2), sort=idx,
+                          integration_provider="abc_supply", abc_item_number=l.get("item_number"),
+                          abc_branch_number=branch, abc_ship_to_number=ship_to, abc_uom=l.get("uom"),
+                          abc_price=None, abc_price_status="unavailable",
+                          abc_product_description=l.get("description"), pricing_source="abc_template"))
+        total += qty * est
+    po.total = round(total, 2)
+    await record_status(db, po, "draft", source="roofspan", note=f"Created from ABC template {payload.template_id}", user_email=user.email)
+    await db.commit()
+    await db.refresh(po)
+    await log_action(db, user=user, action="abc.template.convert", entity_type="purchase_order", entity_id=po.id,
+                     detail={"template_id": payload.template_id, "lines": len(tpl_lines)}, request=request)
+    return await _out(db, po)
+
+
 @router.post("/{po_id}/refresh-price", response_model=RefreshPriceOut)
 async def refresh_abc_price(po_id: str, payload: RefreshPriceIn, request: Request,
                             user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
@@ -226,6 +286,12 @@ async def _validate_and_price(db: AsyncSession, po: PurchaseOrder, request: Requ
     abc_items = [i for i in items if i.integration_provider == "abc_supply" and i.abc_item_number]
     if not abc_items:
         errors.append("The purchase order has no ABC Supply line items.")
+    # Strict ABC order limits (documented): PO reference field ≤ 20 chars; ≤ 99 order lines.
+    from integrations.abc_supply.orders import MAX_ORDER_LINES, PO_FIELD_MAX
+    if len(abc_items) > MAX_ORDER_LINES:
+        errors.append(f"ABC Supply orders are limited to {MAX_ORDER_LINES} lines; this order has {len(abc_items)}.")
+    if po.number and len(po.number) > PO_FIELD_MAX:
+        errors.append(f"The PO number '{po.number}' exceeds ABC's {PO_FIELD_MAX}-character limit.")
     for i in abc_items:
         if not i.abc_uom:
             errors.append(f"Line '{i.description}' is missing a unit of measure.")
@@ -310,7 +376,9 @@ def _normalize_delivery(d: dict | None) -> dict:
         "name": d.get("name"), "line1": d.get("line1"), "line2": d.get("line2"), "city": d.get("city"),
         "state": d.get("state"), "postal": d.get("postal"), "country": d.get("country") or "USA",
         "contact_name": d.get("contact_name"), "contact_phone": d.get("contact_phone"),
+        "contact_email": d.get("contact_email"),
         "instructions": d.get("instructions"), "requested_date": d.get("requested_date"),
+        "appointment_time": d.get("appointment_time"),
     }.items()}
 
 
@@ -454,16 +522,28 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     if contacts:
         ship_to["contacts"] = contacts
     order_lines = []
+    line_comments = payload.line_comments or {}
     for i in abc_items:
         length = i.abc_variation or {}
-        order_lines.append(abc_orders.build_order_line(
+        ol = abc_orders.build_order_line(
             line_id=i.sort + 1, item_number=i.abc_item_number, item_description=i.abc_product_description or i.description,
             quantity=i.quantity, uom=i.abc_uom, unit_price=i.unit_cost, price_uom=i.abc_uom,
-            length_value=length.get("value"), length_uom=length.get("uom")))
-    order = {"requestId": payload.submission_key, "purchaseOrder": po.number[:20], "branchNumber": po.abc_branch_number,
+            length_value=length.get("value"), length_uom=length.get("uom"))
+        lc = (line_comments.get(str(i.id)) or "").strip()
+        if lc:
+            ol["comments"] = lc[:500]
+        order_lines.append(ol)
+    order = {"requestId": payload.submission_key, "purchaseOrder": po.number, "branchNumber": po.abc_branch_number,
              "deliveryService": payload.delivery_service, "typeCode": "SO", "currency": "USD", "shipTo": ship_to, "lines": order_lines}
+    if (payload.order_comments or "").strip():
+        order["comments"] = payload.order_comments.strip()[:1000]
+    dates = {}
     if delivery.get("requested_date"):
-        order["dates"] = {"deliveryRequestedFor": delivery["requested_date"]}
+        dates["deliveryRequestedFor"] = delivery["requested_date"]
+    if delivery.get("appointment_time"):
+        dates["deliveryAppointmentTime"] = delivery["appointment_time"]
+    if dates:
+        order["dates"] = dates
 
     client, _ = await _abc_client(db, request)
     try:
@@ -564,11 +644,39 @@ async def abc_reconcile(po_id: str, request: Request,
     sub = (await db.execute(select(AbcOrderSubmission).where(
         AbcOrderSubmission.purchase_order_id == po.id, AbcOrderSubmission.status == "unknown"))).scalars().first()
     client, _ = await _abc_client(db, request)
+    # Search ABC order history over a window around the attempted submission (documented
+    # /orders/orderHistory has no purchaseOrder field, so fetch each candidate's detail and
+    # match on the strong RoofSpan purchaseOrder identifier). Never guess; never resubmit.
+    anchor = (sub.attempted_at if sub and sub.attempted_at else po.abc_submitted_at) or datetime.now(timezone.utc)
+    start = (anchor - timedelta(days=3)).strftime("%Y-%m-%d")
+    end = (anchor + timedelta(days=3)).strftime("%Y-%m-%d")
+    match = None
     try:
-        history = await abc_orders.get_order_history(client, ship_to=po.abc_ship_to_number, branch=po.abc_branch_number)
+        page, items_per_page = 1, 50
+        while page <= 20 and match is None:
+            hist = await abc_orders.get_order_history(
+                client, start_date=start, end_date=end, page_number=page, items_per_page=items_per_page)
+            items = hist.get("items") or []
+            for it in items:
+                onum = it.get("orderNumber")
+                if not onum:
+                    continue
+                try:
+                    detail = await abc_orders.get_order_by_number(client, str(onum))
+                except Exception:
+                    continue
+                # get_order_by_number returns a NORMALIZED order (snake_case keys).
+                if isinstance(detail, dict) and str(detail.get("purchase_order")) == po.number:
+                    match = {"confirmationNumber": detail.get("confirmation_number"),
+                             "orderNumber": detail.get("order_number") or onum,
+                             "status": detail.get("abc_status")}
+                    break
+            pag = hist.get("pagination") or {}
+            if page >= (pag.get("totalPages") or page):
+                break
+            page += 1
     except AbcError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
-    match = next((o for o in history if str(o.get("purchaseOrder")) == po.number), None)
     await log_action(db, user=user, action="abc.order.reconcile", entity_type="purchase_order", entity_id=po.id,
                      detail={"found": bool(match)}, request=request)
     if not match:

@@ -78,15 +78,29 @@ def test_get_order_by_confirmation_and_history():
     detail = _run(abc_orders.get_order_by_confirmation(c, conf))
     assert detail["confirmation_number"] == conf
     assert detail["normalized_status"] == "processing"
-    history = _run(abc_orders.get_order_history(c))
-    assert any(o.get("purchaseOrder") == "PO-HIST" for o in history)
+    # v2 order history: {pagination, items}; items carry orderNumber (not purchaseOrder). Get each
+    # order's detail to strong-match the RoofSpan purchaseOrder identifier.
+    hist = _run(abc_orders.get_order_history(c))
+    assert isinstance(hist, dict) and "pagination" in hist and "items" in hist, hist
+    assert hist["items"], "expected at least one order in history"
+    found = False
+    for it in hist["items"]:
+        d = _run(abc_orders.get_order_by_number(c, str(it["orderNumber"])))
+        if d.get("purchase_order") == "PO-HIST":
+            found = True
+            break
+    assert found, "PO-HIST not found via order history + detail"
 
 
 def test_templates():
-    tmpls = _run(abc_orders.list_templates(_client()))
-    assert tmpls and tmpls[0]["name"] == "Standard Reroof Kit"
-    t = _run(abc_orders.get_template(_client(), tmpls[0]["id"]))
-    assert t["items"]
+    res = _run(abc_orders.list_templates(_client()))
+    assert isinstance(res, dict) and "templates" in res and "pagination" in res, res
+    tmpls = res["templates"]
+    assert tmpls and tmpls[0].get("templateId")
+    t = _run(abc_orders.get_template(_client(), tmpls[0]["templateId"]))
+    # get_template returns the raw ABC detail; normalize_template gives the stable RoofSpan shape.
+    norm = abc_orders.normalize_template(t)
+    assert norm["lines"] and norm["lines"][0]["item_number"]
 
 
 def test_normalize_status():

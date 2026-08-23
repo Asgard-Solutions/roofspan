@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import ReceivingAttachments from "@/components/ReceivingAttachments";
+import AbcOrderPanel from "@/components/AbcOrderPanel";
 import { ArrowLeft, Loader2, PackageCheck, Ban, Truck, Building2, Link2, Paperclip, CircleDot } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
@@ -58,6 +59,7 @@ export default function PurchaseOrderDetail() {
   const [recvLoc, setRecvLoc] = useState("");
   const [locations, setLocations] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [abcOpen, setAbcOpen] = useState(false);
 
   useEffect(() => { api.get("/inventory/locations", { params: { active: true } }).then((r) => { setLocations(r.data); const d = r.data.find((l) => l.is_default) || r.data[0]; if (d) setRecvLoc(d.id); }).catch(() => {}); }, []);
 
@@ -89,7 +91,8 @@ export default function PurchaseOrderDetail() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <Button variant="ghost" size="sm" onClick={() => navigate(-1)} data-testid="po-back"><ArrowLeft className="h-4 w-4" /> Back</Button>
           <div className="flex flex-wrap gap-2">
-            {canManage && isAbc && ["draft", "ready_for_review"].includes(po.status) && po.job_id && <Button size="sm" onClick={() => navigate(`/jobs/${po.job_id}`)} data-testid="po-abc-review"><Truck className="h-4 w-4" /> Review &amp; submit in ABC</Button>}
+            {canManage && isAbc && ["draft", "ready_for_review"].includes(po.status) && <Button size="sm" onClick={() => setAbcOpen(true)} data-testid="po-abc-review"><Truck className="h-4 w-4" /> Review &amp; submit in ABC</Button>}
+            {canManage && isAbc && po.external_confirmation_number && <Button size="sm" variant="outline" onClick={() => setAbcOpen(true)} data-testid="po-abc-view"><Truck className="h-4 w-4" /> View ABC order</Button>}
             {canManage && !isAbc && po.status === "draft" && <Button size="sm" onClick={() => setStatus("ordered")} data-testid="po-mark-ordered"><Truck className="h-4 w-4" /> Mark ordered</Button>}
             {canReceive && <Button size="sm" onClick={openReceive} data-testid="po-receive"><PackageCheck className="h-4 w-4" /> Receive</Button>}
             {canManage && po.status !== "cancelled" && po.status !== "received" && <Button size="sm" variant="outline" onClick={cancel} data-testid="po-cancel"><Ban className="h-4 w-4" /> Cancel</Button>}
@@ -189,6 +192,8 @@ export default function PurchaseOrderDetail() {
           <DialogFooter><Button variant="outline" onClick={() => setRecvOpen(false)}>Cancel</Button><Button onClick={doReceive} disabled={busy} data-testid="recv-confirm">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Receive"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {isAbc && <AbcOrderPanel open={abcOpen} onOpenChange={setAbcOpen} po={po} onChanged={load} />}
     </div>
   );
 }

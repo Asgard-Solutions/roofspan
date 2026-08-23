@@ -139,13 +139,16 @@ ABC_MOCK_ENABLED=1 uvicorn integrations.abc_supply.mock_server:mock_app --port 8
 **Order API** (`integrations/abc_supply/orders.py`, `/api/order/v2`):
 - `POST /orders` — place order (body is a JSON **array**; response `{request, orders:[{requestId, confirmationNumber, message}]}`, 202). `requestId` = RoofSpan's durable `submission_key` (idempotency).
 - `GET /orders/{orderNumber}` and `GET /orders?confirmationNumber=` — order detail (status, amounts, shipments, deliveryHistory).
-- Order history / templates (`get_order_history`, `list_templates`, `get_template`) — **NEEDS ABC DOC/SANDBOX VERIFICATION** (paths `/orders/history`, `/templates`, `/templates/{id}` inferred; isolated + mocked).
+- `GET /orders/orderHistory` — account-wide history; params `startDate`,`endDate` (YYYY-MM-DD), `pageNumber`, `itemsPerPage`; response `{pagination:{itemsPerPage,pageNumber,totalPages,totalItems}, items:[{orderNumber, orderStatus, orderType, invoiceDate, branch/branchCityState, productQty}]}`. History rows carry an `orderNumber` (no `purchaseOrder`), so RoofSpan strong-matches back to POs by `external_order_number`.
+- `GET /orders/templates` (params `accountNumber`,`pageNumber`,`itemsPerPage`) and `GET /orders/templates/{templateId}` — order templates. `normalize_template()` produces a stable RoofSpan shape (`lines[].item_number/description/uom/quantity/unit_price`).
+- Order limits: `MAX_ORDER_LINES=99`, PO reference field `PO_FIELD_MAX=20` (both enforced server-side before submit).
 
 **Order submission flow** (`routers/purchasing.py`):
-- `POST /{po_id}/abc-submit-review` — validates + runs MANDATORY fresh pricing; returns validation errors + price changes + review payload (never submits).
-- `POST /{po_id}/abc-submit` — row-locks the PO, re-validates + re-prices server-side, blocks on price changes unless `accept_price_changes`, submits, persists ABC identifiers, sets PO `ordered`. Returns one of: `confirmed | price_changed | validation_failed | already_submitted | pending | failed | unknown`.
-- `POST /{po_id}/abc-refresh-status` — pull ABC order detail, update raw + normalized status.
-- `POST /{po_id}/abc-reconcile` — resolve an `unknown` submission by matching PO number in ABC order history.
+- `POST /from-abc-template` — convert an ABC template into a **normal draft RoofSpan PO** (`integration_provider=abc_supply`, status `draft`). NEVER submits to ABC; template prices are copied only as an estimate and each line is marked `abc_price_status=unavailable` so the MANDATORY fresh pricing runs before submit.
+- `POST /{po_id}/abc-submit-review` — validates + runs MANDATORY fresh pricing; returns validation errors (incl. 99-line / 20-char PO / dimensional) + price changes + review payload (never submits).
+- `POST /{po_id}/abc-submit` — row-locks the PO, re-validates + re-prices server-side, blocks on price changes unless `accept_price_changes`, submits, persists ABC identifiers, sets PO `ordered`. Accepts `delivery_service`, `order_comments`, `line_comments` (per `po_item_id`), and a `delivery` override (address/contacts/`requested_date`/`appointment_time`). Returns one of: `confirmed | price_changed | validation_failed | already_submitted | pending | failed | unknown`.
+- `POST /{po_id}/abc-refresh-status` — pull ABC order detail, update raw + normalized status (populates `external_order_number`, enabling history matching).
+- `POST /{po_id}/abc-reconcile` — resolve an `unknown` submission by matching PO number in ABC order history (`get_order_history` v2 shape; per-candidate `get_order_by_number` detail matched on the normalized `purchase_order` identifier).
 
 **Duplicate / concurrency / idempotency**: `abc_order_submissions` table (`submission_key` UNIQUE = ABC `requestId`); only one `confirmed` submission per PO; PO row `SELECT … FOR UPDATE` serializes concurrent submits (verified: 4 concurrent same-key → 1 confirmed, rest `pending`, no duplicate order). Write orders are never auto-retried.
 
@@ -155,11 +158,11 @@ ABC_MOCK_ENABLED=1 uvicorn integrations.abc_supply.mock_server:mock_app --port 8
 
 **Receiving/inventory unchanged**: submission means *ordered*, never *received*; existing Receive workflow remains the sole inventory authority.
 
-**RoofSpan API (reads)**: `GET /integrations/abc/orders/history`, `GET /integrations/abc/orders/{confirmation}`, `GET /integrations/abc/templates`. Audit: `abc.order.review/price_changed/submit_attempt/submitted/submit_failed/submit_unknown/reconcile/status_refresh`.
+**RoofSpan API (reads)**: `GET /integrations/abc/orders/history` (`{pagination, items}`; each item enriched with `roofspan_matched`/`roofspan_po_id`/`roofspan_po_number` — never assumes every ABC order originated in RoofSpan), `GET /integrations/abc/orders/{confirmation|orderNumber}` (deep detail + RoofSpan match), `GET /integrations/abc/templates` + `/templates/{id}` (normalized). Audit: `abc.order.review/price_changed/submit_attempt/submitted/submit_failed/submit_unknown/reconcile/status_refresh`, `abc.template.convert`, `abc.order.delivery_override`.
 
-**UI**: `AbcOrderPanel.jsx` (review → price-change confirmation → submit → status/refresh/reconcile) from Inventory → Purchase Orders (ABC POs); "ABC Supply Orders" history tab. `PODialog` warns that editing a submitted PO does not change the ABC order.
+**UI**: `AbcOrderPanel.jsx` (review → price-change confirmation → delivery service / requested date / appointment / order + per-line comments → submit → status/refresh/reconcile), reachable from Inventory → Purchase Orders (ABC POs) **and** from the PO detail page (`PurchaseOrderDetail.jsx`, incl. template-converted POs with no linked job). `AbcOrderHistory.jsx` = "ABC Supply Orders" tab (date filters + pagination + RoofSpan-PO match links + order detail dialog). `AbcTemplatesPanel.jsx` = "ABC Templates" tab (browse + detail + Convert to RoofSpan PO). `PODialog` warns that editing a submitted PO does not change the ABC order.
 
-**Mock**: `POST /orders` (success, idempotent-by-requestId, `MOCK-REJECT`→400, `MOCK-TIMEOUT`→records-then-504), `GET /orders/{n}` & `?confirmationNumber=`, `/orders/history`, `/templates`. Synthetic ids `MOCK-CONF-*`, `MOCK-ORDER-*`.
+**Mock**: `POST /orders` (success, idempotent-by-requestId, `MOCK-REJECT`→400, `MOCK-TIMEOUT`→records-then-504), `GET /orders/{n}` & `?confirmationNumber=`, `GET /orders/orderHistory` (`{pagination, items}`), `GET /orders/templates` + `/templates/{id}`. Synthetic ids `MOCK-CONF-*`, `MOCK-ORDER-*`.
 
 ## Phase 4 — Notifications & Relay Webhook Ingress (implemented, MOCK VERIFIED)
 
@@ -181,10 +184,8 @@ ABC_MOCK_ENABLED=1 uvicorn integrations.abc_supply.mock_server:mock_app --port 8
 
 ## NEEDS ABC DOC / SANDBOX VERIFICATION
 
-- **Order/Notification** service path **prefixes** (`/api/order/v1`, `/api/notification/v1`) are inferred
-  from the Account/Location/Product pattern; the public docs list only resource names (`/orders`,
-  `/webhooks`). Isolated in `config.py`. (Pricing verified as `/api/pricing/v2/prices`; Product verified
-  as `/api/product/v1/search/items`.)
+- Order API v2 paths (`POST /orders`, `GET /orders/{n}`, `GET /orders?confirmationNumber=`, `GET /orders/orderHistory`, `GET /orders/templates`, `GET /orders/templates/{id}`) and the `/api/order/v2` prefix are implemented per the current ABC Order API v2 docs and fully exercised against the mock. Live-Sandbox confirmation of the exact history/template response field casing (and any account-scoping of templates by Bill-To) is still recommended when real credentials are available.
+- **Notification** service path prefix (`/api/notification/v2`) verified as `/api/notification/v2/webhooks`; the `ORDER_INVOICED` secret transport (Authorization vs `apiKey`) still needs live confirmation.
 - Product **image URLs**: ABC docs state image URLs are "available in a future release" — RoofSpan renders
   a placeholder and lazily proxies images through `GET /products/{item}/image` when a href is present.
 - Product **recent/frequent/favorite** and **all-items/hierarchy** endpoints exist in the docs but were

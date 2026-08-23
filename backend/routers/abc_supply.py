@@ -535,34 +535,95 @@ async def price(payload: AbcPriceIn, request: Request,
 
 # --------------------------- orders: history / detail / templates (Phase 3, read-only) ---------------------------
 @router.get("/orders/history")
-async def order_history(request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def order_history(request: Request, start_date: str | None = None, end_date: str | None = None,
+                        page_number: int = 1, items_per_page: int = 20,
+                        user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """ABC account-level order history (documented Order v2 /orders/orderHistory). Preserves pagination."""
     from integrations.abc_supply import orders as abc_orders
-    row = await _get_or_create(db)
     client = await _connected_client(db, request)
     try:
-        orders = await abc_orders.get_order_history(client, ship_to=row.default_ship_to_number, branch=row.default_branch_number)
+        result = await abc_orders.get_order_history(
+            client, start_date=start_date, end_date=end_date,
+            page_number=page_number, items_per_page=items_per_page)
     except AbcError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
-    return {"orders": orders}
+    items = result["items"]
+    # Strong-identifier matching back to RoofSpan POs (never assume every ABC order originated here):
+    # match each history row's ABC orderNumber against PurchaseOrder.external_order_number.
+    from models import PurchaseOrder as _PO
+    onums = [str(it.get("orderNumber")) for it in items if it.get("orderNumber")]
+    matches: dict[str, _PO] = {}
+    if onums:
+        rows = (await db.execute(select(_PO).where(_PO.external_order_number.in_(onums)).order_by(_PO.created_at.asc()))).scalars().all()
+        matches = {str(p.external_order_number): p for p in rows}  # asc order -> most recent PO wins
+    for it in items:
+        p = matches.get(str(it.get("orderNumber")))
+        it["roofspan_po_id"] = str(p.id) if p else None
+        it["roofspan_po_number"] = p.number if p else None
+        it["roofspan_matched"] = bool(p)
+    return {"pagination": result["pagination"], "items": items}
 
 
-@router.get("/orders/{confirmation_number}")
-async def order_detail(confirmation_number: str, request: Request,
+@router.get("/orders/{identifier}")
+async def order_detail(identifier: str, request: Request,
                        user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Get ABC order by confirmation number OR order number (documented Get Order, both forms).
+    Also attaches a strong-identifier match back to a RoofSpan PO when one exists."""
     from integrations.abc_supply import orders as abc_orders
+    from models import PurchaseOrder as _PO
     client = await _connected_client(db, request)
     try:
-        return await abc_orders.get_order_by_confirmation(client, confirmation_number)
-    except AbcError as e:
-        raise HTTPException(status_code=502, detail=e.user_message)
+        data = await abc_orders.get_order_by_confirmation(client, identifier)
+        if not data:
+            data = await abc_orders.get_order_by_number(client, identifier)
+    except AbcError:
+        try:
+            data = await abc_orders.get_order_by_number(client, identifier)
+        except AbcError as e:
+            raise HTTPException(status_code=502, detail=e.user_message)
+    if isinstance(data, dict):
+        conf = data.get("confirmation_number")
+        onum = data.get("order_number")
+        p = None
+        conds = []
+        if conf:
+            conds.append(_PO.external_confirmation_number == conf)
+        if onum:
+            conds.append(_PO.external_order_number == onum)
+        if conds:
+            p = (await db.execute(select(_PO).where(or_(*conds)).order_by(_PO.created_at.desc()))).scalars().first()
+        data["roofspan_po_id"] = str(p.id) if p else None
+        data["roofspan_po_number"] = p.number if p else None
+        data["roofspan_matched"] = bool(p)
+    return data
 
 
 @router.get("/templates")
-async def order_templates(request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def order_templates(request: Request, account_number: str | None = None, page_number: int = 1,
+                          items_per_page: int = 40,
+                          user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """ABC order templates for the connected Bill-To account (read-only). Preserves pagination."""
+    from integrations.abc_supply import orders as abc_orders
+    row = await _get_or_create(db)
+    acct = account_number or getattr(row, "default_bill_to_number", None) or getattr(row, "default_ship_to_number", None)
+    client = await _connected_client(db, request)
+    try:
+        result = await abc_orders.list_templates(
+            client, account_number=acct, page_number=page_number, items_per_page=items_per_page)
+    except AbcError as e:
+        raise HTTPException(status_code=502, detail=e.user_message)
+    return {"templates": result["templates"], "pagination": result["pagination"]}
+
+
+@router.get("/templates/{template_id}")
+async def order_template_detail(template_id: str, request: Request,
+                                user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Full ABC order template detail (documented get-order-template-by-id), normalized for display + conversion."""
     from integrations.abc_supply import orders as abc_orders
     client = await _connected_client(db, request)
     try:
-        return {"templates": await abc_orders.list_templates(client)}
+        raw = await abc_orders.get_template(client, template_id)
+        return abc_orders.normalize_template(raw)
     except AbcError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
 

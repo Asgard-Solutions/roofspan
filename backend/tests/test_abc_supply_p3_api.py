@@ -311,23 +311,33 @@ class TestHistoryDetailTemplates:
         r = requests.get(f"{BASE_URL}/api/integrations/abc/orders/history", headers=owner_headers, timeout=30)
         assert r.status_code == 200, r.text[:300]
         payload = r.json()
-        orders = payload.get("orders") if isinstance(payload, dict) else payload
-        assert isinstance(orders, list) and orders, "expected at least one submitted order in history"
-        first = orders[0]
-        assert "confirmationNumber" in first and "purchaseOrder" in first and "status" in first
-        conf = first["confirmationNumber"]
-        r2 = requests.get(f"{BASE_URL}/api/integrations/abc/orders/{conf}", headers=owner_headers, timeout=30)
+        # Documented Order History shape: {pagination, items} — pagination not flattened away
+        assert isinstance(payload, dict) and "pagination" in payload and "items" in payload, payload
+        pag = payload["pagination"]
+        assert {"itemsPerPage", "pageNumber", "totalPages", "totalItems"} <= set(pag.keys()), pag
+        items = payload["items"]
+        assert isinstance(items, list) and items, "expected at least one order in history"
+        first = items[0]
+        assert "orderNumber" in first and "orderStatus" in first and "productQty" in first, first
+        onum = first["orderNumber"]
+        # Get Order by order number
+        r2 = requests.get(f"{BASE_URL}/api/integrations/abc/orders/{onum}", headers=owner_headers, timeout=30)
         assert r2.status_code == 200, r2.text[:300]
-        detail = r2.json()
-        assert detail.get("confirmation_number") == conf or detail.get("confirmationNumber") == conf
 
     def test_templates(self, owner_headers):
-        r = requests.get(f"{BASE_URL}/api/integrations/abc/templates", headers=owner_headers, timeout=30)
+        r = requests.get(f"{BASE_URL}/api/integrations/abc/templates?page_number=1&items_per_page=40", headers=owner_headers, timeout=30)
         assert r.status_code == 200, r.text[:300]
         payload = r.json()
-        tmpls = payload.get("templates") if isinstance(payload, dict) else payload
+        assert isinstance(payload, dict) and "templates" in payload and "pagination" in payload, payload
+        tmpls = payload["templates"]
         assert tmpls and isinstance(tmpls, list)
-        assert any("Standard Reroof Kit" == t.get("name") for t in tmpls)
+        t0 = tmpls[0]
+        assert t0.get("templateId") and t0.get("accountNumber") and t0.get("createdDate"), t0
+        # Get template by id (documented detail shape)
+        r2 = requests.get(f"{BASE_URL}/api/integrations/abc/templates/{t0['templateId']}", headers=owner_headers, timeout=30)
+        assert r2.status_code == 200, r2.text[:300]
+        detail = r2.json()
+        assert detail.get("lines") and detail.get("branch"), detail
 
 
 # -------- RBAC --------

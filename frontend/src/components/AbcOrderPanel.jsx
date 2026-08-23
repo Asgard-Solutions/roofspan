@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Loader2, Send, RefreshCw, AlertTriangle, CheckCircle2, XCircle, HelpCircle, Truck } from "lucide-react";
 
 const norm = { processing: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", shipped: "bg-violet-50 text-violet-700", delivered: "bg-green-50 text-green-700", invoiced: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
+const DELIVERY_SERVICES = [
+  { value: "OTG", label: "Our Truck — Ground Delivery" },
+  { value: "OTB", label: "Our Truck — Boom / Rooftop" },
+  { value: "WCL", label: "Will Call — Customer Pickup" },
+];
 
 export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [loading, setLoading] = useState(false);
@@ -21,6 +28,9 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [activity, setActivity] = useState({ events: [], invoices: [] });
   const [delivery, setDelivery] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [deliveryService, setDeliveryService] = useState("OTG");
+  const [orderComments, setOrderComments] = useState("");
+  const [lineComments, setLineComments] = useState({});
   // Local authoritative copy of the PO so the panel can transition to the submitted view
   // immediately after submit (refetched from the backend) without a close/reopen.
   const [poState, setPoState] = useState(po);
@@ -62,6 +72,9 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         submission_key: subKey,
         accept_price_changes: !!(review?.price_changes?.length),
         delivery: delivery || { name: po.number },
+        delivery_service: deliveryService,
+        order_comments: orderComments || null,
+        line_comments: Object.keys(lineComments).length ? lineComments : null,
       });
       setResult(data);
       if (data.status === "confirmed" || data.status === "already_submitted") {
@@ -134,6 +147,21 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 {detail.shipments.map((s, i) => <div key={i} className="text-slate-500">{s.shipment_number}: {s.status}{s.latest_delivery_event ? ` · ${s.latest_delivery_event}` : ""}{s.delivered_on ? ` · delivered ${s.delivered_on}` : ""}</div>)}
               </div>
             )}
+            {detail && (detail.amounts || detail.branch_name || detail.branch_number) && (
+              <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-order-financials">
+                <div className="mb-1 font-medium text-slate-700">Order Details</div>
+                {(detail.branch_name || detail.branch_number) && <div className="flex justify-between text-slate-600"><span className="text-slate-400">Branch</span><span>{detail.branch_name || detail.branch_number}</span></div>}
+                {detail.delivery_service && <div className="flex justify-between text-slate-600"><span className="text-slate-400">Delivery service</span><span>{detail.delivery_service}</span></div>}
+                {detail.dates?.deliveryRequestedFor && <div className="flex justify-between text-slate-600"><span className="text-slate-400">Requested for</span><span>{detail.dates.deliveryRequestedFor}</span></div>}
+                {detail.amounts && (
+                  <div className="mt-1 border-t border-border pt-1">
+                    <div className="flex justify-between text-slate-600"><span>Subtotal</span><span className="tabular-nums">{money(detail.amounts.sub_total || 0)}</span></div>
+                    <div className="flex justify-between text-slate-600"><span>Tax</span><span className="tabular-nums">{money(detail.amounts.tax || 0)}</span></div>
+                    <div className="flex justify-between font-semibold"><span>Total</span><span className="tabular-nums" data-testid="abc-order-total">{money(detail.amounts.total || 0)}</span></div>
+                  </div>
+                )}
+              </div>
+            )}
             <p className="text-xs text-slate-400">Updates are received automatically from ABC Supply. Editing this PO in RoofSpan does not modify the submitted ABC order. Receiving materials still uses the existing Receive workflow.</p>
             {activity.invoices?.length > 0 && (
               <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800" data-testid="abc-invoice">
@@ -179,6 +207,38 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 </div>
               ) : <div className="text-slate-500">No delivery override — materials ship to the ABC Ship-To account's default address. Click <span className="font-medium">Edit Delivery Address</span> to deliver elsewhere.</div>)}
             </div>
+            <div className="rounded-md border border-border p-3 text-sm space-y-3" data-testid="abc-order-options">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Delivery Service</Label>
+                  <Select value={deliveryService} onValueChange={setDeliveryService}>
+                    <SelectTrigger data-testid="abc-delivery-service"><SelectValue /></SelectTrigger>
+                    <SelectContent>{DELIVERY_SERVICES.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Requested Delivery Date</Label>
+                  <Input type="date" value={delivery?.requested_date || ""} onChange={(e) => setDelivery({ ...delivery, requested_date: e.target.value })} data-testid="abc-requested-date" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Delivery Appointment / Time Window (optional)</Label>
+                <Input placeholder="e.g. 09:00–12:00" value={delivery?.appointment_time || ""} onChange={(e) => setDelivery({ ...delivery, appointment_time: e.target.value })} data-testid="abc-appointment-time" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Order Comments (optional)</Label>
+                <Textarea rows={2} placeholder="Instructions for ABC Supply about the whole order" value={orderComments} onChange={(e) => setOrderComments(e.target.value)} data-testid="abc-order-comments" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Line Comments (optional)</Label>
+                {(poState?.items || []).filter((l) => l.integration_provider === "abc_supply" && l.abc_item_number).map((l) => (
+                  <div key={l.id} className="flex items-center gap-2">
+                    <span className="w-40 shrink-0 truncate text-xs text-slate-500">{l.abc_item_number}</span>
+                    <Input className="h-8" placeholder="Comment for this line" value={lineComments[l.id] || ""} onChange={(e) => setLineComments({ ...lineComments, [l.id]: e.target.value })} data-testid={`abc-line-comment-${l.id}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-order-review">
               {(review.review?.lines || []).map((l, i) => (
                 <div key={i} className="flex justify-between text-slate-600"><span>{l.abc_item_number} · {l.quantity} {l.uom}</span><span className="tabular-nums">{money(l.line_total)}</span></div>
@@ -222,6 +282,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
             </div>
             <div className="space-y-1"><Label className="text-xs">Contact Name</Label><Input value={delivery?.contact_name || ""} onChange={(e) => setDelivery({ ...delivery, contact_name: e.target.value })} data-testid="delivery-contact-name" /></div>
             <div className="space-y-1"><Label className="text-xs">Contact Phone</Label><Input value={delivery?.contact_phone || ""} onChange={(e) => setDelivery({ ...delivery, contact_phone: e.target.value })} data-testid="delivery-contact-phone" /></div>
+            <div className="col-span-2 space-y-1"><Label className="text-xs">Contact Email</Label><Input value={delivery?.contact_email || ""} onChange={(e) => setDelivery({ ...delivery, contact_email: e.target.value })} data-testid="delivery-contact-email" /></div>
             <div className="col-span-2 space-y-1"><Label className="text-xs">Delivery Instructions</Label><Input value={delivery?.instructions || ""} onChange={(e) => setDelivery({ ...delivery, instructions: e.target.value })} data-testid="delivery-instructions" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={() => setEditOpen(false)} data-testid="delivery-save">Use This Delivery Address</Button></DialogFooter>

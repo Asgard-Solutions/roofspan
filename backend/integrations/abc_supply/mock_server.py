@@ -483,17 +483,52 @@ async def place_order_mock(request: Request, authorization: str | None = Header(
             "orders": [{"requestId": req_id, "confirmationNumber": conf, "message": "Ordered successfully"}]}
 
 
-@router.get("/api/order/v2/orders/history")
-async def order_history_mock(request: Request, authorization: str | None = Header(default=None)):
+@router.get("/api/order/v2/orders/orderHistory")
+async def order_history_mock(request: Request, startDate: str | None = None, endDate: str | None = None,
+                             pageNumber: int = 1, itemsPerPage: int = 20, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
-    orders = []
+    items = []
     for rec in _MOCK_ORDERS.values():
         so = rec["salesOrder"]
-        orders.append({"confirmationNumber": so["confirmationNumber"], "orderNumber": so["orderNumber"],
-                       "purchaseOrder": so["purchaseOrder"], "status": so["status"], "createdDate": so["createdDate"],
-                       "branch": rec["branch"], "total": rec["orderAmounts"]["total"],
-                       "deliveryStatus": rec["shipments"][0]["status"] if rec["shipments"] else None})
-    return {"orders": orders}
+        items.append({"orderNumber": so["orderNumber"], "branch": rec["branch"].get("number"),
+                      "branchCityState": rec["branch"].get("cityState", "Waldorf, MD"),
+                      "invoiceDate": so.get("createdDate"), "orderType": so.get("orderType", "Will Call"),
+                      "orderStatus": so.get("status", "In Progress"),
+                      "productQty": len(rec.get("lines") or [])})
+    total = len(items)
+    start = (pageNumber - 1) * itemsPerPage
+    page = items[start:start + itemsPerPage]
+    total_pages = max(1, (total + itemsPerPage - 1) // itemsPerPage)
+    return {"pagination": {"itemsPerPage": itemsPerPage, "pageNumber": pageNumber,
+                           "totalPages": total_pages, "totalItems": total},
+            "items": page}
+
+
+@router.get("/api/order/v2/orders/templates")
+async def list_templates_mock(request: Request, accountNumber: str | None = None, pageNumber: int = 1,
+                              itemsPerPage: int = 40, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    return {"templates": [
+        {"templateId": "97211", "accountNumber": accountNumber or "86342100", "name": "Order template",
+         "description": "Order template for roof jobs", "createdDate": "2024-07-18T19:08:45.273"},
+    ], "pagination": {"pageNumber": pageNumber, "itemsPerPage": itemsPerPage}}
+
+
+@router.get("/api/order/v2/orders/templates/{template_id}")
+async def get_template_mock(template_id: str, request: Request, authorization: str | None = Header(default=None)):
+    _require_bearer(authorization)
+    return {
+        "templateId": template_id, "name": "Order template", "description": "Order template for roof jobs",
+        "createdDate": "2024-07-18T19:08:45.273", "branch": {"number": 241, "name": "Waldorf, MD"},
+        "branchAddress": {"line1": "123 Branch Rd", "city": "Waldorf", "state": "MD", "postal": "20601"},
+        "deliveryAddress": {"line1": "500 Job Site Ln", "city": "Waldorf", "state": "MD", "postal": "20602"},
+        "lines": [
+            {"itemNumber": "MOCK-SHINGLE-ARCH-WW", "itemDescription": "Architectural Shingle - Weathered Wood",
+             "uomName": "Square", "uomCode": "SQ", "orderedQty": 30, "unitPrice": 34.50, "lineAmount": 1035.00},
+            {"itemNumber": "MOCK-UNDERLAYMENT-30", "itemDescription": "Synthetic Underlayment 30",
+             "uomName": "Roll", "uomCode": "RL", "orderedQty": 3, "unitPrice": 89.00, "lineAmount": 267.00},
+        ],
+    }
 
 
 @router.get("/api/order/v2/orders/{order_number}")
@@ -512,25 +547,6 @@ async def get_order_by_conf_mock(request: Request, confirmationNumber: str | Non
     if not rec:
         raise HTTPException(status_code=404, detail="Order not found")
     return rec
-
-
-@router.get("/api/order/v2/templates")
-async def list_templates_mock(request: Request, authorization: str | None = Header(default=None)):
-    _require_bearer(authorization)
-    return {"templates": [
-        {"id": "MOCK-TMPL-1", "name": "Standard Reroof Kit", "lastUpdated": "2026-05-01",
-         "items": [{"itemNumber": "MOCK-SHINGLE-ARCH-WW", "quantity": 30, "uom": "SQ"},
-                   {"itemNumber": "MOCK-UNDERLAYMENT-30", "quantity": 3, "uom": "RL"},
-                   {"itemNumber": "MOCK-ICEWATER-BARRIER", "quantity": 2, "uom": "RL"}]},
-    ]}
-
-
-@router.get("/api/order/v2/templates/{template_id}")
-async def get_template_mock(template_id: str, request: Request, authorization: str | None = Header(default=None)):
-    _require_bearer(authorization)
-    return {"id": template_id, "name": "Standard Reroof Kit", "lastUpdated": "2026-05-01",
-            "items": [{"itemNumber": "MOCK-SHINGLE-ARCH-WW", "quantity": 30, "uom": "SQ"},
-                      {"itemNumber": "MOCK-UNDERLAYMENT-30", "quantity": 3, "uom": "RL"}]}
 
 
 # ---------------- Notification API (Phase 4, /api/notification/v2/webhooks) ----------------

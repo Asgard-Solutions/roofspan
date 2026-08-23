@@ -9,9 +9,12 @@ Place-order response: {request:{batchId,...,ordersSucceded}, orders:[{requestId,
 NOTE: only a confirmationNumber is returned at submit; the orderNumber appears later via Get Order.
 `requestId` is the client-provided tracking id — RoofSpan uses its durable submission key here for idempotency.
 
-NEEDS ABC DOC/SANDBOX VERIFICATION: exact Order History and Order Template endpoint paths/filters are not
-fully captured from the public docs. `get_order_history`, `list_templates`, `get_template` are isolated here
-and supported in the local mock; reconcile once verified against Sandbox.
+Order History (source: get-order-history):
+  GET  {ORDER_PREFIX}/orders/orderHistory   params: startDate, endDate (YYYY-MM-DD), pageNumber, itemsPerPage
+Order Templates (source: get-order-templates / get-order-template-by-id):
+  GET  {ORDER_PREFIX}/orders/templates       params: accountNumber (Bill-To), pageNumber, itemsPerPage
+  GET  {ORDER_PREFIX}/orders/templates/{templateId}
+Both history and templates preserve ABC pagination in RoofSpan responses.
 """
 from __future__ import annotations
 
@@ -102,23 +105,70 @@ async def get_order_by_number(client: AbcClient, order_number: str) -> dict:
     return _normalize_order(data if isinstance(data, dict) else {})
 
 
-# --- NEEDS ABC DOC/SANDBOX VERIFICATION (paths/filters) ---
-async def get_order_history(client: AbcClient, *, ship_to: str | None = None, branch: str | None = None) -> list[dict]:
-    params: dict = {}
-    if ship_to:
-        params["shipToNumber"] = ship_to
-    if branch:
-        params["branchNumber"] = branch
-    data = await client.get_json(f"{ORDER_PREFIX}/orders/history", params=params)  # NEEDS ABC DOC/SANDBOX VERIFICATION
-    orders = data.get("orders") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-    return orders or []
+# --- Order History (source: https://apidocs.abcsupply.com/get-order-history/) ---
+async def get_order_history(client: AbcClient, *, start_date: str | None = None, end_date: str | None = None,
+                            page_number: int = 1, items_per_page: int = 20) -> dict:
+    """GET {ORDER_PREFIX}/orders/orderHistory. Dates are YYYY-MM-DD. Preserves ABC pagination."""
+    params: dict = {"pageNumber": page_number, "itemsPerPage": items_per_page}
+    if start_date:
+        params["startDate"] = start_date
+    if end_date:
+        params["endDate"] = end_date
+    data = await client.get_json(f"{ORDER_PREFIX}/orders/orderHistory", params=params)
+    if not isinstance(data, dict):
+        data = {}
+    return {"pagination": data.get("pagination") or {}, "items": data.get("items") or []}
 
 
-async def list_templates(client: AbcClient) -> list[dict]:
-    data = await client.get_json(f"{ORDER_PREFIX}/templates")  # NEEDS ABC DOC/SANDBOX VERIFICATION
-    return (data.get("templates") if isinstance(data, dict) else data) or []
+# --- Order Templates (source: https://apidocs.abcsupply.com/get-order-templates/) ---
+async def list_templates(client: AbcClient, *, account_number: str | None = None,
+                         page_number: int = 1, items_per_page: int = 40) -> dict:
+    """GET {ORDER_PREFIX}/orders/templates. accountNumber is the Bill-To account. Preserves pagination."""
+    params: dict = {"pageNumber": page_number, "itemsPerPage": items_per_page}
+    if account_number:
+        params["accountNumber"] = account_number
+    data = await client.get_json(f"{ORDER_PREFIX}/orders/templates", params=params)
+    if not isinstance(data, dict):
+        data = {}
+    return {"templates": data.get("templates") or [], "pagination": data.get("pagination") or {}}
 
 
 async def get_template(client: AbcClient, template_id: str) -> dict:
-    data = await client.get_json(f"{ORDER_PREFIX}/templates/{template_id}")  # NEEDS ABC DOC/SANDBOX VERIFICATION
+    """GET {ORDER_PREFIX}/orders/templates/{templateId} (source: get-order-template-by-id)."""
+    data = await client.get_json(f"{ORDER_PREFIX}/orders/templates/{template_id}")
     return data if isinstance(data, dict) else {}
+
+
+def normalize_template(data: dict) -> dict:
+    """Normalize an ABC order-template detail into a stable RoofSpan shape for display + PO conversion.
+    Guards against the several line shapes ABC uses (orderedQty as number or {value,uom}; uomCode/uomName)."""
+    data = data or {}
+    lines = []
+    for ln in (data.get("lines") or []):
+        qty = ln.get("orderedQty")
+        if isinstance(qty, dict):
+            uom = qty.get("uom") or ln.get("uomCode") or ln.get("uomName")
+            qty = qty.get("value")
+        else:
+            uom = ln.get("uomCode") or ln.get("uomName")
+        up = ln.get("unitPrice")
+        if isinstance(up, dict):
+            up = up.get("value")
+        lines.append({
+            "item_number": ln.get("itemNumber") or ln.get("item_number"),
+            "description": ln.get("itemDescription") or ln.get("description") or "",
+            "uom": uom,
+            "quantity": qty,
+            "unit_price": up,
+        })
+    return {
+        "template_id": str(data.get("templateId") or data.get("id") or ""),
+        "name": data.get("name") or "",
+        "description": data.get("description") or "",
+        "created_date": data.get("createdDate"),
+        "branch": data.get("branch") or {},
+        "branch_address": data.get("branchAddress") or {},
+        "delivery_address": data.get("deliveryAddress") or {},
+        "lines": lines,
+        "raw": data,
+    }

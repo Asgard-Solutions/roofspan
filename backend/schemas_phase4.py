@@ -424,6 +424,16 @@ class AbcSubmitIn(BaseModel):
     accept_price_changes: bool = False
     delivery: Optional[dict] = None
     delivery_service: str = "OTG"  # ABC delivery service enum (e.g. OTG: Our Truck Ground)
+    order_comments: Optional[str] = None  # order-level comment sent to ABC
+    line_comments: Optional[dict] = None  # {po_item_id: comment} per-line comments
+
+
+class AbcTemplateConvertIn(BaseModel):
+    template_id: str
+    ship_to_number: Optional[str] = None  # defaults to the ABC integration default Ship-To
+    branch_number: Optional[str] = None   # defaults to the ABC integration default branch
+    job_id: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class ReceiveLine(BaseModel):
