@@ -202,19 +202,37 @@ derived from embedded `branches[]` — presented as **Available / Not Available 
 quantity (ABC does not expose quantity-on-hand here).
 
 **Pricing API** (`integrations/abc_supply/pricing.py`): `POST /api/pricing/v2/prices` with a **user token**
-(`pricing.read`), body `{shipToNumber, branchNumber, purpose, lines:[{id,itemNumber,quantity,uom,length}]}`,
-up to 50 lines. HTTP 200 is returned even with per-line errors, so each line's `status` is inspected.
-**$0.00 rule**: `status.code == OK` + `unitPrice == 0.00` ⇒ `price_status="unavailable"` (branch has not
-entered pricing — NOT free). Per-line `status.code != OK` ⇒ `unavailable` with the ABC message.
+(`pricing.read`; client-credentials are never used for pricing), body `{requestId?, shipToNumber, branchNumber,
+purpose, lines:[{id,itemNumber,quantity,uom,length}]}`. **Purpose** is validated to exactly one of
+`estimating | quoting | ordering` (rejected otherwise; schema returns 422, provider raises). **Quantity** is
+an integer — whole-number floats are coerced (2.0→2), genuinely fractional quantities are rejected (400/blocked).
+**Length** is sent ONLY for dimensional items (never `null`/`{}`). **50-line limit** is enforced by
+transparent batching: `price_items` splits >50 lines into ≤50 batches, prices each, and reconciles results by
+stable line `id` (a failing batch never hides good prices; ordering preserved). HTTP 200 is returned even with
+per-line errors, so each line's `status` is inspected. **$0.00 rule**: `status.code == OK` + `unitPrice == 0.00`
+⇒ `price_status="unavailable"` (branch has not entered pricing — NOT free). Per-line `status.code != OK` ⇒
+`unavailable` with the ABC message. Normalized line preserves `currency`/`currency_symbol` and the ABC
+`request_id`. `requestId` uses meaningful RoofSpan identifiers (PO number for PO/order flows; batched suffix
+`-bN`) and never carries secrets/PII. Pricing is NOT availability — availability comes only from the Product API.
 
 **PO integration**: `PurchaseOrder` gains `integration_provider`, `abc_ship_to_number`, `abc_branch_number`;
 `POLineItem` gains `integration_provider, abc_item_number, abc_branch_number, abc_ship_to_number, abc_uom,
 abc_variation, abc_price, abc_price_status, abc_price_timestamp, abc_product_description, abc_product_family,
 abc_product_image_url, pricing_source` (migration `b2d5e7c9a1f3`, all nullable — generic POs unaffected).
 `POOut.pricing_warning` surfaces unresolved-pricing lines. `POST /api/purchase-orders/{id}/refresh-price`
-re-prices one ABC line (using its current Ship-To/branch/qty/UOM/variation) and optionally applies it,
-recomputing the PO total; manual prices are only overwritten when the user explicitly applies. Changing
-Ship-To/branch in the PO dialog clears gathered ABC pricing.
+re-prices one ABC line (using its current Ship-To/branch/qty/UOM/variation) and optionally applies it;
+`POST /api/purchase-orders/{id}/abc-refresh-all-prices` bulk-reprices EVERY ABC line in one action (batched
+≤50, reconciled by id, optional explicit apply). Manual prices are only overwritten when the user explicitly
+applies. Changing Ship-To/branch/qty/UOM/variation/item in the PO dialog invalidates gathered ABC pricing
+(price is context-specific). Final order review (`abc-submit-review`) and `abc-submit` ALWAYS re-price fresh
+with `purpose=ordering` server-side; explicit price-change acceptance is required — no auto-accept, no auto-submit.
+Template-converted POs mark lines `unavailable` so the mandatory fresh price runs before submit.
+
+**Workflow purposes**: Estimates → `estimating`, Quotes → `quoting`, Purchase-Order/ABC order review → `ordering`.
+NOTE: RoofSpan Estimates/Quotes currently price from snapshotted cost + Price Books (they do not yet perform
+per-line live ABC Price Items requests); the `/pricing` endpoint accepts all three purposes, so wiring an
+Estimate/Quote "Refresh ABC pricing" action is possible without provider changes when those line models retain
+ABC supplier context (documented gap — not added to avoid scope creep).
 
 **RoofSpan API**: `POST /integrations/abc/products/search`, `GET /integrations/abc/products/{item}`,
 `GET /integrations/abc/products/{item}/image`, `POST /integrations/abc/pricing`. Audit: `abc.product.search`,

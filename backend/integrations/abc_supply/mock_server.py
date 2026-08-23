@@ -414,6 +414,8 @@ async def price_items(request: Request, authorization: str | None = Header(defau
         elif item == "MOCK-DRIP-EDGE-DIM":
             if not length:
                 base.update({"unitPrice": 0.00, "status": {"code": "Error", "message": "This item requires a length variation before pricing can be retrieved."}})
+            elif str((length or {}).get("uom", "")).strip().lower() not in ("ft", "feet", "in", "inch", "inches"):
+                base.update({"unitPrice": 0.00, "status": {"code": "Error", "message": "Invalid length variation for this item."}})
             else:
                 base.update({"unitPrice": round(6.5 * float(length.get("value") or 1), 2), "length": length, "status": {"code": "OK", "message": "Priced Successfully"}})
         else:

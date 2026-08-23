@@ -6,7 +6,7 @@ Raw ABC objects are passed through as dicts where their shape is large and docum
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---- Config / connection ----
@@ -114,7 +114,16 @@ class AbcPriceIn(BaseModel):
     ship_to_number: str
     branch_number: str
     purpose: str = "ordering"
+    request_id: Optional[str] = None
     lines: List[AbcPriceLineIn] = []
+
+    @field_validator("purpose")
+    @classmethod
+    def _valid_purpose(cls, v: str) -> str:
+        p = (v or "").strip().lower()
+        if p not in ("estimating", "quoting", "ordering"):
+            raise ValueError("purpose must be one of: estimating, quoting, ordering")
+        return p
 
 
 # ---- Vendor Catalog (Inventory) ----

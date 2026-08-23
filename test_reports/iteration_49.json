@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend-only validation of the ABC Supply v2 pricing UX in AbcOrderPanel. Logged in as owner, ABC status=connected(mock). Seeded three ABC POs via /api/purchase-orders and opened each panel from Inventory > Purchase Orders (button data-testid abc-order-{po_id}). RESULTS: (1) Review view for a mixed PO (MOCK-SHINGLE-ARCH-WW + MOCK-RIDGE-CAP-NOPRICE) correctly renders abc-review-total ($1,090.00), 'Prices verified: 11:43:09 PM' timestamp, and per-line rows with UOM. (2) $0.00 handling verified: the NOPRICE line shows an abc-order-errors banner with 'Line \"Ridge Cap (no price)\" has no available ABC price (contact the branch)' — NEVER $0.00 or free — and the abc-submit-order button is DISABLED while the error is present. (3) Price-change acceptance: the same PO renders abc-price-changes with 'Architectural Shingle WW $100.00 → $135.36 (+$35.36)' and 'Updated ABC Total $1,443.60', and the submit button label switches from 'Submit to ABC Supply' to 'Accept pricing & submit' — no auto-accept. (4) abc-refresh-pricing button in abc-order-options re-runs pricing without submitting; verified freshness timestamp advanced (11:44:23 → 11:44:29). (5) All delivery/order options data-testids present and editable: abc-delivery-service (Our Truck/Boom/Will Call), abc-requested-date, abc-appointment-time, abc-order-comments, abc-line-comment-* (2 line-comment inputs for the two ABC lines). (6) Successful submit path: seeded a priceable-only PO (SHINGLE + UNDERLAYMENT), set delivery_service=WCL, requested_date=2026-10-15, appointment=10:00-12:00, order_comments — Accept pricing & submit yielded confirmation MOCK-CONF-10016, transitioned to submitted view (abc-order-status), and after Refresh ABC status the abc-order-financials block rendered Branch/Delivery service/Requested for and abc-order-total=$1,801.10. All required data-testids resolved. Regression not touched (backend-only per handoff note).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AbcOrderPanel — abc-order-review", "issues": ["When a line has 'no available ABC price', the review section still prints that line's stored line_total (e.g., MOCK-RIDGE-CAP-NOPRICE · 3 BD $90.00) alongside the error banner. This is not $0.00 (spec compliant) but the number in the review may mislead — consider rendering 'Unavailable' or an em-dash for that line's line_total in the review list to reinforce the error state.", "The 'ABC Estimated Total' shown next to abc-review-total continues to show the STORED total ($1,090.00) even when live ABC pricing is different; the true live total appears only inside the abc-price-changes banner ('Updated ABC Total $1,443.60'). Consider updating abc-review-total to the live estimated_total from the pricing response, or renaming the label to 'Stored Total' when a price-change banner is present, to avoid two totals disagreeing on screen."]}
+    ]
+  },
+  "test_report_links": ["/app/frontend/src/components/AbcOrderPanel.jsx"],
+  "action_items": [
+    "(Optional UX) Show 'Unavailable' instead of the stored $ figure for lines flagged by abc-order-errors as having no ABC price.",
+    "(Optional UX) Reconcile abc-review-total with the pricing response so the header total and the price-change banner total agree."
+  ],
+  "critical_code_review_comments": [
+    "AbcOrderPanel.submit() sends accept_price_changes=!!(review?.price_changes?.length) computed from the initial review payload. If backend returns fresh price_changes on submit and status='price_changed', the panel updates review.price_changes but the next submit still relies on the same review-derived boolean — which happens to remain true, but the semantics are fragile. Consider passing an explicit user gesture flag when the user clicks 'Accept pricing & submit'.",
+    "abc-refresh-pricing re-invokes loadReview() which resets `delivery` from data.delivery — if the user typed a requested_date/appointment_time and then hits Refresh Pricing, those local edits are wiped (already flagged in iteration_48).",
+    "The disabled state on abc-submit-order relies on `review && errors.length > 0`; if the review request itself fails (toast + review=null), submit becomes enabled (submitting/loading gates aside). Consider also disabling submit when review is null."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% of ABC pricing UX acceptance criteria met"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Created three ABC-integration POs via /api/purchase-orders: PO-1513 (ffabafe2… uom missing, later corrected), PO-1514 (4a56be94… SHINGLE+NOPRICE, used for $0.00 + price-change UX), PO-1515 (1d8f9d17… SHINGLE+UNDERLAYMENT, submitted successfully → MOCK-CONF-10016).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ABC remains connected in sandbox/mock. To exercise the pricing UX in AbcOrderPanel, POST an ABC PO with items[].abc_uom populated (NOT just uom/unit — leaving abc_uom null triggers a spurious 'missing unit of measure' error in the review). Open the panel from Inventory > Purchase Orders (data-testid abc-order-{po_id}); the PurchaseOrderDetail 'Review & submit in ABC' button is still gated on job_id (carried over from iteration_48).",
+  "rca of the issue": "n/a — no functional defects. Two minor UX consistency observations documented."
+}

@@ -208,6 +208,10 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
               ) : <div className="text-slate-500">No delivery override — materials ship to the ABC Ship-To account's default address. Click <span className="font-medium">Edit Delivery Address</span> to deliver elsewhere.</div>)}
             </div>
             <div className="rounded-md border border-border p-3 text-sm space-y-3" data-testid="abc-order-options">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-700">Delivery & Order Options</span>
+                <Button size="sm" variant="ghost" onClick={loadReview} disabled={loading} data-testid="abc-refresh-pricing"><RefreshCw className="h-3.5 w-3.5" /> Refresh ABC Pricing</Button>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Delivery Service</Label>
@@ -241,7 +245,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
             </div>
             <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-order-review">
               {(review.review?.lines || []).map((l, i) => (
-                <div key={i} className="flex justify-between text-slate-600"><span>{l.abc_item_number} · {l.quantity} {l.uom}</span><span className="tabular-nums">{money(l.line_total)}</span></div>
+                <div key={i} className="flex justify-between text-slate-600"><span>{l.abc_item_number} · {l.quantity} {l.uom}</span>{l.price_status === "priced" ? <span className="tabular-nums">{money(l.line_total)}</span> : <span className="text-amber-600" data-testid={`abc-line-unavailable-${i}`}>Unavailable</span>}</div>
               ))}
               <div className="mt-2 flex justify-between border-t border-border pt-2 font-semibold"><span>ABC Estimated Total</span><span className="tabular-nums" data-testid="abc-review-total">{money(review.review?.estimated_total || 0)}</span></div>
               <div className="mt-1 text-xs text-slate-400">Prices verified: {review.prices_verified_at ? new Date(review.prices_verified_at).toLocaleTimeString() : "—"}</div>

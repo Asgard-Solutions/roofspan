@@ -74,6 +74,19 @@ Goal: connect each customer's own myABCSupply account for Account/Location/Produ
   - Tests: iteration_29 — 6/6 frontend checks (all 5 submit outcomes + generic PO regression), backend snapshot verification 100%, 38+1skip ABC unit regression green. Zero issues.
 
 
+## ABC Supply Price Items v2 Completion — COMPLETE & TESTED (2026-06)
+ABC-only pricing hardening against https://apidocs.abcsupply.com/price-items/. Preserved the existing user-token/`pricing.read`, `POST /api/pricing/v2/prices`, $0-rule, per-line status, and mandatory-fresh-order-pricing architecture; enhanced only what was incomplete.
+- **Purpose**: validated to exactly `estimating|quoting|ordering` (`validate_purpose` in provider + `AbcPriceIn` field_validator → 422). Estimates→estimating, Quotes→quoting, PO/order review→ordering.
+- **50-line batching**: `price_items` transparently splits >50 lines into ≤50 batches, prices each, and reconciles by stable line `id` (order preserved; a failing batch never hides good prices). `MAX_PRICE_LINES=50`. Distinct from the 99-line Place Order limit.
+- **Integer quantity**: `_coerce_quantity` coerces whole floats (2.0→2) and rejects fractional/≤0 (route → 400; `_validate_and_price` → blocking error). Non-dimensional lines never send `length`.
+- **Currency + requestId**: normalized line preserves `currency`/`currency_symbol`; `request_id` plumbed with meaningful ids (PO number for order flows; `-bN` per batch) and returned in results; never carries secrets/PII.
+- **$0.00+OK = unavailable** (never free) and **pricing ≠ availability** preserved. Review payload now carries per-line `price_status`/`status_message`; UI shows "Unavailable" (not a $ figure) for unpriced lines and blocks submit.
+- **Bulk refresh**: new `POST /api/purchase-orders/{id}/abc-refresh-all-prices` (batched ≤50, reconciled by id, explicit optional apply) + UI "Refresh ABC Pricing" button. Single-line `refresh-price` retained. Final `abc-submit-review`/`abc-submit` still force fresh `ordering` pricing + explicit price-change acceptance (no auto-accept/submit/receive).
+- **Tests**: new `tests/test_abc_supply_pricing_v2.py` (19). Regression green: p2 9, p2_api 14, p3 7, p3_api 14, epic 6, delivery 7/1skip, catalog 13. Frontend testing_agent iteration_49 = 100%. Docs updated.
+- **Estimate/Quote gap (documented, NOT scope-crept)**: Estimates/Quotes price from snapshotted cost + Price Books, not per-line live ABC Price Items; endpoint already accepts all purposes for future wiring.
+- **Needs live Sandbox**: response field casing, dimensional variation catalog, per-account Ship-To pricing validated only against the mock (not Sandbox-certified).
+
+
 ## ABC Supply Order API v2 Epic (Templates, Place-Order, Get Order + History) — COMPLETE & TESTED (2026-06)
 Scope strictly ABC Supply ordering; generic/non-ABC POs untouched; no ABC ordering on mobile. Preserved the v2 provider layer + mock, the reconcile fix, all P3 protections (mandatory fresh pricing, duplicate/idempotency/concurrency, unknown-state, no auto-retry, no auto-receive).
 - **Reconcile 500 fixed**: `abc-reconcile` referenced non-existent `sub.created_at` (model uses `attempted_at`) + read camelCase `salesOrder`/`purchaseOrder` from a normalized (snake_case) `get_order_by_number` result. Now uses `attempted_at` + normalized `purchase_order`/`confirmation_number`/`order_number`.

@@ -517,14 +517,18 @@ async def price(payload: AbcPriceIn, request: Request,
     if not payload.lines:
         raise HTTPException(status_code=400, detail="No lines to price")
     client = await _connected_client(db, request)
-    lines = [
-        abc_pricing.build_line(line_id=l.id, item_number=l.item_number, quantity=l.quantity, uom=l.uom,
-                               length_value=l.length_value, length_uom=l.length_uom)
-        for l in payload.lines
-    ]
+    try:
+        lines = [
+            abc_pricing.build_line(line_id=l.id, item_number=l.item_number, quantity=l.quantity, uom=l.uom,
+                                   length_value=l.length_value, length_uom=l.length_uom)
+            for l in payload.lines
+        ]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         result = await abc_pricing.price_items(client, ship_to_number=payload.ship_to_number,
-                                               branch_number=payload.branch_number, lines=lines, purpose=payload.purpose)
+                                               branch_number=payload.branch_number, lines=lines,
+                                               purpose=payload.purpose, request_id=payload.request_id)
     except AbcError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
     row = await _get_or_create(db)

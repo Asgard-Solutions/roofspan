@@ -224,7 +224,7 @@ async def refresh_abc_price(po_id: str, payload: RefreshPriceIn, request: Reques
     plines = [abc_pricing.build_line(line_id=str(line.id), item_number=line.abc_item_number,
                                      quantity=line.quantity, uom=line.abc_uom,
                                      length_value=length.get("value"), length_uom=length.get("uom"))]
-    result = await abc_pricing.price_items(client, ship_to_number=ship_to, branch_number=branch, lines=plines, purpose="ordering")
+    result = await abc_pricing.price_items(client, ship_to_number=ship_to, branch_number=branch, lines=plines, purpose="ordering", request_id=po.number)
     r = result[0] if result else {"price_status": "unavailable", "unit_price": None, "status_message": "No response"}
 
     previous = line.unit_cost
@@ -297,6 +297,8 @@ async def _validate_and_price(db: AsyncSession, po: PurchaseOrder, request: Requ
             errors.append(f"Line '{i.description}' is missing a unit of measure.")
         if (i.abc_variation is None or not (i.abc_variation or {}).get("value")) and _is_dimensional(i):
             errors.append(f"Line '{i.description}' requires a length/variation.")
+        if i.quantity is None or float(i.quantity) <= 0 or not float(i.quantity).is_integer():
+            errors.append(f"Line '{i.description}' needs a whole-number quantity for ABC Supply pricing.")
 
     changes: list[dict] = []
     priced: dict = {}
@@ -310,7 +312,8 @@ async def _validate_and_price(db: AsyncSession, po: PurchaseOrder, request: Requ
                 plines.append(abc_pricing.build_line(line_id=str(i.id), item_number=i.abc_item_number, quantity=i.quantity,
                                                      uom=i.abc_uom, length_value=length.get("value"), length_uom=length.get("uom")))
             results = await abc_pricing.price_items(client, ship_to_number=po.abc_ship_to_number,
-                                                    branch_number=po.abc_branch_number, lines=plines, purpose="ordering")
+                                                    branch_number=po.abc_branch_number, lines=plines,
+                                                    purpose="ordering", request_id=po.number)
         except AbcError as e:
             errors.append(e.user_message)
             return errors, changes, abc_items, priced
@@ -398,6 +401,34 @@ def _validate_delivery(d: dict) -> list[str]:
     return errs
 
 
+@router.post("/{po_id}/abc-refresh-all-prices")
+async def abc_refresh_all_prices(po_id: str, payload: AbcSubmitReviewIn, request: Request,
+                                 user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Bulk-refresh live ABC pricing for every ABC line on the PO in a single user action. Lines are
+    batched (≤50/request) inside price_items and reconciled by stable line id. Optionally applies the
+    refreshed prices (never auto-submits). Purpose=ordering."""
+    po = await db.get(PurchaseOrder, po_id)
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    if po.integration_provider != "abc_supply":
+        raise HTTPException(status_code=400, detail="This purchase order is not an ABC Supply order")
+    errors, changes, abc_items, priced = await _validate_and_price(db, po, request, apply_changes=payload.apply_price_changes)
+    await db.commit()
+    await db.refresh(po)
+    lines = []
+    for i in abc_items:
+        r = priced.get(str(i.id)) or {}
+        lines.append({"po_item_id": str(i.id), "abc_item_number": i.abc_item_number, "description": i.description,
+                      "quantity": i.quantity, "uom": i.abc_uom,
+                      "unit_price": r.get("unit_price"), "price_status": r.get("price_status") or i.abc_price_status,
+                      "currency_symbol": r.get("currency_symbol", "$"), "status_message": r.get("status_message"),
+                      "request_id": r.get("request_id")})
+    await log_action(db, user=user, action="abc.price.refresh", entity_type="purchase_order", entity_id=po.id,
+                     detail={"lines": len(abc_items), "applied": payload.apply_price_changes, "changes": len(changes)}, request=request)
+    return {"ok": not errors, "errors": errors, "price_changes": changes, "applied": payload.apply_price_changes,
+            "lines": lines, "estimated_total": po.total, "prices_verified_at": datetime.now(timezone.utc).isoformat()}
+
+
 @router.post("/{po_id}/abc-submit-review")
 async def abc_submit_review(po_id: str, payload: AbcSubmitReviewIn, request: Request,
                             user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
@@ -434,7 +465,9 @@ async def abc_submit_review(po_id: str, payload: AbcSubmitReviewIn, request: Req
             "po_number": po.number, "ship_to_number": po.abc_ship_to_number, "branch_number": po.abc_branch_number,
             "estimated_total": po.total,
             "lines": [{"abc_item_number": i.abc_item_number, "description": i.description, "quantity": i.quantity,
-                       "uom": i.abc_uom, "unit_cost": i.unit_cost, "line_total": i.line_total} for i in abc_items],
+                       "uom": i.abc_uom, "unit_cost": i.unit_cost, "line_total": i.line_total,
+                       "price_status": (priced.get(str(i.id), {}) or {}).get("price_status") or i.abc_price_status,
+                       "status_message": (priced.get(str(i.id), {}) or {}).get("status_message")} for i in abc_items],
         },
     }
 
