@@ -8,9 +8,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Loader2, Star, CheckCircle2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2 } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
+const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
 const txnLabel = (t) => (t || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const costSourceLabel = (s) => ({ preferred_supplier: "Preferred Supplier", best_known_cost: "Best Known Cost", standard_cost: "Standard Cost", mwac: "Inventory Avg (MWAC)" }[s] || "—");
 
@@ -31,6 +37,11 @@ export default function MaterialDetail() {
   const [d, setD] = useState(null);
   const [balances, setBalances] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [form, setForm] = useState({});
+  const [adjOpen, setAdjOpen] = useState(false);
+  const [adj, setAdj] = useState({ delta: 0, reason: "manual_correction", note: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,6 +58,45 @@ export default function MaterialDetail() {
     catch (e) { toast.error(apiError(e)); }
   };
 
+  const openEdit = () => {
+    const m = d.material;
+    setForm({
+      name: m.name || "", sku: m.sku || "", category: m.category || "", unit: m.unit || "each",
+      manufacturer: m.manufacturer || "", brand: m.brand || "", description: m.description || "",
+      reorder_threshold: m.reorder_threshold ?? 0,
+      standard_cost: m.standard_cost ?? "", default_sell_price: m.default_sell_price ?? "",
+    });
+    setEditOpen(true);
+  };
+  const saveEdit = async () => {
+    if (!form.name.trim()) { toast.error("Name is required"); return; }
+    setBusy(true);
+    try {
+      await api.patch(`/materials/${id}`, {
+        name: form.name.trim(), sku: form.sku || null, category: form.category || null, unit: form.unit || "each",
+        manufacturer: form.manufacturer || null, brand: form.brand || null, description: form.description || null,
+        reorder_threshold: Number(form.reorder_threshold) || 0,
+        standard_cost: form.standard_cost === "" ? null : Number(form.standard_cost),
+        default_sell_price: form.default_sell_price === "" ? null : Number(form.default_sell_price),
+      });
+      toast.success("Material updated"); setEditOpen(false); load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  const toggleActive = async () => {
+    try { await api.patch(`/materials/${id}`, { active: !d.material.active }); toast.success(d.material.active ? "Material deactivated" : "Material reactivated"); load(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const doAdjust = async () => {
+    setBusy(true);
+    try { await api.post(`/materials/${id}/adjust`, { delta: Number(adj.delta) || 0, reason: adj.reason, note: adj.note || null }); toast.success("Inventory adjusted"); setAdjOpen(false); setAdj({ delta: 0, reason: "manual_correction", note: "" }); load(); }
+    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  const doDelete = async () => {
+    if (!window.confirm(`Delete "${d.material.name}"? This cannot be undone.`)) return;
+    try { await api.delete(`/materials/${id}`); toast.success("Material deleted"); navigate("/inventory"); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+
   if (loading || !d) return <div className="p-10 text-center text-slate-400" data-testid="material-detail-loading"><Loader2 className="mx-auto h-6 w-6 animate-spin" /></div>;
   const m = d.material; const q = d.quantities;
 
@@ -54,7 +104,17 @@ export default function MaterialDetail() {
     <div>
       <PageHeader title={m.name} description={m.category || "Material"} testid="page-material-detail" />
       <div className="p-6 sm:p-8 space-y-6">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="detail-back"><ArrowLeft className="h-4 w-4" /> Inventory</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="detail-back"><ArrowLeft className="h-4 w-4" /> Inventory</Button>
+          {canManage && (
+            <div className="flex flex-wrap items-center gap-2" data-testid="material-actions">
+              <Button size="sm" variant="outline" onClick={openEdit} data-testid="edit-material-button"><Pencil className="h-4 w-4" /> Edit</Button>
+              <Button size="sm" variant="outline" onClick={() => setAdjOpen(true)} data-testid="adjust-inventory-button"><SlidersHorizontal className="h-4 w-4" /> Adjust inventory</Button>
+              <Button size="sm" variant="outline" onClick={toggleActive} data-testid="toggle-active-button"><Power className="h-4 w-4" /> {m.active ? "Deactivate" : "Reactivate"}</Button>
+              <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={doDelete} data-testid="delete-material-button"><Trash2 className="h-4 w-4" /> Delete</Button>
+            </div>
+          )}
+        </div>
 
         {/* Overview */}
         <section className="rounded-md border border-border bg-white p-4" data-testid="detail-overview">
@@ -190,6 +250,53 @@ export default function MaterialDetail() {
           </Table>
         </section>
       </div>
+
+      {/* Edit dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-lg" data-testid="edit-material-dialog">
+          <DialogHeader><DialogTitle>Edit material</DialogTitle><DialogDescription>Changing details here never alters past estimates, quotes, POs, or job costs.</DialogDescription></DialogHeader>
+          <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+            <div className="space-y-1.5"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="edit-name" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>SKU</Label><Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} data-testid="edit-sku" /></div>
+              <div className="space-y-1.5"><Label>Category</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} data-testid="edit-category" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Manufacturer</Label><Input value={form.manufacturer} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} data-testid="edit-manufacturer" /></div>
+              <div className="space-y-1.5"><Label>Brand</Label><Input value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} data-testid="edit-brand" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Unit</Label><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="bundle / roll / each" data-testid="edit-unit" /></div>
+              <div className="space-y-1.5"><Label>Reorder threshold</Label><Input type="number" value={form.reorder_threshold} onChange={(e) => setForm({ ...form, reorder_threshold: e.target.value })} data-testid="edit-threshold" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Standard cost <span className="text-xs text-slate-400">(fallback)</span></Label><Input type="number" value={form.standard_cost} onChange={(e) => setForm({ ...form, standard_cost: e.target.value })} placeholder="—" data-testid="edit-standard-cost" /></div>
+              <div className="space-y-1.5"><Label>Default sell price</Label><Input type="number" value={form.default_sell_price} onChange={(e) => setForm({ ...form, default_sell_price: e.target.value })} placeholder="—" data-testid="edit-sell-price" /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Description</Label><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} data-testid="edit-description" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button><Button onClick={saveEdit} disabled={busy} data-testid="edit-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Adjust dialog */}
+      <Dialog open={adjOpen} onOpenChange={setAdjOpen}>
+        <DialogContent data-testid="detail-adjust-dialog">
+          <DialogHeader><DialogTitle>Adjust — {m.name}</DialogTitle><DialogDescription>Record an inventory transaction. Reservations do not reduce physical on-hand.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-slate-500">On hand: <span className="font-medium">{q.on_hand}</span>. Use a negative number to decrease.</p>
+            <div className="space-y-1.5"><Label>Transaction type</Label>
+              <Select value={adj.reason} onValueChange={(v) => setAdj({ ...adj, reason: v })}>
+                <SelectTrigger data-testid="detail-adjust-reason"><SelectValue /></SelectTrigger>
+                <SelectContent>{TXN_TYPES.map((t) => <SelectItem key={t} value={t}>{txnLabel(t)}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label>Change (+/-)</Label><Input type="number" value={adj.delta} onChange={(e) => setAdj({ ...adj, delta: e.target.value })} data-testid="detail-adjust-delta" /></div>
+            <div className="space-y-1.5"><Label>Notes (optional)</Label><Input value={adj.note} onChange={(e) => setAdj({ ...adj, note: e.target.value })} data-testid="detail-adjust-note" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setAdjOpen(false)}>Cancel</Button><Button onClick={doAdjust} disabled={busy} data-testid="detail-adjust-save">Apply</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -214,6 +214,46 @@ async def update_material(material_id: str, payload: MaterialPatch, request: Req
     return _mat_out(m)
 
 
+@router.delete("/materials/{material_id}")
+async def delete_material(material_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Safe delete: hard-delete ONLY when the material has no operational/historical references and no
+    stock on hand. Otherwise reject (409) and tell the user to Deactivate instead — history stays intact."""
+    from models import EstimateLineItem, QuoteLineItem, AssemblyItem, PriceBookEntry, AbcCatalogItem
+    m = await db.get(Material, material_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Material not found")
+
+    async def _count(model, col):
+        return int((await db.execute(select(func.count()).select_from(model).where(col == m.id))).scalar() or 0)
+
+    refs = {}
+    if m.quantity_on_hand and m.quantity_on_hand > 0:
+        refs["on-hand stock"] = m.quantity_on_hand
+    for label, model, col in [
+        ("supplier mappings", SupplierMaterial, SupplierMaterial.material_id),
+        ("inventory transactions", InventoryTxn, InventoryTxn.material_id),
+        ("estimate lines", EstimateLineItem, EstimateLineItem.material_id),
+        ("quote lines", QuoteLineItem, QuoteLineItem.material_id),
+        ("purchase order lines", POLineItem, POLineItem.material_id),
+        ("job material plans", JobMaterial, JobMaterial.material_id),
+        ("assembly items", AssemblyItem, AssemblyItem.material_id),
+        ("price book entries", PriceBookEntry, PriceBookEntry.material_id),
+        ("ABC catalog links", AbcCatalogItem, AbcCatalogItem.material_id),
+    ]:
+        c = await _count(model, col)
+        if c:
+            refs[label] = c
+    if refs:
+        summary = ", ".join(f"{v} {k}" for k, v in refs.items())
+        raise HTTPException(status_code=409, detail=(
+            f"This material can't be deleted because it has history/references ({summary}). "
+            "Deactivate it instead to keep records intact."))
+    await db.delete(m)  # InventoryBalance rows cascade via FK
+    await db.commit()
+    await log_action(db, user=user, action="material.delete", entity_type="material", entity_id=material_id, request=request)
+    return {"deleted": True, "id": material_id}
+
+
 @router.get("/materials/{material_id}/quantities", response_model=QuantitiesOut)
 async def material_quantities(material_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     m = await db.get(Material, material_id)
