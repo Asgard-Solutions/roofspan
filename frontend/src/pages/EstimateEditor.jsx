@@ -105,11 +105,14 @@ export default function EstimateEditor() {
   };
 
   const addProduct = (m, sm) => {
-    const cost = sm ? (sm.current_cost || 0) : (m.primary_supplier_cost || m.best_known_cost || 0);
+    const cost = r2(sm ? (sm.current_cost || 0) : (m.effective_cost ?? m.primary_supplier_cost ?? m.best_known_cost ?? 0));
+    // Pull the item's sell price: Default Price Book effective price -> manual default sell price -> cost.
+    const sell = r2(m.effective_price ?? m.default_sell_price ?? cost);
+    const mk = cost ? r2((sell - cost) / cost * 100) : 0;
     setLines((ls) => [...ls, blankLine({ description: m.name, unit: (m.unit || "EA").toUpperCase(), line_kind: "material",
-      material_id: m.id, supplier_material_id: sm?.id, material_cost: cost, selling_unit_price: cost,
-      cost_source_supplier_name: sm ? sm.supplier_name : m.primary_supplier_name, cost_source: sm?.price_status })]);
-    setProdOpen(false); toast.success(`Added ${m.name}`);
+      material_id: m.id, supplier_material_id: sm?.id, material_cost: cost, selling_unit_price: sell, markup_percent: mk,
+      cost_source_supplier_name: sm ? sm.supplier_name : (m.effective_cost_supplier_name || m.primary_supplier_name), cost_source: sm?.price_status })]);
+    setProdOpen(false); toast.success(`Added ${m.name} — you can adjust the Qty on the line`);
   };
 
   const addAssemblyLines = (expandLines) => {
@@ -308,18 +311,19 @@ function ProductPicker({ open, onOpenChange, seeCost, onPick }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto" data-testid="product-picker">
-        <DialogHeader><DialogTitle>Search Product Catalog</DialogTitle><DialogDescription>Add a material — its current cost is snapshotted onto the estimate.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Search Product Catalog</DialogTitle><DialogDescription>Add a material — its unit cost and sell price are pulled onto the estimate. Adjust the Qty on the line afterwards.</DialogDescription></DialogHeader>
         <div className="flex gap-2"><Input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder="Search name / SKU / manufacturer" data-testid="picker-search" /><Button onClick={search} disabled={loading} data-testid="picker-search-btn">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}</Button></div>
         <div className="rounded-md border border-border">
-          <Table><TableHeader><TableRow><TableHead>Material</TableHead><TableHead>Preferred</TableHead>{seeCost && <TableHead>Best Cost</TableHead>}<TableHead /></TableRow></TableHeader>
+          <Table><TableHeader><TableRow><TableHead>Material</TableHead><TableHead>Preferred</TableHead>{seeCost && <TableHead className="text-right">Unit cost</TableHead>}<TableHead className="text-right">Sell price</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>{rows.map((m) => (
               <TableRow key={m.id} data-testid={`picker-row-${m.id}`}>
                 <TableCell><div className="font-medium text-slate-800">{m.name}</div><div className="text-xs text-slate-400">{m.manufacturer || m.category || ""}</div></TableCell>
-                <TableCell className="text-sm">{m.primary_supplier_name ? <span className="flex items-center gap-1"><Star className="h-3 w-3 fill-indigo-500 text-indigo-500" />{m.primary_supplier_name}{seeCost && m.primary_supplier_cost != null ? ` · ${money(m.primary_supplier_cost)}` : ""}</span> : "—"}</TableCell>
-                {seeCost && <TableCell className="text-sm">{m.best_known_cost != null ? `${money(m.best_known_cost)}${m.best_supplier_name ? ` (${m.best_supplier_name})` : ""}` : "—"}</TableCell>}
+                <TableCell className="text-sm">{m.primary_supplier_name ? <span className="flex items-center gap-1"><Star className="h-3 w-3 fill-indigo-500 text-indigo-500" />{m.primary_supplier_name}</span> : "—"}</TableCell>
+                {seeCost && <TableCell className="text-right text-sm tabular-nums" data-testid={`picker-cost-${m.id}`}>{m.effective_cost != null ? money(m.effective_cost) : (m.best_known_cost != null ? money(m.best_known_cost) : "—")}</TableCell>}
+                <TableCell className="text-right text-sm font-medium tabular-nums" data-testid={`picker-price-${m.id}`}>{m.effective_price != null ? money(m.effective_price) : (m.default_sell_price != null ? money(m.default_sell_price) : "—")}</TableCell>
                 <TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => onPick(m, null)} data-testid={`picker-add-${m.id}`}><Plus className="h-4 w-4" /> Add</Button></TableCell>
               </TableRow>
-            ))}{!loading && rows.length === 0 && <TableRow><TableCell colSpan={seeCost ? 4 : 3} className="py-6 text-center text-slate-400">No materials.</TableCell></TableRow>}</TableBody>
+            ))}{!loading && rows.length === 0 && <TableRow><TableCell colSpan={seeCost ? 5 : 4} className="py-6 text-center text-slate-400">No materials.</TableCell></TableRow>}</TableBody>
           </Table>
         </div>
       </DialogContent>
