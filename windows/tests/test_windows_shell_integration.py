@@ -34,6 +34,17 @@ def test_native_shell_project_uses_webview2_and_local_app_origin():
     assert 'UseShellExecute = true' in program  # external links only
 
 
+def test_native_shell_exposes_folder_picker_bridge():
+    """Backups page 'Browse' relies on a WebView2 host object exposing a native folder picker."""
+    program = (SHELL / "Program.cs").read_text(encoding="utf-8")
+    assert 'AddHostObjectToScript("roofspanShell"' in program
+    assert 'class ShellBridge' in program
+    assert 'BrowseForFolder()' in program
+    assert 'FolderBrowserDialog' in program
+    assert '[ComVisible(true)]' in program
+
+
+
 def test_msi_shortcuts_and_first_run_target_native_shell_not_browser():
     wxs = _read_installer("RoofSpan.wxs")
     assert '<Icon Id="RoofSpanIcon"' in wxs

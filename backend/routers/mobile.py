@@ -14,7 +14,7 @@ from fastapi.responses import Response
 from db import get_db
 from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
-from offsite_backup import put_object, get_object
+from services.object_storage import put_object, get_object
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 

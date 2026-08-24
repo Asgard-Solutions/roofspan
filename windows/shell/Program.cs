@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -73,6 +74,11 @@ internal sealed class RoofSpanMainForm : Form
             settings.IsStatusBarEnabled = false;
             settings.IsZoomControlEnabled = true;
 
+            // Native bridge: lets the Backups page open a folder picker for the secondary backup
+            // location. Manual path entry still works if the bridge is unavailable.
+            settings.IsWebMessageEnabled = true;
+            _webView.CoreWebView2.AddHostObjectToScript("roofspanShell", new ShellBridge(this));
+
             _webView.CoreWebView2.NavigationStarting += (_, e) =>
             {
                 if (!IsLocalRoofSpanUri(e.Uri))
@@ -137,4 +143,37 @@ internal sealed class RoofSpanMainForm : Form
         }
         return false;
     }
+
+    // Runs the folder picker on the UI thread and returns the selected path (or "" if cancelled).
+    internal string ShowFolderPicker()
+    {
+        string result = "";
+        void Pick()
+        {
+            using var dlg = new FolderBrowserDialog
+            {
+                Description = "Choose where RoofSpan should copy each backup",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = true,
+            };
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                result = dlg.SelectedPath;
+            }
+        }
+        if (InvokeRequired) { Invoke((Action)Pick); } else { Pick(); }
+        return result;
+    }
+}
+
+// Exposed to the WebView2 page as window.chrome.webview.hostObjects.roofspanShell
+[ComVisible(true)]
+[ClassInterface(ClassInterfaceType.AutoDual)]
+public sealed class ShellBridge
+{
+    private readonly RoofSpanMainForm _form;
+    internal ShellBridge(RoofSpanMainForm form) => _form = form;
+
+    // Opens a native folder picker; returns the chosen absolute path, or "" if cancelled.
+    public string BrowseForFolder() => _form.ShowFolderPicker();
 }

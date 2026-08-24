@@ -1,66 +1,29 @@
 #!/usr/bin/env python3
-"""Off-site backup copy for RoofSpan using Emergent managed object storage (pod-independent).
+"""Off-site (secondary) backup copy for RoofSpan — LOCAL FILESYSTEM ONLY.
+
+RoofSpan copies a completed local PostgreSQL backup to a customer-selected, Windows-accessible
+directory: another local/USB/external drive, a NAS, a UNC network share, or a locally-synchronised
+cloud folder (OneDrive/Dropbox/Google Drive). There is NO cloud API, NO AWS/S3, NO pre-signed URLs,
+NO Emergent object storage, and NO credentials involved — it is a plain file copy performed by the
+same service that creates the backup.
 
 CLI:
-  python3 offsite_backup.py upload <local_dump_path>   -> uploads to roofspan/backups/<basename>; prints OK <object_path> or FAIL
-  python3 offsite_backup.py download <object_path> <dest_path>
-  python3 offsite_backup.py latest-name               -> prints the basename of the newest local dump (helper)
-
-Exit code 0 on success, non-zero on failure (so callers can detect off-site failure).
+  python3 offsite_backup.py copy <local_dump_path>   # copy to the configured secondary location
+  python3 offsite_backup.py validate <dest_dir>      # write/read/delete test on a destination
+  python3 offsite_backup.py latest-name
+Exit code 0 on success, non-zero on failure.
 """
+import asyncio
+import glob
 import os
 import sys
-import glob
 
-import requests
-from dotenv import load_dotenv
+from services import backup as backup_svc
 
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "roofspan"
-BACKUP_DIR = os.environ.get("ROOFSPAN_BACKUP_DIR", "/data/db/roofspan_backups")
-
-_storage_key = None
+BACKUP_DIR = backup_svc.BACKUP_DIR
 
 
-def init_storage(force: bool = False) -> str:
-    global _storage_key
-    if _storage_key and not force:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
-
-
-def put_object(path: str, data: bytes, content_type: str = "application/octet-stream") -> dict:
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=180)
-    if resp.status_code == 404:  # stale/inactive storage key -> mint a fresh one and retry once
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=180)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_object(path: str) -> bytes:
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=120)
-    resp.raise_for_status()
-    return resp.content
-
-
-def _object_path(basename: str) -> str:
-    return f"{APP_NAME}/backups/{basename}"
-
-
-def _latest_local() -> str | None:
+def _latest_local():
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "roofspan_*.dump")), reverse=True)
     return files[0] if files else None
 
@@ -71,19 +34,25 @@ def main() -> int:
         return 2
     cmd = sys.argv[1]
     try:
-        if cmd == "upload":
+        if cmd == "copy":
             local = sys.argv[2]
-            with open(local, "rb") as f:
-                data = f.read()
-            res = put_object(_object_path(os.path.basename(local)), data)
-            print(f"OK {res.get('path')}")
+            dest = asyncio.run(backup_svc.copy_offsite(local))
+            print(f"OK {dest}")
             return 0
-        if cmd == "download":
-            obj, dest = sys.argv[2], sys.argv[3]
-            data = get_object(obj)
-            with open(dest, "wb") as f:
-                f.write(data)
-            print(f"OK {dest} ({len(data)} bytes)")
+        if cmd == "validate":
+            res = backup_svc.validate_offsite_location(sys.argv[2])
+            print(("OK " if res["ok"] else "FAIL ") + res["message"])
+            return 0 if res["ok"] else 1
+        if cmd == "retrieve":
+            name, dest = sys.argv[2], sys.argv[3]
+            src_dir = backup_svc.get_offsite_dir()
+            if not src_dir:
+                print("FAIL: no secondary backup location configured", file=sys.stderr)
+                return 1
+            src = os.path.join(src_dir, os.path.basename(name))
+            import shutil
+            shutil.copyfile(src, dest)
+            print(f"OK {dest}")
             return 0
         if cmd == "latest-name":
             latest = _latest_local()
@@ -94,7 +63,7 @@ def main() -> int:
             return 0
         print(f"FAIL: unknown command {cmd}", file=sys.stderr)
         return 2
-    except Exception as e:  # loud failure for callers/logs
+    except Exception as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
 

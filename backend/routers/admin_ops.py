@@ -1,6 +1,7 @@
 import os
 import glob
 from datetime import datetime
+from typing import Optional
 
 import jwt
 from sqlalchemy import select
@@ -15,7 +16,8 @@ from services import backup as backup_svc
 
 router = APIRouter(prefix="/api/admin", tags=["admin-ops"])
 
-BACKUP_DIR = os.environ.get("ROOFSPAN_BACKUP_DIR", "/data/db/roofspan_backups")
+# Reuse the service's OS-aware backup directory (Windows: ProgramData\RoofSpan\backups; POSIX: data volume).
+BACKUP_DIR = backup_svc.BACKUP_DIR
 
 
 def _iso(ts: str):
@@ -58,6 +60,11 @@ class ScheduleIn(BaseModel):
     enabled: bool
     time: str
     offsite: bool = False
+    offsite_dir: Optional[str] = None
+
+
+class OffsiteLocationIn(BaseModel):
+    offsite_dir: str = ""
 
 
 async def _auth_admin(request: Request) -> User:
@@ -140,6 +147,8 @@ async def offsite_backup_copy(payload: RestoreIn, request: Request,
         raise HTTPException(status_code=404, detail="Backup not found.")
     try:
         object_path = await backup_svc.copy_offsite(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Off-site copy failed: {e}")
     async with SessionLocal() as db:
@@ -233,13 +242,32 @@ async def backup_health(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
 async def set_backup_schedule(payload: ScheduleIn, request: Request,
                               user: User = Depends(require_roles(*SENSITIVE_ROLES))):
     try:
-        sched = backup_svc.set_schedule(payload.enabled, payload.time, payload.offsite)
+        sched = backup_svc.set_schedule(payload.enabled, payload.time, payload.offsite, payload.offsite_dir)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     async with SessionLocal() as db:
         await log_action(db, user=user, action="backup.schedule.update", entity_type="config",
                          entity_id="backup_schedule", detail=sched, request=request)
     return {"schedule": sched, "state": backup_svc.get_schedule_state()}
+
+
+@router.put("/backups/offsite-location")
+async def set_offsite_location(payload: OffsiteLocationIn, request: Request,
+                               user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    """Save the customer-selected secondary (off-site) backup directory to machine-level config."""
+    sched = backup_svc.set_offsite_dir(payload.offsite_dir)
+    async with SessionLocal() as db:
+        await log_action(db, user=user, action="backup.offsite.location", entity_type="config",
+                         entity_id="offsite_dir", detail={"offsite_dir": sched.get("offsite_dir")}, request=request)
+    return {"schedule": backup_svc.get_schedule()}
+
+
+@router.post("/backups/offsite-location/test")
+async def test_offsite_location(payload: OffsiteLocationIn,
+                                user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    """Validate a secondary backup directory (write/read/delete a temp file) from the service context."""
+    dest = payload.offsite_dir or backup_svc.get_offsite_dir()
+    return backup_svc.validate_offsite_location(dest)
 
 
 @router.post("/backups/schedule/run-now")

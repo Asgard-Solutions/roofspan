@@ -14,7 +14,19 @@ import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse, unquote
 
-BACKUP_DIR = os.environ.get("ROOFSPAN_BACKUP_DIR", "/data/db/roofspan_backups")
+from services import pg_tools
+
+
+def _default_backup_dir() -> str:
+    """Windows customer installs store backups under ProgramData; POSIX/dev uses the data volume.
+    The Windows installer sets ROOFSPAN_BACKUP_DIR=C:\\ProgramData\\RoofSpan\\backups explicitly."""
+    if os.name == "nt":
+        base = os.environ.get("ProgramData", r"C:\ProgramData")
+        return os.path.join(base, "RoofSpan", "backups")
+    return "/data/db/roofspan_backups"
+
+
+BACKUP_DIR = os.environ.get("ROOFSPAN_BACKUP_DIR") or _default_backup_dir()
 SCHEDULE_FILE = os.path.join(BACKUP_DIR, "schedule.json")
 SCHED_STATE_FILE = os.path.join(BACKUP_DIR, "schedule_state.json")
 # Only files matching this pattern are ever listed / downloaded / restored.
@@ -72,24 +84,71 @@ def list_backups() -> list[dict]:
 
 
 async def copy_offsite(path: str) -> str:
-    """Push a local backup file to off-pod object storage. Returns the stored object path.
-
-    Reuses the same off-site transport as the nightly backup. Runs the blocking upload in a
-    worker thread and records a local '<file>.offsite' marker on success.
+    """Copy a completed local backup to the customer-configured SECONDARY location (a normal
+    Windows-accessible directory: local/USB/external drive, NAS, UNC share, or a locally-synced
+    cloud folder). This is a COPY — the original local backup is never moved or modified. Writes to
+    a '.partial' file first then atomically renames. Records a local '<file>.offsite' marker on success.
     """
-    import offsite_backup
+    dest_dir = get_offsite_dir()
+    if not dest_dir:
+        raise ValueError("No secondary backup location is configured.")
     basename = os.path.basename(path)
-    with open(path, "rb") as f:
-        data = f.read()
 
     def _do():
-        res = offsite_backup.put_object(offsite_backup._object_path(basename), data)
-        return res.get("path") or offsite_backup._object_path(basename)
+        os.makedirs(dest_dir, exist_ok=True)
+        final = os.path.join(dest_dir, basename)
+        tmp = final + ".partial"
+        try:
+            with open(path, "rb") as src, open(tmp, "wb") as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+            os.replace(tmp, final)  # atomic on same filesystem
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        return final
 
     obj = await asyncio.to_thread(_do)
     with open(path + ".offsite", "w") as f:
         f.write(obj)
     return obj
+
+
+def validate_offsite_location(dest_dir: str) -> dict:
+    """Validate the SECONDARY backup location from the service context that performs the copy:
+    the directory exists (or can be created) and RoofSpan can write, read, then delete a temp file.
+    Returns a user-friendly {ok, message}. Raw exceptions are logged, never surfaced verbatim."""
+    dest_dir = (dest_dir or "").strip()
+    if not dest_dir:
+        return {"ok": False, "message": "Enter a backup copy location."}
+    probe = os.path.join(dest_dir, ".roofspan_write_test")
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        with open(probe, "wb") as f:
+            f.write(b"roofspan-write-test")
+        with open(probe, "rb") as f:
+            f.read()
+        os.remove(probe)
+        return {"ok": True, "message": "Backup location is accessible and writable."}
+    except Exception as e:
+        logging.getLogger("roofspan").warning("off-site location validation failed for %r: %s", dest_dir, e)
+        try:
+            if os.path.exists(probe):
+                os.remove(probe)
+        except OSError:
+            pass
+        return {"ok": False, "message": (
+            f"RoofSpan cannot write to this backup location:\n{dest_dir}\n\n"
+            "Verify that the folder exists and that the RoofSpan service account has permission to access it. "
+            "For network shares, use a UNC path (\\\\Server\\Share\\RoofSpan) rather than a mapped drive letter."
+        )}
 
 
 async def create_backup(suffix: str = "") -> dict:
@@ -103,7 +162,7 @@ async def create_backup(suffix: str = "") -> dict:
     out = os.path.join(BACKUP_DIR, f"roofspan_{ts}{suffix}.dump")
     tmp = out + ".partial"
     proc = await asyncio.create_subprocess_exec(
-        "pg_dump", "-h", c["host"], "-p", c["port"], "-U", c["user"],
+        pg_tools.resolve_executable("pg_dump"), "-h", c["host"], "-p", c["port"], "-U", c["user"],
         "-d", c["dbname"], "-Fc", "-f", tmp,
         env=_env(c),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -147,12 +206,14 @@ async def restore_backup(path: str) -> str:
         raise ValueError("Unsafe database name.")
     base = ["-h", c["host"], "-p", c["port"], "-U", c["user"]]
     env = _env(c)
+    psql = pg_tools.resolve_executable("psql")
+    pg_restore = pg_tools.resolve_executable("pg_restore")
     # 1. Drop + recreate the target DB from the 'postgres' maintenance database.
-    await _run(["psql", *base, "-d", "postgres", "-v", "ON_ERROR_STOP=1",
+    await _run([psql, *base, "-d", "postgres", "-v", "ON_ERROR_STOP=1",
                 "-c", f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE);',
                 "-c", f'CREATE DATABASE "{db}" OWNER "{c["user"]}";'], env)
     # 2. Restore the dump into the fresh database.
-    msg = await _run(["pg_restore", "--no-owner", "--no-privileges", *base, "-d", db, path], env)
+    msg = await _run([pg_restore, "--no-owner", "--no-privileges", *base, "-d", db, path], env)
     return msg[-800:]
 
 
@@ -176,7 +237,8 @@ def save_upload(raw_name: str, data: bytes) -> dict:
 
 
 # ---- Scheduled auto-backup (file-based so it survives DB restores) ----
-DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False}
+DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": ""}
+OFFSITE_DIR_ENV = os.environ.get("ROOFSPAN_OFFSITE_BACKUP_DIR", "")
 
 
 def _read_json(path: str, default: dict) -> dict:
@@ -198,15 +260,33 @@ def _write_json(path: str, data: dict):
 def get_schedule() -> dict:
     s = _read_json(SCHEDULE_FILE, DEFAULT_SCHEDULE)
     return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00"),
-            "offsite": bool(s.get("offsite", False))}
+            "offsite": bool(s.get("offsite", False)),
+            "offsite_dir": s.get("offsite_dir") or OFFSITE_DIR_ENV or ""}
 
 
-def set_schedule(enabled: bool, time_str: str, offsite: bool = False) -> dict:
+def set_schedule(enabled: bool, time_str: str, offsite: bool = False, offsite_dir: str | None = None) -> dict:
     if not _TIME_RE.match(time_str or ""):
         raise ValueError("Time must be in 24-hour HH:MM format.")
-    sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite)}
+    current = get_schedule()
+    dest = current.get("offsite_dir", "") if offsite_dir is None else (offsite_dir or "").strip()
+    if offsite and not dest:
+        raise ValueError("Choose a backup copy location before enabling secondary backups.")
+    sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite), "offsite_dir": dest}
     _write_json(SCHEDULE_FILE, sched)
     return sched
+
+
+def get_offsite_dir() -> str:
+    return get_schedule().get("offsite_dir") or ""
+
+
+def set_offsite_dir(dest_dir: str) -> dict:
+    """Persist the customer-selected secondary backup directory to machine-level RoofSpan config
+    (the backups schedule.json), NOT browser storage. Does not store any credentials."""
+    s = get_schedule()
+    s["offsite_dir"] = (dest_dir or "").strip()
+    _write_json(SCHEDULE_FILE, s)
+    return s
 
 
 def get_schedule_state() -> dict:

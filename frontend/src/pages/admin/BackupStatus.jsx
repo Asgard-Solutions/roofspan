@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   RefreshCw, CheckCircle2, XCircle, MinusCircle, DatabaseBackup,
-  Download, Upload, RotateCcw, Loader2, HardDriveDownload, CloudUpload, Cloud, AlertTriangle,
+  Download, Upload, RotateCcw, Loader2, HardDriveDownload, HardDrive, FolderUp, AlertTriangle,
   CalendarClock, Play,
 } from "lucide-react";
 
@@ -58,10 +58,13 @@ export default function BackupStatus() {
   const [restoreTarget, setRestoreTarget] = useState(null);
   const [restoring, setRestoring] = useState(false);
   const [offsiting, setOffsiting] = useState(null);
-  const [schedule, setSchedule] = useState({ enabled: false, time: "02:00", offsite: false });
+  const [schedule, setSchedule] = useState({ enabled: false, time: "02:00", offsite: false, offsite_dir: "" });
   const [schedState, setSchedState] = useState({});
   const [savingSched, setSavingSched] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
+  const [offsiteDirInput, setOffsiteDirInput] = useState("");
+  const [testingLoc, setTestingLoc] = useState(false);
+  const [locStatus, setLocStatus] = useState(null);
   const fileRef = useRef(null);
 
   const load = useCallback(() => {
@@ -69,7 +72,7 @@ export default function BackupStatus() {
     Promise.all([
       api.get("/admin/backup-status").then((r) => setData(r.data)).catch(() => {}),
       api.get("/admin/backups").then((r) => setBackups(r.data.backups || [])).catch(() => {}),
-      api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); }).catch(() => {}),
+      api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); setOffsiteDirInput(r.data.schedule?.offsite_dir || ""); }).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -142,6 +145,49 @@ export default function BackupStatus() {
     }
   };
 
+  const browseForFolder = async () => {
+    const bridge = window.chrome?.webview?.hostObjects?.roofspanShell;
+    if (!bridge) {
+      toast.info("Folder picker is available in the RoofSpan Office desktop app. For now, type or paste the full path.");
+      return;
+    }
+    try {
+      const picked = await bridge.BrowseForFolder();
+      if (picked) { setOffsiteDirInput(picked); setLocStatus(null); }
+    } catch {
+      toast.error("Could not open the folder picker.");
+    }
+  };
+
+  const saveLocation = async () => {
+    setSavingSched(true);
+    try {
+      const r = await api.put("/admin/backups/offsite-location", { offsite_dir: offsiteDirInput });
+      setSchedule(r.data.schedule);
+      setOffsiteDirInput(r.data.schedule?.offsite_dir || "");
+      toast.success("Backup copy location saved.");
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingSched(false);
+    }
+  };
+
+  const testLocation = async () => {
+    setTestingLoc(true);
+    setLocStatus(null);
+    try {
+      const r = await api.post("/admin/backups/offsite-location/test", { offsite_dir: offsiteDirInput });
+      setLocStatus(r.data);
+      if (r.data.ok) toast.success("Backup location is accessible and writable.");
+      else toast.error("Backup location is not writable.");
+    } catch (e) {
+      setLocStatus({ ok: false, message: apiError(e) });
+    } finally {
+      setTestingLoc(false);
+    }
+  };
+
   const runScheduledNow = async () => {
     setRunningNow(true);
     try {
@@ -160,7 +206,7 @@ export default function BackupStatus() {
   const copyOffsite = async (filename) => {    setOffsiting(filename);
     try {
       await api.post("/admin/backups/offsite", { filename });
-      toast.success("Backup copied off-site.");
+      toast.success("Backup copied to the configured location.");
       load();
     } catch (e) {
       toast.error(apiError(e));
@@ -264,10 +310,38 @@ export default function BackupStatus() {
               {runningNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run now
             </Button>
           </div>
-          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
-            <Switch checked={schedule.offsite} onCheckedChange={(v) => saveSchedule({ ...schedule, offsite: v })} disabled={savingSched} data-testid="schedule-offsite-switch" />
-            <span className="flex items-center gap-1.5"><Cloud className="h-4 w-4 text-slate-400" /> Also copy each automatic backup off-site (protects you if this machine fails)</span>
+          <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
+            <Switch checked={schedule.offsite} onCheckedChange={(v) => saveSchedule({ ...schedule, offsite: v, offsite_dir: offsiteDirInput })} disabled={savingSched} data-testid="schedule-offsite-switch" />
+            <span className="flex items-center gap-1.5"><HardDrive className="h-4 w-4 text-slate-400" /> Also copy each automatic backup to another location (protects you if this machine fails)</span>
           </label>
+          <div className="mt-3 max-w-2xl rounded-md border border-border bg-slate-50 p-3" data-testid="offsite-location-card">
+            <div className="text-xs font-medium text-slate-600">Backup copy location</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <Input value={offsiteDirInput} onChange={(e) => { setOffsiteDirInput(e.target.value); setLocStatus(null); }}
+                     placeholder="\\NAS01\Backups\RoofSpan  or  D:\RoofSpan Backups"
+                     className="w-full max-w-md font-mono text-xs" data-testid="offsite-location-input" />
+              <Button variant="outline" size="sm" onClick={browseForFolder} data-testid="offsite-location-browse">
+                <FolderUp className="h-4 w-4" /> Browse
+              </Button>
+              <Button variant="outline" size="sm" onClick={saveLocation} disabled={savingSched} data-testid="offsite-location-save">
+                {savingSched ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save location
+              </Button>
+              <Button variant="outline" size="sm" onClick={testLocation} disabled={testingLoc || !offsiteDirInput} data-testid="offsite-location-test">
+                {testingLoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Test location
+              </Button>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              Choose any writable Windows folder: another/USB/external drive, a NAS, a network share, or a
+              locally-synced OneDrive/Dropbox/Google Drive folder. For network shares, use a UNC path
+              (<span className="font-mono">\\Server\Share\RoofSpan</span>) — the RoofSpan service may not see mapped drive letters.
+            </p>
+            {locStatus && (
+              <div className={`mt-2 flex items-start gap-1.5 whitespace-pre-line rounded-md border p-2 text-xs ${locStatus.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-700"}`} data-testid="offsite-location-status">
+                {locStatus.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                <span>{locStatus.message}</span>
+              </div>
+            )}
+          </div>
           {/* Last automatic backup status — stays "failed" until a successful run */}
           {schedState.last_status ? (
             <div className={`mt-4 flex items-start gap-2 rounded-md border p-3 text-sm ${schedState.last_status === "OK" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`} data-testid="schedule-status">
@@ -287,10 +361,10 @@ export default function BackupStatus() {
                 )}
                 {schedState.last_status === "OK" && schedState.offsite_status && (
                   <div className={`mt-1 flex items-center gap-1.5 text-xs ${schedState.offsite_status === "OK" ? "text-emerald-700" : "text-amber-700"}`} data-testid="schedule-offsite-status">
-                    <Cloud className="h-3.5 w-3.5" />
+                    <HardDrive className="h-3.5 w-3.5" />
                     {schedState.offsite_status === "OK"
-                      ? "Off-site copy succeeded"
-                      : `Off-site copy failed: ${schedState.offsite_error || "unknown error"}`}
+                      ? "Backup copy succeeded"
+                      : `Backup copy failed: ${schedState.offsite_error || "unknown error"}`}
                   </div>
                 )}
               </div>
@@ -319,7 +393,7 @@ export default function BackupStatus() {
                       <span className="truncate font-mono text-xs font-medium text-slate-900" data-testid="backup-filename">{b.filename}</span>
                       {b.offsite && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700" data-testid={`offsite-badge-${b.filename}`}>
-                          <Cloud className="h-3 w-3" /> Off-site
+                          <HardDrive className="h-3 w-3" /> Copied
                         </span>
                       )}
                     </div>
@@ -330,8 +404,8 @@ export default function BackupStatus() {
                       <Download className="h-4 w-4" /> Download
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => copyOffsite(b.filename)} disabled={offsiting === b.filename} data-testid={`offsite-backup-${b.filename}`}>
-                      {offsiting === b.filename ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
-                      {b.offsite ? "Re-copy off-site" : "Copy off-site"}
+                      {offsiting === b.filename ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderUp className="h-4 w-4" />}
+                      {b.offsite ? "Re-copy to location" : "Copy to location"}
                     </Button>
                     <Button variant="outline" size="sm" className="border-red-200 text-red-700 hover:bg-red-50" onClick={() => setRestoreTarget(b.filename)} data-testid={`restore-backup-${b.filename}`}>
                       <RotateCcw className="h-4 w-4" /> Restore
@@ -349,8 +423,8 @@ export default function BackupStatus() {
             <HardDriveDownload className="h-4 w-4 text-slate-500" /> Automatic backup health
           </div>
           <StatusRow label="Last local backup" item={data?.local_backup} hint="Nightly pg_dump on the persistent volume" />
-          <StatusRow label="Last off-site copy" item={data?.offsite_copy} hint="Copied to off-pod object storage" />
-          <StatusRow label="Last off-site restore drill" item={data?.offsite_restore_drill} hint="Retrieve off-site backup → restore → verify" />
+          <StatusRow label="Last backup copy" item={data?.offsite_copy} hint="Copied to the configured backup copy location" />
+          <StatusRow label="Last copy restore drill" item={data?.offsite_restore_drill} hint="Retrieve the copied backup → restore → verify" />
           <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
             <span data-testid="backup-count">Local backups retained: {data?.local_backup_count ?? "—"}</span>
             <span>{loading ? "Loading…" : data?.backup_dir}</span>

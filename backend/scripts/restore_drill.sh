@@ -33,8 +33,8 @@ if [ "$OFFSITE" = "1" ]; then
   NAME="$(cd "$BACKEND_DIR" && python3 offsite_backup.py latest-name 2>/dev/null)"
   if [ -z "$NAME" ]; then echo "FAIL: no backup available to locate off-site copy"; exit 1; fi
   TMP_OFFSITE="/tmp/offsite_restore_${NAME}"
-  if ! (cd "$BACKEND_DIR" && python3 offsite_backup.py download "roofspan/backups/${NAME}" "$TMP_OFFSITE"); then
-    echo "FAIL: could not RETRIEVE off-site backup ${NAME}"
+  if ! (cd "$BACKEND_DIR" && python3 offsite_backup.py retrieve "${NAME}" "$TMP_OFFSITE"); then
+    echo "FAIL: could not RETRIEVE backup copy ${NAME}"
     echo "FAIL $(date -u +%Y%m%dT%H%M%SZ)" > "$BACKUP_DIR/LAST_OFFSITE_RESTORE_STATUS"
     exit 1
   fi
