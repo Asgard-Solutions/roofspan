@@ -215,3 +215,31 @@ async def mobile_revoke(device_id: str, user: User = Depends(require_roles(*SENS
         return await pairing_client.revoke_device(db, device_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane: {str(e)[:200]}")
+
+
+# ---- Per-user Mobile Access (Office User record → Connect/Devices/Revoke, bound to that user) ----
+@router.post("/admin/users/{user_id}/mobile/pair")
+async def user_mobile_pair(user_id: str, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from models import User as U
+    target = await db.get(U, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    from licensing import pairing_client
+    try:
+        res = await pairing_client.create_pairing(db, expected_user_id=str(target.id),
+                                                  expected_user_label=(target.full_name or target.email))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane to pair device: {str(e)[:200]}")
+    await log_action(db, user=user, action="mobile.pair.create", entity_type="user", entity_id=target.id)
+    return res
+
+
+@router.get("/admin/users/{user_id}/mobile/devices")
+async def user_mobile_devices(user_id: str, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from licensing import pairing_client
+    try:
+        data = await pairing_client.list_devices(db)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach RoofSpan Control Plane: {str(e)[:200]}")
+    devices = [d for d in data.get("devices", []) if str(d.get("expected_user_id")) == str(user_id)]
+    return {"devices": devices}

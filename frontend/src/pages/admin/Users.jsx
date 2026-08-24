@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserPlus, KeyRound, Loader2 } from "lucide-react";
+import { UserPlus, KeyRound, Loader2, Smartphone } from "lucide-react";
 
 const ROLE_OPTIONS = [
   { value: "owner", label: "Owner" },
@@ -42,6 +42,35 @@ export default function Users() {
   const [pwOpen, setPwOpen] = useState(false);
   const [pwTarget, setPwTarget] = useState(null);
   const [pwValue, setPwValue] = useState("");
+
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileTarget, setMobileTarget] = useState(null);
+  const [pairing, setPairing] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [mobileBusy, setMobileBusy] = useState(false);
+
+  const openMobile = async (u) => {
+    setMobileTarget(u); setPairing(null); setDevices([]); setMobileOpen(true);
+    try { const r = await api.get(`/admin/users/${u.id}/mobile/devices`); setDevices(r.data.devices || []); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const connectDevice = async () => {
+    setMobileBusy(true);
+    try {
+      const r = await api.post(`/admin/users/${mobileTarget.id}/mobile/pair`);
+      setPairing(r.data);
+      const d = await api.get(`/admin/users/${mobileTarget.id}/mobile/devices`);
+      setDevices(d.data.devices || []);
+    } catch (e) { toast.error(apiError(e)); } finally { setMobileBusy(false); }
+  };
+  const revokeDevice = async (id) => {
+    try {
+      await api.post(`/admin/mobile/devices/${id}/revoke`);
+      toast.success("Device revoked");
+      const d = await api.get(`/admin/users/${mobileTarget.id}/mobile/devices`);
+      setDevices(d.data.devices || []);
+    } catch (e) { toast.error(apiError(e)); }
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -148,6 +177,11 @@ export default function Users() {
                         <Button variant="outline" size="sm" onClick={() => { setPwTarget(u); setPwOpen(true); }} data-testid={`reset-pw-${u.email}`}>
                           <KeyRound className="h-3.5 w-3.5" /> Reset
                         </Button>
+                        {u.role === "sales" && (
+                          <Button variant="outline" size="sm" onClick={() => openMobile(u)} data-testid={`mobile-access-${u.email}`}>
+                            <Smartphone className="h-3.5 w-3.5" /> Mobile
+                          </Button>
+                        )}
                         <Button
                           variant={u.is_active ? "outline" : "default"}
                           size="sm"
@@ -223,6 +257,57 @@ export default function Users() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPwOpen(false)}>Cancel</Button>
             <Button onClick={resetPassword} data-testid="confirm-reset-pw">Set password</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Mobile Access dialog */}
+      <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
+        <DialogContent data-testid="mobile-access-dialog">
+          <DialogHeader>
+            <DialogTitle>Mobile Access</DialogTitle>
+            <DialogDescription>{mobileTarget?.full_name || mobileTarget?.email}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {pairing ? (
+              <div className="rounded-lg border border-border bg-slate-50 p-4 text-center" data-testid="pairing-code-box">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pairing code</p>
+                <p className="my-1 text-3xl font-black tracking-widest text-slate-900" data-testid="pairing-numeric">{pairing.numeric_code}</p>
+                <p className="text-xs text-slate-500">Scan the QR in RoofSpan Mobile or enter this 6-digit code.</p>
+                <p className="mt-2 break-all rounded bg-white p-2 text-[10px] text-slate-400" data-testid="pairing-token">{pairing.token}</p>
+                {pairing.expires_at && <p className="mt-1 text-xs text-amber-600">Expires {new Date(pairing.expires_at).toLocaleTimeString()} · single-use</p>}
+              </div>
+            ) : (
+              <Button onClick={connectDevice} disabled={mobileBusy} className="w-full" data-testid="connect-mobile-device">
+                {mobileBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Connect Mobile Device"}
+              </Button>
+            )}
+            {pairing && (
+              <Button variant="outline" onClick={connectDevice} disabled={mobileBusy} className="w-full" data-testid="regenerate-pairing">
+                Generate new pairing code
+              </Button>
+            )}
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-700">Devices</p>
+              {devices.length === 0 ? (
+                <p className="text-sm text-slate-400" data-testid="no-devices">No paired device yet.</p>
+              ) : devices.map((d) => (
+                <div key={d.id} className="flex items-center justify-between border-b border-border py-2" data-testid={`device-${d.id}`}>
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">{d.label || "Mobile device"}</p>
+                    <p className="text-xs text-slate-500">
+                      {d.status === "ACTIVE" ? "Connected" : "Revoked"}
+                      {d.last_seen_at ? ` · last seen ${new Date(d.last_seen_at).toLocaleString()}` : ""}
+                    </p>
+                  </div>
+                  {d.status === "ACTIVE" && (
+                    <Button variant="outline" size="sm" onClick={() => revokeDevice(d.id)} data-testid={`revoke-${d.id}`}>Revoke</Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMobileOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

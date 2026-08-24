@@ -20,6 +20,7 @@ import Leads from "./src/screens/Leads";
 import LeadDetail from "./src/screens/LeadDetail";
 import NewLead from "./src/screens/NewLead";
 import MapScreen from "./src/screens/MapScreen";
+import Property from "./src/screens/Property";
 import Jobs from "./src/screens/Jobs";
 import JobDetail from "./src/screens/JobDetail";
 import Inspection from "./src/screens/Inspection";
@@ -28,7 +29,19 @@ import More from "./src/screens/More";
 const Tab = createBottomTabNavigator();
 const LeadStack = createNativeStackNavigator();
 const JobStack = createNativeStackNavigator();
+const MapStack = createNativeStackNavigator();
 const PairStack = createNativeStackNavigator();
+
+function MapNav() {
+  return (
+    <MapStack.Navigator>
+      <MapStack.Screen name="MyArea" component={MapScreen} options={{ title: "My Area" }} />
+      <MapStack.Screen name="Property" component={Property} options={{ title: "Property" }} />
+      <MapStack.Screen name="NewLead" component={NewLead} options={{ title: "New Lead" }} />
+      <MapStack.Screen name="Inspection" component={Inspection} />
+    </MapStack.Navigator>
+  );
+}
 
 function LeadsNav() {
   return (
@@ -113,7 +126,7 @@ function MainApp() {
       >
         <Tab.Screen name="Home" component={Home} />
         <Tab.Screen name="LeadsTab" component={LeadsNav} options={{ title: "Leads", headerShown: false }} />
-        <Tab.Screen name="Map" component={MapScreen} />
+        <Tab.Screen name="Map" component={MapNav} options={{ title: "My Area", headerShown: false }} />
         <Tab.Screen name="JobsTab" component={JobsNav} options={{ title: "Jobs", headerShown: false }} />
         <Tab.Screen name="More" component={More} />
       </Tab.Navigator>

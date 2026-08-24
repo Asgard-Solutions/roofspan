@@ -690,20 +690,26 @@ def _version_tuple(v: str) -> tuple:
         return (0,)
 
 
-async def create_pairing(db: AsyncSession, *, installation_id: str) -> dict:
-    """Issue a short-lived, single-use pairing token (QR + numeric fallback). No secrets in payload."""
+async def create_pairing(db: AsyncSession, *, installation_id: str, expected_user_id: str | None = None,
+                         expected_user_label: str | None = None) -> dict:
+    """Issue a short-lived, single-use pairing token (QR + numeric fallback). No secrets in payload.
+    Optionally BIND the pairing to a specific Office user so only that salesperson's device enrolls."""
     from control_plane.models import PairingToken
     now = datetime.now(timezone.utc)
     token = uuid.uuid4().hex
     numeric = f"{random.randint(0, 999999):06d}"
     expires = now + timedelta(seconds=config.PAIRING_TTL_SECONDS)
-    db.add(PairingToken(token=token, numeric_code=numeric, installation_id=uuid.UUID(installation_id), expires_at=expires))
+    db.add(PairingToken(token=token, numeric_code=numeric, installation_id=uuid.UUID(installation_id),
+                        expires_at=expires, expected_user_id=expected_user_id, expected_user_label=expected_user_label))
     await db.commit()
     await audit(db, actor=installation_id, action="pairing.create", entity_type="installation", entity_id=installation_id)
     qr_payload = {"v": config.PROTOCOL_VERSION, "installation_id": installation_id, "token": token,
                   "relay": config.RELAY_ENDPOINT, "expires_at": int(expires.timestamp())}
+    if expected_user_label:
+        qr_payload["for"] = expected_user_label  # display prefill only — never a credential
     return {"token": token, "numeric_code": numeric, "expires_at": expires.isoformat(),
             "relay_endpoint": config.RELAY_ENDPOINT, "protocol_version": config.PROTOCOL_VERSION,
+            "expected_user_id": expected_user_id, "expected_user_label": expected_user_label,
             "qr_payload": qr_payload}
 
 
@@ -731,6 +737,7 @@ async def resolve_pairing(db: AsyncSession, *, token: str | None, numeric_code: 
     import hashlib as _hashlib
     device_secret = _secrets.token_urlsafe(32)  # durable per-device credential — returned ONCE
     device = MobileDevice(installation_id=pt.installation_id, label=label, status="ACTIVE", last_seen_at=now,
+                          expected_user_id=pt.expected_user_id, expected_user_label=pt.expected_user_label,
                           credential_hash=_hashlib.sha256(device_secret.encode()).hexdigest())
     db.add(device)
     await db.commit()
@@ -739,6 +746,7 @@ async def resolve_pairing(db: AsyncSession, *, token: str | None, numeric_code: 
     vp = await get_version_policy(db)
     return {"installation_id": str(pt.installation_id), "device_id": str(device.id),
             "device_credential": device_secret,  # store in Mobile secure storage; never returned again
+            "expected_user_id": pt.expected_user_id, "expected_user_label": pt.expected_user_label,
             "relay_endpoint": config.RELAY_ENDPOINT, "protocol_version": config.PROTOCOL_VERSION,
             "min_mobile_version": vp.mobile_min_supported}
 
@@ -748,6 +756,7 @@ async def list_devices(db: AsyncSession, *, installation_id: str) -> list[dict]:
     rows = (await db.execute(select(MobileDevice).where(MobileDevice.installation_id == uuid.UUID(installation_id))
                              .order_by(MobileDevice.paired_at.desc()))).scalars().all()
     return [{"id": str(d.id), "label": d.label, "status": d.status, "paired_at": d.paired_at.isoformat(),
+             "expected_user_id": d.expected_user_id, "expected_user_label": d.expected_user_label,
              "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None} for d in rows]
 
 

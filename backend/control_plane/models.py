@@ -155,6 +155,8 @@ class PairingToken(CPBase):
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     numeric_code: Mapped[str] = mapped_column(String(12), index=True, nullable=False)  # fallback code
     installation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    expected_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # Office user this device is bound to
+    expected_user_label: Mapped[str | None] = mapped_column(String(160), nullable=True)  # display only (name/email); NOT a credential
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -166,6 +168,8 @@ class MobileDevice(CPBase):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     installation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    expected_user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)  # Office user bound to this device
+    expected_user_label: Mapped[str | None] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")  # ACTIVE | REVOKED
     credential_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)  # SHA-256 of durable device secret (never plaintext)
     paired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -386,14 +386,25 @@ async def mobile_canvass_section_properties(section_id: str, user: User = Depend
         .where(CanvassSectionProperty.section_id == s.id,
                Property.latitude.isnot(None), Property.longitude.isnot(None))
     )).scalars().all()
-    features = [{
-        "type": "Feature",
-        "geometry": {"type": "Point", "coordinates": [p.longitude, p.latitude]},
-        "properties": {
-            "id": str(p.id), "address": p.formatted_address, "do_not_knock": p.do_not_knock,
-            "property_type": p.property_type, "owner_occupied": p.owner_occupied,
-        },
-    } for p in rows]
+    features = []
+    for p in rows:
+        last_visit = (await db.execute(
+            select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()).limit(1)
+        )).scalars().first()
+        has_lead = (await db.execute(
+            select(Lead.id).where(Lead.property_id == p.id, Lead.assigned_user_id == user.id, Lead.status != "archived").limit(1)
+        )).first() is not None
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [p.longitude, p.latitude]},
+            "properties": {
+                "id": str(p.id), "address": p.formatted_address, "do_not_knock": p.do_not_knock,
+                "property_type": p.property_type, "owner_occupied": p.owner_occupied,
+                "last_outcome": last_visit.outcome if last_visit else None,
+                "last_visited_at": last_visit.visited_at.isoformat() if last_visit else None,
+                "has_lead": has_lead,
+            },
+        })
     return {"section_id": str(s.id), "type": "FeatureCollection", "features": features}
 
 

@@ -63,9 +63,13 @@ async def _post_signed(path: str, installation_id: str, priv, body: bytes = b"")
         return await c.post(f"{INTERNAL_CP_BASE}{path}", content=body, headers=headers)
 
 
-async def create_pairing(db: AsyncSession) -> dict:
+async def create_pairing(db: AsyncSession, expected_user_id: str | None = None, expected_user_label: str | None = None) -> dict:
     iid, priv = await ensure_registered(db)
-    r = await _post_signed("/pairing/create", iid, priv)
+    body = b""
+    if expected_user_id or expected_user_label:
+        import json as _json
+        body = _json.dumps({"expected_user_id": expected_user_id, "expected_user_label": expected_user_label}).encode()
+    r = await _post_signed("/pairing/create", iid, priv, body=body)
     r.raise_for_status()
     return r.json()
 

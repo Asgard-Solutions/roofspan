@@ -66,7 +66,7 @@ export default function MapScreen({ navigation }) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const selectSection = async (id) => { setSelId(id); await loadSectionProps(id); };
-  const openProp = (pid) => navigation.getParent()?.navigate("LeadsTab", { screen: "LeadDetail", params: { id: pid } });
+  const openProp = (pid) => navigation.navigate("Property", { id: pid });
 
   const selected = sections.find((s) => s.id === selId) || null;
   const mapStyle = NATIVE_MAP_OK ? buildMapStyle(cfg) : null;

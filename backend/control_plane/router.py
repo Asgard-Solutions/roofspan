@@ -275,7 +275,19 @@ async def _authed_installation(request: Request, db: AsyncSession):
 @router.post("/pairing/create")
 async def pairing_create(request: Request, db: AsyncSession = Depends(get_cp_db)):
     inst = await _authed_installation(request, db)
-    return await service.create_pairing(db, installation_id=str(inst.id))
+    # Optional user binding travels in the signed request body (never a credential).
+    expected_user_id = expected_user_label = None
+    try:
+        raw = await request.body()
+        if raw:
+            import json as _json
+            data = _json.loads(raw.decode() or "{}")
+            expected_user_id = data.get("expected_user_id")
+            expected_user_label = data.get("expected_user_label")
+    except Exception:
+        pass
+    return await service.create_pairing(db, installation_id=str(inst.id),
+                                        expected_user_id=expected_user_id, expected_user_label=expected_user_label)
 
 
 @router.post("/pairing/resolve")
