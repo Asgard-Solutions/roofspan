@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Finance — Invoice View / Print / PDF / Email — DONE (2026-06)
+- Finance → Invoices now has "View / Send" per invoice → `InvoiceDocumentDialog` renders a clean printable invoice (Company Profile from Settings `app_config.company_profile` + customer + property address + line items + subtotal/tax/total, records-only note).
+- Backend (`routers/invoices.py`): `GET /invoices/{id}/document` (render data), `GET /invoices/{id}/pdf` (reportlab PDF via `services/invoice_pdf.py`, `%PDF` StreamingResponse), `POST /invoices/{id}/send` (emails PDF to customer via `services/email_sender.py` → Resend; sets draft→issued; logs `invoice.send`).
+- Print = open server PDF and browser-print; Download PDF = blob download; Email = Resend with base64 PDF attachment + short "contact us to pay" message (RoofSpan is records-only). `tax_rate` is stored as a percent (e.g. 8.25) — displayed as-is.
+- Email is a single APP-WIDE choke point (`services/email_sender.py::send_email`) — currently STUBBED (`EMAIL_PROVIDER=stub`, default): sends are logged + return a stub id, nothing is delivered; the invoice is NOT marked issued and the UI shows an honest "email delivery isn't switched on yet — use Print/PDF" message. A real transport (SMTP/Resend/SES) plugs into `_send_via_provider` behind `EMAIL_PROVIDER` later and every caller sends for free. View/Print/PDF verified E2E + tested (`tests/test_invoice_document.py`, 3 pass).
+
+
 ## Product
 RoofSpan is a commercially distributed roofing business application:
 - **RoofSpan Office**: runs locally on Windows (FastAPI backend + React browser UI + local PostgreSQL).

@@ -8,6 +8,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { FileText } from "lucide-react";
+import InvoiceDocumentDialog from "@/components/InvoiceDocumentDialog";
 
 const sc = { draft: "bg-slate-100 text-slate-600", sent: "bg-blue-50 text-blue-700", accepted: "bg-green-50 text-green-700", declined: "bg-red-50 text-red-700", expired: "bg-slate-100 text-slate-500", issued: "bg-blue-50 text-blue-700", paid: "bg-green-50 text-green-700", void: "bg-slate-100 text-slate-500" };
 const INV_STATUS = ["draft", "issued", "paid", "void"];
@@ -17,6 +20,7 @@ export default function Finance() {
   const isManage = ["owner", "administrator", "office"].includes(user?.role);
   const [quotes, setQuotes] = useState([]);
   const [invoices, setInvoices] = useState([]);
+  const [viewInvoiceId, setViewInvoiceId] = useState(null);
 
   const load = () => {
     api.get("/quotes").then((r) => setQuotes(r.data)).catch(() => {});
@@ -63,7 +67,7 @@ export default function Finance() {
             <TabsContent value="invoices" className="mt-6">
               <div className="overflow-x-auto rounded-md border border-border bg-white">
                 <Table data-testid="invoices-table">
-                  <TableHeader><TableRow><TableHead>Invoice #</TableHead><TableHead>Total</TableHead><TableHead>Issued</TableHead><TableHead>Due</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>Invoice #</TableHead><TableHead>Total</TableHead><TableHead>Issued</TableHead><TableHead>Due</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                   <TableBody>
                     {invoices.map((inv) => (
                       <TableRow key={inv.id} data-testid={`fin-invoice-${inv.id}`}>
@@ -79,9 +83,14 @@ export default function Finance() {
                             <SelectContent>{INV_STATUS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                           </Select>
                         </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="outline" size="sm" onClick={() => setViewInvoiceId(inv.id)} data-testid={`invoice-view-${inv.id}`}>
+                            <FileText className="h-3.5 w-3.5" /> View / Send
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
-                    {invoices.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-slate-400">No invoices.</TableCell></TableRow>}
+                    {invoices.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No invoices.</TableCell></TableRow>}
                   </TableBody>
                 </Table>
               </div>
@@ -89,6 +98,8 @@ export default function Finance() {
           )}
         </Tabs>
       </div>
+      <InvoiceDocumentDialog invoiceId={viewInvoiceId} open={!!viewInvoiceId}
+        onOpenChange={(v) => { if (!v) setViewInvoiceId(null); }} onSent={load} />
     </div>
   );
 }

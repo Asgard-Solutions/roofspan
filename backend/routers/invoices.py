@@ -1,14 +1,16 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Invoice, InvoiceLineItem, Quote, QuoteLineItem, Job, User
+from models import Invoice, InvoiceLineItem, Quote, QuoteLineItem, Job, User, Customer, Property, AppConfig
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase3 import InvoiceIn, InvoiceOut, InvoiceStatusIn, LineItemOut
 from sales_common import next_number, compute_totals, line_total, check_idempotency, record_idempotency
+from services.invoice_pdf import build_invoice_pdf
 
 router = APIRouter(prefix="/api/invoices", tags=["invoices"])
 VALID_STATUS = ["draft", "issued", "paid", "void"]
@@ -77,6 +79,74 @@ async def create_invoice(payload: InvoiceIn, request: Request, idempotency_key: 
     await db.refresh(inv)
     await log_action(db, user=user, action="invoice.create", entity_type="invoice", entity_id=inv.id, detail={"number": number, "total": total}, request=request)
     return await _out(db, inv)
+
+
+async def _document_data(db: AsyncSession, inv: Invoice) -> dict:
+    """Gather everything needed to render/print/PDF an invoice: line items, company profile, customer, property."""
+    out = await _out(db, inv)
+    company_row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+    company = company_row.value if company_row else {}
+    customer = None
+    if inv.customer_id:
+        c = await db.get(Customer, inv.customer_id)
+        if c:
+            customer = {"name": c.name, "email": c.email, "phone": c.phone, "billing_address": c.billing_address}
+    property_address = None
+    if inv.property_id:
+        p = await db.get(Property, inv.property_id)
+        if p:
+            property_address = getattr(p, "formatted_address", None) or getattr(p, "address_line1", None)
+    return {"invoice": out.model_dump(), "company": company, "customer": customer, "property_address": property_address}
+
+
+@router.get("/{invoice_id}/document")
+async def invoice_document(invoice_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    inv = await db.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return await _document_data(db, inv)
+
+
+@router.get("/{invoice_id}/pdf")
+async def invoice_pdf(invoice_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    inv = await db.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    data = await _document_data(db, inv)
+    pdf = build_invoice_pdf(invoice=data["invoice"], company=data["company"],
+                            customer=data["customer"], property_address=data["property_address"])
+    filename = f"Invoice-{inv.number}.pdf"
+    return StreamingResponse(iter([pdf]), media_type="application/pdf",
+                             headers={"Content-Disposition": f'inline; filename="{filename}"'})
+
+
+@router.post("/{invoice_id}/send")
+async def send_invoice(invoice_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    inv = await db.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    data = await _document_data(db, inv)
+    to_email = (data["customer"] or {}).get("email")
+    if not to_email:
+        raise HTTPException(status_code=400, detail="This invoice's customer has no email address on file.")
+    pdf = build_invoice_pdf(invoice=data["invoice"], company=data["company"],
+                            customer=data["customer"], property_address=data["property_address"])
+    from services.email_sender import send_invoice_email, EmailNotConfigured
+    try:
+        result = await send_invoice_email(to_email=to_email, invoice=data["invoice"], company=data["company"], pdf_bytes=pdf)
+    except EmailNotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not send the invoice email: {e}")
+    stubbed = bool(result.get("stubbed"))
+    if not stubbed and inv.status == "draft":
+        inv.status = "issued"
+        await db.commit()
+    await log_action(db, user=user, action="invoice.send", entity_type="invoice", entity_id=inv.id,
+                     detail={"to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed}, request=request)
+    return {"ok": True, "to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed, "status": inv.status,
+            "message": ("Email delivery isn't switched on yet, so nothing was sent — use Print or Download PDF for now."
+                        if stubbed else f"Invoice emailed to {to_email}.")}
 
 
 @router.get("/{invoice_id}", response_model=InvoiceOut)
