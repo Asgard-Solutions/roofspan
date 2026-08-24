@@ -64,6 +64,8 @@ export default function BackupStatus() {
   const [runningNow, setRunningNow] = useState(false);
   const [offsiteDirInput, setOffsiteDirInput] = useState("");
   const [offsiteRetention, setOffsiteRetention] = useState(0);
+  const [offsiteList, setOffsiteList] = useState({ available: false, backups: [] });
+  const [restoringCopy, setRestoringCopy] = useState(null);
   const [testingLoc, setTestingLoc] = useState(false);
   const [locStatus, setLocStatus] = useState(null);
   const fileRef = useRef(null);
@@ -74,6 +76,7 @@ export default function BackupStatus() {
       api.get("/admin/backup-status").then((r) => setData(r.data)).catch(() => {}),
       api.get("/admin/backups").then((r) => setBackups(r.data.backups || [])).catch(() => {}),
       api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); setOffsiteDirInput(r.data.schedule?.offsite_dir || ""); setOffsiteRetention(r.data.schedule?.offsite_retention || 0); }).catch(() => {}),
+      api.get("/admin/backups/offsite-list").then((r) => setOffsiteList(r.data)).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -143,6 +146,24 @@ export default function BackupStatus() {
       toast.error(apiError(e));
     } finally {
       setSavingSched(false);
+    }
+  };
+
+  const restoreFromCopy = async (filename) => {
+    if (!window.confirm(
+      `Restore from the copy location?\n\n${filename}\n\n` +
+      "This REPLACES all current data with this backup. A safety backup is taken first so you can undo. " +
+      "You'll need to reload and sign in again."
+    )) return;
+    setRestoringCopy(filename);
+    try {
+      const r = await api.post("/admin/backups/restore-from-copy", { filename });
+      toast.success(r.data.message || "Restored from copy location.");
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setRestoringCopy(null);
     }
   };
 
@@ -312,6 +333,17 @@ export default function BackupStatus() {
               {runningNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run now
             </Button>
           </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-700" data-testid="local-retention-row">
+            <span>Keep only the newest</span>
+            <Input type="number" min={0} value={schedule.local_retention ?? 0}
+                   onChange={(e) => setSchedule({ ...schedule, local_retention: e.target.value })}
+                   className="w-20" data-testid="local-retention-input" />
+            <span>backups on this machine</span>
+            <Button variant="outline" size="sm" disabled={savingSched}
+                    onClick={() => saveSchedule({ ...schedule, local_retention: Number(schedule.local_retention) || 0 })}
+                    data-testid="local-retention-save">Save</Button>
+            <span className="text-slate-400">(0 = keep all; older local backups are pruned automatically to save disk space)</span>
+          </div>
           <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
             <Switch checked={schedule.offsite} onCheckedChange={(v) => saveSchedule({ ...schedule, offsite: v, offsite_dir: offsiteDirInput })} disabled={savingSched} data-testid="schedule-offsite-switch" />
             <span className="flex items-center gap-1.5"><HardDrive className="h-4 w-4 text-slate-400" /> Also copy each automatic backup to another location (protects you if this machine fails)</span>
@@ -348,6 +380,23 @@ export default function BackupStatus() {
               <div className={`mt-2 flex items-start gap-1.5 whitespace-pre-line rounded-md border p-2 text-xs ${locStatus.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-700"}`} data-testid="offsite-location-status">
                 {locStatus.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
                 <span>{locStatus.message}</span>
+              </div>
+            )}
+            {/* Restore From Copy — restore directly from a backup at the configured copy location */}
+            {offsiteList.available && offsiteList.backups?.length > 0 && (
+              <div className="mt-3 border-t border-border pt-3" data-testid="restore-from-copy">
+                <div className="text-xs font-medium text-slate-600">Restore from this location</div>
+                <div className="mt-2 space-y-1.5">
+                  {offsiteList.backups.slice(0, 6).map((b) => (
+                    <div key={b.filename} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1.5 text-xs" data-testid={`copy-backup-${b.filename}`}>
+                      <span className="truncate font-mono text-slate-600">{b.filename} <span className="text-slate-400">· {fmtSize(b.size_bytes)}</span></span>
+                      <Button variant="outline" size="sm" disabled={!!restoringCopy}
+                              onClick={() => restoreFromCopy(b.filename)} data-testid={`restore-copy-${b.filename}`}>
+                        {restoringCopy === b.filename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Restore
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

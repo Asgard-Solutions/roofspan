@@ -168,6 +168,67 @@ def test_copy_offsite_prunes_after_copy(tmp_path):
     assert remaining == ["roofspan_20260103T000000Z.dump", "roofspan_20260201T000000Z.dump"]  # newest 2
 
 
+def test_prune_local_keeps_newest_and_protects_safety(tmp_path, monkeypatch):
+    import time
+    from services import backup as b
+    monkeypatch.setattr(b, "BACKUP_DIR", str(tmp_path))
+    # 4 normal backups + 1 safety, staggered mtimes (oldest first)
+    names = ["roofspan_a.dump", "roofspan_b.dump", "roofspan_c_safety.dump", "roofspan_d.dump", "roofspan_e.dump"]
+    for i, n in enumerate(names):
+        p = tmp_path / n
+        p.write_bytes(b"x")
+        os.utime(p, (time.time() + i, time.time() + i))
+    (tmp_path / "roofspan_a.dump.offsite").write_text("marker")  # companion marker of an old file
+    removed = b.prune_local(keep=2)
+    remaining = sorted(p.name for p in tmp_path.glob("roofspan_*.dump"))
+    # newest 2 (d,e) kept + safety always protected
+    assert "roofspan_e.dump" in remaining and "roofspan_d.dump" in remaining
+    assert "roofspan_c_safety.dump" in remaining  # safety undo point never pruned
+    assert "roofspan_a.dump" not in remaining and "roofspan_b.dump" not in remaining
+    assert not (tmp_path / "roofspan_a.dump.offsite").exists()  # companion marker removed too
+    assert "roofspan_a.dump" in removed
+
+
+def test_prune_local_zero_keeps_all(tmp_path, monkeypatch):
+    from services import backup as b
+    monkeypatch.setattr(b, "BACKUP_DIR", str(tmp_path))
+    for i in range(3):
+        (tmp_path / f"roofspan_{i}.dump").write_bytes(b"x")
+    assert b.prune_local(0) == []
+
+
+def test_record_offsite_result_tracks_last_ok(tmp_path, monkeypatch):
+    from services import backup as b
+    monkeypatch.setattr(b, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(b, "SCHED_STATE_FILE", str(tmp_path / "state.json"))
+    s1 = b.record_offsite_result(True)
+    assert s1["offsite_status"] == "OK" and s1["offsite_last_ok_at"]
+    ok_at = s1["offsite_last_ok_at"]
+    s2 = b.record_offsite_result(False, "NAS offline")
+    assert s2["offsite_status"] == "FAIL" and s2["offsite_error"] == "NAS offline"
+    assert s2["offsite_last_ok_at"] == ok_at  # last success preserved across a failure
+
+
+def test_stage_offsite_for_restore_validates(tmp_path, monkeypatch):
+    import asyncio
+    from services import backup as b
+    monkeypatch.setattr(b, "BACKUP_DIR", str(tmp_path / "local"))
+    (tmp_path / "local").mkdir()
+    dest = tmp_path / "copy"
+    dest.mkdir()
+    monkeypatch.setattr(b, "get_offsite_dir", lambda: str(dest))
+    # valid file at copy location
+    (dest / "roofspan_20260101T000000Z.dump").write_bytes(b"DUMP")
+    out = asyncio.run(b.stage_offsite_for_restore("roofspan_20260101T000000Z.dump"))
+    assert os.path.exists(out) and open(out, "rb").read() == b"DUMP"
+    # bad filename rejected
+    with pytest.raises(ValueError):
+        asyncio.run(b.stage_offsite_for_restore("../etc/passwd"))
+    # missing file rejected
+    with pytest.raises(ValueError):
+        asyncio.run(b.stage_offsite_for_restore("roofspan_does_not_exist.dump"))
+
+
 def test_enable_offsite_without_dir_rejected(tmp_path, monkeypatch):
     from services import backup as b
     monkeypatch.setattr(b, "get_schedule", lambda: {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": ""})

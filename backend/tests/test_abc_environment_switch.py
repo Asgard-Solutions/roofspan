@@ -61,3 +61,16 @@ def test_saving_same_env_does_not_wipe_client_id(owner_headers):
     st = _cfg(h)
     assert st["environment"] == "sandbox"
     assert st["has_client_id"] is True
+
+
+def test_go_live_check_shape_and_env_flag(owner_headers):
+    h = owner_headers
+    requests.put(f"{BASE_URL}/api/integrations/abc/config", headers=h, json={"environment": "sandbox"}, timeout=30)
+    r = requests.get(f"{BASE_URL}/api/integrations/abc/go-live-check", headers=h, timeout=30)
+    assert r.status_code == 200, r.text[:300]
+    d = r.json()
+    keys = {c["key"] for c in d["checks"]}
+    assert {"environment", "mock_off", "credentials", "connected", "scopes", "defaults"} <= keys
+    env_check = next(c for c in d["checks"] if c["key"] == "environment")
+    assert env_check["ok"] is False  # sandbox is not production
+    assert d["ready"] is False       # not ready while on sandbox / mock on

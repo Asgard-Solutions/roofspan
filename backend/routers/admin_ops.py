@@ -61,6 +61,7 @@ class ScheduleIn(BaseModel):
     time: str
     offsite: bool = False
     offsite_dir: Optional[str] = None
+    local_retention: Optional[int] = None
 
 
 class OffsiteLocationIn(BaseModel):
@@ -149,9 +150,12 @@ async def offsite_backup_copy(payload: RestoreIn, request: Request,
     try:
         object_path = await backup_svc.copy_offsite(path)
     except ValueError as e:
+        backup_svc.record_offsite_result(False, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        backup_svc.record_offsite_result(False, str(e))
         raise HTTPException(status_code=502, detail=f"Off-site copy failed: {e}")
+    backup_svc.record_offsite_result(True)
     async with SessionLocal() as db:
         await log_action(db, user=user, action="backup.offsite", entity_type="backup",
                          entity_id=payload.filename, detail={"object_path": object_path}, request=request)
@@ -221,14 +225,31 @@ async def backup_health(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
         except Exception:
             age_days = None
     stale = newest is None or (age_days is not None and age_days > 7)
+    # Copy-location health: warn when the secondary copy has been unreachable for several days.
+    offsite_enabled = bool(sched.get("offsite"))
+    offsite_unreachable_days = None
+    if offsite_enabled:
+        last_ok = state.get("offsite_last_ok_at")
+        if last_ok:
+            try:
+                offsite_unreachable_days = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ok)).days
+            except Exception:
+                offsite_unreachable_days = None
+        else:
+            offsite_unreachable_days = 999  # never succeeded
+    copy_unreachable = offsite_enabled and offsite_unreachable_days is not None and offsite_unreachable_days >= 3
     if newest is None:
         level, label = "error", "No backups yet"
     elif state.get("last_status") == "FAIL":
         level, label = "error", "Automatic backup failed"
     elif stale:
         level, label = "warn", f"Last backup {age_days}d ago"
-    elif sched.get("offsite") and state.get("offsite_status") == "FAIL":
-        level, label = "warn", "Off-site copy failed"
+    elif copy_unreachable:
+        level = "warn"
+        label = ("Backup copy location never reached" if offsite_unreachable_days >= 999
+                 else f"Backup copy unreachable {offsite_unreachable_days}d")
+    elif offsite_enabled and state.get("offsite_status") == "FAIL":
+        level, label = "warn", "Backup copy failed"
     else:
         label = "Backed up today" if (age_days == 0) else f"Backed up {age_days}d ago"
         level = "ok"
@@ -236,6 +257,8 @@ async def backup_health(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
         "level": level, "label": label, "last_backup_at": newest, "age_days": age_days,
         "count": len(backups), "scheduled_enabled": sched.get("enabled"),
         "scheduled_status": state.get("last_status"), "offsite_status": state.get("offsite_status"),
+        "offsite_enabled": offsite_enabled, "offsite_last_ok_at": state.get("offsite_last_ok_at"),
+        "offsite_unreachable_days": offsite_unreachable_days, "copy_unreachable": copy_unreachable,
     }
 
 
@@ -243,7 +266,8 @@ async def backup_health(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
 async def set_backup_schedule(payload: ScheduleIn, request: Request,
                               user: User = Depends(require_roles(*SENSITIVE_ROLES))):
     try:
-        sched = backup_svc.set_schedule(payload.enabled, payload.time, payload.offsite, payload.offsite_dir)
+        sched = backup_svc.set_schedule(payload.enabled, payload.time, payload.offsite,
+                                        payload.offsite_dir, payload.local_retention)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     async with SessionLocal() as db:
@@ -270,6 +294,48 @@ async def test_offsite_location(payload: OffsiteLocationIn,
     """Validate a secondary backup directory (write/read/delete a temp file) from the service context."""
     dest = payload.offsite_dir or backup_svc.get_offsite_dir()
     return backup_svc.validate_offsite_location(dest)
+
+
+@router.get("/backups/offsite-list")
+async def list_offsite_backups(user: User = Depends(require_roles(*SENSITIVE_ROLES))):
+    """List RoofSpan backups available at the configured copy location (for one-click Restore From Copy)."""
+    return backup_svc.list_offsite_backups()
+
+
+@router.post("/backups/restore-from-copy")
+async def restore_from_copy(payload: RestoreIn, request: Request):
+    """Stage a backup from the configured copy location back into the local backup dir, then restore it."""
+    user = await _auth_admin(request)
+    import traceback, logging
+    try:
+        path = await backup_svc.stage_offsite_for_restore(payload.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not retrieve the backup from the copy location: {e}")
+    # Safety backup first (undo point), then restore — mirrors /backups/restore exactly.
+    try:
+        safety = await backup_svc.create_backup(suffix="_safety")
+    except Exception as e:
+        logging.getLogger("roofspan").error("safety backup failed: %s", e)
+        raise HTTPException(status_code=500,
+                            detail=f"Could not create a safety backup before restoring, so the restore was aborted: {e}")
+    try:
+        await engine.dispose()
+        try:
+            await backup_svc.restore_backup(path)
+        finally:
+            await engine.dispose()
+        async with SessionLocal() as db:
+            await log_action(db, user=user, action="backup.restore_from_copy", entity_type="backup",
+                             entity_id=payload.filename, detail={"safety_backup": safety["filename"]}, request=request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.getLogger("roofspan").error("restore-from-copy failed: %s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Restore failed: {type(e).__name__}: {e}")
+    return {"ok": True, "filename": payload.filename, "safety_backup": safety["filename"],
+            "source": "copy_location", "message": "Database restored from the copy location. Please reload and sign in again."}
 
 
 @router.post("/backups/schedule/run-now")

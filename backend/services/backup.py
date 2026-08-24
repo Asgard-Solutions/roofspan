@@ -178,6 +178,15 @@ async def create_backup(suffix: str = "") -> dict:
         raise RuntimeError(f"pg_dump failed: {stderr.decode(errors='replace')[-500:]}")
     os.replace(tmp, out)
     st = os.stat(out)
+    # Local retention: cap the number of local backups kept in BACKUP_DIR (never prune while
+    # creating a pre-restore safety backup; the newest safety point is always preserved).
+    if not suffix:
+        keep = get_local_retention()
+        if keep > 0:
+            try:
+                prune_local(keep)
+            except Exception:
+                logging.getLogger("roofspan").exception("local retention prune failed")
     return {
         "filename": os.path.basename(out),
         "size_bytes": st.st_size,
@@ -241,8 +250,10 @@ def save_upload(raw_name: str, data: bytes) -> dict:
 
 
 # ---- Scheduled auto-backup (file-based so it survives DB restores) ----
-DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": "", "offsite_retention": 0}
+DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": "",
+                    "offsite_retention": 0, "local_retention": 0}
 OFFSITE_DIR_ENV = os.environ.get("ROOFSPAN_OFFSITE_BACKUP_DIR", "")
+_SAFETY_TAG = "_safety"
 
 
 def _read_json(path: str, default: dict) -> dict:
@@ -263,27 +274,31 @@ def _write_json(path: str, data: dict):
 
 def get_schedule() -> dict:
     s = _read_json(SCHEDULE_FILE, DEFAULT_SCHEDULE)
-    try:
-        retention = max(0, int(s.get("offsite_retention", 0) or 0))
-    except (TypeError, ValueError):
-        retention = 0
+    def _int(v):
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
     return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00"),
             "offsite": bool(s.get("offsite", False)),
             "offsite_dir": s.get("offsite_dir") or OFFSITE_DIR_ENV or "",
-            "offsite_retention": retention}
+            "offsite_retention": _int(s.get("offsite_retention", 0)),
+            "local_retention": _int(s.get("local_retention", 0))}
 
 
-def set_schedule(enabled: bool, time_str: str, offsite: bool = False, offsite_dir: str | None = None) -> dict:
+def set_schedule(enabled: bool, time_str: str, offsite: bool = False, offsite_dir: str | None = None,
+                 local_retention: int | None = None) -> dict:
     if not _TIME_RE.match(time_str or ""):
         raise ValueError("Time must be in 24-hour HH:MM format.")
     current = get_schedule()
     dest = current.get("offsite_dir", "") if offsite_dir is None else (offsite_dir or "").strip()
     if offsite and not dest:
         raise ValueError("Choose a backup copy location before enabling secondary backups.")
+    lr = current.get("local_retention", 0) if local_retention is None else max(0, int(local_retention))
     sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite), "offsite_dir": dest,
-             "offsite_retention": current.get("offsite_retention", 0)}
+             "offsite_retention": current.get("offsite_retention", 0), "local_retention": lr}
     _write_json(SCHEDULE_FILE, sched)
-    return sched
+    return get_schedule()
 
 
 def get_offsite_dir() -> str:
@@ -292,6 +307,10 @@ def get_offsite_dir() -> str:
 
 def get_offsite_retention() -> int:
     return get_schedule().get("offsite_retention", 0)
+
+
+def get_local_retention() -> int:
+    return get_schedule().get("local_retention", 0)
 
 
 def set_offsite_dir(dest_dir: str, retention: int | None = None) -> dict:
@@ -324,6 +343,105 @@ def prune_offsite(dest_dir: str, keep: int) -> list[str]:
     return removed
 
 
+def prune_local(keep: int) -> list[str]:
+    """Keep only the newest `keep` local RoofSpan backups in BACKUP_DIR so the disk doesn't fill up.
+    keep<=0 disables pruning. The single most-recent '_safety' backup is always preserved (undo point),
+    and only RoofSpan-generated files (+ their .offsite markers) are ever removed."""
+    if keep <= 0:
+        return []
+    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "roofspan_*.dump")),
+                   key=lambda p: os.stat(p).st_mtime, reverse=True)  # newest first
+    protected = set()
+    newest_safety = next((p for p in files if _SAFETY_TAG in os.path.basename(p)), None)
+    if newest_safety:
+        protected.add(newest_safety)
+    removed = []
+    for old in files[keep:]:
+        if old in protected:
+            continue
+        try:
+            os.remove(old)
+            for marker in (old + ".offsite",):
+                if os.path.exists(marker):
+                    os.remove(marker)
+            removed.append(os.path.basename(old))
+        except OSError as e:
+            logging.getLogger("roofspan").warning("could not prune old local backup %r: %s", old, e)
+    return removed
+
+
+def list_offsite_backups() -> dict:
+    """List RoofSpan backups available at the configured copy location (for Restore From Copy)."""
+    dest = get_offsite_dir()
+    if not dest:
+        return {"offsite_dir": "", "available": False, "backups": []}
+    try:
+        names = glob.glob(os.path.join(dest, "roofspan_*.dump"))
+    except OSError:
+        return {"offsite_dir": dest, "available": False, "backups": []}
+    out = []
+    for path in names:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        out.append({"filename": os.path.basename(path), "size_bytes": st.st_size,
+                    "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()})
+    out.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"offsite_dir": dest, "available": True, "backups": out}
+
+
+async def stage_offsite_for_restore(filename: str) -> str:
+    """Copy a backup FROM the configured copy location back into BACKUP_DIR so it can be restored.
+    The source is restricted to the configured copy directory and RoofSpan-named files only."""
+    if not filename or not SAFE_NAME.match(filename):
+        raise ValueError("Invalid backup filename.")
+    dest = get_offsite_dir()
+    if not dest:
+        raise ValueError("No secondary backup location is configured.")
+    src = os.path.realpath(os.path.join(dest, filename))
+    if os.path.dirname(src) != os.path.realpath(dest):
+        raise ValueError("Invalid backup path.")
+    if not os.path.exists(src):
+        raise ValueError("That backup was not found at the configured copy location.")
+    local = resolve_path(filename)
+
+    def _copy():
+        tmp = local + ".partial"
+        try:
+            with open(src, "rb") as s, open(tmp, "wb") as d:
+                while True:
+                    chunk = s.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    d.write(chunk)
+            os.replace(tmp, local)
+        except Exception:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
+        return local
+
+    return await asyncio.to_thread(_copy)
+
+
+def record_offsite_result(ok: bool, error: str | None = None):
+    """Persist the latest secondary-copy outcome so the Dashboard can warn when the copy location has
+    been unreachable for several days. Local backup status is tracked separately and is unaffected."""
+    state = get_schedule_state()
+    now = datetime.now(timezone.utc).isoformat()
+    state["offsite_status"] = "OK" if ok else "FAIL"
+    state["offsite_error"] = None if ok else (error or "")[:300]
+    state["offsite_last_attempt_at"] = now
+    if ok:
+        state["offsite_last_ok_at"] = now
+    _write_json(SCHED_STATE_FILE, state)
+    return state
+
+
 def get_schedule_state() -> dict:
     return _read_json(SCHED_STATE_FILE, {})
 
@@ -340,12 +458,17 @@ async def run_scheduled_backup(attempt_date: str | None = None) -> dict:
                 await copy_offsite(resolve_path(info["filename"]))
                 state["offsite_status"] = "OK"
                 state["offsite_error"] = None
+                state["offsite_last_ok_at"] = datetime.now(timezone.utc).isoformat()
+                state["offsite_last_attempt_at"] = state["offsite_last_ok_at"]
             except Exception as e:
                 state["offsite_status"] = "FAIL"
                 state["offsite_error"] = str(e)[:300]
+                state["offsite_last_attempt_at"] = datetime.now(timezone.utc).isoformat()
+                state["offsite_last_ok_at"] = get_schedule_state().get("offsite_last_ok_at")
                 logging.getLogger("roofspan").error("scheduled off-site copy FAILED: %s", e)
         else:
             state["offsite_status"] = None
+            state["offsite_last_ok_at"] = get_schedule_state().get("offsite_last_ok_at")
     except Exception as e:
         state = {"last_status": "FAIL", "last_run_at": datetime.now(timezone.utc).isoformat(),
                  "last_file": None, "last_error": str(e)[:300], "last_attempt_date": ad,

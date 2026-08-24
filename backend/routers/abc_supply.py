@@ -176,6 +176,51 @@ async def get_status(request: Request, user: User = Depends(require_roles(*MANAG
     return _status_out(row, request)
 
 
+@router.get("/go-live-check")
+async def go_live_check(user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """One-click Production readiness check for ABC Supply — confirms the environment is Production,
+    the mock is OFF, app credentials exist, the OAuth connection is live with the required scopes, and
+    (recommended) default Ship-To/branch are set. `ready` is true only when all CRITICAL checks pass."""
+    row = await _get_or_create(db)
+    scopes = set((row.token_scopes or "").replace(",", " ").split())
+    required_scopes = ["pricing.read", "order.read", "order.write", "account.read"]
+    missing = [s for s in required_scopes if s not in scopes]
+    checks = [
+        {"key": "environment", "label": "Environment is Production", "severity": "critical",
+         "ok": row.environment == "production",
+         "detail": f"Currently: {row.environment}." + ("" if row.environment == "production"
+                   else " Switch to Production in ABC Supply settings.")},
+        {"key": "mock_off", "label": "Live ABC mode (mock disabled)", "severity": "critical",
+         "ok": not abc_config.mock_enabled(),
+         "detail": "ABC mock is ON — real orders/pricing are simulated." if abc_config.mock_enabled()
+                   else "Requests go to the live ABC Supply API."},
+        {"key": "credentials", "label": "Production app credentials entered", "severity": "critical",
+         "ok": bool(row.client_id) and bool(row.client_secret_ciphertext),
+         "detail": "Client ID and Secret are set." if (row.client_id and row.client_secret_ciphertext)
+                   else "Enter the Production Client ID and Secret."},
+        {"key": "connected", "label": "Connected to ABC Supply", "severity": "critical",
+         "ok": row.status == "connected",
+         "detail": f"Connection status: {row.status}." + ("" if row.status == "connected" else " Click Connect to authorize."),
+         },
+        {"key": "identity", "label": "Authorized ABC account", "severity": "info",
+         "ok": bool(row.connected_identity),
+         "detail": (f"Connected as {row.connected_identity}." if row.connected_identity else "No connected identity yet.")},
+        {"key": "scopes", "label": "Required permissions granted", "severity": "critical",
+         "ok": row.status == "connected" and not missing,
+         "detail": ("All required scopes granted." if not missing
+                    else f"Reconnect to grant: {', '.join(missing)}.") if row.status == "connected"
+                    else "Connect first to verify granted scopes."},
+        {"key": "defaults", "label": "Default Ship-To and branch set", "severity": "recommended",
+         "ok": bool(row.default_ship_to_number) and bool(row.default_branch_number),
+         "detail": (f"Ship-To {row.default_ship_to_number}, branch {row.default_branch_number}."
+                    if (row.default_ship_to_number and row.default_branch_number)
+                    else "Set defaults so new ABC orders are pre-filled.")},
+    ]
+    ready = all(c["ok"] for c in checks if c["severity"] == "critical")
+    return {"ready": ready, "environment": row.environment, "is_mock": abc_config.mock_enabled(),
+            "checks": checks}
+
+
 @router.put("/config", response_model=AbcStatusOut)
 async def update_config(payload: AbcConfigUpdate, request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     row = await _get_or_create(db)

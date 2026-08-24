@@ -36,6 +36,8 @@ export default function AbcSupply() {
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [goLive, setGoLive] = useState(null);
+  const [goLiveBusy, setGoLiveBusy] = useState(false);
   const [params, setParams] = useSearchParams();
 
   // config form
@@ -147,6 +149,12 @@ export default function AbcSupply() {
     catch (e) { setTestResult({ ok: false, message: apiError(e) }); } finally { setTesting(false); }
   };
 
+  const runGoLive = async () => {
+    setGoLiveBusy(true); setGoLive(null);
+    try { const { data } = await api.get("/integrations/abc/go-live-check"); setGoLive(data); }
+    catch (e) { toast.error(apiError(e)); } finally { setGoLiveBusy(false); }
+  };
+
   const copyRedirect = async (value) => {
     try { await navigator.clipboard.writeText(value); toast.success("Redirect URI copied"); }
     catch { toast.error("Could not copy — select and copy manually"); }
@@ -205,7 +213,33 @@ export default function AbcSupply() {
             <Button variant="outline" onClick={test} disabled={testing || (!status.has_client_secret && !status.is_mock)} data-testid="abc-test-button">
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <><PlugZap className="h-4 w-4" /> Test connection</>}
             </Button>
+            <Button variant="outline" onClick={runGoLive} disabled={goLiveBusy} data-testid="abc-golive-button">
+              {goLiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><ShieldCheck className="h-4 w-4" /> Go-Live check</>}
+            </Button>
           </div>
+          {goLive && (
+            <div className={`rounded-md border p-4 ${goLive.ready ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`} data-testid="abc-golive-result">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                {goLive.ready ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                {goLive.ready ? "Ready for Production — you can start placing real ABC Supply orders." : "Not ready for Production yet — resolve the items below."}
+              </div>
+              <ul className="space-y-1.5">
+                {goLive.checks.map((c) => (
+                  <li key={c.key} className="flex items-start gap-2 text-sm" data-testid={`abc-golive-${c.key}`}>
+                    {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                          : (c.severity === "critical"
+                              ? <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                              : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />)}
+                    <span>
+                      <span className={c.ok ? "text-slate-700" : "font-medium text-slate-800"}>{c.label}</span>
+                      {c.severity === "recommended" && <span className="ml-1 text-xs text-slate-400">(recommended)</span>}
+                      <span className="block text-xs text-slate-500">{c.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {testResult && (
             <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${testResult.ok ? "border-green-200 bg-green-50 text-green-700" : "border-red-200 bg-red-50 text-red-700"}`} data-testid="abc-test-result">
               {testResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
