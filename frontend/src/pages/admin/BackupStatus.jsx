@@ -63,6 +63,7 @@ export default function BackupStatus() {
   const [savingSched, setSavingSched] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
   const [offsiteDirInput, setOffsiteDirInput] = useState("");
+  const [offsiteRetention, setOffsiteRetention] = useState(0);
   const [testingLoc, setTestingLoc] = useState(false);
   const [locStatus, setLocStatus] = useState(null);
   const fileRef = useRef(null);
@@ -72,7 +73,7 @@ export default function BackupStatus() {
     Promise.all([
       api.get("/admin/backup-status").then((r) => setData(r.data)).catch(() => {}),
       api.get("/admin/backups").then((r) => setBackups(r.data.backups || [])).catch(() => {}),
-      api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); setOffsiteDirInput(r.data.schedule?.offsite_dir || ""); }).catch(() => {}),
+      api.get("/admin/backups/schedule").then((r) => { setSchedule(r.data.schedule); setSchedState(r.data.state || {}); setOffsiteDirInput(r.data.schedule?.offsite_dir || ""); setOffsiteRetention(r.data.schedule?.offsite_retention || 0); }).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -162,9 +163,10 @@ export default function BackupStatus() {
   const saveLocation = async () => {
     setSavingSched(true);
     try {
-      const r = await api.put("/admin/backups/offsite-location", { offsite_dir: offsiteDirInput });
+      const r = await api.put("/admin/backups/offsite-location", { offsite_dir: offsiteDirInput, retention: Number(offsiteRetention) || 0 });
       setSchedule(r.data.schedule);
       setOffsiteDirInput(r.data.schedule?.offsite_dir || "");
+      setOffsiteRetention(r.data.schedule?.offsite_retention || 0);
       toast.success("Backup copy location saved.");
     } catch (e) {
       toast.error(apiError(e));
@@ -335,6 +337,13 @@ export default function BackupStatus() {
               locally-synced OneDrive/Dropbox/Google Drive folder. For network shares, use a UNC path
               (<span className="font-mono">\\Server\Share\RoofSpan</span>) — the RoofSpan service may not see mapped drive letters.
             </p>
+            <div className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+              <span>Keep only the newest</span>
+              <Input type="number" min={0} value={offsiteRetention}
+                     onChange={(e) => setOffsiteRetention(e.target.value)}
+                     className="w-20" data-testid="offsite-retention-input" />
+              <span>backups at this location <span className="text-slate-400">(0 = keep all; older copies are pruned automatically)</span></span>
+            </div>
             {locStatus && (
               <div className={`mt-2 flex items-start gap-1.5 whitespace-pre-line rounded-md border p-2 text-xs ${locStatus.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-700"}`} data-testid="offsite-location-status">
                 {locStatus.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}

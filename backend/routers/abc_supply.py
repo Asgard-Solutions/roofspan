@@ -179,11 +179,28 @@ async def get_status(request: Request, user: User = Depends(require_roles(*MANAG
 @router.put("/config", response_model=AbcStatusOut)
 async def update_config(payload: AbcConfigUpdate, request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     row = await _get_or_create(db)
+    env_changed = False
     if payload.environment is not None:
         env = payload.environment.strip().lower()
         if env not in abc_config.DEFAULT_BASES:
             raise HTTPException(status_code=422, detail="environment must be 'sandbox' or 'production'")
+        if env != row.environment:
+            env_changed = True
         row.environment = env
+    if env_changed:
+        # ABC registers separate apps + issues environment-specific tokens for Sandbox vs Production.
+        # Switching environments invalidates the old credentials, so force a clean reconnect: clear the
+        # client_id/secret and any tokens and require the production app credentials to be re-entered.
+        row.client_id = None
+        row.client_secret_ciphertext = None
+        row.client_secret_last4 = None
+        row.access_token_ciphertext = None
+        row.refresh_token_ciphertext = None
+        row.token_expires_at = None
+        row.token_scopes = None
+        row.connected_identity = None
+        row.connected_at = None
+        row.status = "not_connected"
     if payload.client_id is not None:
         row.client_id = payload.client_id.strip() or None
     if payload.redirect_uri is not None:
@@ -194,7 +211,8 @@ async def update_config(payload: AbcConfigUpdate, request: Request, user: User =
     await db.commit()
     await db.refresh(row)
     await log_action(db, user=user, action="abc.config.update", entity_type="abc_integration", entity_id=str(row.id),
-                     detail={"environment": row.environment, "has_client_id": bool(row.client_id)}, request=request)
+                     detail={"environment": row.environment, "has_client_id": bool(row.client_id),
+                             "environment_switched": env_changed}, request=request)
     return _status_out(row, request)
 
 

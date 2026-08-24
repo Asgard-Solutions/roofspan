@@ -65,6 +65,7 @@ class ScheduleIn(BaseModel):
 
 class OffsiteLocationIn(BaseModel):
     offsite_dir: str = ""
+    retention: Optional[int] = None
 
 
 async def _auth_admin(request: Request) -> User:
@@ -254,12 +255,13 @@ async def set_backup_schedule(payload: ScheduleIn, request: Request,
 @router.put("/backups/offsite-location")
 async def set_offsite_location(payload: OffsiteLocationIn, request: Request,
                                user: User = Depends(require_roles(*SENSITIVE_ROLES))):
-    """Save the customer-selected secondary (off-site) backup directory to machine-level config."""
-    sched = backup_svc.set_offsite_dir(payload.offsite_dir)
+    """Save the customer-selected secondary (off-site) backup directory + retention to machine-level config."""
+    sched = backup_svc.set_offsite_dir(payload.offsite_dir, payload.retention)
     async with SessionLocal() as db:
         await log_action(db, user=user, action="backup.offsite.location", entity_type="config",
-                         entity_id="offsite_dir", detail={"offsite_dir": sched.get("offsite_dir")}, request=request)
-    return {"schedule": backup_svc.get_schedule()}
+                         entity_id="offsite_dir", detail={"offsite_dir": sched.get("offsite_dir"),
+                                                          "offsite_retention": sched.get("offsite_retention")}, request=request)
+    return {"schedule": sched}
 
 
 @router.post("/backups/offsite-location/test")

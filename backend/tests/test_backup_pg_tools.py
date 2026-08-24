@@ -122,6 +122,52 @@ def test_offsite_copy_requires_configured_location(tmp_path):
         b.get_offsite_dir = orig
 
 
+def test_prune_offsite_keeps_newest_n(tmp_path):
+    from services import backup as b
+    dest = tmp_path / "sec"
+    dest.mkdir()
+    names = [f"roofspan_2026010{i}T000000Z.dump" for i in range(1, 6)]  # 5 files, oldest..newest
+    for n in names:
+        (dest / n).write_bytes(b"x")
+    (dest / "keepme.txt").write_bytes(b"unrelated")  # non-RoofSpan file must never be removed
+    removed = b.prune_offsite(str(dest), keep=2)
+    remaining = sorted(p.name for p in dest.glob("roofspan_*.dump"))
+    assert remaining == names[-2:]  # newest 2 kept
+    assert set(removed) == set(names[:3])
+    assert (dest / "keepme.txt").exists()
+
+
+def test_prune_offsite_zero_keeps_all(tmp_path):
+    from services import backup as b
+    dest = tmp_path / "sec"
+    dest.mkdir()
+    for i in range(3):
+        (dest / f"roofspan_2026010{i}T000000Z.dump").write_bytes(b"x")
+    assert b.prune_offsite(str(dest), keep=0) == []
+    assert len(list(dest.glob("roofspan_*.dump"))) == 3
+
+
+def test_copy_offsite_prunes_after_copy(tmp_path):
+    import asyncio
+    from services import backup as b
+    dest_dir = tmp_path / "sec"
+    dest_dir.mkdir()
+    # pre-existing older copies at the destination
+    for i in range(1, 4):
+        (dest_dir / f"roofspan_2026010{i}T000000Z.dump").write_bytes(b"old")
+    src = tmp_path / "roofspan_20260201T000000Z.dump"
+    src.write_bytes(b"NEW")
+    o_dir, o_ret = b.get_offsite_dir, b.get_offsite_retention
+    b.get_offsite_dir = lambda: str(dest_dir)
+    b.get_offsite_retention = lambda: 2
+    try:
+        asyncio.run(b.copy_offsite(str(src)))
+    finally:
+        b.get_offsite_dir, b.get_offsite_retention = o_dir, o_ret
+    remaining = sorted(p.name for p in dest_dir.glob("roofspan_*.dump"))
+    assert remaining == ["roofspan_20260103T000000Z.dump", "roofspan_20260201T000000Z.dump"]  # newest 2
+
+
 def test_enable_offsite_without_dir_rejected(tmp_path, monkeypatch):
     from services import backup as b
     monkeypatch.setattr(b, "get_schedule", lambda: {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": ""})

@@ -118,6 +118,10 @@ async def copy_offsite(path: str) -> str:
     obj = await asyncio.to_thread(_do)
     with open(path + ".offsite", "w") as f:
         f.write(obj)
+    # Enforce copy-location retention (keep newest N), if configured.
+    retention = get_offsite_retention()
+    if retention > 0:
+        await asyncio.to_thread(prune_offsite, dest_dir, retention)
     return obj
 
 
@@ -237,7 +241,7 @@ def save_upload(raw_name: str, data: bytes) -> dict:
 
 
 # ---- Scheduled auto-backup (file-based so it survives DB restores) ----
-DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": ""}
+DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "offsite": False, "offsite_dir": "", "offsite_retention": 0}
 OFFSITE_DIR_ENV = os.environ.get("ROOFSPAN_OFFSITE_BACKUP_DIR", "")
 
 
@@ -259,9 +263,14 @@ def _write_json(path: str, data: dict):
 
 def get_schedule() -> dict:
     s = _read_json(SCHEDULE_FILE, DEFAULT_SCHEDULE)
+    try:
+        retention = max(0, int(s.get("offsite_retention", 0) or 0))
+    except (TypeError, ValueError):
+        retention = 0
     return {"enabled": bool(s.get("enabled", False)), "time": s.get("time", "02:00"),
             "offsite": bool(s.get("offsite", False)),
-            "offsite_dir": s.get("offsite_dir") or OFFSITE_DIR_ENV or ""}
+            "offsite_dir": s.get("offsite_dir") or OFFSITE_DIR_ENV or "",
+            "offsite_retention": retention}
 
 
 def set_schedule(enabled: bool, time_str: str, offsite: bool = False, offsite_dir: str | None = None) -> dict:
@@ -271,7 +280,8 @@ def set_schedule(enabled: bool, time_str: str, offsite: bool = False, offsite_di
     dest = current.get("offsite_dir", "") if offsite_dir is None else (offsite_dir or "").strip()
     if offsite and not dest:
         raise ValueError("Choose a backup copy location before enabling secondary backups.")
-    sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite), "offsite_dir": dest}
+    sched = {"enabled": bool(enabled), "time": time_str, "offsite": bool(offsite), "offsite_dir": dest,
+             "offsite_retention": current.get("offsite_retention", 0)}
     _write_json(SCHEDULE_FILE, sched)
     return sched
 
@@ -280,13 +290,38 @@ def get_offsite_dir() -> str:
     return get_schedule().get("offsite_dir") or ""
 
 
-def set_offsite_dir(dest_dir: str) -> dict:
-    """Persist the customer-selected secondary backup directory to machine-level RoofSpan config
-    (the backups schedule.json), NOT browser storage. Does not store any credentials."""
+def get_offsite_retention() -> int:
+    return get_schedule().get("offsite_retention", 0)
+
+
+def set_offsite_dir(dest_dir: str, retention: int | None = None) -> dict:
+    """Persist the customer-selected secondary backup directory (and optional retention count) to
+    machine-level RoofSpan config (schedule.json), NOT browser storage. Stores no credentials."""
     s = get_schedule()
     s["offsite_dir"] = (dest_dir or "").strip()
+    if retention is not None:
+        try:
+            s["offsite_retention"] = max(0, int(retention))
+        except (TypeError, ValueError):
+            s["offsite_retention"] = 0
     _write_json(SCHEDULE_FILE, s)
-    return s
+    return get_schedule()
+
+
+def prune_offsite(dest_dir: str, keep: int) -> list[str]:
+    """Keep only the newest `keep` RoofSpan backups at the copy location; delete older ones.
+    keep<=0 disables pruning. Only RoofSpan-generated 'roofspan_*.dump' files are ever removed."""
+    if keep <= 0 or not dest_dir:
+        return []
+    files = sorted(glob.glob(os.path.join(dest_dir, "roofspan_*.dump")), reverse=True)  # newest first (ts name)
+    removed = []
+    for old in files[keep:]:
+        try:
+            os.remove(old)
+            removed.append(os.path.basename(old))
+        except OSError as e:
+            logging.getLogger("roofspan").warning("could not prune old off-site backup %r: %s", old, e)
+    return removed
 
 
 def get_schedule_state() -> dict:

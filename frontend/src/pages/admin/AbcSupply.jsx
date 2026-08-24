@@ -107,6 +107,12 @@ export default function AbcSupply() {
   }, [status?.status, shipTo, accounts]);
 
   const saveConfig = async () => {
+    const switchingEnv = status?.environment && environment !== status.environment;
+    if (switchingEnv && !window.confirm(
+      `Switch ABC Supply to ${environment.toUpperCase()}?\n\n` +
+      "This clears the current app credentials and connection (they are specific to each " +
+      "environment). You'll need to enter the " + environment + " Client ID/Secret and reconnect."
+    )) return;
     setBusy(true);
     try {
       await api.put("/integrations/abc/config", {
@@ -116,7 +122,7 @@ export default function AbcSupply() {
         await api.put("/integrations/abc/config/secret", { client_secret: clientSecret.trim() });
         setClientSecret("");
       }
-      toast.success("ABC Supply configuration saved");
+      toast.success(switchingEnv ? `Switched to ${environment} — enter credentials and reconnect.` : "ABC Supply configuration saved");
       await load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
@@ -271,6 +277,12 @@ export default function AbcSupply() {
                 <SelectItem value="production">Production</SelectItem>
               </SelectContent>
             </Select>
+            {environment === "production" && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-700" data-testid="abc-production-note">
+                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Production sends real orders and pricing requests to ABC Supply. Use your production app credentials.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>Client ID</Label>
