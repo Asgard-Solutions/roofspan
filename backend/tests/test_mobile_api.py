@@ -174,10 +174,18 @@ class TestRBAC:
         r = requests.post(f"{BASE_URL}/api/mobile/visits", json={"property_id": property_id, "outcome": "no_answer"}, timeout=30)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}"
 
-    def test_sales_can_create_visit(self, sales_token, property_id):
+    def test_sales_blocked_from_unauthorized_property_visit(self, sales_token, property_id):
+        # Property Access Security (P1): a sales user may only visit a property in their assigned
+        # canvass section (or tied to their lead/job). An arbitrary property is now backend-denied.
         h = {"Authorization": f"Bearer {sales_token}", "Idempotency-Key": f"sales-{uuid.uuid4()}"}
         r = requests.post(f"{BASE_URL}/api/mobile/visits", json={"property_id": property_id, "outcome": "no_answer", "notes": "TEST sales visit"}, headers=h, timeout=30)
-        assert r.status_code == 201, f"Sales should be a FIELD_ROLE: {r.status_code} {r.text}"
+        assert r.status_code == 403, f"Sales must not visit unauthorized property: {r.status_code} {r.text}"
+
+    def test_field_role_can_create_visit(self, owner_headers, property_id):
+        # Management field roles retain broad access and can still create visits.
+        h = {**owner_headers, "Idempotency-Key": f"owner-{uuid.uuid4()}"}
+        r = requests.post(f"{BASE_URL}/api/mobile/visits", json={"property_id": property_id, "outcome": "no_answer", "notes": "TEST owner visit"}, headers=h, timeout=30)
+        assert r.status_code == 201, f"Field role should create visit: {r.status_code} {r.text}"
 
 
 # ---- Office regression ----

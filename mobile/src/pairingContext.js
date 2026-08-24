@@ -8,6 +8,8 @@ import NetInfo from "@react-native-community/netinfo";
 import { clearPairing, loadPairing, savePairing } from "./pairingStore";
 import { probeConnection, resolvePairing, checkVersion } from "./relay";
 import { setActivePairing } from "./transport";
+import { setInstallationScope } from "./storage";
+import { runSync } from "./sync";
 import { versionGate } from "./version";
 import { STATES, mapRelayError } from "./connectionState";
 
@@ -23,6 +25,7 @@ export function PairingProvider({ children }) {
   const evaluate = useCallback(async (p) => {
     if (!p) return;
     setActivePairing(p); // route transport through the relay for this pairing
+    setInstallationScope(p.installation_id); // isolate cache + queue per paired installation (§29)
     // 1) version authority = Control Plane version_policy (fallback to stored minimum if offline)
     const vp = await checkVersion(APP_VERSION);
     if (vp) {
@@ -40,6 +43,8 @@ export function PairingProvider({ children }) {
     setConn(STATES.CONNECTING);
     const r = await probeConnection(p);
     setConn(r.ok ? STATES.CONNECTED : mapRelayError(r.code));
+    // Office reachable again -> flush any pending offline work (relay reconnection retry, §17).
+    if (r.ok) runSync().catch(() => {});
   }, []);
 
   useEffect(() => {

@@ -18,6 +18,7 @@ import { SubscriptionLock, DeviceRevoked, ServerUnavailable, UpdateRequired, Opt
 import Home from "./src/screens/Home";
 import Leads from "./src/screens/Leads";
 import LeadDetail from "./src/screens/LeadDetail";
+import NewLead from "./src/screens/NewLead";
 import MapScreen from "./src/screens/MapScreen";
 import Jobs from "./src/screens/Jobs";
 import JobDetail from "./src/screens/JobDetail";
@@ -32,8 +33,17 @@ const PairStack = createNativeStackNavigator();
 function LeadsNav() {
   return (
     <LeadStack.Navigator>
-      <LeadStack.Screen name="Leads" component={Leads} />
+      <LeadStack.Screen
+        name="Leads"
+        component={Leads}
+        options={({ navigation }) => ({
+          headerRight: () => (
+            <Text onPress={() => navigation.navigate("NewLead", {})} style={{ color: C.brand, fontWeight: "800", fontSize: 16, paddingHorizontal: 6 }} testID="new-lead-button">+ New</Text>
+          ),
+        })}
+      />
       <LeadStack.Screen name="LeadDetail" component={LeadDetail} options={{ title: "Lead" }} />
+      <LeadStack.Screen name="NewLead" component={NewLead} options={{ title: "New Lead" }} />
       <LeadStack.Screen name="Inspection" component={Inspection} />
     </LeadStack.Navigator>
   );

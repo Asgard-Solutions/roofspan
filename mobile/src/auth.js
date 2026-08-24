@@ -3,6 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import axios from "axios";
 import { API } from "./config";
 import { signInThroughRelay } from "./relay";
+import { setUserScope } from "./storage";
 
 const TOKEN_KEY = "roofspan_token";
 const USER_KEY = "roofspan_user";
@@ -19,7 +20,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     (async () => {
       const raw = await SecureStore.getItemAsync(USER_KEY);
-      if (raw) setUser(JSON.parse(raw));
+      if (raw) { const u = JSON.parse(raw); setUserScope(u.id); setUser(u); }
       setReady(true);
     })();
   }, []);
@@ -27,6 +28,7 @@ export function AuthProvider({ children }) {
   const _persist = async (access_token, u) => {
     await SecureStore.setItemAsync(TOKEN_KEY, access_token); // secure device storage
     await SecureStore.setItemAsync(USER_KEY, JSON.stringify(u));
+    setUserScope(u.id); // scope cache + queue to this signed-in salesperson (data isolation §29)
     setUser(u);
     return u;
   };
@@ -50,6 +52,7 @@ export function AuthProvider({ children }) {
   const logout = async () => {
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     await SecureStore.deleteItemAsync(USER_KEY);
+    setUserScope(null); // stop exposing this user's scoped cache; pending work is retained, not dropped
     setUser(null);
   };
 

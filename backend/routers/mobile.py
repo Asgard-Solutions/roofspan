@@ -15,6 +15,7 @@ from db import get_db
 from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from services.object_storage import put_object, get_object
+from services import mobile_authz as mauthz
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -77,9 +78,7 @@ async def create_visit(payload: MobileVisitIn, request: Request, idempotency_key
         v = await db.get(Visit, prior)
         if v:
             return _visit_out(v, replayed=True)
-    p = await db.get(Property, payload.property_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Property not found")
+    p = await mauthz.assert_property_access(db, payload.property_id, user)
     v = Visit(property_id=p.id, user_id=user.id, user_email=user.email,
               visited_at=payload.visited_at or datetime.now(timezone.utc), outcome=payload.outcome, notes=payload.notes)
     db.add(v)
@@ -122,6 +121,16 @@ async def create_inspection(payload: MobileInspectionIn, request: Request, idemp
         i = await db.get(Inspection, prior)
         if i:
             return _insp_out(i, replayed=True)
+    if mauthz.is_sales(user):  # sales may only attach an inspection to their own lead/property
+        if payload.lead_id:
+            lead = await db.get(Lead, payload.lead_id)
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            await mauthz.assert_lead_access(db, lead, user)
+        if payload.property_id:
+            await mauthz.assert_property_access(db, payload.property_id, user)
+        if not payload.lead_id and not payload.property_id:
+            raise HTTPException(status_code=403, detail="An inspection must be tied to your lead or property.")
     i = Inspection(**payload.model_dump(), created_by=user.email)
     db.add(i)
     await db.flush()
@@ -140,6 +149,7 @@ async def update_inspection(inspection_id: str, payload: MobileInspectionIn, req
     i = await db.get(Inspection, inspection_id)
     if not i:
         raise HTTPException(status_code=404, detail="Inspection not found")
+    await mauthz.assert_inspection_access(db, i, user)
     # Simple visible conflict detection: client sends the updated_at it last saw via If-Match.
     server_token = _token(i)
     if if_match and server_token and if_match != server_token:
@@ -166,6 +176,36 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
             "if_match": _token(i), "created_by": i.created_by, "replayed": replayed}
 
 
+# ---- Mobile inspection reads (salesperson-scoped) ----
+@router.get("/inspections")
+async def list_inspections(lead_id: str | None = Query(None), property_id: str | None = Query(None),
+                           user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    if mauthz.is_sales(user) and not lead_id and not property_id:
+        raise HTTPException(status_code=422, detail="lead_id or property_id is required")
+    if lead_id:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        await mauthz.assert_lead_access(db, lead, user)
+    if property_id:
+        await mauthz.assert_property_access(db, property_id, user)
+    stmt = select(Inspection).order_by(Inspection.created_at.desc())
+    if lead_id:
+        stmt = stmt.where(Inspection.lead_id == lead_id)
+    if property_id:
+        stmt = stmt.where(Inspection.property_id == property_id)
+    return [_insp_out(i) for i in (await db.execute(stmt)).scalars().all()]
+
+
+@router.get("/inspections/{inspection_id}")
+async def get_inspection(inspection_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    i = await db.get(Inspection, inspection_id)
+    if not i:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    await mauthz.assert_inspection_access(db, i, user)
+    return _insp_out(i)
+
+
 # ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----
 _EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
 _CATS = {"Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other",
@@ -183,6 +223,7 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
         raise HTTPException(status_code=422, detail="Invalid category")
     if (file.content_type or "") not in _EXT:  # server-side file-type validation
         raise HTTPException(status_code=422, detail="Unsupported image type")
+    await mauthz.assert_record_access(db, record_type, record_id, user)  # sales must own the parent record
     prior, replay = await _reserve_idem(db, idempotency_key, "mobile_photo")
     if replay and prior and prior != "pending":
         ph = await db.get(Photo, prior)
@@ -214,16 +255,18 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
 
 
 @router.get("/photos")
-async def list_photos(record_type: str = Query(...), record_id: str = Query(...), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_photos(record_type: str = Query(...), record_id: str = Query(...), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    await mauthz.assert_record_access(db, record_type, record_id, user)
     rows = (await db.execute(select(Photo).where(Photo.record_type == record_type, Photo.record_id == record_id).order_by(Photo.created_at.desc()))).scalars().all()
     return [_photo_out(p) for p in rows]
 
 
 @router.get("/photos/{photo_id}/content")
-async def photo_content(photo_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def photo_content(photo_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     ph = await db.get(Photo, photo_id)
     if not ph:
         raise HTTPException(status_code=404, detail="Photo not found")
+    await mauthz.assert_record_access(db, ph.record_type, ph.record_id, user)
     try:
         data = get_object(ph.object_path)
     except Exception:
@@ -261,7 +304,7 @@ def _job_row(j: Job) -> dict:
 
 @router.get("/leads")
 async def my_leads(scope: str = Query("auto"), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    stmt = select(Lead).order_by(Lead.created_at.desc())
+    stmt = select(Lead).where(Lead.status != "archived").order_by(Lead.created_at.desc())
     if _field_only(user) or scope == "mine":
         stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
@@ -353,3 +396,242 @@ async def mobile_canvass_section_properties(section_id: str, user: User = Depend
     } for p in rows]
     return {"section_id": str(s.id), "type": "FeatureCollection", "features": features}
 
+
+# ============================================================================
+# Mobile Lead CRUD (salesperson-authorized; server assigns to the caller)
+# ============================================================================
+class MobileLeadCreate(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    status: str | None = "new"
+    notes: str | None = None
+    property_id: str | None = None
+    # NOTE: no assigned_user_id/assigned_to — assignment is always the caller, never client-chosen.
+
+
+class MobileLeadPatch(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    status: str | None = None
+    notes: str | None = None
+
+
+def _lead_token(l: Lead) -> str | None:
+    ts = getattr(l, "updated_at", None) or getattr(l, "created_at", None)
+    return ts.isoformat() if ts else None
+
+
+async def _lead_detail(db: AsyncSession, l: Lead, replayed: bool = False, existing: bool = False) -> dict:
+    address = l.address
+    do_not_knock = False
+    visits = []
+    if l.property_id:
+        p = await db.get(Property, l.property_id)
+        if p:
+            address = p.formatted_address or address
+            do_not_knock = p.do_not_knock
+            vrows = (await db.execute(select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()))).scalars().all()
+            visits = [{"id": str(v.id), "outcome": v.outcome, "notes": v.notes,
+                       "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows]
+    insp = (await db.execute(select(Inspection).where(Inspection.lead_id == l.id).order_by(Inspection.created_at.desc()))).scalars().first()
+    return {
+        "id": str(l.id), "name": l.name, "phone": l.phone, "email": l.email,
+        "address": address, "status": l.status, "notes": l.notes,
+        "property_id": str(l.property_id) if l.property_id else None,
+        "assigned_user_id": str(l.assigned_user_id) if l.assigned_user_id else None,
+        "created_by": l.created_by, "created_at": l.created_at.isoformat(),
+        "do_not_knock": do_not_knock, "visits": visits,
+        "inspection_id": str(insp.id) if insp else None,
+        "if_match": _lead_token(l), "replayed": replayed, "existing": existing,
+    }
+
+
+@router.post("/leads", status_code=201)
+async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_key: str | None = Header(None),
+                      user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_lead")
+    if replay and prior and prior != "pending":
+        l = await db.get(Lead, prior)
+        if l:
+            return await _lead_detail(db, l, replayed=True)
+    prop = None
+    if payload.property_id:
+        prop = await mauthz.assert_property_access(db, payload.property_id, user)  # sales must own the property
+        # Dedupe: reuse an existing (non-archived) lead the caller already owns for this property.
+        existing = (await db.execute(
+            select(Lead).where(Lead.property_id == prop.id, Lead.assigned_user_id == user.id,
+                               Lead.status != "archived").order_by(Lead.created_at.desc())
+        )).scalars().first()
+        if existing:
+            if idempotency_key:
+                k = await db.get(IdempotencyKey, idempotency_key)
+                if k:
+                    k.entity_id = str(existing.id)
+                await db.commit()
+            return await _lead_detail(db, existing, existing=True)
+    name = payload.name or (prop.formatted_address if prop else None) or "New Lead"
+    address = payload.address or (prop.formatted_address if prop else None)
+    l = Lead(name=name, phone=payload.phone, email=payload.email, address=address,
+             status=payload.status or "new", notes=payload.notes,
+             property_id=prop.id if prop else None,
+             assigned_user_id=user.id,  # SERVER-AUTHORITATIVE — never trust client assignment
+             assigned_to=user.full_name or user.email, created_by=user.email)
+    db.add(l)
+    await db.flush()
+    if idempotency_key:
+        k = await db.get(IdempotencyKey, idempotency_key)
+        if k:
+            k.entity_id = str(l.id)
+    await db.commit()
+    await db.refresh(l)
+    await log_action(db, user=user, action="lead.create", entity_type="lead", entity_id=l.id,
+                     detail={"via": "mobile", "from_property": bool(prop)}, request=request)
+    return await _lead_detail(db, l)
+
+
+@router.get("/leads/{lead_id}")
+async def get_lead(lead_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    l = await db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await mauthz.assert_lead_access(db, l, user)
+    return await _lead_detail(db, l)
+
+
+@router.patch("/leads/{lead_id}")
+async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, if_match: str | None = Header(None),
+                      user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    l = await db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await mauthz.assert_lead_access(db, l, user)
+    server_token = _lead_token(l)
+    if if_match and server_token and if_match != server_token:
+        raise HTTPException(status_code=409, detail={"message": "This lead changed on the server since your copy.",
+                                                     "server": await _lead_detail(db, l)})
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(l, k, v)
+    await db.commit()
+    await db.refresh(l)
+    await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=l.id, detail={"via": "mobile"}, request=request)
+    return await _lead_detail(db, l)
+
+
+@router.delete("/leads/{lead_id}")
+async def archive_lead(lead_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Soft-archive (status='archived'). Records are never destroyed and stay visible/reversible in Office."""
+    l = await db.get(Lead, lead_id)
+    if not l:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await mauthz.assert_lead_access(db, l, user)
+    l.status = "archived"
+    await db.commit()
+    await log_action(db, user=user, action="lead.archive", entity_type="lead", entity_id=l.id, detail={"via": "mobile"}, request=request)
+    return {"id": str(l.id), "status": l.status, "archived": True}
+
+
+# ============================================================================
+# Mobile Job read/update (salesperson-authorized). No blank-create, no delete:
+# Jobs originate from an accepted Quote and link to costing/inventory (Office workflow preserved).
+# ============================================================================
+_JOB_STATUSES = ["created", "pending", "scheduled", "in_progress", "completed", "cancelled"]
+
+
+class MobileJobPatch(BaseModel):
+    status: str | None = None
+    scope: str | None = None
+    notes: str | None = None
+    schedule_notes: str | None = None
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+
+
+def _job_token(j: Job) -> str | None:
+    ts = getattr(j, "updated_at", None) or getattr(j, "created_at", None)
+    return ts.isoformat() if ts else None
+
+
+async def _job_detail(db: AsyncSession, j: Job) -> dict:
+    from models import Customer, JobMaterial, Material
+    cust = await db.get(Customer, j.customer_id) if j.customer_id else None
+    prop = await db.get(Property, j.property_id) if j.property_id else None
+    jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == j.id))).scalars().all()
+    materials = []
+    for jm in jms:
+        m = await db.get(Material, jm.material_id)
+        materials.append({"id": str(jm.id), "material_name": m.name if m else "?",
+                          "unit": jm.unit or (m.unit if m else "ea"), "planned_quantity": jm.planned_quantity})
+    return {
+        "id": str(j.id), "number": j.number, "status": j.status, "scope": j.scope, "notes": j.notes,
+        "scheduled_start": j.scheduled_start.isoformat() if j.scheduled_start else None,
+        "scheduled_end": j.scheduled_end.isoformat() if j.scheduled_end else None,
+        "schedule_notes": j.schedule_notes, "assigned_to": j.assigned_to,
+        "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None,
+        "customer_name": cust.name if cust else None,
+        "property_id": str(j.property_id) if j.property_id else None,
+        "property_address": prop.formatted_address if prop else None,
+        "materials": materials, "created_at": j.created_at.isoformat(), "if_match": _job_token(j),
+    }
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await mauthz.assert_job_access(db, j, user)
+    return await _job_detail(db, j)
+
+
+@router.patch("/jobs/{job_id}")
+async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_match: str | None = Header(None),
+                     user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    j = await db.get(Job, job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await mauthz.assert_job_access(db, j, user)
+    server_token = _job_token(j)
+    if if_match and server_token and if_match != server_token:
+        raise HTTPException(status_code=409, detail={"message": "This job changed on the server since your copy.",
+                                                     "server": await _job_detail(db, j)})
+    data = payload.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] not in _JOB_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Status must be one of {_JOB_STATUSES}")
+    for k, v in data.items():
+        setattr(j, k, v)
+    # Preserve Office business rules on status transitions (idempotent).
+    if data.get("status") in ("completed", "cancelled"):
+        from services import inventory_ops as ops
+        await ops.auto_release_reservations(db, j, user.email)
+    if data.get("status") == "completed":
+        from services import job_costing as jc
+        await jc.build_snapshot(db, j, "completion", user.email)
+    await db.commit()
+    await db.refresh(j)
+    await log_action(db, user=user, action="job.update", entity_type="job", entity_id=j.id, detail={"via": "mobile", "fields": list(data.keys())}, request=request)
+    return await _job_detail(db, j)
+
+
+# ============================================================================
+# Mobile Property detail (salesperson-authorized; canvass/field context only)
+# ============================================================================
+@router.get("/properties/{property_id}")
+async def get_property(property_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    p = await mauthz.assert_property_access(db, property_id, user)
+    from models import PropertyContact
+    owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()
+    vrows = (await db.execute(select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()))).scalars().all()
+    lead = (await db.execute(select(Lead).where(Lead.property_id == p.id, Lead.status != "archived").order_by(Lead.created_at.desc()))).scalars().first()
+    return {
+        "id": str(p.id), "formatted_address": p.formatted_address, "latitude": p.latitude, "longitude": p.longitude,
+        "property_type": p.property_type, "owner_occupied": p.owner_occupied,
+        "do_not_knock": p.do_not_knock, "do_not_knock_reason": p.do_not_knock_reason, "notes": p.notes,
+        "owner_name": owner.name if owner else None, "owner_phone": owner.phone if owner else None,
+        "existing_lead_id": str(lead.id) if lead else None,
+        "visits": [{"id": str(v.id), "outcome": v.outcome, "notes": v.notes,
+                    "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows],
+    }

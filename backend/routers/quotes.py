@@ -1,18 +1,37 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User)
+from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig)
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_phase3 import (QuoteIn, QuoteUpdate, QuoteOut, QuoteAccept, QuoteAcceptResult, LineItemOut,
                             QuotePackageOut)
 from sales_common import next_number, enforce_version
 from services import estimating as calc
+from services.invoice_pdf import build_quote_pdf
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
+
+
+async def _quote_document_data(db: AsyncSession, q: Quote) -> dict:
+    out = await _out(db, q)
+    company_row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+    company = company_row.value if company_row else {}
+    customer = None
+    if q.customer_id:
+        c = await db.get(Customer, q.customer_id)
+        if c:
+            customer = {"name": c.name, "email": c.email, "phone": c.phone, "billing_address": c.billing_address}
+    property_address = None
+    if q.property_id:
+        p = await db.get(Property, q.property_id)
+        if p:
+            property_address = getattr(p, "formatted_address", None) or getattr(p, "address_line1", None)
+    return {"quote": out.model_dump(), "company": company, "customer": customer, "property_address": property_address}
 
 
 def _r2(v):
@@ -155,6 +174,26 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
     await db.refresh(q)
     await log_action(db, user=user, action="quote.create", entity_type="quote", entity_id=q.id, detail={"number": number, "total": q.total}, request=request)
     return await _out(db, q)
+
+
+@router.get("/{quote_id}/document")
+async def quote_document(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return await _quote_document_data(db, q)
+
+
+@router.get("/{quote_id}/pdf")
+async def quote_pdf(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    data = await _quote_document_data(db, q)
+    pdf = build_quote_pdf(quote=data["quote"], company=data["company"],
+                          customer=data["customer"], property_address=data["property_address"])
+    return StreamingResponse(iter([pdf]), media_type="application/pdf",
+                             headers={"Content-Disposition": f'inline; filename="Quote-{q.number}.pdf"'})
 
 
 @router.get("/{quote_id}", response_model=QuoteOut)

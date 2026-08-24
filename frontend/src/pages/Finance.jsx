@@ -21,6 +21,7 @@ export default function Finance() {
   const [quotes, setQuotes] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [viewInvoiceId, setViewInvoiceId] = useState(null);
+  const [viewQuoteId, setViewQuoteId] = useState(null);
 
   const load = () => {
     api.get("/quotes").then((r) => setQuotes(r.data)).catch(() => {});
@@ -46,7 +47,7 @@ export default function Finance() {
           <TabsContent value="quotes" className="mt-6">
             <div className="overflow-x-auto rounded-md border border-border bg-white">
               <Table data-testid="quotes-table">
-                <TableHeader><TableRow><TableHead>Quote #</TableHead><TableHead>Status</TableHead><TableHead>Total</TableHead><TableHead>Issued</TableHead><TableHead>Expires</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Quote #</TableHead><TableHead>Status</TableHead><TableHead>Total</TableHead><TableHead>Issued</TableHead><TableHead>Expires</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {quotes.map((q) => (
                     <TableRow key={q.id} data-testid={`fin-quote-${q.id}`}>
@@ -55,9 +56,14 @@ export default function Finance() {
                       <TableCell className="tabular-nums">{money(q.total)}</TableCell>
                       <TableCell className="text-slate-500">{shortDate(q.issue_date)}</TableCell>
                       <TableCell className="text-slate-500">{shortDate(q.expiration_date)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="outline" size="sm" onClick={() => setViewQuoteId(q.id)} data-testid={`quote-view-${q.id}`}>
+                          <FileText className="h-3.5 w-3.5" /> View / PDF
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
-                  {quotes.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-slate-400">No quotes.</TableCell></TableRow>}
+                  {quotes.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No quotes.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
@@ -100,6 +106,8 @@ export default function Finance() {
       </div>
       <InvoiceDocumentDialog invoiceId={viewInvoiceId} open={!!viewInvoiceId}
         onOpenChange={(v) => { if (!v) setViewInvoiceId(null); }} onSent={load} />
+      <InvoiceDocumentDialog docId={viewQuoteId} kind="quote" open={!!viewQuoteId}
+        onOpenChange={(v) => { if (!v) setViewQuoteId(null); }} onSent={load} />
     </div>
   );
 }

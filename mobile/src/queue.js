@@ -14,7 +14,7 @@ function uuidv4() {
 }
 
 // Build a durable mutation. The client_id IS the Idempotency-Key and never changes on retry.
-function makeMutation({ kind, method, path, body, ifMatch = null, label = "" }) {
+function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null }) {
   const id = uuidv4();
   return {
     client_id: id,
@@ -25,6 +25,7 @@ function makeMutation({ kind, method, path, body, ifMatch = null, label = "" }) 
     body: body || {},
     ifMatch,
     label,
+    scope,
     state: STATES.PENDING,
     server_id: null,
     serverValue: null,

@@ -13,14 +13,15 @@ export default function Inspection({ route, navigation }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get(`/inspections`, { params: { lead_id } });
+      const params = lead_id ? { lead_id } : { property_id };
+      const r = await api.get(`/mobile/inspections`, { params });
       if (r.data && r.data.length) {
         const i = r.data[0];
         setExisting(i);
         setForm({ roof_condition: i.roof_condition || "", findings: i.findings || "", recommended_work: i.recommended_work || "", measurements: i.measurements || "", notes: i.notes || "" });
       }
     } catch (e) {}
-  }, [lead_id]);
+  }, [lead_id, property_id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 

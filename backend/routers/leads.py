@@ -89,6 +89,8 @@ async def update_lead(lead_id: str, payload: LeadPatch, request: Request, user: 
     lead = await db.get(Lead, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if user.role == "sales" and lead.assigned_user_id != user.id:  # strict: sales may only edit their own
+        raise HTTPException(status_code=403, detail="This lead is not assigned to you")
     fields = payload.model_dump(exclude_unset=True)
     for k, v in fields.items():
         setattr(lead, k, v)

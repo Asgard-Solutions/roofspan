@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_db
 from models import Inspection, User
 from core import get_current_user, require_roles, FIELD_ROLES, log_action
+from services import mobile_authz as mauthz
 from schemas_phase3 import InspectionIn, InspectionOut
 
 router = APIRouter(prefix="/api/inspections", tags=["inspections"])
@@ -23,6 +24,16 @@ def _out(i: Inspection) -> InspectionOut:
 
 @router.get("", response_model=list[InspectionOut])
 async def list_inspections(lead_id: str | None = Query(None), customer_id: str | None = Query(None), property_id: str | None = Query(None), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if mauthz.is_sales(user):  # sales must scope to a lead/property they own (no broad enumeration)
+        if not lead_id and not property_id:
+            raise HTTPException(status_code=403, detail="Sales must query inspections by their own lead or property")
+        if lead_id:
+            lead = await db.get(__import__("models").Lead, lead_id)
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            await mauthz.assert_lead_access(db, lead, user)
+        if property_id:
+            await mauthz.assert_property_access(db, property_id, user)
     stmt = select(Inspection).order_by(Inspection.created_at.desc())
     if lead_id:
         stmt = stmt.where(Inspection.lead_id == lead_id)
@@ -48,6 +59,7 @@ async def get_inspection(inspection_id: str, user: User = Depends(get_current_us
     i = await db.get(Inspection, inspection_id)
     if not i:
         raise HTTPException(status_code=404, detail="Inspection not found")
+    await mauthz.assert_inspection_access(db, i, user)
     return _out(i)
 
 
@@ -56,6 +68,7 @@ async def update_inspection(inspection_id: str, payload: InspectionIn, request: 
     i = await db.get(Inspection, inspection_id)
     if not i:
         raise HTTPException(status_code=404, detail="Inspection not found")
+    await mauthz.assert_inspection_access(db, i, user)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(i, k, v)
     await db.commit()
