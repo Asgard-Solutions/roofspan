@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import logging
 from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import serialization
@@ -21,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import config
 from control_plane.models import SigningKey
+
+log = logging.getLogger("roofspan.cp.keys")
 
 
 def _new_kid() -> str:
@@ -42,12 +45,23 @@ def _generate() -> tuple[str, str]:
 
 
 def _mirror_to_disk(kid: str, priv_pem: str, pub_pem: str) -> None:
-    os.makedirs(config.DEV_SIGNING_KEYS_DIR, exist_ok=True)
-    with open(os.path.join(config.DEV_SIGNING_KEYS_DIR, f"{kid}.private.pem"), "w") as f:
-        f.write(priv_pem)
-    os.chmod(os.path.join(config.DEV_SIGNING_KEYS_DIR, f"{kid}.private.pem"), 0o600)
-    with open(os.path.join(config.DEV_SIGNING_KEYS_DIR, f"{kid}.public.pem"), "w") as f:
-        f.write(pub_pem)
+    """Best-effort dev convenience only. The authoritative private key lives in the (isolated) CP DB;
+    this mirror must NEVER break activation. In a packaged/frozen build the target dir can be
+    read-only (e.g. inside a PyInstaller bundle or a locked-down ProgramData path), so any failure
+    here is logged and swallowed rather than 500-ing the pairing/activation flow."""
+    try:
+        os.makedirs(config.DEV_SIGNING_KEYS_DIR, exist_ok=True)
+        priv_path = os.path.join(config.DEV_SIGNING_KEYS_DIR, f"{kid}.private.pem")
+        with open(priv_path, "w") as f:
+            f.write(priv_pem)
+        try:
+            os.chmod(priv_path, 0o600)  # POSIX only; no-op/limited on Windows
+        except OSError:
+            pass
+        with open(os.path.join(config.DEV_SIGNING_KEYS_DIR, f"{kid}.public.pem"), "w") as f:
+            f.write(pub_pem)
+    except Exception as e:  # never fatal — DB copy is the source of truth
+        log.warning("Could not mirror CP signing key %s to disk (%s); continuing (DB copy is authoritative)", kid, e)
 
 
 async def ensure_active_key(db: AsyncSession) -> SigningKey:

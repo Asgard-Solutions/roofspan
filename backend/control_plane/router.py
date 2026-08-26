@@ -9,6 +9,8 @@ they are the Control Plane itself. The guard only protects business routes on th
 """
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+import traceback
 
 from control_plane import config, service
 from control_plane.db import get_cp_db
@@ -19,6 +21,7 @@ from control_plane.schemas import (
 )
 
 router = APIRouter(prefix="/api/control-plane", tags=["control-plane"])
+log = logging.getLogger("roofspan.cp.router")
 
 
 def _cp_error(e: service.CPError):
@@ -77,6 +80,9 @@ async def activate(payload: ActivateIn, db: AsyncSession = Depends(get_cp_db)):
         return ActivateOut(**result)
     except service.CPError as e:
         raise _cp_error(e)
+    except Exception as e:  # surface the real cause instead of a blank 500 (co-hosted install)
+        log.error("Control Plane activation failed: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Control Plane activation error: {type(e).__name__}: {e}")
 
 
 @router.post("/entitlement/refresh", response_model=RefreshOut)
