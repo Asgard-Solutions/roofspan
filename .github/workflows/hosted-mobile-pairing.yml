@@ -15,8 +15,7 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
-      - "windows/winbuild/relay_entry.py"
-      - "windows/winbuild/config/roofspan.env.template"
+      - "windows/**"
       - "deploy/railway/**"
       - "infra/config/production.endpoints.env.example"
       - ".github/workflows/hosted-mobile-pairing.yml"
@@ -34,8 +33,7 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
-      - "windows/winbuild/relay_entry.py"
-      - "windows/winbuild/config/roofspan.env.template"
+      - "windows/**"
       - "deploy/railway/**"
       - "infra/config/production.endpoints.env.example"
       - ".github/workflows/hosted-mobile-pairing.yml"
@@ -61,12 +59,14 @@ jobs:
             qrcode pillow PyJWT passlib bcrypt alembic websockets
           npm install --global yarn@1.22.22
 
-      - name: Run Office hosted-pairing unit tests
+      - name: Run Office hosted-pairing and Relay release-contract tests
         env:
           PYTHONPATH: backend
           DATABASE_URL: postgresql+asyncpg://roofspan:test@127.0.0.1:5432/roofspan
           CONTROL_PLANE_BASE_URL: https://cp.roofspan.io
-        run: pytest -q -n 0 backend/tests/test_hosted_pairing_client.py
+        run: |
+          pytest -q -n 0 backend/tests/test_hosted_pairing_client.py
+          pytest -q -n 0 windows/tests/test_relay_connector_release_contract.py
 
       - name: Compile changed pairing and Relay modules
         run: |
@@ -79,7 +79,8 @@ jobs:
             backend/server.py \
             backend/cp_asgi.py \
             backend/tests/hosted_pairing_probe.py \
-            windows/winbuild/relay_entry.py
+            windows/winbuild/relay_entry.py \
+            windows/tests/test_relay_connector_release_contract.py
 
       - name: Install locked Office frontend dependencies
         working-directory: frontend
@@ -100,7 +101,7 @@ jobs:
           grep -q 'cp.roofspan.io' /tmp/roofspan-expo-config.json
           grep -q 'relay.roofspan.io' /tmp/roofspan-expo-config.json
 
-      - name: Assert the obsolete split identity and Relay behavior cannot return
+      - name: Assert the obsolete split identity and stale-binary behavior cannot return
         run: |
           ! grep -q 'INTERNAL_CP_BASE =.*localhost' backend/licensing/pairing_client.py
           grep -q 'CONTROL_PLANE_BASE_URL' backend/licensing/pairing_client.py
@@ -109,6 +110,11 @@ jobs:
           grep -q 'revoke-self' backend/licensing/pairing_client.py
           grep -q '/api/relay/connector/identity' windows/winbuild/relay_entry.py
           ! grep -q 'private_key, installation_id = get_or_create_identity' windows/winbuild/relay_entry.py
+          grep -q -- '--build-info' windows/winbuild/relay_entry.py
+          grep -q 'hosted-installation-identity-v2' windows/winbuild/relay_entry.py
+          grep -q 'runtime_hooks=RUNTIME_HOOKS' windows/winbuild/roofspan-relay-connector.spec
+          grep -q 'Assert-RelayConnectorBuildInfo' windows/winbuild/build_exes.ps1
+          grep -q 'Assert-RelayConnectorBuildInfo' windows/installer/build.ps1
           grep -q 'app.include_router(relay_router)' backend/cp_asgi.py
           grep -q '/api/relay/installation' windows/winbuild/config/roofspan.env.template
 
@@ -155,7 +161,7 @@ jobs:
           python -m uvicorn cp_asgi:app --app-dir backend --host 127.0.0.1 --port 8765 > /tmp/roofspan-central.log 2>&1 &
           echo $! > /tmp/roofspan-central.pid
 
-      - name: Prove registration, QR/code pairing, user binding, Relay routing, and revoke
+      - name: Prove registration, QR/code pairing, current/legacy Relay routing, and revoke
         env:
           PYTHONPATH: backend
           CP_PROBE_BASE_URL: http://127.0.0.1:8765
