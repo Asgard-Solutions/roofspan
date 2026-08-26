@@ -37,7 +37,7 @@ jobs:
         run: pytest -q windows/tests/test_db_bootstrap_integration.py
 
   validate:
-    runs-on: ubuntu-latest  # pwsh (PowerShell 7) is preinstalled on GitHub-hosted runners
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -49,8 +49,10 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
-      - name: Python regression checks (ASCII, spec datas, venv, yarn sync, param contract)
-        run: pytest -q windows/tests/test_build_scripts.py
+      - name: Python regression checks (ASCII, specs, venv, yarn, release contract)
+        run: |
+          pytest -q windows/tests/test_build_scripts.py
+          pytest -q windows/tests/test_relay_connector_release_contract.py
 
       - name: PowerShell parser validation (real parse of every .ps1)
         shell: pwsh
@@ -72,9 +74,7 @@ jobs:
             }
           if ($failed) { throw "One or more PowerShell scripts failed to parse." }
 
-  # Authoritative Burn-bundle compile: actually runs `wix build bundle.wxs` on Windows with WiX 5.0.2 so
-  # schema/compiler regressions (e.g. WIX0010 typed-Variable-without-Value, or a Burn [variable] used as
-  # an ExePackage SourceFile) fail CI BEFORE anyone runs the real Windows build.
+  # Authoritative Burn-bundle compile on Windows with WiX 5.0.2.
   bundle-compile:
     runs-on: windows-latest
     steps:
@@ -100,40 +100,45 @@ jobs:
       - name: Real WiX 5 Burn-bundle + MSI compile smoke test
         run: pytest -q windows/tests/test_bundle_compile.py
 
-      - name: Prerequisites are EMBEDDED + RoofSpanSetup.exe is self-contained (isolated extract)
+      - name: Prerequisites are embedded and RoofSpanSetup.exe is self-contained
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $version = (Get-Content windows/VERSION -Raw).Trim()
           $work = Join-Path $env:RUNNER_TEMP "bundlepayload"
           $src  = Join-Path $work "src"
           New-Item -ItemType Directory -Force -Path $src | Out-Null
-          # Distinctive dummy prerequisites (real files so Burn embeds them).
           $edb = Join-Path $src "postgres-edb.exe"
           $wv  = Join-Path $src "webview2setup.exe"
-          # Build a real minimal MSI for the MsiPackage.
+
+          # Build a real minimal MSI for the MsiPackage using the checked-in release version.
           $wxs = Join-Path $work "dummy.wxs"
-          $xml = '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package Name="RoofSpan Dummy" Manufacturer="RoofSpan" Version="0.2.0" UpgradeCode="11111111-1111-1111-1111-111111111111" Scope="perMachine" Compressed="yes"><MediaTemplate EmbedCab="yes" /><StandardDirectory Id="ProgramFiles64Folder"><Directory Id="APPDIR" Name="RoofSpanDummy"><Component Id="C1" Guid="22222222-2222-2222-2222-222222222222"><RegistryValue Root="HKLM" Key="Software\RoofSpanDummy" Name="v" Type="string" Value="1" KeyPath="yes" /></Component></Directory></StandardDirectory><Feature Id="F"><ComponentRef Id="C1" /></Feature></Package></Wix>'
+          $xml = '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"><Package Name="RoofSpan Dummy" Manufacturer="RoofSpan" Version="{0}" UpgradeCode="11111111-1111-1111-1111-111111111111" Scope="perMachine" Compressed="yes"><MediaTemplate EmbedCab="yes" /><StandardDirectory Id="ProgramFiles64Folder"><Directory Id="APPDIR" Name="RoofSpanDummy"><Component Id="C1" Guid="22222222-2222-2222-2222-222222222222"><RegistryValue Root="HKLM" Key="Software\RoofSpanDummy" Name="v" Type="string" Value="1" KeyPath="yes" /></Component></Directory></StandardDirectory><Feature Id="F"><ComponentRef Id="C1" /></Feature></Package></Wix>' -f $version
           Set-Content -Encoding UTF8 -Path $wxs -Value $xml
           $msi = Join-Path $src "RoofSpanOffice.msi"
           wix build $wxs -arch x64 -o $msi
-          # ~5 MB dummy prereqs so we can also sanity-check the setup carries real payload bytes.
-          $buf = New-Object byte[] (5MB); (New-Object Random).NextBytes($buf)
-          [IO.File]::WriteAllBytes($edb, $buf); [IO.File]::WriteAllBytes($wv, $buf)
+
+          # Use two DIFFERENT incompressible payloads. Reusing the same bytes lets Burn deduplicate them
+          # and makes the bundle-size assertion meaningless.
+          $edbBuf = New-Object byte[] (5MB)
+          $wvBuf = New-Object byte[] (5MB)
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($edbBuf)
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($wvBuf)
+          [IO.File]::WriteAllBytes($edb, $edbBuf)
+          [IO.File]::WriteAllBytes($wv, $wvBuf)
 
           $setup = Join-Path $work "RoofSpanSetup.exe"
-          wix build .\windows\installer\bundle.wxs -arch x64 -d "Version=0.2.0" `
+          wix build .\windows\installer\bundle.wxs -arch x64 -d "Version=$version" `
             -d "MsiPath=$msi" -d "PostgresInstaller=$edb" -d "WebView2Bootstrapper=$wv" `
             -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
           if (-not (Test-Path $setup)) { throw "RoofSpanSetup.exe did not build" }
 
-          # Payload sanity guard: embedded prereqs must make the setup substantially larger than the MSI
-          # alone (guards against the 0.2.0 regression where the setup was ~= the MSI only).
           $setupMB = [math]::Round((Get-Item $setup).Length/1MB, 1)
           $msiMB   = [math]::Round((Get-Item $msi).Length/1MB, 1)
           Write-Host "setup=$setupMB MB  msi=$msiMB MB"
-          if (($setupMB - $msiMB) -lt 9) { throw "setup does not appear to carry the embedded prerequisites (delta $($setupMB-$msiMB) MB)" }
+          if (($setupMB - $msiMB) -lt 9) { throw "setup does not appear to carry both embedded prerequisites (delta $($setupMB-$msiMB) MB)" }
 
-          # Prove self-containment: copy ONLY the setup to an empty dir, delete the source prereqs, extract.
+          # Prove self-containment: copy only setup, remove source payloads, then extract Burn manifest.
           $iso = Join-Path $work "isolated"; New-Item -ItemType Directory -Force -Path $iso | Out-Null
           Copy-Item $setup (Join-Path $iso "RoofSpanSetup.exe")
           Remove-Item $edb, $wv, $msi -Force
@@ -145,14 +150,10 @@ jobs:
           foreach ($name in @("postgres-edb.exe","webview2setup.exe","RoofSpanOffice.msi")) {
             if ($m -notmatch [regex]::Escape($name)) { throw "payload $name missing from the embedded bundle manifest" }
           }
-          if ($m -match 'Packaging="external"') { throw "a prerequisite is an EXTERNAL payload (must be embedded)" }
-          Write-Host "OK: PostgreSQL + WebView2 + MSI are EMBEDDED; RoofSpanSetup.exe is self-contained"
+          if ($m -match 'Packaging="external"') { throw "a prerequisite is an external payload" }
+          Write-Host "OK: PostgreSQL + WebView2 + MSI are embedded; setup is self-contained"
 
-  # END-TO-END proof that the three RoofSpan-owned executables are REAL Windows SCM services: build the
-  # onedir service exes, build the MSI, install it elevated/silently, then assert the services exist,
-  # start, the backend actually answers on 127.0.0.1:8001, and they stop cleanly. Compilation alone is
-  # NOT accepted. A deterministic PostgreSQL is provisioned so the backend lifespan (migrations) can run;
-  # a small stub service named RoofSpanPostgreSQL satisfies the backend's SCM start dependency.
+  # Build actual PyInstaller services, install the MSI, and prove SCM + upgrade behavior.
   services-install-smoke:
     runs-on: windows-latest
     steps:
@@ -184,38 +185,43 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $version = (Get-Content windows/VERSION -Raw).Trim()
           $work = Join-Path $env:RUNNER_TEMP "svc"
           $stage = Join-Path $work "stage"
-          New-Item -ItemType Directory -Force -Path (Join-Path $stage "frontend"),(Join-Path $stage "runtime"),(Join-Path $stage "config-templates") | Out-Null
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $stage "frontend"), `
+            (Join-Path $stage "runtime"), `
+            (Join-Path $stage "config-templates"), `
+            (Join-Path $stage "shell") | Out-Null
+
           # Real onedir service executables (pywin32-hosted SCM services).
           pwsh -File windows/winbuild/build_exes.ps1 -OutDir (Join-Path $stage "services")
-          # Minimal Office UI + a real update public key so the update service has a deterministic key path.
+
+          # Complete minimum Office payload required by the actual MSI authoring.
           "<html><body>RoofSpan Office</body></html>" | Set-Content (Join-Path $stage "frontend\index.html")
           "runtime" | Set-Content (Join-Path $stage "runtime\README.txt")
+          Copy-Item "$env:WINDIR\System32\where.exe" (Join-Path $stage "shell\RoofSpanOffice.exe")
+          Add-Type -AssemblyName System.Drawing
+          $iconStream = [IO.File]::Create((Join-Path $stage "runtime\RoofSpan.ico"))
+          try { [System.Drawing.SystemIcons]::Application.Save($iconStream) } finally { $iconStream.Dispose() }
           Copy-Item windows/winbuild/config/* (Join-Path $stage "config-templates") -Recurse -Force
-          # Placeholder update-verification PUBLIC key. The update service never reaches key verification
-          # in CI (the manifest URL is deliberately unreachable -> a recoverable check failure), but the
-          # file must exist so the deterministic key path resolves.
           "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content (Join-Path $stage "config-templates\update_public_key.pem")
+
           $msi = Join-Path $work "RoofSpanOffice.msi"
-          wix build .\windows\installer\RoofSpan.wxs -arch x64 -d "Version=0.2.0" -d "StageDir=$stage" `
+          wix build .\windows\installer\RoofSpan.wxs -arch x64 -d "Version=$version" -d "StageDir=$stage" `
             -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
           if (-not (Test-Path $msi)) { throw "MSI did not compile" }
           "MSI=$msi" | Out-File -Append $env:GITHUB_ENV
+          "RELEASE_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Prepare a CLEAN customer machine (Postgres superuser secret + SCM dependency stub only)
+      - name: Prepare a clean customer machine
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # DO NOT create the roofspan role/db and DO NOT write roofspan.env here - RoofSpan's own
-          # first-install bootstrap must do all of that. We only reproduce the two things a real clean
-          # machine has after the Burn PostgreSQL prerequisite runs:
-          #   1) the DPAPI-protected superuser secret at identity\pg_super.bin, and
-          #   2) a running Windows service named RoofSpanPostgreSQL (SCM start dependency).
           $id = "C:\ProgramData\RoofSpan\identity"
           New-Item -ItemType Directory -Force -Path $id | Out-Null
           Add-Type -AssemblyName System.Security
-          $bytes = [Text.Encoding]::UTF8.GetBytes("postgres")   # == the superuser password set above
+          $bytes = [Text.Encoding]::UTF8.GetBytes("postgres")
           $enc = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
           [IO.File]::WriteAllBytes((Join-Path $id "pg_super.bin"), $enc)
 
@@ -232,7 +238,7 @@ jobs:
           sc.exe create RoofSpanPostgreSQL binPath= "$stub" start= auto | Out-Null
           Start-Service RoofSpanPostgreSQL
 
-      - name: Install MSI (elevated, silent) and prove the SCM lifecycle
+      - name: Install MSI and prove the SCM lifecycle + Relay contract
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -242,11 +248,23 @@ jobs:
 
           $expected = @("RoofSpanBackend","RoofSpanRelayConnector","RoofSpanUpdateService")
           foreach ($s in $expected) {
-            if (-not (Get-Service -Name $s -ErrorAction SilentlyContinue)) { throw "service $s was NOT created" }
+            if (-not (Get-Service -Name $s -ErrorAction SilentlyContinue)) { throw "service $s was not created" }
           }
           Write-Host "OK: all three services exist"
 
-          # Backend must reach Running and actually answer on 127.0.0.1:8001.
+          # The installed relay binary itself must identify the exact source/version and v2 contract.
+          $relayExe = "C:\Program Files\RoofSpan Office\services\roofspan-relay-connector\roofspan-relay-connector.exe"
+          $infoLine = @(& $relayExe --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+          if (-not $infoLine) { throw "installed Relay connector does not expose build-info" }
+          $info = $infoLine | ConvertFrom-Json
+          if ($info.build_sha -ne "${{ github.sha }}") { throw "installed Relay connector SHA mismatch: $($info.build_sha)" }
+          if ($info.version -ne $env:RELEASE_VERSION) { throw "installed Relay connector version mismatch: $($info.version)" }
+          if ($info.contract -ne "hosted-installation-identity-v2") { throw "installed Relay connector contract mismatch: $($info.contract)" }
+          if ($info.identity_endpoint -ne "/api/relay/connector/identity" -or $info.installation_relay_path -ne "/api/relay/installation") {
+            throw "installed Relay connector route contract is stale"
+          }
+          Write-Host "OK: installed Relay connector SHA/version/contract verified"
+
           if ((Get-Service RoofSpanBackend).Status -ne "Running") { Start-Service RoofSpanBackend }
           $deadline = (Get-Date).AddSeconds(120)
           while ((Get-Service RoofSpanBackend).Status -ne "Running" -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
@@ -259,18 +277,15 @@ jobs:
           if (-not $ok) { throw "backend did not answer on 127.0.0.1:8001" }
           Write-Host "OK: backend is serving on 127.0.0.1:8001"
 
-          # First-install bootstrap must have CREATED roofspan.env with a REAL generated credential.
           $cfg = "C:\ProgramData\RoofSpan\config\roofspan.env"
           if (-not (Test-Path $cfg)) { throw "first-install bootstrap did not create $cfg" }
           $cfgText = Get-Content $cfg -Raw
           if ($cfgText -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still contains the placeholder" }
-          # Record a HASH of DATABASE_URL (never the secret) so restart/upgrade can prove non-rotation.
           $dbline = (($cfgText -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
           "DBURL_HASH=$hash" | Out-File -Append $env:GITHUB_ENV
-          Write-Host "OK: roofspan.env created by first-install bootstrap (no placeholder, credential generated)"
+          Write-Host "OK: roofspan.env created by first-install bootstrap"
 
-          # Relay + Update must also be able to enter Running (resilient even with an unreachable relay).
           foreach ($s in @("RoofSpanRelayConnector","RoofSpanUpdateService")) {
             if ((Get-Service $s).Status -ne "Running") { Start-Service $s }
             $d = (Get-Date).AddSeconds(60)
@@ -279,7 +294,6 @@ jobs:
           }
           Write-Host "OK: relay + update services are Running"
 
-          # Clean SCM stop.
           foreach ($s in $expected) { Stop-Service $s -Force -ErrorAction SilentlyContinue }
           Start-Sleep 5
           foreach ($s in $expected) {
@@ -287,7 +301,7 @@ jobs:
           }
           Write-Host "OK: all three services stopped cleanly"
 
-      - name: Restart services and prove credentials/data are PRESERVED (idempotent bootstrap)
+      - name: Restart services and prove credentials are preserved
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -295,34 +309,37 @@ jobs:
           $deadline = (Get-Date).AddSeconds(120)
           while ((Get-Service RoofSpanBackend).Status -ne "Running" -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
           if ((Get-Service RoofSpanBackend).Status -ne "Running") { throw "RoofSpanBackend did not restart" }
-          # The generated DB credential must be REUSED verbatim (no rotation on restart).
           $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
-          if ($hash -ne $env:DBURL_HASH) { throw "DB credential was rotated on restart (must be preserved)" }
+          if ($hash -ne $env:DBURL_HASH) { throw "DB credential was rotated on restart" }
           $ok = $false; $deadline = (Get-Date).AddSeconds(60)
           while (-not $ok -and (Get-Date) -lt $deadline) { try { if ((Invoke-WebRequest "http://127.0.0.1:8001/api/health" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { $ok = $true } } catch { Start-Sleep 3 } }
           if (-not $ok) { throw "backend did not serve after restart" }
           Write-Host "OK: restart preserved credentials + backend healthy"
 
-      - name: MSI reinstall/upgrade path preserves the local DB + config (no data destruction)
+      - name: MSI reinstall path preserves DB + config and Relay contract
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $log = Join-Path $env:RUNNER_TEMP "reinstall.log"
-          # Maintenance reinstall of all features/files - must NOT drop the persisted DB dirs or config.
           $p = Start-Process msiexec -ArgumentList @("/i","`"$env:MSI`"","/qn","REINSTALL=ALL","REINSTALLMODE=vomus","/l*v","`"$log`"") -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content $log -Tail 80; throw "MSI reinstall failed ($($p.ExitCode))" }
           $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
           if ($hash -ne $env:DBURL_HASH) { throw "upgrade/reinstall rotated or destroyed the DB credential" }
+          $relayExe = "C:\Program Files\RoofSpan Office\services\roofspan-relay-connector\roofspan-relay-connector.exe"
+          $info = (@(& $relayExe --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1) | ConvertFrom-Json
+          if ($info.build_sha -ne "${{ github.sha }}" -or $info.contract -ne "hosted-installation-identity-v2") {
+            throw "upgrade/reinstall left a stale Relay connector"
+          }
           foreach ($s in @("RoofSpanBackend","RoofSpanRelayConnector","RoofSpanUpdateService")) {
             $d = (Get-Date).AddSeconds(90)
             while ((Get-Service $s).Status -ne "Running" -and (Get-Date) -lt $d) { Start-Sleep 2 }
             if ((Get-Service $s).Status -ne "Running") { throw "$s not Running after reinstall" }
           }
-          Write-Host "OK: reinstall/upgrade preserved DB credentials + config; all services Running"
+          Write-Host "OK: reinstall preserved data and retained the current Relay contract"
 
-      - name: A FAILED startup surfaces the real exception in backend-service.log (fix regression)
+      - name: A failed startup surfaces the real exception without leaking a secret
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -330,26 +347,23 @@ jobs:
           $orig = Get-Content $cfg -Raw
           Stop-Service RoofSpanBackend -Force -ErrorAction SilentlyContinue
           Start-Sleep 3
-          # Corrupt ONLY the DB password so the FastAPI lifespan (Alembic connect) fails at authentication.
           $bad = [regex]::Replace($orig, 'roofspan:[^@]+@', 'roofspan:WRONGPASSWORD_INJECTED@')
           Set-Content -Encoding ASCII -Path $cfg -Value $bad
           Clear-Content "C:\ProgramData\RoofSpan\logs\backend-service.log" -ErrorAction SilentlyContinue
           try { Start-Service RoofSpanBackend -ErrorAction Stop } catch { }
           Start-Sleep 20
           $running = (Get-Service RoofSpanBackend).Status -eq "Running"
-          $log = ""
-          if (Test-Path "C:\ProgramData\RoofSpan\logs\backend-service.log") { $log = Get-Content "C:\ProgramData\RoofSpan\logs\backend-service.log" -Raw }
-          # Restore ORIGINAL config + service BEFORE asserting so cleanup always runs.
+          $serviceLog = ""
+          if (Test-Path "C:\ProgramData\RoofSpan\logs\backend-service.log") { $serviceLog = Get-Content "C:\ProgramData\RoofSpan\logs\backend-service.log" -Raw }
           Stop-Service RoofSpanBackend -Force -ErrorAction SilentlyContinue
           Set-Content -Encoding ASCII -Path $cfg -Value $orig
           Start-Service RoofSpanBackend -ErrorAction SilentlyContinue
-          if ($running) { throw "backend wrongly reached Running with an invalid DB password (masked failure)" }
-          if ($log -notmatch 'password|authentication|InvalidPassword|startup failed|Traceback') {
-            throw "backend-service.log did not surface the underlying startup exception:`n$log"
+          if ($running) { throw "backend wrongly reached Running with an invalid DB password" }
+          if ($serviceLog -notmatch 'password|authentication|InvalidPassword|startup failed|Traceback') {
+            throw "backend-service.log did not surface the startup exception:`n$serviceLog"
           }
-          if ($log -match 'WRONGPASSWORD_INJECTED') { throw "SECRET LEAK: the DB password appears in the log" }
-          Write-Host "OK: failed startup surfaced the real exception (not just 'reported not started'); no secret leaked"
-
+          if ($serviceLog -match 'WRONGPASSWORD_INJECTED') { throw "secret leak: injected password appears in log" }
+          Write-Host "OK: failed startup surfaced the real exception without leaking the credential"
 
       - name: Dump service + install logs (on failure)
         if: failure()
@@ -361,4 +375,3 @@ jobs:
           if (Test-Path (Join-Path $env:RUNNER_TEMP "install.log")) {
             Write-Host "===== install.log (tail) ====="; Get-Content (Join-Path $env:RUNNER_TEMP "install.log") -Tail 120
           }
-
