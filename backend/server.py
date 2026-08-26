@@ -21,6 +21,7 @@ from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, building_tiles, licensing as licensing_router
 from routers import abc_supply
 from routers import abc_webhooks
+from routers import relay_connector as relay_connector_router
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
@@ -111,6 +112,7 @@ from routers import canvass as canvass_router
 app.include_router(canvass_router.router)
 app.include_router(mobile.router)
 app.include_router(licensing_router.router)
+app.include_router(relay_connector_router.router)
 if licensing_config.LICENSING_MODE == "dev":
     from routers import licensing_dev
     app.include_router(licensing_dev.router)
