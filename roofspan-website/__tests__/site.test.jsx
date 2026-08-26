@@ -76,7 +76,7 @@ describe("early-access form", () => {
     await user.type(screen.getByTestId("field-company"), "Example Roofing");
     await user.click(screen.getByTestId("field-consent"));
     await user.click(screen.getByTestId("form-submit"));
-    expect(window.location.href).toMatch(/^mailto:sales@roofspan\.io/);
+    expect(window.location.href).toMatch(/^mailto:support@roofspan\.io/);
     expect(await screen.findByTestId("form-mailto")).toBeInTheDocument();
     expect(screen.queryByTestId("form-success")).toBeNull();
   });
