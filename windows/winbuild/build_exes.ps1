@@ -68,7 +68,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Verifying backend runtime imports"
-$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; import control_plane.bootstrap, control_plane.readiness, control_plane.migrations_runner; print('backend import preflight OK')"
+# Importing server.py requires configuration keys but must not require a live database. Supply inert,
+# build-preflight-only values inside the child Python process; none are written to disk or frozen into
+# the service executable. This keeps clean CI/build machines deterministic without borrowing a user's
+# persisted roofspan.env.
+$preflight = "import os,sys; os.environ.setdefault('DATABASE_URL','postgresql+asyncpg://roofspan:build-preflight@127.0.0.1:5432/roofspan'); os.environ.setdefault('JWT_SECRET','build-preflight-only'); os.environ.setdefault('SECRETS_ENCRYPTION_KEY','MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA='); sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; import control_plane.bootstrap, control_plane.readiness, control_plane.migrations_runner; print('backend import preflight OK')"
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
