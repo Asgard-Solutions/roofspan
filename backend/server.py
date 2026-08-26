@@ -154,7 +154,11 @@ async def on_startup():
     try:
         await init_control_plane()
     except Exception as e:
-        logger.warning("Control Plane init skipped/failed (non-fatal for the local installation): %s", e)
+        # Resilient: Office keeps running. But do NOT hide the underlying DB failure — log the full
+        # traceback so Mobile Access issues (e.g. missing roofspan_control_plane DB) are diagnosable.
+        import traceback
+        logger.error("Control Plane init failed (non-fatal for Office; Mobile Access pairing will be "
+                     "unavailable until resolved): %s\n%s", e, traceback.format_exc())
     from relay.hub import hub as relay_hub
     await relay_hub.startup()
 

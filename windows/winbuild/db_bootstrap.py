@@ -21,6 +21,7 @@ import re
 import secrets
 import string
 import time
+import traceback
 
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
 JWT_PLACEHOLDER = "__GENERATED_JWT_SECRET__"
@@ -28,6 +29,7 @@ SECRETS_KEY_PLACEHOLDER = "__GENERATED_SECRETS_ENCRYPTION_KEY__"
 SUPERUSER = "postgres"
 APP_ROLE = "roofspan"
 APP_DB = "roofspan"
+CP_DB = "roofspan_control_plane"  # embedded Control Plane DB (owned by the least-privilege roofspan role)
 PG_HOST = "127.0.0.1"
 PG_PORT = 5432
 
@@ -139,6 +141,31 @@ def decrypt_super_password(pg_super_bin: str) -> str:
     return data.decode("utf-8")
 
 
+async def _create_db_if_missing(conn, db_name: str, owner: str, logger) -> bool:
+    """Create `db_name` OWNED BY `owner` if absent. Returns True if it was created. The CREATE runs on
+    the SUPERUSER connection, so the runtime `roofspan` role never needs CREATEDB."""
+    exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", db_name)
+    if exists:
+        logger.info("bootstrap: database '%s' already exists (kept)", db_name)
+        return False
+    await conn.execute(f'CREATE DATABASE {db_name} OWNER {owner}')
+    logger.info("bootstrap: created database '%s' owned by '%s'", db_name, owner)
+    return True
+
+
+async def _own_public_schema(super_password: str, db_name: str, owner: str) -> None:
+    """Ensure `owner` owns the public schema of `db_name` (PG15+ locks it down for non-owners)."""
+    import asyncpg
+
+    conn = await asyncpg.connect(user=SUPERUSER, password=super_password,
+                                 host=PG_HOST, port=PG_PORT, database=db_name)
+    try:
+        await conn.execute(f'GRANT ALL ON DATABASE {db_name} TO {owner}')
+        await conn.execute(f'ALTER SCHEMA public OWNER TO {owner}')
+    finally:
+        await conn.close()
+
+
 async def _ensure_role_and_db(super_password: str, app_password: str, logger) -> None:
     import asyncpg
 
@@ -149,26 +176,39 @@ async def _ensure_role_and_db(super_password: str, app_password: str, logger) ->
         role_exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", APP_ROLE)
         if role_exists:
             logger.info("bootstrap: role '%s' already exists (kept)", APP_ROLE)
-            await conn.execute(f"ALTER ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
+            # Explicitly enforce least privilege (revokes CREATEDB/SUPERUSER if a prior build granted them).
+            await conn.execute(f"ALTER ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER NOCREATEDB PASSWORD {quoted_pw}")
         else:
-            await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER PASSWORD {quoted_pw}")
+            await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER NOCREATEDB PASSWORD {quoted_pw}")
             logger.info("bootstrap: created least-privilege role '%s'", APP_ROLE)
-        db_exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", APP_DB)
-        if not db_exists:
-            await conn.execute(f'CREATE DATABASE {APP_DB} OWNER {APP_ROLE}')
-            logger.info("bootstrap: created database '%s' owned by '%s'", APP_DB, APP_ROLE)
-        else:
-            logger.info("bootstrap: database '%s' already exists (kept)", APP_DB)
+        # Both databases are created BY the superuser and OWNED BY the least-privilege roofspan role.
+        created_app = await _create_db_if_missing(conn, APP_DB, APP_ROLE, logger)
+        created_cp = await _create_db_if_missing(conn, CP_DB, APP_ROLE, logger)
     finally:
         await conn.close()
 
-    conn2 = await asyncpg.connect(user=SUPERUSER, password=super_password,
-                                  host=PG_HOST, port=PG_PORT, database=APP_DB)
+    await _own_public_schema(super_password, APP_DB, APP_ROLE)
+    if created_app or created_cp:
+        await _own_public_schema(super_password, CP_DB, APP_ROLE)
+    else:
+        # Existing install: still make sure CP schema ownership is correct (cheap + idempotent).
+        await _own_public_schema(super_password, CP_DB, APP_ROLE)
+
+
+async def _ensure_cp_db_only(super_password: str, logger) -> bool:
+    """Idempotent: create ONLY the Control Plane DB (owned by roofspan) if missing. Used to repair
+    already-provisioned installs. Never touches the role, the business DB, or existing data."""
+    import asyncpg
+
+    conn = await asyncpg.connect(user=SUPERUSER, password=super_password,
+                                 host=PG_HOST, port=PG_PORT, database="postgres")
     try:
-        await conn2.execute(f'GRANT ALL ON DATABASE {APP_DB} TO {APP_ROLE}')
-        await conn2.execute(f'ALTER SCHEMA public OWNER TO {APP_ROLE}')
+        created = await _create_db_if_missing(conn, CP_DB, APP_ROLE, logger)
     finally:
-        await conn2.close()
+        await conn.close()
+    if created:
+        await _own_public_schema(super_password, CP_DB, APP_ROLE)
+    return created
 
 
 async def _wait_for_postgres(super_password: str, logger, timeout: float) -> None:
@@ -189,6 +229,28 @@ async def _wait_for_postgres(super_password: str, logger, timeout: float) -> Non
     raise TimeoutError(f"PostgreSQL not accepting connections within {timeout}s: {type(last).__name__}")
 
 
+def repair_control_plane_db(logger, identity_dir: str, wait_timeout: float = 60.0) -> None:
+    """Idempotent repair for ALREADY-provisioned installs whose `roofspan_control_plane` DB is missing
+    (older builds only created the business DB). Reuses the existing DPAPI superuser secret; does NOT
+    rotate the DB password/JWT/encryption key/installation identity and does NOT touch existing data."""
+    import asyncio
+
+    pg_super_bin = os.path.join(identity_dir, "pg_super.bin")
+    if not os.path.isfile(pg_super_bin):
+        logger.warning("bootstrap: CP DB repair skipped — superuser secret not found at %s", pg_super_bin)
+        return
+    super_password = decrypt_super_password(pg_super_bin)
+    try:
+        asyncio.run(_wait_for_postgres(super_password, logger, wait_timeout))
+        created = asyncio.run(_ensure_cp_db_only(super_password, logger))
+        if created:
+            logger.info("bootstrap: repaired missing Control Plane database '%s' (owner '%s')", CP_DB, APP_ROLE)
+        else:
+            logger.info("bootstrap: Control Plane database '%s' already present (no repair needed)", CP_DB)
+    finally:
+        super_password = None  # noqa: F841
+
+
 def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
               wait_timeout: float = 120.0) -> str:
     import asyncio
@@ -197,6 +259,13 @@ def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
         logger.info("bootstrap: existing provisioned roofspan.env found; reusing credentials")
         ensure_required_runtime_secrets(config_path, logger)
         _load_env_file_into_process(config_path)
+        # Repair path: older installs provisioned only the business DB. Ensure the CP DB exists so
+        # Mobile Access pairing works. Non-fatal (Office stays resilient) but logs full detail.
+        try:
+            repair_control_plane_db(logger, identity_dir)
+        except Exception:
+            logger.error("bootstrap: Control Plane DB repair FAILED (Mobile pairing may be unavailable):\n%s",
+                         traceback.format_exc())
         return os.environ["DATABASE_URL"]
 
     logger.info("bootstrap: first-install provisioning starting")
