@@ -61,55 +61,76 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Verifying backend runtime imports"
-$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; import control_plane.migrations_runner; print('backend import preflight OK')"
+$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; import control_plane.bootstrap, control_plane.readiness, control_plane.migrations_runner; print('backend import preflight OK')"
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
+# Freeze the exact Git revision into the backend process as a PyInstaller runtime hook. This gives
+# support a deterministic build SHA through /api/version and backend-service.log on customer machines.
+$gitSha = (& git -C $repoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-fA-F]{40}$') {
+  throw "Unable to resolve the source Git SHA; refusing to produce an untraceable Office build."
+}
+$buildWork = Join-Path $PSScriptRoot "build"
+New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
+$buildInfoHook = Join-Path $PSScriptRoot "roofspan_build_info_hook.generated.py"
+$hookText = @"
+import os
+os.environ['ROOFSPAN_BUILD_SHA'] = '$gitSha'
+os.environ.setdefault('CP_DEV_SIGNING_KEYS_DIR', r'C:\ProgramData\RoofSpan\identity\cp-signing-keys')
+"@
+Set-Content -Path $buildInfoHook -Value $hookText -Encoding ASCII
+$env:ROOFSPAN_BUILD_INFO_HOOK = $buildInfoHook
+Write-Host "==> Embedding source Git SHA: $gitSha"
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
-foreach ($spec in $specs) {
-  $specPath = Join-Path $PSScriptRoot $spec
-  if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
-  Write-Host "==> PyInstaller $spec"
-  & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
-              --workpath (Join-Path $PSScriptRoot "build") $specPath
-  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $spec (exit $LASTEXITCODE)." }
-  $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
-  $distDir = Join-Path $PSScriptRoot "dist\$name"
-  $exe = Join-Path $distDir "$name.exe"
-  if (-not (Test-Path $exe)) { throw "PyInstaller did not produce $exe" }
+try {
+  $specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
+  foreach ($spec in $specs) {
+    $specPath = Join-Path $PSScriptRoot $spec
+    if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
+    Write-Host "==> PyInstaller $spec"
+    & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
+                --workpath (Join-Path $PSScriptRoot "build") $specPath
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $spec (exit $LASTEXITCODE)." }
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($spec)
+    $distDir = Join-Path $PSScriptRoot "dist\$name"
+    $exe = Join-Path $distDir "$name.exe"
+    if (-not (Test-Path $exe)) { throw "PyInstaller did not produce $exe" }
 
-  # The embedded Control Plane migration runner resolves its files from
-  # _internal\control_plane at runtime. Make a missing migration payload a BUILD failure rather than
-  # shipping an Office build that starts normally but returns 500/502 from Mobile Access.
-  if ($name -eq "roofspan-backend") {
-    $internalDir = Join-Path $distDir "_internal"
-    $requiredBackendAssets = @(
-      "alembic.ini",
-      "alembic\env.py",
-      "control_plane\alembic.ini",
-      "control_plane\alembic\env.py"
-    )
-    foreach ($relativeAsset in $requiredBackendAssets) {
-      $assetPath = Join-Path $internalDir $relativeAsset
-      if (-not (Test-Path $assetPath)) {
-        throw "PyInstaller backend payload is missing required migration asset '$relativeAsset' at '$assetPath'."
+    if ($name -eq "roofspan-backend") {
+      $internalDir = Join-Path $distDir "_internal"
+      $requiredBackendAssets = @(
+        "alembic.ini",
+        "alembic\env.py",
+        "control_plane\alembic.ini",
+        "control_plane\alembic\env.py"
+      )
+      foreach ($relativeAsset in $requiredBackendAssets) {
+        $assetPath = Join-Path $internalDir $relativeAsset
+        if (-not (Test-Path $assetPath)) {
+          throw "PyInstaller backend payload is missing required migration asset '$relativeAsset' at '$assetPath'."
+        }
       }
+      $cpVersions = Join-Path $internalDir "control_plane\alembic\versions"
+      if (-not (Test-Path $cpVersions)) {
+        throw "PyInstaller backend payload is missing Control Plane Alembic versions at '$cpVersions'."
+      }
+      if (-not (Get-ChildItem -Path $cpVersions -File -Filter "*.py" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "PyInstaller backend payload contains no Control Plane Alembic version files at '$cpVersions'."
+      }
+      Write-Host "==> Verified business + Control Plane Alembic assets in frozen backend"
     }
-    $cpVersions = Join-Path $internalDir "control_plane\alembic\versions"
-    if (-not (Test-Path $cpVersions)) {
-      throw "PyInstaller backend payload is missing Control Plane Alembic versions at '$cpVersions'."
-    }
-    if (-not (Get-ChildItem -Path $cpVersions -File -Filter "*.py" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-      throw "PyInstaller backend payload contains no Control Plane Alembic version files at '$cpVersions'."
-    }
-    Write-Host "==> Verified business + Control Plane Alembic assets in frozen backend"
-  }
 
-  $destDir = Join-Path $OutDir $name
-  if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
-  Copy-Item $distDir $destDir -Recurse -Force
-  if (-not (Test-Path (Join-Path $destDir "$name.exe"))) { throw "Staging did not place $name.exe under $destDir" }
+    $destDir = Join-Path $OutDir $name
+    if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
+    Copy-Item $distDir $destDir -Recurse -Force
+    if (-not (Test-Path (Join-Path $destDir "$name.exe"))) { throw "Staging did not place $name.exe under $destDir" }
+  }
+} finally {
+  Remove-Item Env:\ROOFSPAN_BUILD_INFO_HOOK -ErrorAction SilentlyContinue
+  Remove-Item $buildInfoHook -Force -ErrorAction SilentlyContinue
 }
+
 Write-Host "==> Service executables (onedir) staged in $OutDir"

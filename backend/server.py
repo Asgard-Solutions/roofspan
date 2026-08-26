@@ -24,8 +24,9 @@ from routers import abc_webhooks
 from licensing import config as licensing_config, service as licensing_service
 from licensing.middleware import SubscriptionGuardMiddleware
 from control_plane.router import router as control_plane_router
-from control_plane.service import init_control_plane
-from version import ROOFSPAN_VERSION, DISPLAY_VERSION, CHANNEL
+from control_plane.bootstrap import init_control_plane
+from control_plane import readiness as cp_readiness
+from version import ROOFSPAN_VERSION, DISPLAY_VERSION, CHANNEL, BUILD_SHA
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
@@ -35,13 +36,42 @@ app = FastAPI(title="RoofSpan Office API", version="1.0.0")
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "roofspan-office", "database": "postgresql", "version": DISPLAY_VERSION}
+    cp = cp_readiness.snapshot()
+    return {
+        "status": "ok",
+        "service": "roofspan-office",
+        "database": "postgresql",
+        "version": DISPLAY_VERSION,
+        "control_plane": {"ready": cp["ready"], "state": cp["state"], "code": cp["code"]},
+    }
+
+
+@app.get("/api/health/control-plane")
+async def control_plane_health():
+    """Safe Mobile Access readiness diagnostics; contains no credentials or connection strings."""
+    from fastapi.responses import JSONResponse
+
+    status = cp_readiness.snapshot()
+    return JSONResponse(status_code=200 if status["ready"] else 503, content=status)
 
 
 @app.get("/api/version")
 async def version():
-    """RoofSpan Office software version (support/diagnostics)."""
-    return {"version": ROOFSPAN_VERSION, "display_version": DISPLAY_VERSION, "channel": CHANNEL, "service": "roofspan-office"}
+    """RoofSpan Office software/build and Control Plane migration identity for support diagnostics."""
+    cp = cp_readiness.snapshot()
+    return {
+        "version": ROOFSPAN_VERSION,
+        "display_version": DISPLAY_VERSION,
+        "channel": CHANNEL,
+        "build_sha": BUILD_SHA,
+        "service": "roofspan-office",
+        "control_plane": {
+            "ready": cp["ready"],
+            "storage_mode": cp["storage_mode"],
+            "migration_head": cp["migration_head"],
+            "current_revision": cp["current_revision"],
+        },
+    }
 
 
 app.include_router(auth.router)
@@ -88,10 +118,9 @@ from relay.server import router as relay_router  # noqa: E402
 app.include_router(relay_router)
 
 # Local mock ABC Supply server for development/testing (mounted only when ABC_MOCK_ENABLED is set).
-# Lets the full ABC OAuth + API flow be exercised without real ABC Sandbox credentials.
 from integrations.abc_supply.config import mock_enabled as _abc_mock_enabled  # noqa: E402
 if _abc_mock_enabled():
-    from integrations.abc_supply.mock_server import router as abc_mock_router  # noqa: E402
+    from integrations.abc_supply.mock_server import router as abc_mock_router
     app.include_router(abc_mock_router, prefix="/api/abc-mock", tags=["abc-mock"])
 
 # Guard business workflows when the subscription is not ACTIVE/GRACE. Added before CORS so CORS
@@ -135,17 +164,14 @@ async def cleanup_duplicates_then_refresh_locations():
         stats = await cleanup_duplicate_properties()
         logger.info("Duplicate property cleanup complete: scanned=%d merged=%d", stats["scanned"], stats["merged"])
     except Exception:
-        # Cleanup is intentionally non-fatal. A cleanup bug must never prevent Office from starting
-        # or block the existing location resolver.
         logger.exception("Duplicate property cleanup failed; continuing with location backfill")
     await refresh_existing_property_locations()
 
 
 @app.on_event("startup")
 async def on_startup():
-    # Migration-driven schema: Alembic is the single authoritative schema path (no create_all,
-    # no manual SQL). The Windows SCM host pre-applies migrations so failures propagate directly
-    # before uvicorn starts; normal/dev execution still runs them here.
+    # Migration-driven business schema. The Windows SCM host pre-applies migrations so failures
+    # propagate directly before uvicorn starts; normal/dev execution still runs them here.
     if os.environ.get("ROOFSPAN_MIGRATIONS_PREAPPLIED") != "1":
         await asyncio.to_thread(run_migrations)
     await seed_owner()
@@ -153,12 +179,12 @@ async def on_startup():
         await licensing_service.bootstrap(db)
     try:
         await init_control_plane()
-    except Exception as e:
-        # Resilient: Office keeps running. But do NOT hide the underlying DB failure — log the full
-        # traceback so Mobile Access issues (e.g. missing roofspan_control_plane DB) are diagnosable.
-        import traceback
-        logger.error("Control Plane init failed (non-fatal for Office; Mobile Access pairing will be "
-                     "unavailable until resolved): %s\n%s", e, traceback.format_exc())
+    except Exception:
+        # Office remains usable, but every Control Plane/Mobile pairing route fails closed with a safe
+        # 503 until a later restart completes migration and readiness validation.
+        logger.exception(
+            "Control Plane init failed (non-fatal for Office; Mobile Access remains unavailable)"
+        )
     from relay.hub import hub as relay_hub
     await relay_hub.startup()
 
@@ -170,7 +196,7 @@ async def on_startup():
     from services import backup as _backup_svc
     asyncio.create_task(_backup_svc.scheduler_loop())
 
-    logger.info("RoofSpan Office backend ready")
+    logger.info("RoofSpan Office backend ready (build_sha=%s, cp_ready=%s)", BUILD_SHA, cp_readiness.snapshot()["ready"])
 
 
 @app.on_event("shutdown")

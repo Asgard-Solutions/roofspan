@@ -1,24 +1,27 @@
 """Control Plane API router (mounted at /api/control-plane).
 
-Public: activation (bootstrap-credential-gated) and installation-authenticated entitlement refresh.
-Admin/dev: revoke, key rotation, subscription updates, version-policy writes — guarded by the DEV
-admin secret in C1 (production uses proper operator auth — HUMAN REQUIRED).
-
-NOTE: these endpoints are NOT gated by the customer SubscriptionGuardMiddleware allowlist concern —
-they are the Control Plane itself. The guard only protects business routes on the installation.
+Operational endpoints are gated by ``get_cp_db`` and therefore return a safe HTTP 503 until startup
+migration/readiness validation succeeds. Liveness and readiness endpoints never expose credentials,
+connection strings, SQL, private keys, or tracebacks.
 """
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 import traceback
 
-from control_plane import config, service
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from control_plane import config, readiness, service
 from control_plane.db import get_cp_db
-from licensing import reqsig
 from control_plane.schemas import (
-    ActivateIn, ActivateOut, RefreshOut, SigningKeysOut, SetSubscriptionIn,
-    VersionPolicyOut, VersionPolicyUpdateIn,
+    ActivateIn,
+    ActivateOut,
+    RefreshOut,
+    SetSubscriptionIn,
+    SigningKeysOut,
+    VersionPolicyOut,
+    VersionPolicyUpdateIn,
 )
+from licensing import reqsig
 
 router = APIRouter(prefix="/api/control-plane", tags=["control-plane"])
 log = logging.getLogger("roofspan.cp.router")
@@ -28,11 +31,13 @@ def _cp_error(e: service.CPError):
     return HTTPException(status_code=e.status, detail=e.detail)
 
 
-def _require_admin(authorization: str | None = Header(default=None),
-                   x_roofspan_admin: str | None = Header(default=None)):
-    # Production: RoofSpan-internal operator JWT (Cognito). Dev: isolated X-RoofSpan-Admin header.
+def _require_admin(
+    authorization: str | None = Header(default=None),
+    x_roofspan_admin: str | None = Header(default=None),
+):
     if config.CP_ENV == "production":
         from control_plane import operator_auth
+
         return operator_auth.verify_operator(authorization)
     if x_roofspan_admin != config.DEV_ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Control Plane admin authentication required")
@@ -41,48 +46,48 @@ def _require_admin(authorization: str | None = Header(default=None),
 
 @router.get("/health")
 async def cp_health():
-    return {"status": "ok", "service": "roofspan-control-plane"}
+    status = readiness.snapshot()
+    return {
+        "status": "ok",
+        "service": "roofspan-control-plane",
+        "ready": status["ready"],
+        "state": status["state"],
+        "code": status["code"],
+    }
 
 
 @router.get("/ready")
-async def cp_ready(db: AsyncSession = Depends(get_cp_db)):
-    from sqlalchemy import text
-    from control_plane import keys as cp_keys
-    checks = {"db": False, "signing_key": False}
-    try:
-        await db.execute(text("SELECT 1"))
-        checks["db"] = True
-        keys = await cp_keys.public_keys(db)
-        # KMS mode: readiness requires a configured key id + an ACTIVE published public key. We do NOT
-        # perform a paid KMS Sign on every readiness probe (startup validate_active_key does the
-        # GetPublicKey reconcile). Local mode: an ACTIVE public key must exist.
-        if config.ENTITLEMENT_SIGNER == "kms":
-            checks["signing_key"] = bool(keys) and bool(config.CP_KMS_SIGNING_KEY_ID)
-        else:
-            checks["signing_key"] = bool(keys)
-    except Exception:  # noqa: BLE001
-        pass
-    ready = all(checks.values())
-    if not ready:
-        raise HTTPException(status_code=503, detail={"ready": False, "checks": checks,
-                                                     "signer": config.ENTITLEMENT_SIGNER})
-    return {"ready": True, "checks": checks, "signer": config.ENTITLEMENT_SIGNER}
+async def cp_ready():
+    status = readiness.snapshot()
+    if not status["ready"]:
+        raise HTTPException(status_code=503, detail=status)
+    return status
 
 
 @router.post("/activate", response_model=ActivateOut)
 async def activate(payload: ActivateIn, db: AsyncSession = Depends(get_cp_db)):
     try:
         result = await service.activate(
-            db, company_name=payload.company_name, requested_seats=payload.requested_seats,
-            public_key_pem=payload.installation_public_key, software_version=payload.software_version,
+            db,
+            company_name=payload.company_name,
+            requested_seats=payload.requested_seats,
+            public_key_pem=payload.installation_public_key,
+            software_version=payload.software_version,
             bootstrap_credential=payload.bootstrap_credential,
         )
         return ActivateOut(**result)
     except service.CPError as e:
         raise _cp_error(e)
-    except Exception as e:  # surface the real cause instead of a blank 500 (co-hosted install)
+    except Exception as e:
+        # Full traceback is server-side only. Never leak raw SQLAlchemy/PostgreSQL details to Office.
         log.error("Control Plane activation failed: %s\n%s", e, traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Control Plane activation error: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "activation_failed",
+                "message": "RoofSpan Mobile Access activation failed. See backend-service.log or contact RoofSpan support.",
+            },
+        ) from e
 
 
 @router.post("/entitlement/refresh", response_model=RefreshOut)
@@ -97,8 +102,12 @@ async def refresh(request: Request, db: AsyncSession = Depends(get_cp_db)):
         raise HTTPException(status_code=401, detail="Missing installation authentication headers")
     try:
         result = await service.refresh_entitlement(
-            db, installation_id=installation_id, timestamp=timestamp, nonce=nonce,
-            body=body, signature_b64=signature,
+            db,
+            installation_id=installation_id,
+            timestamp=timestamp,
+            nonce=nonce,
+            body=body,
+            signature_b64=signature,
         )
         return RefreshOut(**result)
     except service.CPError as e:
@@ -108,6 +117,7 @@ async def refresh(request: Request, db: AsyncSession = Depends(get_cp_db)):
 @router.get("/signing-keys/public", response_model=SigningKeysOut)
 async def signing_keys_public(db: AsyncSession = Depends(get_cp_db)):
     from control_plane import keys as cp_keys
+
     return SigningKeysOut(keys=await cp_keys.public_keys(db))
 
 
@@ -115,10 +125,14 @@ async def signing_keys_public(db: AsyncSession = Depends(get_cp_db)):
 async def version_policy(db: AsyncSession = Depends(get_cp_db)):
     vp = await service.get_version_policy(db)
     return VersionPolicyOut(
-        office_latest=vp.office_latest, office_min_supported=vp.office_min_supported,
-        office_recommended=vp.office_recommended, mobile_latest=vp.mobile_latest,
-        mobile_min_supported=vp.mobile_min_supported, mobile_recommended=vp.mobile_recommended,
-        office_update_mandatory=vp.office_update_mandatory, mobile_update_mandatory=vp.mobile_update_mandatory,
+        office_latest=vp.office_latest,
+        office_min_supported=vp.office_min_supported,
+        office_recommended=vp.office_recommended,
+        mobile_latest=vp.mobile_latest,
+        mobile_min_supported=vp.mobile_min_supported,
+        mobile_recommended=vp.mobile_recommended,
+        office_update_mandatory=vp.office_update_mandatory,
+        mobile_update_mandatory=vp.mobile_update_mandatory,
         updated_at=vp.updated_at,
     )
 
@@ -126,7 +140,11 @@ async def version_policy(db: AsyncSession = Depends(get_cp_db)):
 # ---------------- admin/dev ----------------
 
 @router.post("/installations/{installation_id}/revoke")
-async def revoke(installation_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def revoke(
+    installation_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         await service.revoke_installation(db, installation_id=installation_id)
         return {"ok": True, "installation_id": installation_id, "status": "REVOKED"}
@@ -141,22 +159,37 @@ async def rotate(_: bool = Depends(_require_admin), db: AsyncSession = Depends(g
 
 
 @router.put("/subscriptions/{company_id}")
-async def set_subscription(company_id: str, payload: SetSubscriptionIn, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def set_subscription(
+    company_id: str,
+    payload: SetSubscriptionIn,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
-        sub = await service.set_subscription(db, company_id=company_id, state=payload.state, seats=payload.seats)
+        sub = await service.set_subscription(
+            db, company_id=company_id, state=payload.state, seats=payload.seats
+        )
         return {"ok": True, "company_id": company_id, "state": sub.state, "seats": sub.seats}
     except service.CPError as e:
         raise _cp_error(e)
 
 
 @router.put("/version-policy", response_model=VersionPolicyOut)
-async def update_version_policy(payload: VersionPolicyUpdateIn, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def update_version_policy(
+    payload: VersionPolicyUpdateIn,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     vp = await service.update_version_policy(db, payload.model_dump())
     return VersionPolicyOut(
-        office_latest=vp.office_latest, office_min_supported=vp.office_min_supported,
-        office_recommended=vp.office_recommended, mobile_latest=vp.mobile_latest,
-        mobile_min_supported=vp.mobile_min_supported, mobile_recommended=vp.mobile_recommended,
-        office_update_mandatory=vp.office_update_mandatory, mobile_update_mandatory=vp.mobile_update_mandatory,
+        office_latest=vp.office_latest,
+        office_min_supported=vp.office_min_supported,
+        office_recommended=vp.office_recommended,
+        mobile_latest=vp.mobile_latest,
+        mobile_min_supported=vp.mobile_min_supported,
+        mobile_recommended=vp.mobile_recommended,
+        office_update_mandatory=vp.office_update_mandatory,
+        mobile_update_mandatory=vp.mobile_update_mandatory,
         updated_at=vp.updated_at,
     )
 
@@ -173,7 +206,12 @@ async def billing_webhook(request: Request, db: AsyncSession = Depends(get_cp_db
 
 
 @router.put("/subscriptions/{company_id}/seats")
-async def set_seats(company_id: str, seats: int, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def set_seats(
+    company_id: str,
+    seats: int,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.set_subscription_seats(db, company_id=company_id, seats=seats)
     except service.CPError as e:
@@ -186,7 +224,11 @@ async def billing_sweep(_: bool = Depends(_require_admin), db: AsyncSession = De
 
 
 @router.post("/billing/reconcile")
-async def billing_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def billing_reconcile(
+    company_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.reconcile_subscription(db, company_id=company_id)
     except service.CPError as e:
@@ -194,7 +236,11 @@ async def billing_reconcile(company_id: str, _: bool = Depends(_require_admin), 
 
 
 @router.post("/billing/checkout")
-async def billing_checkout(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def billing_checkout(
+    company_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return {"url": await service.checkout_url(company_id), "company_id": company_id}
     except service.CPError as e:
@@ -202,7 +248,11 @@ async def billing_checkout(company_id: str, _: bool = Depends(_require_admin), d
 
 
 @router.get("/billing/portal-url")
-async def billing_portal(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def billing_portal(
+    company_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return {"url": await service.portal_url(company_id), "company_id": company_id}
     except service.CPError as e:
@@ -221,17 +271,31 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_cp_db)
 
 
 @router.post("/billing/stripe/checkout")
-async def stripe_checkout(company_id: str, payload: dict | None = None, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def stripe_checkout(
+    company_id: str,
+    payload: dict | None = None,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     payload = payload or {}
     try:
-        return await service.stripe_create_checkout(db, company_id=company_id, seats=payload.get("seats"),
-                                                    origin_url=payload.get("origin_url"))
+        return await service.stripe_create_checkout(
+            db,
+            company_id=company_id,
+            seats=payload.get("seats"),
+            origin_url=payload.get("origin_url"),
+        )
     except service.CPError as e:
         raise _cp_error(e)
 
 
 @router.put("/billing/stripe/seats")
-async def stripe_seats(company_id: str, seats: int, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def stripe_seats(
+    company_id: str,
+    seats: int,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.stripe_update_seats(db, company_id=company_id, seats=seats)
     except service.CPError as e:
@@ -239,7 +303,12 @@ async def stripe_seats(company_id: str, seats: int, _: bool = Depends(_require_a
 
 
 @router.post("/billing/stripe/cancel")
-async def stripe_cancel(company_id: str, cancel: bool = True, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def stripe_cancel(
+    company_id: str,
+    cancel: bool = True,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.stripe_set_cancel(db, company_id=company_id, cancel=cancel)
     except service.CPError as e:
@@ -247,7 +316,12 @@ async def stripe_cancel(company_id: str, cancel: bool = True, _: bool = Depends(
 
 
 @router.get("/billing/stripe/portal-url")
-async def stripe_portal(company_id: str, return_url: str | None = None, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def stripe_portal(
+    company_id: str,
+    return_url: str | None = None,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.stripe_portal(db, company_id=company_id, return_url=return_url)
     except service.CPError as e:
@@ -255,7 +329,11 @@ async def stripe_portal(company_id: str, return_url: str | None = None, _: bool 
 
 
 @router.post("/billing/stripe/reconcile")
-async def stripe_reconcile(company_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def stripe_reconcile(
+    company_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         return await service.stripe_reconcile(db, company_id=company_id)
     except service.CPError as e:
@@ -267,12 +345,23 @@ async def stripe_reconcile(company_id: str, _: bool = Depends(_require_admin), d
 async def _authed_installation(request: Request, db: AsyncSession):
     body = await request.body()
     h = request.headers
-    iid, ts, nonce, sig = (h.get(reqsig.H_INSTALLATION), h.get(reqsig.H_TIMESTAMP),
-                           h.get(reqsig.H_NONCE), h.get(reqsig.H_SIGNATURE))
+    iid, ts, nonce, sig = (
+        h.get(reqsig.H_INSTALLATION),
+        h.get(reqsig.H_TIMESTAMP),
+        h.get(reqsig.H_NONCE),
+        h.get(reqsig.H_SIGNATURE),
+    )
     if not all([iid, ts, nonce, sig]):
         raise HTTPException(status_code=401, detail="Missing installation authentication headers")
     try:
-        inst = await service._verify_installation_request(db, installation_id=iid, timestamp=ts, nonce=nonce, body=body, signature_b64=sig)
+        inst = await service._verify_installation_request(
+            db,
+            installation_id=iid,
+            timestamp=ts,
+            nonce=nonce,
+            body=body,
+            signature_b64=sig,
+        )
     except service.CPError as e:
         raise _cp_error(e)
     return inst
@@ -281,26 +370,34 @@ async def _authed_installation(request: Request, db: AsyncSession):
 @router.post("/pairing/create")
 async def pairing_create(request: Request, db: AsyncSession = Depends(get_cp_db)):
     inst = await _authed_installation(request, db)
-    # Optional user binding travels in the signed request body (never a credential).
     expected_user_id = expected_user_label = None
     try:
         raw = await request.body()
         if raw:
             import json as _json
+
             data = _json.loads(raw.decode() or "{}")
             expected_user_id = data.get("expected_user_id")
             expected_user_label = data.get("expected_user_label")
     except Exception:
         pass
-    return await service.create_pairing(db, installation_id=str(inst.id),
-                                        expected_user_id=expected_user_id, expected_user_label=expected_user_label)
+    return await service.create_pairing(
+        db,
+        installation_id=str(inst.id),
+        expected_user_id=expected_user_id,
+        expected_user_label=expected_user_label,
+    )
 
 
 @router.post("/pairing/resolve")
 async def pairing_resolve(payload: dict, db: AsyncSession = Depends(get_cp_db)):
     try:
-        return await service.resolve_pairing(db, token=payload.get("token"),
-                                             numeric_code=payload.get("numeric_code"), label=payload.get("label"))
+        return await service.resolve_pairing(
+            db,
+            token=payload.get("token"),
+            numeric_code=payload.get("numeric_code"),
+            label=payload.get("label"),
+        )
     except service.CPError as e:
         raise _cp_error(e)
 
@@ -312,7 +409,11 @@ async def pairing_devices(request: Request, db: AsyncSession = Depends(get_cp_db
 
 
 @router.post("/pairing/devices/{device_id}/revoke")
-async def pairing_revoke(device_id: str, _: bool = Depends(_require_admin), db: AsyncSession = Depends(get_cp_db)):
+async def pairing_revoke(
+    device_id: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
     try:
         await service.revoke_device(db, device_id=device_id)
         return {"ok": True, "device_id": device_id, "status": "REVOKED"}

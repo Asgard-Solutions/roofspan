@@ -1,10 +1,11 @@
-"""Control Plane database (its own engine/session; separate from the business DB by default).
+"""Control Plane database/session setup.
 
-Legacy Windows installs that cannot create the dedicated Control Plane database may use the existing
-RoofSpan database with CONTROL_PLANE_SCHEMA set. SQLAlchemy's schema_translate_map keeps CP tables
-isolated from business tables without changing the model definitions.
+The normal deployment uses a dedicated database. Legacy Windows installations may use an isolated
+schema in the existing RoofSpan database. Runtime ORM statements use ``schema_translate_map`` for that
+fallback; Alembic migration routing is handled separately with PostgreSQL ``search_path``.
 """
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from control_plane.config import CONTROL_PLANE_DATABASE_URL, CONTROL_PLANE_SCHEMA
@@ -22,5 +23,20 @@ class CPBase(DeclarativeBase):
 
 
 async def get_cp_db():
+    """FastAPI dependency that fails Mobile/Control Plane work closed until validation passes."""
+    from control_plane import readiness
+
+    try:
+        readiness.require_ready()
+    except readiness.ControlPlaneUnavailable as exc:
+        status = exc.status
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": status.get("code", "control_plane_unavailable"),
+                "message": status.get("message"),
+            },
+        ) from exc
+
     async with SessionLocal() as session:
         yield session
