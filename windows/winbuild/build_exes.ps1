@@ -13,12 +13,19 @@ $alembicDir = Join-Path $backend "alembic"
 $cpAlembicDir = Join-Path $backend "control_plane\alembic"
 $cpAlembicIni = Join-Path $backend "control_plane\alembic.ini"
 $requirements = Join-Path $backend "requirements.txt"
+$versionFile = Join-Path $repoRoot "windows\VERSION"
 
 if (-not (Test-Path $alembicDir))                         { throw "backend\alembic directory not found at '$backend'." }
 if (-not (Test-Path (Join-Path $backend "alembic.ini"))) { throw "backend\alembic.ini not found at '$backend'." }
 if (-not (Test-Path $cpAlembicDir))                       { throw "backend\control_plane\alembic directory not found at '$backend'." }
 if (-not (Test-Path $cpAlembicIni))                       { throw "backend\control_plane\alembic.ini not found at '$backend'." }
 if (-not (Test-Path $requirements))                       { throw "backend\requirements.txt not found at '$requirements'." }
+if (-not (Test-Path $versionFile))                        { throw "windows\VERSION not found at '$versionFile'." }
+
+$releaseVersion = (Get-Content $versionFile -Raw).Trim()
+if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') {
+  throw "windows\VERSION must contain a three-part numeric version; found '$releaseVersion'."
+}
 
 # Remove stale migration bytecode before freezing either Alembic tree.
 foreach ($migrationDir in @($alembicDir, $cpAlembicDir)) {
@@ -65,8 +72,8 @@ $preflight = "import sys; sys.path.insert(0, r'$backend'); import server, proper
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
-# Freeze the exact Git revision into the backend process as a PyInstaller runtime hook. This gives
-# support a deterministic build SHA through /api/version and backend-service.log on customer machines.
+# Freeze the exact Git revision and canonical release version into every service that consumes the
+# runtime hook. This gives support deterministic identities on installed customer machines.
 $gitSha = (& git -C $repoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-fA-F]{40}$') {
   throw "Unable to resolve the source Git SHA; refusing to produce an untraceable Office build."
@@ -77,11 +84,56 @@ $buildInfoHook = Join-Path $PSScriptRoot "roofspan_build_info_hook.generated.py"
 $hookText = @"
 import os
 os.environ['ROOFSPAN_BUILD_SHA'] = '$gitSha'
+os.environ['ROOFSPAN_VERSION'] = '$releaseVersion'
 os.environ.setdefault('CP_DEV_SIGNING_KEYS_DIR', r'C:\ProgramData\RoofSpan\identity\cp-signing-keys')
 "@
 Set-Content -Path $buildInfoHook -Value $hookText -Encoding ASCII
 $env:ROOFSPAN_BUILD_INFO_HOOK = $buildInfoHook
 Write-Host "==> Embedding source Git SHA: $gitSha"
+Write-Host "==> Embedding release version: $releaseVersion"
+
+function Assert-RelayConnectorBuildInfo {
+  param(
+    [Parameter(Mandatory=$true)][string]$ExePath,
+    [Parameter(Mandatory=$true)][string]$ExpectedSha,
+    [Parameter(Mandatory=$true)][string]$ExpectedVersion
+  )
+
+  $output = @(& $ExePath --build-info)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    throw "Relay connector build-info probe failed for '$ExePath' (exit $exitCode). The binary may be stale."
+  }
+  $jsonLine = $output | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+  if (-not $jsonLine) {
+    throw "Relay connector '$ExePath' did not return build-info JSON. The binary may be stale."
+  }
+  try {
+    $info = $jsonLine | ConvertFrom-Json
+  } catch {
+    throw "Relay connector '$ExePath' returned invalid build-info JSON: $jsonLine"
+  }
+
+  if ($info.service -ne "roofspan-relay-connector") {
+    throw "Relay connector service identity mismatch in '$ExePath': '$($info.service)'."
+  }
+  if ($info.build_sha -ne $ExpectedSha) {
+    throw "Relay connector source mismatch in '$ExePath': expected $ExpectedSha, found $($info.build_sha)."
+  }
+  if ($info.version -ne $ExpectedVersion) {
+    throw "Relay connector version mismatch in '$ExePath': expected $ExpectedVersion, found $($info.version)."
+  }
+  if ($info.contract -ne "hosted-installation-identity-v2") {
+    throw "Relay connector contract mismatch in '$ExePath': '$($info.contract)'."
+  }
+  if ($info.identity_endpoint -ne "/api/relay/connector/identity") {
+    throw "Relay connector identity endpoint mismatch in '$ExePath': '$($info.identity_endpoint)'."
+  }
+  if ($info.installation_relay_path -ne "/api/relay/installation") {
+    throw "Relay connector route mismatch in '$ExePath': '$($info.installation_relay_path)'."
+  }
+  Write-Host "==> Verified Relay connector: SHA=$($info.build_sha) version=$($info.version) contract=$($info.contract)"
+}
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -123,10 +175,18 @@ try {
       Write-Host "==> Verified business + Control Plane Alembic assets in frozen backend"
     }
 
+    if ($name -eq "roofspan-relay-connector") {
+      Assert-RelayConnectorBuildInfo -ExePath $exe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
+    }
+
     $destDir = Join-Path $OutDir $name
     if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
     Copy-Item $distDir $destDir -Recurse -Force
-    if (-not (Test-Path (Join-Path $destDir "$name.exe"))) { throw "Staging did not place $name.exe under $destDir" }
+    $stagedExe = Join-Path $destDir "$name.exe"
+    if (-not (Test-Path $stagedExe)) { throw "Staging did not place $name.exe under $destDir" }
+    if ($name -eq "roofspan-relay-connector") {
+      Assert-RelayConnectorBuildInfo -ExePath $stagedExe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
+    }
   }
 } finally {
   Remove-Item Env:\ROOFSPAN_BUILD_INFO_HOOK -ErrorAction SilentlyContinue
