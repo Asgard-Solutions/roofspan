@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  :root { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+html { scroll-padding-top: 84px; } /* sticky-header anchor offset */
+body { @apply bg-white text-slate-body font-sans antialiased; }
+
+/* Visible keyboard focus everywhere */
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid #1E63C8; outline-offset: 2px; border-radius: 6px;
+}
+
+.container-x { @apply mx-auto max-w-content px-5 sm:px-8; }
+.h1 { @apply font-display font-extrabold tracking-tight text-4xl sm:text-5xl lg:text-6xl text-white; }
+.h2 { @apply font-display font-bold tracking-tight text-3xl sm:text-4xl text-slate-ink; }
+.eyebrow { @apply inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-brand; }
+.btn { @apply inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-colors min-h-[48px] px-6 text-base; }
+.btn-primary { @apply btn bg-safety text-white hover:bg-safety-600; }
+.btn-onlight { @apply btn bg-brand text-white hover:bg-brand-600; }
+.btn-ghost { @apply btn border-2 border-white/40 text-white hover:bg-white/10; }
+.btn-outline { @apply btn border-2 border-brand text-brand hover:bg-brand hover:text-white; }
+.card { @apply rounded-xl2 border border-slate-line bg-white shadow-card; }
+
+/* Grain/noise depth overlay for dark sections */
+.noise { position: relative; }
+.noise::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+  background-image: radial-gradient(rgba(255,255,255,.9) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
