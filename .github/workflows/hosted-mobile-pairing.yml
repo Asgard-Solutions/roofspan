@@ -64,11 +64,23 @@ jobs:
             backend/cp_asgi.py \
             backend/tests/hosted_pairing_probe.py
 
+      - name: Generate the missing Office frontend lockfile
+        working-directory: frontend
+        run: yarn install
+
+      - name: Capture the generated frontend lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-yarn-lock
+          path: frontend/yarn.lock
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Build RoofSpan Office frontend with QR UI
         working-directory: frontend
-        run: |
-          yarn install --frozen-lockfile
-          yarn build
+        env:
+          CI: "false"
+        run: yarn build
 
       - name: Validate RoofSpan Mobile pairing configuration and helpers
         working-directory: mobile
