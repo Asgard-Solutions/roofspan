@@ -29,8 +29,8 @@ def _to_async_url(url: str) -> str:
 def _derive_cp_url() -> str:
     """Default the Control Plane DB to a SEPARATE database on the same server as the business DB.
 
-    This keeps commercial metadata physically separate from customer business data and keeps the
-    business Alembic autogenerate clean (CP tables live in a different database).
+    Windows legacy installs that lack the retained PostgreSQL superuser credential may explicitly set
+    CONTROL_PLANE_DATABASE_URL to the business DB and CONTROL_PLANE_SCHEMA to an isolated CP schema.
     """
     explicit = os.environ.get("CONTROL_PLANE_DATABASE_URL")
     if explicit:
@@ -39,81 +39,48 @@ def _derive_cp_url() -> str:
     if not base:
         return ""
     parsed = urlparse(base)
-    # replace the path (database name) with the control-plane database
     new = parsed._replace(path="/roofspan_control_plane")
     return _to_async_url(urlunparse(new))
 
 
 CONTROL_PLANE_DATABASE_URL = _derive_cp_url()
+CONTROL_PLANE_SCHEMA = os.environ.get("CONTROL_PLANE_SCHEMA", "").strip() or None
 
-# Timestamp tolerance (seconds) for installation-authenticated requests (replay window).
 REQUEST_TIMESTAMP_TOLERANCE = int(os.environ.get("CP_REQUEST_TIMESTAMP_TOLERANCE", "300"))
-# How long a used nonce is remembered (>= tolerance so replays inside the window are caught).
 NONCE_RETENTION_SECONDS = int(os.environ.get("CP_NONCE_RETENTION_SECONDS", "900"))
-
-# DEV bootstrap credential for activation. Clearly isolated dev mechanism; production activation
-# credential/checkout linkage is finalized with C2 billing. Never a long-lived master credential in
-# the installer.
 DEV_BOOTSTRAP_SECRET = os.environ.get("CP_DEV_BOOTSTRAP_SECRET", "dev-bootstrap-roofspan")
-
-# DEV admin credential guarding Control Plane admin/dev endpoints (revoke, key rotation, subscription
-# updates, version policy writes). Production uses proper operator auth (HUMAN REQUIRED).
 DEV_ADMIN_SECRET = os.environ.get("CP_DEV_ADMIN_SECRET", "dev-admin-roofspan")
-
-# Seat bounds (mirror licensing.config; product-locked, not pricing).
 MIN_SEATS = int(os.environ.get("LICENSING_MIN_SEATS", "5"))
 MAX_SEATS = int(os.environ.get("LICENSING_MAX_SEATS", "50"))
 PRODUCT = os.environ.get("LICENSING_PRODUCT", "roofspan-office")
-
-# Entitlement timing (mirror licensing.config so policy is not duplicated divergently).
 REFRESH_INTERVAL_HOURS = float(os.environ.get("LICENSING_REFRESH_HOURS", "12"))
 OFFLINE_GRACE_DAYS = float(os.environ.get("LICENSING_OFFLINE_GRACE_DAYS", "7"))
-PAYMENT_GRACE_DAYS = float(os.environ.get("LICENSING_PAYMENT_GRACE_DAYS", "7"))  # billing grace (separate from offline)
-BILLING_PERIOD_DAYS = int(os.environ.get("BILLING_PERIOD_DAYS", "30"))  # mock paid-through period length
+PAYMENT_GRACE_DAYS = float(os.environ.get("LICENSING_PAYMENT_GRACE_DAYS", "7"))
+BILLING_PERIOD_DAYS = int(os.environ.get("BILLING_PERIOD_DAYS", "30"))
 
-# DEV signing-key storage dir (git-ignored). Production signing keys live in AWS KMS/Secrets Manager
-# (HUMAN REQUIRED) — never in the repo or ordinary config.
 DEV_SIGNING_KEYS_DIR = os.environ.get(
     "CP_DEV_SIGNING_KEYS_DIR", os.path.join(os.path.dirname(__file__), "dev_signing_keys")
 )
 
 MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
-
-# C3: relay endpoint metadata (advertised to Mobile after pairing) + pairing token lifetime.
-# Actual relay transport is a secure outbound WebSocket-TLS tunnel hosted on AWS (HUMAN REQUIRED);
-# this value is metadata only and contains no secrets.
 RELAY_ENDPOINT = os.environ.get("ROOFSPAN_RELAY_ENDPOINT", "wss://relay.roofspan.dev/v1")
 PROTOCOL_VERSION = os.environ.get("ROOFSPAN_PROTOCOL_VERSION", "1")
 PAIRING_TTL_SECONDS = int(os.environ.get("PAIRING_TTL_SECONDS", "300"))
-
-# ---- Billing (Phase C2/Stripe) ----
-# BILLING_MODE: mock (safe dev/test default) | stripe (production authoritative engine) | revenuecat | stub.
-# Production configuration failure must FAIL CLEARLY — never silently fall back to mock (see billing.get_provider).
 BILLING_MODE = os.environ.get("BILLING_MODE", "mock").strip().lower()
-
-# Stripe Billing is the authoritative subscription/payment engine.
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_SEAT_LOOKUP_KEY = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat_monthly")
-SEAT_PRICE_USD = float(os.environ.get("ROOFSPAN_SEAT_PRICE_USD", "49"))  # informational; Stripe Price is source of truth
+SEAT_PRICE_USD = float(os.environ.get("ROOFSPAN_SEAT_PRICE_USD", "49"))
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
-
-# ---- Production hosting (AWS) selectors — dev defaults keep in-container behavior unchanged ----
-# CP_ENV: "dev" (default; X-RoofSpan-Admin header ok) | "production" (operator JWT required, KMS signer).
 CP_ENV = os.environ.get("CP_ENV", "dev").strip().lower()
-
-# Entitlement signer: "local" (dev PEM keys) | "kms" (AWS KMS Ed25519, private key never leaves KMS).
 ENTITLEMENT_SIGNER = os.environ.get("ENTITLEMENT_SIGNER", "local" if CP_ENV != "production" else "kms").strip().lower()
 CP_KMS_SIGNING_KEY_ID = os.environ.get("CP_KMS_SIGNING_KEY_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "")
-
-# Operator (RoofSpan-internal) auth for admin endpoints in production (Cognito JWT: issuer + audience).
 CP_OPERATOR_ISSUER = os.environ.get("CP_OPERATOR_ISSUER", "")
 CP_OPERATOR_AUDIENCE = os.environ.get("CP_OPERATOR_AUDIENCE", "")
 
 
 def require_production_config() -> None:
-    """Fail CLEARLY at startup in production if required central config is missing (never silent fallback)."""
     if CP_ENV != "production":
         return
     missing = []
