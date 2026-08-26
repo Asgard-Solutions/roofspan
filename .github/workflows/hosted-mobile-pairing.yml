@@ -3,6 +3,7 @@ name: hosted-mobile-pairing
 on:
   push:
     paths:
+      - "backend/requirements.txt"
       - "backend/control_plane/**"
       - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
@@ -21,6 +22,7 @@ on:
       - ".github/workflows/hosted-mobile-pairing.yml"
   pull_request:
     paths:
+      - "backend/requirements.txt"
       - "backend/control_plane/**"
       - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
@@ -142,7 +144,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install central-services runtime dependencies
-        run: pip install -r backend/requirements.txt
+        run: |
+          pip install -r backend/requirements.txt
+          python -c "import mapbox_vector_tile, shapely, pyclipper; print('vector-tile runtime dependencies OK')"
 
       - name: Start disposable hosted Control Plane and Relay
         env:
