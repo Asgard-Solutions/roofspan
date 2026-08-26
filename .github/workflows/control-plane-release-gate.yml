@@ -1,0 +1,284 @@
+name: control-plane-release-gate
+
+on:
+  push:
+    paths:
+      - "backend/control_plane/**"
+      - "backend/licensing/pairing_client.py"
+      - "backend/server.py"
+      - "backend/cp_asgi.py"
+      - "backend/version.py"
+      - "backend/tests/test_control_plane_*"
+      - "windows/**"
+      - "docs/control-plane-mobile-pairing-runbook.md"
+      - ".github/workflows/control-plane-release-gate.yml"
+  pull_request:
+    paths:
+      - "backend/control_plane/**"
+      - "backend/licensing/pairing_client.py"
+      - "backend/server.py"
+      - "backend/cp_asgi.py"
+      - "backend/version.py"
+      - "backend/tests/test_control_plane_*"
+      - "windows/**"
+      - "docs/control-plane-mobile-pairing-runbook.md"
+      - ".github/workflows/control-plane-release-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  unit-and-static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install focused dependencies
+        run: >-
+          pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
+          fastapi==0.110.1 httpx cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
+      - name: Run readiness, migration logic, and packaging tests serially
+        env:
+          DATABASE_URL: postgresql+asyncpg://roofspan:test@127.0.0.1:5432/roofspan
+        run: |
+          pytest -q -n 0 backend/tests/test_control_plane_readiness.py backend/tests/test_control_plane_migration_logic.py
+          pytest -q -n 0 windows/tests/test_control_plane_packaging.py
+      - name: Compile changed Python modules
+        run: |
+          python -m py_compile \
+            backend/control_plane/readiness.py \
+            backend/control_plane/migrations_runner.py \
+            backend/control_plane/bootstrap.py \
+            backend/control_plane/db.py \
+            backend/control_plane/router.py \
+            backend/control_plane/alembic/env.py \
+            backend/licensing/pairing_client.py \
+            backend/server.py backend/cp_asgi.py backend/version.py \
+            backend/tests/test_control_plane_migrations_live.py \
+            windows/tests/control_plane_packaged_probe.py
+
+  real-postgresql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Control Plane dependencies
+        run: >-
+          pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
+          fastapi==0.110.1 httpx requests cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
+      - name: Run both storage modes and damaged-state recovery serially
+        env:
+          CP_RUN_INTEGRATION: "1"
+          ROOFSPAN_TEST_PG_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: pytest -q -n 0 backend/tests/test_control_plane_migrations_live.py -vv
+
+  build-windows-msi:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install build prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pyinstaller pywin32
+          npm install --global yarn@1.22.22
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
+      - name: Build Office stage and MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP "roofspan-stage"
+          pwsh -File windows/installer/stage.ps1 -StageDir $stage
+          $version = (Get-Content windows/VERSION -Raw).Trim()
+          $msi = Join-Path $env:RUNNER_TEMP "RoofSpanOffice-$version.msi"
+          wix build windows/installer/RoofSpan.wxs -arch x64 `
+            -d "Version=$version" -d "StageDir=$stage" `
+            -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
+          if (-not (Test-Path $msi)) { throw "RoofSpan Office MSI was not produced" }
+          foreach ($relative in @(
+            "services\roofspan-backend\_internal\control_plane\alembic.ini",
+            "services\roofspan-backend\_internal\control_plane\alembic\env.py",
+            "services\roofspan-backend\_internal\control_plane\alembic\versions"
+          )) {
+            if (-not (Test-Path (Join-Path $stage $relative))) { throw "Missing packaged CP asset: $relative" }
+          }
+          "MSI_PATH=$msi" | Out-File -Append $env:GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roofspan-control-plane-gate-msi
+          path: ${{ env.MSI_PATH }}
+          if-no-files-found: error
+          retention-days: 3
+
+  packaged-windows:
+    needs: build-windows-msi
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [fresh, legacy-damaged]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ikalnytskyi/action-setup-postgres@v6
+        with:
+          username: postgres
+          password: postgres
+          port: "5432"
+      - uses: actions/download-artifact@v4
+        with:
+          name: roofspan-control-plane-gate-msi
+          path: ${{ runner.temp }}/msi
+      - name: Install probe dependencies
+        run: pip install requests cryptography
+      - name: Create RoofSpanPostgreSQL dependency service
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cs = @(
+            'using System.ServiceProcess;',
+            'public class RsStub : ServiceBase {',
+            ' public static void Main() { ServiceBase.Run(new RsStub()); }',
+            ' protected override void OnStart(string[] args) { }',
+            ' protected override void OnStop() { }',
+            '}') -join "`n"
+          $src = Join-Path $env:RUNNER_TEMP "pgstub.cs"
+          $stub = Join-Path $env:RUNNER_TEMP "pgstub.exe"
+          Set-Content -Encoding ASCII $src $cs
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:exe /out:$stub /r:System.ServiceProcess.dll $src
+          sc.exe create RoofSpanPostgreSQL binPath= "$stub" start= auto | Out-Null
+          Start-Service RoofSpanPostgreSQL
+      - name: Prepare machine state
+        shell: pwsh
+        env:
+          TEST_MODE: ${{ matrix.mode }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "C:\ProgramData\RoofSpan"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path "$root\identity","$root\config" | Out-Null
+          if ($env:TEST_MODE -eq "fresh") {
+            Add-Type -AssemblyName System.Security
+            $bytes = [Text.Encoding]::UTF8.GetBytes("postgres")
+            $enc = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+            [IO.File]::WriteAllBytes("$root\identity\pg_super.bin", $enc)
+          } else {
+            $env:PGPASSWORD = "postgres"
+            psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE roofspan WITH LOGIN PASSWORD 'LegacyGatePw123456789' NOSUPERUSER NOCREATEDB;"
+            psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE roofspan OWNER roofspan;"
+            $jwt = python -c "import secrets; print(secrets.token_urlsafe(48))"
+            $encKey = python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+            @(
+              "DATABASE_URL=postgresql+asyncpg://roofspan:LegacyGatePw123456789@127.0.0.1:5432/roofspan",
+              "JWT_SECRET=$jwt", "SECRETS_ENCRYPTION_KEY=$encKey",
+              "INSTALLATION_KEYS_DIR=C:\ProgramData\RoofSpan\identity",
+              "ROOFSPAN_CHANNEL=test", "ROOFSPAN_VERSION=0.1.0"
+            ) | Set-Content -Encoding ASCII "$root\config\roofspan.env"
+            $env:PGPASSWORD = "LegacyGatePw123456789"
+            psql -h 127.0.0.1 -U roofspan -d roofspan -v ON_ERROR_STOP=1 -c "CREATE SCHEMA roofspan_control_plane AUTHORIZATION roofspan; CREATE TABLE roofspan_control_plane.alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO roofspan_control_plane.alembic_version VALUES ('e1f2a3b4c5d6');"
+          }
+      - name: Install MSI and wait for readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = Get-ChildItem "$env:RUNNER_TEMP\msi" -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { throw "MSI artifact not found" }
+          $log = Join-Path $env:RUNNER_TEMP "install-${{ matrix.mode }}.log"
+          $p = Start-Process msiexec -ArgumentList @("/i","`"$($msi.FullName)`"","/qn","/l*v","`"$log`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 120; throw "MSI install failed ($($p.ExitCode))" }
+          $deadline = (Get-Date).AddMinutes(4)
+          do {
+            try { $response = Invoke-RestMethod http://127.0.0.1:8001/api/health/control-plane -TimeoutSec 5 } catch { $response = $null }
+            if ($response -and $response.ready -eq $true) { break }
+            Start-Sleep 3
+          } while ((Get-Date) -lt $deadline)
+          if (-not $response -or $response.ready -ne $true) { Get-Content C:\ProgramData\RoofSpan\logs\backend-service.log -Tail 200; throw "Installed CP did not become ready" }
+      - name: Verify storage and least privilege
+        shell: pwsh
+        env:
+          TEST_MODE: ${{ matrix.mode }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PGPASSWORD = "postgres"
+          $priv = psql -h 127.0.0.1 -U postgres -d postgres -tA -v ON_ERROR_STOP=1 -c "SELECT rolsuper::text || ',' || rolcreatedb::text FROM pg_roles WHERE rolname='roofspan';"
+          if ($priv.Trim() -ne "false,false") { throw "roofspan role privilege regression: $priv" }
+          $names = "'alembic_version','companies','cp_audit_logs','entitlement_issuances','request_nonces','signing_keys','version_policy','installations','licenses','subscriptions','billing_events','mobile_devices','pairing_tokens'"
+          if ($env:TEST_MODE -eq "fresh") {
+            $count = psql -h 127.0.0.1 -U postgres -d roofspan_control_plane -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ($names);"
+          } else {
+            $count = psql -h 127.0.0.1 -U postgres -d roofspan -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='roofspan_control_plane' AND table_name IN ($names);"
+            $publicCount = psql -h 127.0.0.1 -U postgres -d roofspan -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ($names);"
+            if ([int]$publicCount -ne 0) { throw "CP tables leaked into business public schema" }
+            $archives = psql -h 127.0.0.1 -U postgres -d roofspan -tA -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM information_schema.schemata WHERE schema_name LIKE 'roofspan_control_plane_broken_%';"
+            if ([int]$archives -lt 1) { throw "damaged legacy schema was not archived" }
+          }
+          if ([int]$count -ne 13) { throw "CP storage has only $count/13 required tables" }
+      - name: Run activation and signed user-bound pairing
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
+          ROOFSPAN_EXPECTED_BUILD_SHA: ${{ github.sha }}
+        run: python windows/tests/control_plane_packaged_probe.py
+      - name: Restart service and prove idempotency
+        shell: pwsh
+        env:
+          TEST_MODE: ${{ matrix.mode }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PGPASSWORD = "postgres"
+          $database = if ($env:TEST_MODE -eq "fresh") { "roofspan_control_plane" } else { "roofspan" }
+          $schema = if ($env:TEST_MODE -eq "fresh") { "public" } else { "roofspan_control_plane" }
+          $sql = "SELECT (SELECT count(*) FROM $schema.companies)::text || ',' || (SELECT count(*) FROM $schema.installations)::text || ',' || (SELECT count(*) FROM $schema.signing_keys)::text;"
+          $before = psql -h 127.0.0.1 -U postgres -d $database -tA -v ON_ERROR_STOP=1 -c $sql
+          Restart-Service RoofSpanBackend
+          $deadline = (Get-Date).AddMinutes(3)
+          do {
+            try { $ready = Invoke-RestMethod http://127.0.0.1:8001/api/health/control-plane -TimeoutSec 5 } catch { $ready = $null }
+            if ($ready -and $ready.ready -eq $true) { break }
+            Start-Sleep 3
+          } while ((Get-Date) -lt $deadline)
+          if (-not $ready -or $ready.ready -ne $true) { Get-Content C:\ProgramData\RoofSpan\logs\backend-service.log -Tail 180; throw "CP not ready after restart" }
+          $after = psql -h 127.0.0.1 -U postgres -d $database -tA -v ON_ERROR_STOP=1 -c $sql
+          if ($before.Trim() -ne $after.Trim()) { throw "restart created duplicate CP rows: before=$before after=$after" }
+      - name: Upload service logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cp-gate-logs-${{ matrix.mode }}
+          path: C:\ProgramData\RoofSpan\logs\*.log
+          if-no-files-found: ignore
+          retention-days: 7
