@@ -46,7 +46,7 @@ def _reset(asyncpg):
         try:
             # Drop every DB owned by the test role before dropping the role. The Control Plane bootstrap
             # added a second database, so deleting only `roofspan` leaves a dependent owner object.
-            for database in (boot.CONTROL_PLANE_DB, boot.APP_DB):
+            for database in (boot.CP_DB, boot.APP_DB):
                 await conn.execute(
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                     "WHERE datname=$1 AND pid <> pg_backend_pid()",
@@ -69,7 +69,7 @@ def _inspect(asyncpg):
                 boot.APP_ROLE,
             )
             owners = {}
-            for database in (boot.APP_DB, boot.CONTROL_PLANE_DB):
+            for database in (boot.APP_DB, boot.CP_DB):
                 owners[database] = await conn.fetchval(
                     "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname=$1",
                     database,
@@ -107,10 +107,10 @@ def _assert_bootstrap_state(asyncpg, password):
     assert role["rolcreatedb"] is False, "roofspan must NOT have CREATEDB"
     assert owners == {
         boot.APP_DB: boot.APP_ROLE,
-        boot.CONTROL_PLANE_DB: boot.APP_ROLE,
+        boot.CP_DB: boot.APP_ROLE,
     }
     assert _can_login(asyncpg, password, boot.APP_DB) == boot.APP_ROLE
-    assert _can_login(asyncpg, password, boot.CONTROL_PLANE_DB) == boot.APP_ROLE
+    assert _can_login(asyncpg, password, boot.CP_DB) == boot.APP_ROLE
 
 
 def test_fresh_create_then_existing_alter_branch():
