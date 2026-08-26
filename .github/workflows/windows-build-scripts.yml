@@ -281,7 +281,9 @@ jobs:
           if (-not (Test-Path $cfg)) { throw "first-install bootstrap did not create $cfg" }
           $cfgText = Get-Content $cfg -Raw
           if ($cfgText -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still contains the placeholder" }
-          $dbline = (($cfgText -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $dbline = (($cfgText -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" } | Select-Object -First 1)
+          if (-not $dbline) { throw "roofspan.env does not contain DATABASE_URL" }
+          $dbline = $dbline.Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
           "DBURL_HASH=$hash" | Out-File -Append $env:GITHUB_ENV
           Write-Host "OK: roofspan.env created by first-install bootstrap"
@@ -309,7 +311,9 @@ jobs:
           $deadline = (Get-Date).AddSeconds(120)
           while ((Get-Service RoofSpanBackend).Status -ne "Running" -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
           if ((Get-Service RoofSpanBackend).Status -ne "Running") { throw "RoofSpanBackend did not restart" }
-          $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $dbline = ((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" | Where-Object { $_ -match "^DATABASE_URL=" } | Select-Object -First 1))
+          if (-not $dbline) { throw "roofspan.env does not contain DATABASE_URL after restart" }
+          $dbline = $dbline.Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
           if ($hash -ne $env:DBURL_HASH) { throw "DB credential was rotated on restart" }
           $ok = $false; $deadline = (Get-Date).AddSeconds(60)
@@ -324,7 +328,9 @@ jobs:
           $log = Join-Path $env:RUNNER_TEMP "reinstall.log"
           $p = Start-Process msiexec -ArgumentList @("/i","`"$env:MSI`"","/qn","REINSTALL=ALL","REINSTALLMODE=vomus","/l*v","`"$log`"") -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content $log -Tail 80; throw "MSI reinstall failed ($($p.ExitCode))" }
-          $dbline = (((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" -Raw) -split "`n") | Where-Object { $_ -match "^DATABASE_URL=" })[0].Trim()
+          $dbline = ((Get-Content "C:\ProgramData\RoofSpan\config\roofspan.env" | Where-Object { $_ -match "^DATABASE_URL=" } | Select-Object -First 1))
+          if (-not $dbline) { throw "roofspan.env does not contain DATABASE_URL after reinstall" }
+          $dbline = $dbline.Trim()
           $hash = (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($dbline)) -Algorithm SHA256).Hash
           if ($hash -ne $env:DBURL_HASH) { throw "upgrade/reinstall rotated or destroyed the DB credential" }
           $relayExe = "C:\Program Files\RoofSpan Office\services\roofspan-relay-connector\roofspan-relay-connector.exe"
