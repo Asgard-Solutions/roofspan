@@ -17,8 +17,16 @@ a = Analysis(
     pathex=[BACKEND, WINDOWS],
     binaries=[],
     datas=[
+        # Business-database Alembic assets. backend/migrations_runner.py resolves these from
+        # sys._MEIPASS (the ONEDIR _internal directory when frozen).
         (os.path.join(BACKEND, "alembic.ini"), "."),
         (os.path.join(BACKEND, "alembic"), "alembic"),
+        # Embedded Control Plane has its OWN Alembic tree. control_plane/migrations_runner.py resolves
+        # _ROOT from its frozen __file__, which is _internal/control_plane, so these assets must preserve
+        # that exact relative layout. Without them Mobile Access starts but activation fails because the
+        # Control Plane schema/tables (companies, installations, pairing_sessions, etc.) are never created.
+        (os.path.join(BACKEND, "control_plane", "alembic.ini"), "control_plane"),
+        (os.path.join(BACKEND, "control_plane", "alembic"), os.path.join("control_plane", "alembic")),
     ],
     hiddenimports=[
         "roofspan_service", "db_bootstrap", "migrations_runner", "win32crypt",
