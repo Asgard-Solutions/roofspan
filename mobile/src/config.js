@@ -2,31 +2,39 @@ import Constants from "expo-constants";
 
 const extra = (Constants.expoConfig && Constants.expoConfig.extra) || {};
 
-// Control Plane / API base. Production: https://cp.roofspan.io (set via EXPO_PUBLIC_* at build time).
-// EXPO_PUBLIC_CONTROL_PLANE_BASE_URL is the canonical production var (see
-// infra/config/production.endpoints.env.example); EXPO_PUBLIC_API_BASE kept for backwards compat.
-export const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE ||
+function cleanBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+// One authoritative hosted Control Plane. The canonical EXPO_PUBLIC variable and app.json value take
+// precedence over the legacy generic API variable so a stale preview URL cannot silently receive a
+// production pairing code.
+export const API_BASE = cleanBase(
   process.env.EXPO_PUBLIC_CONTROL_PLANE_BASE_URL ||
+  extra.controlPlaneBase ||
+  process.env.EXPO_PUBLIC_API_BASE ||
   extra.apiBase ||
-  "https://unified-mono-deploy.preview.emergentagent.com";
+  "https://cp.roofspan.io"
+);
 
 export const API = `${API_BASE}/api`;
 
-// Secure Relay WSS host. Production is a SEPARATE host from the Control Plane and is NOT derived
-// from it (wss://relay.roofspan.io). Set EXPO_PUBLIC_RELAY_WSS_URL (or app.json extra.relayWss) in
-// production builds. In dev/preview (no override) the relay is served by the same backend, so we
-// derive the ws:// origin from API_BASE. The relay mobile route is always /api/relay/mobile.
-const RELAY_WSS_BASE =
-  process.env.EXPO_PUBLIC_RELAY_WSS_URL || extra.relayWss || "";
+// Relay is a separate public service. A resolved pairing may provide the endpoint; the build-time
+// value remains the fallback. Both an origin and a full /api/relay/mobile URL are accepted.
+const RELAY_WSS_BASE = cleanBase(
+  process.env.EXPO_PUBLIC_RELAY_WSS_URL || extra.relayWss || "wss://relay.roofspan.io"
+);
 
-export function relayWsUrl() {
-  const origin = RELAY_WSS_BASE || API_BASE.replace(/^http/, "ws");
-  return origin.replace(/\/+$/, "") + "/api/relay/mobile";
+export function relayWsUrl(pairingEndpoint = "") {
+  let origin = cleanBase(pairingEndpoint) || RELAY_WSS_BASE;
+  if (/\/api\/relay\/mobile$/i.test(origin)) return origin;
+  if (/\/api\/relay\/tunnel$/i.test(origin)) {
+    return origin.replace(/\/api\/relay\/tunnel$/i, "/api/relay/mobile");
+  }
+  return `${origin}/api/relay/mobile`;
 }
 
-// RoofSpan web application (billing / account management lives on the web, never in-app purchasing).
-// The subscription-lock screen sends owners/admins here. Configurable per build.
-export const WEB_APP_URL =
-  process.env.EXPO_PUBLIC_WEB_APP_URL || extra.webAppUrl || "https://roofspan.io";
-
+// RoofSpan web application (billing/account management lives on the web, never in-app purchasing).
+export const WEB_APP_URL = cleanBase(
+  process.env.EXPO_PUBLIC_WEB_APP_URL || extra.webAppUrl || "https://roofspan.io"
+);
