@@ -1,7 +1,10 @@
-"""Railway / production ASGI entrypoint for the RoofSpan CENTRAL Control Plane ONLY.
+"""Railway ASGI entrypoint for RoofSpan central services.
 
-This exposes just the Control Plane API plus liveness/readiness endpoints. Customer business data and
-Office workflows remain local to each customer's installation.
+The Control Plane and Secure Relay are hosted together initially so Office pairing, installation
+identity authentication, and Mobile routing share one authoritative commercial-metadata database.
+Customer Office workflows and roofing-business data remain local to each Windows installation.
+``cp.roofspan.io`` and ``relay.roofspan.io`` may point at this same service; their public responsibilities
+remain logically separate even while deployed in one small process.
 """
 import asyncio
 import logging
@@ -14,18 +17,21 @@ from fastapi.responses import JSONResponse
 from control_plane import config as cp_config
 from control_plane import readiness as cp_readiness
 from control_plane.bootstrap import init_control_plane
-from control_plane.router import router as control_plane_router
 from control_plane.installation_router import router as control_plane_installation_router
+from control_plane.router import router as control_plane_router
+from relay import config as relay_config
+from relay.hub import hub as relay_hub
+from relay.server import router as relay_router
 
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-logger = logging.getLogger("roofspan.cp")
+logger = logging.getLogger("roofspan.cloud")
 
 app = FastAPI(
-    title="RoofSpan Control Plane",
+    title="RoofSpan Central Services",
     version="1.0.0",
     docs_url=None,
     redoc_url=None,
@@ -33,6 +39,7 @@ app = FastAPI(
 )
 app.include_router(control_plane_router)
 app.include_router(control_plane_installation_router)
+app.include_router(relay_router)
 
 _db_init_task: asyncio.Task | None = None
 
@@ -43,9 +50,18 @@ async def health():
     status = cp_readiness.snapshot()
     return {
         "status": "ok",
-        "service": "control-plane",
+        "service": "roofspan-central",
         "env": cp_config.CP_ENV,
-        "control_plane": {"ready": status["ready"], "state": status["state"], "code": status["code"]},
+        "control_plane": {
+            "ready": status["ready"],
+            "state": status["state"],
+            "code": status["code"],
+        },
+        "relay": {
+            "env": relay_config.RELAY_ENV,
+            "registry": relay_config.RELAY_REGISTRY,
+            "node_id": relay_config.NODE_ID,
+        },
     }
 
 
@@ -56,14 +72,14 @@ async def ready():
 
 
 async def _initialize_control_plane_background() -> None:
-    """Initialize DB/schema without holding Railway's liveness check hostage."""
+    """Initialize DB/schema without holding liveness checks hostage."""
     attempts = int(os.environ.get("CP_DB_INIT_MAX_ATTEMPTS", "12"))
     delay = int(os.environ.get("CP_DB_INIT_RETRY_DELAY_SECONDS", "5"))
 
     for attempt in range(1, attempts + 1):
         try:
             await init_control_plane()
-            logger.info("Control Plane schema and readiness gate initialized.")
+            logger.info("Control Plane schema/readiness initialized; Relay authentication is available.")
             return
         except Exception as exc:  # noqa: BLE001
             if attempt >= attempts:
@@ -87,7 +103,17 @@ async def _startup():
     global _db_init_task
 
     cp_config.require_production_config()
-    logger.info("Control Plane starting (CP_ENV=%s, signer=%s)", cp_config.CP_ENV, cp_config.ENTITLEMENT_SIGNER)
+    # Single-node memory mode is valid for the initial one-instance deployment. When RELAY_ENV is
+    # explicitly set to production, enforce the existing Valkey + stable-node-id contract.
+    relay_config.require_production_config()
+    await relay_hub.startup()
+    logger.info(
+        "RoofSpan central services starting (CP_ENV=%s, signer=%s, relay=%s/%s)",
+        cp_config.CP_ENV,
+        cp_config.ENTITLEMENT_SIGNER,
+        relay_config.RELAY_ENV,
+        relay_config.RELAY_REGISTRY,
+    )
     _db_init_task = asyncio.create_task(_initialize_control_plane_background())
 
 
@@ -99,3 +125,4 @@ async def _shutdown():
             await _db_init_task
         except asyncio.CancelledError:
             pass
+    await relay_hub.shutdown()
