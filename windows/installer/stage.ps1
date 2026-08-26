@@ -101,6 +101,9 @@ Set-Content -Path (Join-Path $runtime "README.txt") -Value "RoofSpan Office runt
 
 $requiredStage = @(
   (Join-Path $services "roofspan-backend\roofspan-backend.exe"),
+  (Join-Path $services "roofspan-backend\_internal\control_plane\alembic.ini"),
+  (Join-Path $services "roofspan-backend\_internal\control_plane\alembic\env.py"),
+  (Join-Path $services "roofspan-backend\_internal\control_plane\alembic\versions"),
   (Join-Path $services "roofspan-relay-connector\roofspan-relay-connector.exe"),
   (Join-Path $services "roofspan-update-service\roofspan-update-service.exe"),
   (Join-Path $frontend "index.html"),
