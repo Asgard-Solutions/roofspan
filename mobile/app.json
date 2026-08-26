@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "RoofSpan Field",
-    "slug": "roofspan-field",
+    "slug": "roofspan",
+    "owner": "armyjake75",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "roofspan",
@@ -24,7 +25,10 @@
     "web": { "favicon": "./assets/favicon.png" },
     "plugins": ["expo-secure-store", "expo-image-picker", "expo-dev-client", "@maplibre/maplibre-react-native", ["expo-camera", { "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office." }]],
     "extra": {
-      "apiBase": "https://unified-mono-deploy.preview.emergentagent.com"
+      "apiBase": "https://cp.roofspan.io",
+      "eas": {
+        "projectId": "edcd6d6d-f0e9-49a0-8fd1-0ba39ff11bef"
+      }
     }
   }
 }
