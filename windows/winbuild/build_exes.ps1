@@ -10,21 +10,30 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $backend = Join-Path $repoRoot "backend"
 $alembicDir = Join-Path $backend "alembic"
+$cpAlembicDir = Join-Path $backend "control_plane\alembic"
+$cpAlembicIni = Join-Path $backend "control_plane\alembic.ini"
 $requirements = Join-Path $backend "requirements.txt"
 
 if (-not (Test-Path $alembicDir))                         { throw "backend\alembic directory not found at '$backend'." }
 if (-not (Test-Path (Join-Path $backend "alembic.ini"))) { throw "backend\alembic.ini not found at '$backend'." }
+if (-not (Test-Path $cpAlembicDir))                       { throw "backend\control_plane\alembic directory not found at '$backend'." }
+if (-not (Test-Path $cpAlembicIni))                       { throw "backend\control_plane\alembic.ini not found at '$backend'." }
 if (-not (Test-Path $requirements))                       { throw "backend\requirements.txt not found at '$requirements'." }
 
-Get-ChildItem -Path $alembicDir -Directory -Filter "__pycache__" -Recurse -ErrorAction SilentlyContinue |
-  Remove-Item -Recurse -Force
-Get-ChildItem -Path $alembicDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue |
-  Remove-Item -Force
+# Remove stale migration bytecode before freezing either Alembic tree.
+foreach ($migrationDir in @($alembicDir, $cpAlembicDir)) {
+  Get-ChildItem -Path $migrationDir -Directory -Filter "__pycache__" -Recurse -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force
+  Get-ChildItem -Path $migrationDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+}
 foreach ($cleanDir in @((Join-Path $PSScriptRoot "dist"), (Join-Path $PSScriptRoot "build"))) {
   if (Test-Path $cleanDir) { Remove-Item $cleanDir -Recurse -Force }
 }
-$staleBytecode = Get-ChildItem -Path $alembicDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue
-if ($staleBytecode) { throw "Stale Alembic bytecode remains after cleanup; refusing to freeze service executables." }
+foreach ($migrationDir in @($alembicDir, $cpAlembicDir)) {
+  $staleBytecode = Get-ChildItem -Path $migrationDir -File -Include *.pyc,*.pyo -Recurse -ErrorAction SilentlyContinue
+  if ($staleBytecode) { throw "Stale Alembic bytecode remains after cleanup under '$migrationDir'; refusing to freeze service executables." }
+}
 
 $venvPyi = Join-Path $repoRoot ".venv\Scripts\pyinstaller.exe"
 if (Test-Path $venvPyi) {
@@ -52,7 +61,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Verifying backend runtime imports"
-$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; print('backend import preflight OK')"
+$preflight = "import sys; sys.path.insert(0, r'$backend'); import server, property_dedup, location_upgrade, mapbox_geocoding, maptiler, mapbox_vector_tile, shapely; import control_plane.migrations_runner; print('backend import preflight OK')"
 & $python -c $preflight
 if ($LASTEXITCODE -ne 0) { throw "Backend runtime import preflight failed; refusing to build installer." }
 
@@ -70,6 +79,34 @@ foreach ($spec in $specs) {
   $distDir = Join-Path $PSScriptRoot "dist\$name"
   $exe = Join-Path $distDir "$name.exe"
   if (-not (Test-Path $exe)) { throw "PyInstaller did not produce $exe" }
+
+  # The embedded Control Plane migration runner resolves its files from
+  # _internal\control_plane at runtime. Make a missing migration payload a BUILD failure rather than
+  # shipping an Office build that starts normally but returns 500/502 from Mobile Access.
+  if ($name -eq "roofspan-backend") {
+    $internalDir = Join-Path $distDir "_internal"
+    $requiredBackendAssets = @(
+      "alembic.ini",
+      "alembic\env.py",
+      "control_plane\alembic.ini",
+      "control_plane\alembic\env.py"
+    )
+    foreach ($relativeAsset in $requiredBackendAssets) {
+      $assetPath = Join-Path $internalDir $relativeAsset
+      if (-not (Test-Path $assetPath)) {
+        throw "PyInstaller backend payload is missing required migration asset '$relativeAsset' at '$assetPath'."
+      }
+    }
+    $cpVersions = Join-Path $internalDir "control_plane\alembic\versions"
+    if (-not (Test-Path $cpVersions)) {
+      throw "PyInstaller backend payload is missing Control Plane Alembic versions at '$cpVersions'."
+    }
+    if (-not (Get-ChildItem -Path $cpVersions -File -Filter "*.py" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+      throw "PyInstaller backend payload contains no Control Plane Alembic version files at '$cpVersions'."
+    }
+    Write-Host "==> Verified business + Control Plane Alembic assets in frozen backend"
+  }
+
   $destDir = Join-Path $OutDir $name
   if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
   Copy-Item $distDir $destDir -Recurse -Force
