@@ -29,17 +29,12 @@ on:
       - ".github/workflows/hosted-mobile-pairing.yml"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   unit-and-client-builds:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -71,29 +66,9 @@ jobs:
             backend/cp_asgi.py \
             backend/tests/hosted_pairing_probe.py
 
-      - name: Install locked Office frontend dependencies or generate the missing lock once
-        id: frontend_lock
+      - name: Install locked Office frontend dependencies
         working-directory: frontend
-        shell: bash
-        run: |
-          if [ -f yarn.lock ]; then
-            yarn install --frozen-lockfile
-            echo "generated=false" >> "$GITHUB_OUTPUT"
-          else
-            yarn install
-            test -s yarn.lock
-            echo "generated=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Commit the generated frontend lockfile to this branch
-        if: steps.frontend_lock.outputs.generated == 'true' && github.event_name == 'push'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add frontend/yarn.lock
-          git commit -m "Add deterministic Office frontend dependency lock"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+        run: yarn install --frozen-lockfile
 
       - name: Build RoofSpan Office frontend with QR UI
         working-directory: frontend
