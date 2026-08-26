@@ -1,41 +1,34 @@
 {
   "name": "roofspan-website",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Public roofspan.io marketing & download website (standalone). NOT part of RoofSpan Office; imports no Office code.",
+  "description": "Public roofspan.io marketing & download website (standalone, Next.js static export). NOT part of RoofSpan Office; imports no Office code.",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "npx serve@14 out -l ${PORT:-3000}",
+    "lint": "next lint",
+    "test": "jest",
+    "e2e": "playwright test"
+  },
   "dependencies": {
     "lucide-react": "0.516.0",
-    "react": "19.0.0",
-    "react-dom": "19.0.0",
-    "react-scripts": "5.0.1",
-    "serve": "^14.2.6"
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.47.2",
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/jest-dom": "6.4.8",
+    "@testing-library/react": "16.0.1",
+    "@testing-library/user-event": "14.5.2",
     "autoprefixer": "10.4.20",
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.15",
+    "jest": "29.7.0",
+    "jest-environment-jsdom": "29.7.0",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.17"
-  },
-  "scripts": {
-    "start": "PORT=3001 react-scripts start",
-    "build": "react-scripts build",
-    "serve": "serve -s build -l ${PORT:-3000}",
-    "test": "react-scripts test"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
   }
 }
