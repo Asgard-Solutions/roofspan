@@ -36,14 +36,14 @@ jobs:
           python-version: "3.12"
       - name: Install focused dependencies
         run: >-
-          pip install pytest sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
+          pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
           fastapi==0.110.1 httpx cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
-      - name: Run readiness, migration logic, and packaging tests
+      - name: Run readiness, migration logic, and packaging tests serially
         env:
           DATABASE_URL: postgresql+asyncpg://roofspan:test@127.0.0.1:5432/roofspan
         run: |
-          pytest -q backend/tests/test_control_plane_readiness.py backend/tests/test_control_plane_migration_logic.py
-          pytest -q windows/tests/test_control_plane_packaging.py
+          pytest -q -n 0 backend/tests/test_control_plane_readiness.py backend/tests/test_control_plane_migration_logic.py
+          pytest -q -n 0 windows/tests/test_control_plane_packaging.py
       - name: Compile changed Python modules
         run: |
           python -m py_compile \
@@ -82,13 +82,13 @@ jobs:
           python-version: "3.12"
       - name: Install Control Plane dependencies
         run: >-
-          pip install pytest sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
+          pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
           fastapi==0.110.1 httpx requests cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
-      - name: Run both storage modes and damaged-state recovery
+      - name: Run both storage modes and damaged-state recovery serially
         env:
           CP_RUN_INTEGRATION: "1"
           ROOFSPAN_TEST_PG_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-        run: pytest -q backend/tests/test_control_plane_migrations_live.py -vv
+        run: pytest -q -n 0 backend/tests/test_control_plane_migrations_live.py -vv
 
   build-windows-msi:
     runs-on: windows-latest
