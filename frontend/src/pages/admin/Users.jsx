@@ -24,10 +24,36 @@ const ROLE_OPTIONS = [
 function roleBadge(role) {
   const sensitive = role === "owner" || role === "administrator";
   return (
-    <Badge variant={sensitive ? "default" : "secondary"} data-testid={`user-role-badge`}>
+    <Badge variant={sensitive ? "default" : "secondary"} data-testid="user-role-badge">
       {role.charAt(0).toUpperCase() + role.slice(1)}
     </Badge>
   );
+}
+
+function formatPairingCode(value) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 6);
+  return digits.length > 3 ? `${digits.slice(0, 3)} ${digits.slice(3)}` : digits;
+}
+
+function PairingExpiry({ expiresAt }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!expiresAt) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [expiresAt]);
+
+  if (!expiresAt) return null;
+  const deadline = new Date(expiresAt).getTime();
+  if (!Number.isFinite(deadline)) return null;
+  const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
+  if (remaining <= 0) {
+    return <p className="mt-2 text-xs font-medium text-red-600">Expired · generate a new code</p>;
+  }
+  const minutes = Math.floor(remaining / 60);
+  const seconds = String(remaining % 60).padStart(2, "0");
+  return <p className="mt-2 text-xs text-amber-700">Expires in {minutes}:{seconds} · single-use</p>;
 }
 
 export default function Users() {
@@ -50,10 +76,18 @@ export default function Users() {
   const [mobileBusy, setMobileBusy] = useState(false);
 
   const openMobile = async (u) => {
-    setMobileTarget(u); setPairing(null); setDevices([]); setMobileOpen(true);
-    try { const r = await api.get(`/admin/users/${u.id}/mobile/devices`); setDevices(r.data.devices || []); }
-    catch (e) { toast.error(apiError(e)); }
+    setMobileTarget(u);
+    setPairing(null);
+    setDevices([]);
+    setMobileOpen(true);
+    try {
+      const r = await api.get(`/admin/users/${u.id}/mobile/devices`);
+      setDevices(r.data.devices || []);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
   };
+
   const connectDevice = async () => {
     setMobileBusy(true);
     try {
@@ -61,20 +95,30 @@ export default function Users() {
       setPairing(r.data);
       const d = await api.get(`/admin/users/${mobileTarget.id}/mobile/devices`);
       setDevices(d.data.devices || []);
-    } catch (e) { toast.error(apiError(e)); } finally { setMobileBusy(false); }
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setMobileBusy(false);
+    }
   };
+
   const revokeDevice = async (id) => {
     try {
       await api.post(`/admin/mobile/devices/${id}/revoke`);
       toast.success("Device revoked");
       const d = await api.get(`/admin/users/${mobileTarget.id}/mobile/devices`);
       setDevices(d.data.devices || []);
-    } catch (e) { toast.error(apiError(e)); }
+    } catch (e) {
+      toast.error(apiError(e));
+    }
   };
 
   const load = useCallback(() => {
     setLoading(true);
-    api.get("/users").then((r) => setUsers(r.data)).catch((e) => toast.error(apiError(e))).finally(() => setLoading(false));
+    api.get("/users")
+      .then((r) => setUsers(r.data))
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -174,11 +218,21 @@ export default function Users() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={() => { setPwTarget(u); setPwOpen(true); }} data-testid={`reset-pw-${u.email}`}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { setPwTarget(u); setPwOpen(true); }}
+                          data-testid={`reset-pw-${u.email}`}
+                        >
                           <KeyRound className="h-3.5 w-3.5" /> Reset
                         </Button>
                         {u.role === "sales" && (
-                          <Button variant="outline" size="sm" onClick={() => openMobile(u)} data-testid={`mobile-access-${u.email}`}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openMobile(u)}
+                            data-testid={`mobile-access-${u.email}`}
+                          >
                             <Smartphone className="h-3.5 w-3.5" /> Mobile
                           </Button>
                         )}
@@ -197,14 +251,15 @@ export default function Users() {
                 );
               })}
               {users.length === 0 && !loading && (
-                <TableRow><TableCell colSpan={5} className="text-center text-sm text-slate-400">No users.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-sm text-slate-400">No users.</TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>
         </div>
       </div>
 
-      {/* Create user dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent data-testid="create-user-dialog">
           <DialogHeader>
@@ -243,7 +298,6 @@ export default function Users() {
         </DialogContent>
       </Dialog>
 
-      {/* Reset password dialog */}
       <Dialog open={pwOpen} onOpenChange={setPwOpen}>
         <DialogContent data-testid="reset-password-dialog">
           <DialogHeader>
@@ -260,21 +314,38 @@ export default function Users() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Mobile Access dialog */}
+
       <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
-        <DialogContent data-testid="mobile-access-dialog">
+        <DialogContent className="sm:max-w-[560px]" data-testid="mobile-access-dialog">
           <DialogHeader>
             <DialogTitle>Mobile Access</DialogTitle>
             <DialogDescription>{mobileTarget?.full_name || mobileTarget?.email}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {pairing ? (
-              <div className="rounded-lg border border-border bg-slate-50 p-4 text-center" data-testid="pairing-code-box">
+              <div className="rounded-lg border border-border bg-slate-50 p-5 text-center" data-testid="pairing-code-box">
+                {pairing.qr_code_data_url ? (
+                  <div className="mx-auto mb-4 w-fit rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <img
+                      src={pairing.qr_code_data_url}
+                      alt="RoofSpan Mobile pairing QR code"
+                      className="h-56 w-56"
+                      data-testid="pairing-qr-code"
+                    />
+                  </div>
+                ) : (
+                  <p className="mb-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800" data-testid="pairing-qr-unavailable">
+                    QR image is unavailable. Enter the pairing code in RoofSpan Mobile.
+                  </p>
+                )}
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pairing code</p>
-                <p className="my-1 text-3xl font-black tracking-widest text-slate-900" data-testid="pairing-numeric">{pairing.numeric_code}</p>
-                <p className="text-xs text-slate-500">Scan the QR in RoofSpan Mobile or enter this 6-digit code.</p>
-                <p className="mt-2 break-all rounded bg-white p-2 text-[10px] text-slate-400" data-testid="pairing-token">{pairing.token}</p>
-                {pairing.expires_at && <p className="mt-1 text-xs text-amber-600">Expires {new Date(pairing.expires_at).toLocaleTimeString()} · single-use</p>}
+                <p className="my-1 text-3xl font-black tracking-widest text-slate-900" data-testid="pairing-numeric">
+                  {formatPairingCode(pairing.numeric_code)}
+                </p>
+                <p className="text-xs leading-5 text-slate-500">
+                  Scan the QR code in RoofSpan Mobile, or enter the six-digit code. This code is bound to {mobileTarget?.full_name || mobileTarget?.email}.
+                </p>
+                <PairingExpiry expiresAt={pairing.expires_at} />
               </div>
             ) : (
               <Button onClick={connectDevice} disabled={mobileBusy} className="w-full" data-testid="connect-mobile-device">
@@ -283,7 +354,7 @@ export default function Users() {
             )}
             {pairing && (
               <Button variant="outline" onClick={connectDevice} disabled={mobileBusy} className="w-full" data-testid="regenerate-pairing">
-                Generate new pairing code
+                {mobileBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Generate new pairing code"}
               </Button>
             )}
             <div>

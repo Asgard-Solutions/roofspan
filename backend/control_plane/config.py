@@ -7,10 +7,9 @@ from urllib.parse import urlparse, urlunparse
 def _to_async_url(url: str) -> str:
     """Force the SQLAlchemy async driver (asyncpg).
 
-    Managed providers (e.g. Railway) hand out plain ``postgresql://`` (or ``postgres://``) URLs. Passed
-    to ``create_async_engine`` those default to the SYNC psycopg2 dialect (not installed / wrong for
-    async) and crash at import. The rest of the CP package deliberately converts AWAY from ``+asyncpg``
-    for its sync psycopg work, so ``+asyncpg`` is the single canonical form.
+    Managed providers hand out plain ``postgresql://`` URLs. Passed to ``create_async_engine`` those
+    default to a synchronous dialect, while the rest of the CP package deliberately converts away
+    from ``+asyncpg`` for its synchronous psycopg work. ``+asyncpg`` is the canonical runtime form.
     """
     if not url:
         return url
@@ -27,11 +26,7 @@ def _to_async_url(url: str) -> str:
 
 
 def _derive_cp_url() -> str:
-    """Default the Control Plane DB to a SEPARATE database on the same server as the business DB.
-
-    Windows legacy installs that lack the retained PostgreSQL superuser credential may explicitly set
-    CONTROL_PLANE_DATABASE_URL to the business DB and CONTROL_PLANE_SCHEMA to an isolated CP schema.
-    """
+    """Default the Control Plane DB to a separate DB on the same server as the business DB."""
     explicit = os.environ.get("CONTROL_PLANE_DATABASE_URL")
     if explicit:
         return _to_async_url(explicit)
@@ -63,7 +58,13 @@ DEV_SIGNING_KEYS_DIR = os.environ.get(
 )
 
 MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
-RELAY_ENDPOINT = os.environ.get("ROOFSPAN_RELAY_ENDPOINT", "wss://relay.roofspan.dev/v1")
+# Pairing responses must direct Mobile to the public Relay, never the Office localhost CP. Accept the
+# explicit CP variable first, then the shared production Relay setting used by the Windows connector.
+RELAY_ENDPOINT = (
+    os.environ.get("ROOFSPAN_RELAY_ENDPOINT")
+    or os.environ.get("RELAY_WSS_URL")
+    or "wss://relay.roofspan.io"
+).strip().rstrip("/")
 PROTOCOL_VERSION = os.environ.get("ROOFSPAN_PROTOCOL_VERSION", "1")
 PAIRING_TTL_SECONDS = int(os.environ.get("PAIRING_TTL_SECONDS", "300"))
 BILLING_MODE = os.environ.get("BILLING_MODE", "mock").strip().lower()
@@ -73,7 +74,9 @@ STRIPE_SEAT_LOOKUP_KEY = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat
 SEAT_PRICE_USD = float(os.environ.get("ROOFSPAN_SEAT_PRICE_USD", "49"))
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
 CP_ENV = os.environ.get("CP_ENV", "dev").strip().lower()
-ENTITLEMENT_SIGNER = os.environ.get("ENTITLEMENT_SIGNER", "local" if CP_ENV != "production" else "kms").strip().lower()
+ENTITLEMENT_SIGNER = os.environ.get(
+    "ENTITLEMENT_SIGNER", "local" if CP_ENV != "production" else "kms"
+).strip().lower()
 CP_KMS_SIGNING_KEY_ID = os.environ.get("CP_KMS_SIGNING_KEY_ID", "")
 AWS_REGION = os.environ.get("AWS_REGION", "")
 CP_OPERATOR_ISSUER = os.environ.get("CP_OPERATOR_ISSUER", "")

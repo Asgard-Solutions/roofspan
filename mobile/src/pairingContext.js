@@ -24,26 +24,26 @@ export function PairingProvider({ children }) {
 
   const evaluate = useCallback(async (p) => {
     if (!p) return;
-    setActivePairing(p); // route transport through the relay for this pairing
-    setInstallationScope(p.installation_id); // isolate cache + queue per paired installation (§29)
-    // 1) version authority = Control Plane version_policy (fallback to stored minimum if offline)
+    setActivePairing(p);
+    setInstallationScope(p.installation_id);
+
     const vp = await checkVersion(APP_VERSION);
     if (vp) {
       if (vp.status === "must_update") { setConn(STATES.UPDATE_REQUIRED); return; }
       setOptionalUpdate(vp.status === "update_available");
     } else if (versionGate(APP_VERSION, p.min_mobile_version, null) === "must_update") {
-      setConn(STATES.UPDATE_REQUIRED); return;
+      setConn(STATES.UPDATE_REQUIRED);
+      return;
     }
-    // 2) network
+
     try {
       const net = await NetInfo.fetch();
       if (net && net.isConnected === false) { setConn(STATES.OFFLINE); return; }
     } catch (e) { /* ignore */ }
-    // 3) relay probe -> subscription / device / server state
+
     setConn(STATES.CONNECTING);
     const r = await probeConnection(p);
     setConn(r.ok ? STATES.CONNECTED : mapRelayError(r.code));
-    // Office reachable again -> flush any pending offline work (relay reconnection retry, §17).
     if (r.ok) runSync().catch(() => {});
   }, []);
 
@@ -61,9 +61,14 @@ export function PairingProvider({ children }) {
     const r = await resolvePairing({ token, numeric_code, label: "RoofSpan Mobile" });
     if (r.status >= 200 && r.status < 300 && r.data && r.data.device_credential) {
       const p = {
-        installation_id: r.data.installation_id, device_id: r.data.device_id,
-        device_credential: r.data.device_credential, relay_endpoint: r.data.relay_endpoint,
-        protocol_version: r.data.protocol_version, min_mobile_version: r.data.min_mobile_version,
+        installation_id: r.data.installation_id,
+        device_id: r.data.device_id,
+        device_credential: r.data.device_credential,
+        relay_endpoint: r.data.relay_endpoint,
+        protocol_version: r.data.protocol_version,
+        min_mobile_version: r.data.min_mobile_version,
+        expected_user_id: r.data.expected_user_id || null,
+        expected_user_label: r.data.expected_user_label || null,
       };
       await savePairing(p);
       setPairing(p);
@@ -71,7 +76,13 @@ export function PairingProvider({ children }) {
       await evaluate(p);
       return { ok: true };
     }
-    const code = r.status === 404 ? "not_found" : r.status === 409 ? "used" : "error";
+
+    let code = "error";
+    if (r.status === 0) code = "unreachable";
+    else if (r.status === 404) code = "not_found";
+    else if (r.status === 409) code = "used";
+    else if (r.status === 410) code = "expired";
+    else if (r.status === 503) code = "unavailable";
     return { ok: false, code };
   }, [evaluate]);
 

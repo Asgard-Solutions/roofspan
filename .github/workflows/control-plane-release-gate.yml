@@ -4,25 +4,39 @@ on:
   push:
     paths:
       - "backend/control_plane/**"
+      - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
       - "backend/server.py"
       - "backend/cp_asgi.py"
       - "backend/version.py"
       - "backend/tests/test_control_plane_*"
+      - "backend/tests/test_hosted_pairing_client.py"
+      - "backend/tests/hosted_pairing_probe.py"
+      - "frontend/src/pages/admin/Users.jsx"
+      - "frontend/yarn.lock"
+      - "mobile/**"
       - "windows/**"
       - "docs/control-plane-mobile-pairing-runbook.md"
       - ".github/workflows/control-plane-release-gate.yml"
+      - ".github/workflows/hosted-mobile-pairing.yml"
   pull_request:
     paths:
       - "backend/control_plane/**"
+      - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
       - "backend/server.py"
       - "backend/cp_asgi.py"
       - "backend/version.py"
       - "backend/tests/test_control_plane_*"
+      - "backend/tests/test_hosted_pairing_client.py"
+      - "backend/tests/hosted_pairing_probe.py"
+      - "frontend/src/pages/admin/Users.jsx"
+      - "frontend/yarn.lock"
+      - "mobile/**"
       - "windows/**"
       - "docs/control-plane-mobile-pairing-runbook.md"
       - ".github/workflows/control-plane-release-gate.yml"
+      - ".github/workflows/hosted-mobile-pairing.yml"
   workflow_dispatch:
 
 jobs:
@@ -37,12 +51,17 @@ jobs:
       - name: Install focused dependencies
         run: >-
           pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
-          fastapi==0.110.1 httpx cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
-      - name: Run readiness, migration logic, and packaging tests serially
+          fastapi==0.110.1 httpx cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode pillow
+      - name: Run readiness, migration logic, hosted pairing client, and packaging tests serially
         env:
+          PYTHONPATH: backend
           DATABASE_URL: postgresql+asyncpg://roofspan:test@127.0.0.1:5432/roofspan
+          CONTROL_PLANE_BASE_URL: https://cp.roofspan.io
         run: |
-          pytest -q -n 0 backend/tests/test_control_plane_readiness.py backend/tests/test_control_plane_migration_logic.py
+          pytest -q -n 0 \
+            backend/tests/test_control_plane_readiness.py \
+            backend/tests/test_control_plane_migration_logic.py \
+            backend/tests/test_hosted_pairing_client.py
           pytest -q -n 0 windows/tests/test_control_plane_packaging.py
       - name: Compile changed Python modules
         run: |
@@ -52,10 +71,13 @@ jobs:
             backend/control_plane/bootstrap.py \
             backend/control_plane/db.py \
             backend/control_plane/router.py \
+            backend/control_plane/installation_router.py \
             backend/control_plane/alembic/env.py \
+            backend/licensing/config.py \
             backend/licensing/pairing_client.py \
             backend/server.py backend/cp_asgi.py backend/version.py \
             backend/tests/test_control_plane_migrations_live.py \
+            backend/tests/hosted_pairing_probe.py \
             windows/tests/control_plane_packaged_probe.py
 
   real-postgresql:
@@ -83,9 +105,10 @@ jobs:
       - name: Install Control Plane dependencies
         run: >-
           pip install pytest pytest-xdist sqlalchemy==2.0.50 alembic==1.19.0 asyncpg psycopg[binary]
-          fastapi==0.110.1 httpx requests cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode
+          fastapi==0.110.1 httpx requests cryptography PyJWT python-dotenv pydantic passlib bcrypt qrcode pillow
       - name: Run both storage modes and damaged-state recovery serially
         env:
+          PYTHONPATH: backend
           CP_RUN_INTEGRATION: "1"
           ROOFSPAN_TEST_PG_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: pytest -q -n 0 backend/tests/test_control_plane_migrations_live.py -vv
@@ -206,7 +229,8 @@ jobs:
               "DATABASE_URL=postgresql+asyncpg://roofspan:LegacyGatePw123456789@127.0.0.1:5432/roofspan",
               "JWT_SECRET=$jwt", "SECRETS_ENCRYPTION_KEY=$encKey",
               "INSTALLATION_KEYS_DIR=C:\ProgramData\RoofSpan\identity",
-              "ROOFSPAN_CHANNEL=test", "ROOFSPAN_VERSION=0.1.0"
+              "ROOFSPAN_CHANNEL=test", "ROOFSPAN_VERSION=0.1.0",
+              "CONTROL_PLANE_BASE_URL=https://cp.roofspan.io"
             ) | Set-Content -Encoding ASCII "$root\config\roofspan.env"
             $env:PGPASSWORD = "LegacyGatePw123456789"
             psql -h 127.0.0.1 -U roofspan -d roofspan -v ON_ERROR_STOP=1 -c "CREATE SCHEMA roofspan_control_plane AUTHORIZATION roofspan; CREATE TABLE roofspan_control_plane.alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO roofspan_control_plane.alembic_version VALUES ('e1f2a3b4c5d6');"

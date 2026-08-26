@@ -16,13 +16,22 @@ export default function Connect() {
   const submit = async (args) => {
     if (busy) return;
     setBusy(true);
-    const r = await pair(args);
-    setBusy(false);
+    let r;
+    try {
+      r = await pair(args);
+    } catch (e) {
+      r = { ok: false, code: "unreachable" };
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       const msg =
-        r.code === "not_found" ? "That pairing code wasn't found. Ask your administrator for a new one." :
-        r.code === "used" ? "That pairing code was already used. Ask your administrator for a new one." :
-        "Pairing didn't work. Please try again.";
+        r.code === "not_found" ? "That pairing code wasn't found. Generate a new code in RoofSpan Office and try again." :
+        r.code === "used" ? "That pairing code was already used. Generate a new code in RoofSpan Office." :
+        r.code === "expired" ? "That pairing code has expired. Generate a new code in RoofSpan Office." :
+        r.code === "unreachable" ? "RoofSpan could not reach the hosted Control Plane. Check this device's internet connection and try again." :
+        r.code === "unavailable" ? "RoofSpan Mobile pairing is temporarily unavailable. Please try again shortly." :
+        "Pairing didn't work. Please generate a new code and try again.";
       Alert.alert("Couldn't connect", msg);
       setScanned(false);
     }
@@ -36,8 +45,8 @@ export default function Connect() {
     if (!parsed.ok) {
       const m =
         parsed.reason === "protocol" ? "This QR code isn't compatible with this version of RoofSpan. Please update the app." :
-        parsed.reason === "expired" ? "This pairing code has expired. Ask your administrator for a new one." :
-        "That doesn't look like a RoofSpan pairing code.";
+        parsed.reason === "expired" ? "This pairing code has expired. Generate a new code in RoofSpan Office." :
+        "That doesn't look like a RoofSpan pairing QR code.";
       Alert.alert("Invalid code", m, [{ text: "OK", onPress: () => setScanned(false) }]);
       return;
     }
@@ -48,7 +57,7 @@ export default function Connect() {
     return (
       <View style={s.wrap}>
         <Text style={s.h}>Connect this device</Text>
-        <Text style={s.sub}>Use the pairing code from your RoofSpan Office administrator.</Text>
+        <Text style={s.sub}>Scan the QR code shown in RoofSpan Office, or enter its six-digit fallback code.</Text>
         <TouchableOpacity style={s.btn} onPress={() => setMode("scan")} testID="scan-qr-btn">
           <Text style={s.btnText}>Scan QR Code</Text>
         </TouchableOpacity>
@@ -99,12 +108,11 @@ export default function Connect() {
     );
   }
 
-  // mode === "code"
   const valid = isValidNumericCode(code);
   return (
     <View style={s.wrap}>
       <Text style={s.h}>Enter Pairing Code</Text>
-      <Text style={s.sub}>Type the 6-digit code from your RoofSpan Office administrator.</Text>
+      <Text style={s.sub}>Type the six-digit code currently shown in RoofSpan Office.</Text>
       <TextInput
         style={s.codeInput}
         placeholder="000 000"

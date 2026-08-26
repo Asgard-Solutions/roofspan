@@ -23,9 +23,17 @@
       }
     },
     "web": { "favicon": "./assets/favicon.png" },
-    "plugins": ["expo-secure-store", "expo-image-picker", "expo-dev-client", "@maplibre/maplibre-react-native", ["expo-camera", { "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office." }]],
+    "plugins": [
+      "expo-secure-store",
+      "expo-image-picker",
+      "expo-dev-client",
+      "@maplibre/maplibre-react-native",
+      ["expo-camera", { "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office." }]
+    ],
     "extra": {
+      "controlPlaneBase": "https://cp.roofspan.io",
       "apiBase": "https://cp.roofspan.io",
+      "relayWss": "wss://relay.roofspan.io",
       "eas": {
         "projectId": "edcd6d6d-f0e9-49a0-8fd1-0ba39ff11bef"
       }
