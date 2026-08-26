@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd roofspan-website && yarn install --frozen-lockfile && yarn build",
+  "outputDirectory": "roofspan-website/out",
+  "installCommand": "echo \"deferred to buildCommand\"",
+  "framework": null,
+  "cleanUrls": true,
+  "trailingSlash": true
+}

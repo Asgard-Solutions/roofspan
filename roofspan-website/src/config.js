@@ -9,7 +9,7 @@ const CLOUDFRONT_RELEASES_BASE = "https://downloads.roofspan.io/releases";
 const CLOUDFRONT_UPDATE_MANIFEST = "https://downloads.roofspan.io/update/windows/latest.json";
 
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://roofspan.io";
-export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "sales@roofspan.io";
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "support@roofspan.io";
 // Public lead destination. When unset, the early-access form falls back to a transparent mailto:
 // (it NEVER fakes a success). Point this at your form provider/webhook before launch.
 export const LEAD_ENDPOINT = process.env.NEXT_PUBLIC_LEAD_ENDPOINT || "";

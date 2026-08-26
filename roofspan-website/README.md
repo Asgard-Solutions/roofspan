@@ -29,7 +29,7 @@ in `NEXT_PUBLIC_*` ships to the browser.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXT_PUBLIC_SITE_URL` | `https://roofspan.io` | Canonical/OG/sitemap base URL |
-| `NEXT_PUBLIC_CONTACT_EMAIL` | `sales@roofspan.io` | Footer/CTA/mailto fallback address |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | `support@roofspan.io` | Footer/CTA/mailto fallback address |
 | `NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE` | `false` | **Master availability switch.** `false` → primary CTA is "Join Early Access". Set `true` **only** after the installer is published → CTA becomes "Download for Windows". Drives header, hero, pricing, and download status consistently. |
 | `NEXT_PUBLIC_WINDOWS_INSTALLER_URL` | `https://downloads.roofspan.io/latest/RoofSpanSetup.exe` | Installer download URL (must be on `downloads.roofspan.io`) |
 | `NEXT_PUBLIC_WINDOWS_RELEASES_BASE_URL` | `https://downloads.roofspan.io/releases` | Versioned releases base (host-validated) |
@@ -43,7 +43,7 @@ keyboard + screen-reader support, honeypot spam field). Behavior:
 - If unset → opens a prefilled email to `NEXT_PUBLIC_CONTACT_EMAIL` and clearly says so. **No fake success.**
 
 ## ⚠️ Required before production launch (owner must supply)
-1. **`sales@roofspan.io` mailbox** — must exist and be monitored/tested; it is the contact + mailto fallback.
+1. **`support@roofspan.io` mailbox** — must exist and be monitored/tested; it is the contact + mailto fallback.
 2. **Lead endpoint** — set `NEXT_PUBLIC_LEAD_ENDPOINT` to a real form provider/webhook (Formspree, Getform,
    your own handler) if you don't want the mailto fallback in production.
 3. **Legal pages** — Privacy Policy and Terms are intentionally **omitted** (no fabricated legal copy).
