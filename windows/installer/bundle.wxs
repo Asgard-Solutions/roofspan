@@ -3,14 +3,14 @@
   RoofSpan Office - WiX 5 (Toolset 5.0.2) Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
 
   Chain (in order):
-    1) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
+    1) WebView2 Evergreen Runtime — installed only if absent.
+    2) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
        PostgreSQL is not already present (detected via registry). Marked Permanent so it is NOT removed
        on RoofSpan uninstall (the customer's database service + data are preserved).
-    2) RoofSpanOffice-{VERSION}.msi — the RoofSpan Office application.
+    3) RoofSpanOffice-{VERSION}.msi — the RoofSpan Office application.
 
   Contains NO secrets and is NOT customer-specific. Building/signing is HUMAN REQUIRED on Windows.
-  The EDB installer binary itself is NOT committed; supply its path via -d PostgresInstaller=... (build.ps1
-  validates it exists and fails fast otherwise).
+  Prerequisite binaries are NOT committed; supply their paths through build.ps1.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
@@ -50,8 +50,10 @@
 
     <Chain>
       <!-- 1) WebView2 Evergreen Runtime (silent), EMBEDDED in RoofSpanSetup.exe. Skipped when present.
-              Permanent = shared runtime never uninstalled by RoofSpan. Installed BEFORE the Office MSI. -->
+              CacheId is explicit and version-scoped so it cannot collide with another embedded payload,
+              even when test or vendor bootstrapper binaries happen to be byte-identical. -->
       <ExePackage Id="WebView2Runtime"
+                  CacheId="RoofSpanWebView2Runtime-$(var.Version)"
                   DisplayName="Microsoft Edge WebView2 Runtime (RoofSpan prerequisite)"
                   SourceFile="$(var.WebView2Bootstrapper)"
                   Permanent="yes"
@@ -79,8 +81,9 @@
 
       <!-- 2b) PostgreSQL prerequisite = the REAL EDB installer, EMBEDDED in RoofSpanSetup.exe. Reads the
                generated superuser password from the option file; unattended flags + service name preserved.
-               Permanent = never uninstalled by RoofSpan (protects the customer's database + data). -->
+               Explicit version-scoped CacheId prevents collisions with any other embedded executable. -->
       <ExePackage Id="PostgreSQLPrereq"
+                  CacheId="RoofSpanPostgreSQLPrereq-$(var.Version)"
                   DisplayName="PostgreSQL (RoofSpan prerequisite)"
                   SourceFile="$(var.PostgresInstaller)"
                   Permanent="yes"
@@ -102,7 +105,9 @@
                   Compressed="yes" />
 
       <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. -->
-      <MsiPackage Id="RoofSpanOfficeMsi" SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
+      <MsiPackage Id="RoofSpanOfficeMsi"
+                  CacheId="RoofSpanOfficeMsi-$(var.Version)"
+                  SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
     </Chain>
   </Bundle>
 </Wix>
