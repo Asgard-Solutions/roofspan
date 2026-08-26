@@ -27,6 +27,7 @@ import secrets
 import string
 import time
 import traceback
+from urllib.parse import unquote, urlparse
 
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
 JWT_PLACEHOLDER = "__GENERATED_JWT_SECRET__"
@@ -147,6 +148,24 @@ def decrypt_super_password(pg_super_bin: str) -> str:
     return data.decode("utf-8")
 
 
+def _parse_runtime_database_url(database_url: str) -> dict[str, object]:
+    """Parse the exact installed DATABASE_URL the same way the backend migration runner does.
+
+    Legacy configs can contain URL-escaped passwords and non-default host/port/database values. Rebuilding
+    a connection from only the regex-extracted password is unsafe because `%40`, `%3A`, etc. must be
+    decoded before authenticating. This helper intentionally mirrors backend/migrations_runner.py.
+    """
+    clean = database_url.replace("+asyncpg", "").replace("+psycopg", "")
+    p = urlparse(clean)
+    return {
+        "host": p.hostname or PG_HOST,
+        "port": p.port or PG_PORT,
+        "user": unquote(p.username or APP_ROLE),
+        "password": unquote(p.password or ""),
+        "database": (p.path or f"/{APP_DB}").lstrip("/") or APP_DB,
+    }
+
+
 async def _create_db_if_missing(conn, db_name: str, owner: str, logger) -> bool:
     """Create `db_name` OWNED BY `owner` if absent. Returns True if it was created. The CREATE runs on
     the SUPERUSER connection, so the runtime `roofspan` role never needs CREATEDB."""
@@ -213,25 +232,32 @@ async def _ensure_cp_db_only(super_password: str, logger) -> bool:
     return created
 
 
-async def _ensure_cp_schema_fallback(app_password: str, logger) -> None:
-    """Create an isolated CP schema using only the existing least-privilege application role.
+async def _ensure_cp_schema_fallback(database_url: str, logger) -> None:
+    """Create an isolated CP schema using the exact installed business DATABASE_URL.
 
     This is intentionally a LEGACY fallback for machines whose PostgreSQL existed before RoofSpan began
     retaining pg_super.bin. It does not grant server-level privileges and does not modify PostgreSQL auth.
+    Using the exact URL is important: legacy installs may use URL-escaped passwords or non-default
+    connection values, and the business backend already proves that this URL is authoritative.
     """
     import asyncpg
 
-    conn = await asyncpg.connect(user=APP_ROLE, password=app_password,
-                                 host=PG_HOST, port=PG_PORT, database=APP_DB)
+    cfg = _parse_runtime_database_url(database_url)
+    conn = await asyncpg.connect(
+        user=cfg["user"], password=cfg["password"], host=cfg["host"], port=cfg["port"], database=cfg["database"]
+    )
     try:
-        await conn.execute(f'CREATE SCHEMA IF NOT EXISTS {CP_SCHEMA} AUTHORIZATION {APP_ROLE}')
+        await conn.execute(f'CREATE SCHEMA IF NOT EXISTS {CP_SCHEMA} AUTHORIZATION CURRENT_USER')
     finally:
         await conn.close()
-    os.environ["CONTROL_PLANE_DATABASE_URL"] = _database_url(app_password)
+
+    # Preserve the authoritative installed URL byte-for-byte so SQLAlchemy/psycopg use the same escaped
+    # credential, host, port and database that the business backend successfully uses.
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = database_url
     os.environ["CONTROL_PLANE_SCHEMA"] = CP_SCHEMA
     logger.warning(
         "bootstrap: pg_super.bin is unavailable; using isolated Control Plane schema '%s' in database '%s'",
-        CP_SCHEMA, APP_DB,
+        CP_SCHEMA, cfg["database"],
     )
 
 
@@ -253,17 +279,17 @@ async def _wait_for_postgres(super_password: str, logger, timeout: float) -> Non
     raise TimeoutError(f"PostgreSQL not accepting connections within {timeout}s: {type(last).__name__}")
 
 
-def repair_control_plane_db(logger, identity_dir: str, app_password: str, wait_timeout: float = 60.0) -> None:
+def repair_control_plane_db(logger, identity_dir: str, database_url: str, wait_timeout: float = 60.0) -> None:
     """Repair already-provisioned installs without elevating the runtime database role.
 
     Preferred path: use the DPAPI-protected postgres credential to create the dedicated CP database.
-    Legacy path: if that credential does not exist, use an isolated schema in the existing business DB.
+    Legacy path: if that credential does not exist, use an isolated schema in the exact existing business DB.
     """
     import asyncio
 
     pg_super_bin = os.path.join(identity_dir, "pg_super.bin")
     if not os.path.isfile(pg_super_bin):
-        asyncio.run(_ensure_cp_schema_fallback(app_password, logger))
+        asyncio.run(_ensure_cp_schema_fallback(database_url, logger))
         return
 
     super_password = decrypt_super_password(pg_super_bin)
@@ -285,16 +311,16 @@ def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
     if config_is_provisioned(config_path):
         logger.info("bootstrap: existing provisioned roofspan.env found; reusing credentials")
         ensure_required_runtime_secrets(config_path, logger)
-        app_password = parse_generated_password(_read(config_path))
         _load_env_file_into_process(config_path)
+        database_url = os.environ["DATABASE_URL"]
         # Repair path: older installs provisioned only the business DB. Ensure CP storage is available so
         # Mobile Access pairing works. Non-fatal (Office stays resilient) but logs full detail.
         try:
-            repair_control_plane_db(logger, identity_dir, app_password)
+            repair_control_plane_db(logger, identity_dir, database_url)
         except Exception:
             logger.error("bootstrap: Control Plane storage repair FAILED (Mobile pairing may be unavailable):\n%s",
                          traceback.format_exc())
-        return os.environ["DATABASE_URL"]
+        return database_url
 
     logger.info("bootstrap: first-install provisioning starting")
     pg_super_bin = os.path.join(identity_dir, "pg_super.bin")
