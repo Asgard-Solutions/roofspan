@@ -15,6 +15,7 @@ from control_plane import config as cp_config
 from control_plane import readiness as cp_readiness
 from control_plane.bootstrap import init_control_plane
 from control_plane.router import router as control_plane_router
+from control_plane.installation_router import router as control_plane_installation_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +32,7 @@ app = FastAPI(
     openapi_url=None,
 )
 app.include_router(control_plane_router)
+app.include_router(control_plane_installation_router)
 
 _db_init_task: asyncio.Task | None = None
 
