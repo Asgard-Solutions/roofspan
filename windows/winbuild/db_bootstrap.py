@@ -12,6 +12,11 @@ Runs INSIDE the backend service, BEFORE `server`/`backend.db` are imported. On a
 Existing provisioned configs are preserved. If an older installed roofspan.env is missing the runtime
 secrets introduced later, bootstrap repairs only those missing keys atomically without rotating the DB
 credential or touching customer data. Secrets are never logged.
+
+Legacy installs created before pg_super.bin was introduced cannot create the separate Control Plane
+database because the runtime `roofspan` role is intentionally NOCREATEDB. For those installs only,
+bootstrap uses an isolated `roofspan_control_plane` schema inside the existing RoofSpan business database.
+This keeps the runtime role least-privileged and repairs Mobile Access without resetting PostgreSQL auth.
 """
 from __future__ import annotations
 
@@ -29,7 +34,8 @@ SECRETS_KEY_PLACEHOLDER = "__GENERATED_SECRETS_ENCRYPTION_KEY__"
 SUPERUSER = "postgres"
 APP_ROLE = "roofspan"
 APP_DB = "roofspan"
-CP_DB = "roofspan_control_plane"  # embedded Control Plane DB (owned by the least-privilege roofspan role)
+CP_DB = "roofspan_control_plane"  # dedicated embedded Control Plane DB for normal/fresh installs
+CP_SCHEMA = "roofspan_control_plane"  # isolated schema fallback for legacy installs with no pg_super.bin
 PG_HOST = "127.0.0.1"
 PG_PORT = 5432
 
@@ -182,17 +188,13 @@ async def _ensure_role_and_db(super_password: str, app_password: str, logger) ->
             await conn.execute(f"CREATE ROLE {APP_ROLE} WITH LOGIN NOSUPERUSER NOCREATEDB PASSWORD {quoted_pw}")
             logger.info("bootstrap: created least-privilege role '%s'", APP_ROLE)
         # Both databases are created BY the superuser and OWNED BY the least-privilege roofspan role.
-        created_app = await _create_db_if_missing(conn, APP_DB, APP_ROLE, logger)
-        created_cp = await _create_db_if_missing(conn, CP_DB, APP_ROLE, logger)
+        await _create_db_if_missing(conn, APP_DB, APP_ROLE, logger)
+        await _create_db_if_missing(conn, CP_DB, APP_ROLE, logger)
     finally:
         await conn.close()
 
     await _own_public_schema(super_password, APP_DB, APP_ROLE)
-    if created_app or created_cp:
-        await _own_public_schema(super_password, CP_DB, APP_ROLE)
-    else:
-        # Existing install: still make sure CP schema ownership is correct (cheap + idempotent).
-        await _own_public_schema(super_password, CP_DB, APP_ROLE)
+    await _own_public_schema(super_password, CP_DB, APP_ROLE)
 
 
 async def _ensure_cp_db_only(super_password: str, logger) -> bool:
@@ -209,6 +211,28 @@ async def _ensure_cp_db_only(super_password: str, logger) -> bool:
     if created:
         await _own_public_schema(super_password, CP_DB, APP_ROLE)
     return created
+
+
+async def _ensure_cp_schema_fallback(app_password: str, logger) -> None:
+    """Create an isolated CP schema using only the existing least-privilege application role.
+
+    This is intentionally a LEGACY fallback for machines whose PostgreSQL existed before RoofSpan began
+    retaining pg_super.bin. It does not grant server-level privileges and does not modify PostgreSQL auth.
+    """
+    import asyncpg
+
+    conn = await asyncpg.connect(user=APP_ROLE, password=app_password,
+                                 host=PG_HOST, port=PG_PORT, database=APP_DB)
+    try:
+        await conn.execute(f'CREATE SCHEMA IF NOT EXISTS {CP_SCHEMA} AUTHORIZATION {APP_ROLE}')
+    finally:
+        await conn.close()
+    os.environ["CONTROL_PLANE_DATABASE_URL"] = _database_url(app_password)
+    os.environ["CONTROL_PLANE_SCHEMA"] = CP_SCHEMA
+    logger.warning(
+        "bootstrap: pg_super.bin is unavailable; using isolated Control Plane schema '%s' in database '%s'",
+        CP_SCHEMA, APP_DB,
+    )
 
 
 async def _wait_for_postgres(super_password: str, logger, timeout: float) -> None:
@@ -229,16 +253,19 @@ async def _wait_for_postgres(super_password: str, logger, timeout: float) -> Non
     raise TimeoutError(f"PostgreSQL not accepting connections within {timeout}s: {type(last).__name__}")
 
 
-def repair_control_plane_db(logger, identity_dir: str, wait_timeout: float = 60.0) -> None:
-    """Idempotent repair for ALREADY-provisioned installs whose `roofspan_control_plane` DB is missing
-    (older builds only created the business DB). Reuses the existing DPAPI superuser secret; does NOT
-    rotate the DB password/JWT/encryption key/installation identity and does NOT touch existing data."""
+def repair_control_plane_db(logger, identity_dir: str, app_password: str, wait_timeout: float = 60.0) -> None:
+    """Repair already-provisioned installs without elevating the runtime database role.
+
+    Preferred path: use the DPAPI-protected postgres credential to create the dedicated CP database.
+    Legacy path: if that credential does not exist, use an isolated schema in the existing business DB.
+    """
     import asyncio
 
     pg_super_bin = os.path.join(identity_dir, "pg_super.bin")
     if not os.path.isfile(pg_super_bin):
-        logger.warning("bootstrap: CP DB repair skipped — superuser secret not found at %s", pg_super_bin)
+        asyncio.run(_ensure_cp_schema_fallback(app_password, logger))
         return
+
     super_password = decrypt_super_password(pg_super_bin)
     try:
         asyncio.run(_wait_for_postgres(super_password, logger, wait_timeout))
@@ -258,13 +285,14 @@ def bootstrap(logger, template_path: str, config_path: str, identity_dir: str,
     if config_is_provisioned(config_path):
         logger.info("bootstrap: existing provisioned roofspan.env found; reusing credentials")
         ensure_required_runtime_secrets(config_path, logger)
+        app_password = parse_generated_password(_read(config_path))
         _load_env_file_into_process(config_path)
-        # Repair path: older installs provisioned only the business DB. Ensure the CP DB exists so
+        # Repair path: older installs provisioned only the business DB. Ensure CP storage is available so
         # Mobile Access pairing works. Non-fatal (Office stays resilient) but logs full detail.
         try:
-            repair_control_plane_db(logger, identity_dir)
+            repair_control_plane_db(logger, identity_dir, app_password)
         except Exception:
-            logger.error("bootstrap: Control Plane DB repair FAILED (Mobile pairing may be unavailable):\n%s",
+            logger.error("bootstrap: Control Plane storage repair FAILED (Mobile pairing may be unavailable):\n%s",
                          traceback.format_exc())
         return os.environ["DATABASE_URL"]
 
