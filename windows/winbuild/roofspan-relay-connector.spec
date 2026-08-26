@@ -5,6 +5,8 @@ import os
 
 BACKEND = os.path.abspath(os.path.join(SPECPATH, "..", "..", "backend"))
 WINDOWS = os.path.abspath(os.path.join(SPECPATH, ".."))
+BUILD_INFO_HOOK = os.environ.get("ROOFSPAN_BUILD_INFO_HOOK", "")
+RUNTIME_HOOKS = [BUILD_INFO_HOOK] if BUILD_INFO_HOOK and os.path.isfile(BUILD_INFO_HOOK) else []
 
 PYWIN32 = ["win32serviceutil", "win32service", "win32event", "servicemanager",
            "pywintypes", "win32api", "win32con", "winerror", "win32timezone"]
@@ -16,6 +18,7 @@ a = Analysis(
     datas=[],
     hiddenimports=["roofspan_service", "relay.tunnel_client", "relay.protocol",
                    "licensing.identity", "licensing.reqsig", "httpx", "websockets"] + PYWIN32,
+    runtime_hooks=RUNTIME_HOOKS,
     excludes=[],
 )
 pyz = PYZ(a.pure)

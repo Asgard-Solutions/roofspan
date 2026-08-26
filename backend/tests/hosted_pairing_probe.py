@@ -5,7 +5,9 @@ Run against a disposable cp_asgi process and PostgreSQL database. It proves:
 - signed installation status/create/list/revoke ownership;
 - numeric pairing resolve and user binding on the same Control Plane;
 - installation challenge authentication with the same Ed25519 identity;
-- paired-device authentication and request/response routing through the hosted Relay.
+- paired-device authentication and request/response routing through the hosted Relay;
+- bounded compatibility for pre-release Office connectors that used /tunnel and sent the public PEM
+  as the installation-id claim.
 """
 from __future__ import annotations
 
@@ -69,22 +71,30 @@ def signed_request(method, path, installation_id, private_key, body=b""):
     )
 
 
-async def prove_relay_route(installation_id, private_key, resolved_data):
+async def prove_relay_route(
+    installation_id,
+    private_key,
+    resolved_data,
+    *,
+    installation_claim=None,
+    installation_route="/api/relay/installation",
+):
     """Open both hosted WebSockets and prove one Mobile request reaches the installation tunnel."""
     installation_ready = asyncio.Event()
     route_complete = asyncio.Event()
     response_body = b'{"status":"ok","source":"installation-tunnel"}'
+    claim = installation_claim or installation_id
 
     async def installation_side():
         async with websockets.connect(
-            f"{WS_BASE}/api/relay/installation",
+            f"{WS_BASE}{installation_route}",
             max_size=16 * 1024 * 1024,
         ) as ws:
             await ws.send(
                 P.dumps(
                     {
                         "type": P.T_HELLO,
-                        "installation_id": installation_id,
+                        "installation_id": claim,
                         "protocol": P.PROTOCOL_VERSION,
                     }
                 )
@@ -95,7 +105,7 @@ async def prove_relay_route(installation_id, private_key, resolved_data):
             timestamp = str(int(time.time()))
             signature = reqsig.sign_request(
                 private_key,
-                installation_id=installation_id,
+                installation_id=claim,
                 timestamp=timestamp,
                 nonce=nonce,
                 body=nonce.encode(),
@@ -111,6 +121,7 @@ async def prove_relay_route(installation_id, private_key, resolved_data):
             )
             ready = P.loads(await ws.recv())
             assert ready["type"] == P.T_READY, ready
+            assert ready["installation_id"] == installation_id, ready
             installation_ready.set()
 
             request_frame = P.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -235,7 +246,19 @@ def main():
     assert resolved_data["expected_user_id"] == user_id
     assert resolved_data["device_credential"]
 
+    # Current connector contract: canonical hosted UUID + /installation.
     asyncio.run(prove_relay_route(installation_id, private_key, resolved_data))
+    # Compatibility contract for already-installed pre-release connectors: public PEM claim + /tunnel.
+    # The Relay must canonicalize the tunnel to the hosted UUID so the paired Mobile route can find it.
+    asyncio.run(
+        prove_relay_route(
+            installation_id,
+            private_key,
+            resolved_data,
+            installation_claim=public_pem,
+            installation_route="/api/relay/tunnel",
+        )
+    )
 
     device_id = resolved_data["device_id"]
     revoked = signed_request(
@@ -253,7 +276,9 @@ def main():
     assert matching and matching[0]["status"] == "REVOKED"
     assert matching[0]["expected_user_id"] == user_id
 
-    print("Hosted registration + QR/code pairing + authenticated Relay routing + revoke: PASS")
+    print(
+        "Hosted registration + QR/code pairing + current/legacy Relay routing + revoke: PASS"
+    )
 
 
 if __name__ == "__main__":

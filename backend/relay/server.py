@@ -13,6 +13,8 @@ The relay is not the RBAC authority and never persists roofing-business payloads
 import logging
 import uuid as uuidlib
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/api/relay", tags=["relay"])
 REQUEST_TIMEOUT = RC.REQUEST_TIMEOUT
 MAX_JSON_BYTES = RC.MAX_JSON_BYTES
 MAX_UPLOAD_BYTES = RC.MAX_UPLOAD_BYTES
+LEGACY_PUBLIC_KEY_MAX_CHARS = 2048
 
 
 def _b64_len(value: str) -> int:
@@ -58,6 +61,56 @@ async def _load_installation(db, installation_id: str):
     return (
         await db.execute(select(Installation).where(Installation.id == iid))
     ).scalar_one_or_none()
+
+
+def _canonical_ed25519_public_pem(value) -> str | None:
+    """Return a canonical Ed25519 public PEM or None without logging the supplied value.
+
+    Pre-release Windows relay connectors accidentally sent the installation public PEM in the
+    ``installation_id`` field. The private key still signed the challenge correctly, so accepting that
+    bounded, parsed public-key claim is safe when it resolves to an already-registered installation and
+    the signature verifies. Arbitrary strings, private keys, non-Ed25519 keys, and oversized frames are
+    rejected.
+    """
+    if not isinstance(value, str) or not value or len(value) > LEGACY_PUBLIC_KEY_MAX_CHARS:
+        return None
+    if not value.lstrip().startswith("-----BEGIN PUBLIC KEY-----"):
+        return None
+    try:
+        key = serialization.load_pem_public_key(value.encode("ascii"))
+    except (ValueError, TypeError, UnicodeError):
+        return None
+    if not isinstance(key, Ed25519PublicKey):
+        return None
+    return key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+
+
+async def _resolve_installation_claim(db, claim):
+    """Resolve a current UUID claim or the bounded legacy public-key claim.
+
+    Returns ``(installation, canonical_installation_id, legacy_claim)``. Runtime routing always uses the
+    canonical hosted UUID, even when challenge verification must use the exact legacy claim string.
+    """
+    installation = await _load_installation(db, claim)
+    if installation is not None:
+        return installation, str(installation.id), False
+
+    canonical_pem = _canonical_ed25519_public_pem(claim)
+    if canonical_pem is None:
+        return None, None, False
+    installation = (
+        await db.execute(
+            select(Installation)
+            .where(Installation.public_key_pem == canonical_pem)
+            .limit(1)
+        )
+    ).scalars().first()
+    if installation is None:
+        return None, None, False
+    return installation, str(installation.id), True
 
 
 async def _entitlement_state(db, company_id) -> str | None:
@@ -114,7 +167,7 @@ async def installation_ws(ws: WebSocket):
             )
             await ws.close()
             return
-        installation_id = hello.get("installation_id")
+        claimed_installation_id = hello.get("installation_id")
         nonce = uuidlib.uuid4().hex
         await _send(ws, {"type": P.T_CHALLENGE, "nonce": nonce, "protocol": P.PROTOCOL_VERSION})
 
@@ -124,8 +177,11 @@ async def installation_ws(ws: WebSocket):
             return
         timestamp = auth.get("timestamp", "")
         signature = auth.get("signature", "")
+        legacy_claim = False
         async with SessionLocal() as db:
-            installation = await _load_installation(db, installation_id)
+            installation, canonical_installation_id, legacy_claim = await _resolve_installation_claim(
+                db, claimed_installation_id
+            )
             if installation is None:
                 await _send(ws, {"type": P.T_ERROR, "code": "unknown_installation"})
                 await ws.close()
@@ -136,7 +192,7 @@ async def installation_ws(ws: WebSocket):
                 return
             if not reqsig.verify_request(
                 installation.public_key_pem,
-                installation_id=installation_id,
+                installation_id=claimed_installation_id,
                 timestamp=timestamp,
                 nonce=nonce,
                 body=nonce.encode(),
@@ -150,10 +206,24 @@ async def installation_ws(ws: WebSocket):
                 await _send(ws, {"type": P.T_ERROR, "code": "not_entitled", "message": state})
                 await ws.close()
                 return
+            installation_id = canonical_installation_id
 
+        if legacy_claim:
+            log.warning(
+                "relay accepted a legacy public-key tunnel identity for installation=%s; "
+                "the Office connector should be upgraded",
+                installation_id,
+            )
         conn = InstallationConn(installation_id, ws)
         await hub.register(conn)
-        await _send(ws, {"type": P.T_READY, "protocol": P.PROTOCOL_VERSION})
+        await _send(
+            ws,
+            {
+                "type": P.T_READY,
+                "installation_id": installation_id,
+                "protocol": P.PROTOCOL_VERSION,
+            },
+        )
 
         while True:
             frame = P.loads(await ws.receive_text())
