@@ -72,6 +72,16 @@ def test_installer_refuses_old_stage_or_manual_version_drift():
     assert "version overrides are not allowed" in script
 
 
+def test_packaged_backend_declares_vector_tile_runtime_dependencies():
+    requirements = set(_text(BACKEND / "requirements.txt").splitlines())
+    # maptiler.py imports all three at runtime. Keep the mapbox-vector-tile release on the protobuf-5
+    # line used by RoofSpan; v2.2 requires protobuf 6 and would conflict with the pinned backend stack.
+    assert "mapbox-vector-tile==2.1.0" in requirements
+    assert "pyclipper==1.3.0.post6" in requirements
+    assert "shapely==2.1.2" in requirements
+    assert "protobuf==5.29.6" in requirements
+
+
 def test_hosted_relay_has_bounded_legacy_connector_compatibility():
     source = _text(BACKEND / "relay" / "server.py")
     assert '@router.websocket("/tunnel")' in source
