@@ -39,14 +39,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: yarn
-          cache-dependency-path: frontend/yarn.lock
 
-      - name: Install focused backend dependencies
-        run: >-
-          pip install pytest sqlalchemy==2.0.50 asyncpg psycopg[binary]
-          fastapi==0.110.1 httpx cryptography python-dotenv pydantic
-          qrcode pillow PyJWT passlib bcrypt alembic
+      - name: Install focused backend dependencies and Yarn 1
+        run: |
+          pip install pytest sqlalchemy==2.0.50 asyncpg psycopg[binary] \
+            fastapi==0.110.1 httpx cryptography python-dotenv pydantic \
+            qrcode pillow PyJWT passlib bcrypt alembic
+          npm install --global yarn@1.22.22
 
       - name: Run Office hosted-pairing unit tests
         env:
