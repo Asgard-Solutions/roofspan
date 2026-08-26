@@ -40,9 +40,7 @@ jobs:
         with:
           node-version: "22"
           cache: yarn
-          cache-dependency-path: |
-            frontend/yarn.lock
-            mobile/yarn.lock
+          cache-dependency-path: frontend/yarn.lock
 
       - name: Install focused backend dependencies
         run: >-
@@ -76,8 +74,8 @@ jobs:
       - name: Validate RoofSpan Mobile pairing configuration and helpers
         working-directory: mobile
         run: |
-          yarn install --frozen-lockfile
-          yarn test:pairing
+          npm ci
+          npm run test:pairing
           npx expo config --type public > /tmp/roofspan-expo-config.json
           grep -q 'cp.roofspan.io' /tmp/roofspan-expo-config.json
           grep -q 'relay.roofspan.io' /tmp/roofspan-expo-config.json
