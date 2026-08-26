@@ -149,7 +149,12 @@ async def main():
             expected_user_id="00000000-0000-0000-0000-000000000123",
             expected_user_label="Release Gate User",
         )
-        resolved = await service.resolve_pairing(db, token=pairing["token"], label="Release Gate Device")
+        resolved = await service.resolve_pairing(
+            db,
+            token=pairing["token"],
+            numeric_code=None,
+            label="Release Gate Device",
+        )
     print(json.dumps({
         "ready": status["ready"],
         "revision": status["current_revision"],
