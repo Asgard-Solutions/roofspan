@@ -6,6 +6,8 @@ on:
       - "backend/control_plane/**"
       - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
+      - "backend/relay/**"
+      - "backend/routers/relay_connector.py"
       - "backend/server.py"
       - "backend/cp_asgi.py"
       - "backend/tests/test_hosted_pairing_client.py"
@@ -13,12 +15,18 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
+      - "windows/winbuild/relay_entry.py"
+      - "windows/winbuild/config/roofspan.env.template"
+      - "deploy/railway/**"
+      - "infra/config/production.endpoints.env.example"
       - ".github/workflows/hosted-mobile-pairing.yml"
   pull_request:
     paths:
       - "backend/control_plane/**"
       - "backend/licensing/config.py"
       - "backend/licensing/pairing_client.py"
+      - "backend/relay/**"
+      - "backend/routers/relay_connector.py"
       - "backend/server.py"
       - "backend/cp_asgi.py"
       - "backend/tests/test_hosted_pairing_client.py"
@@ -26,6 +34,10 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
+      - "windows/winbuild/relay_entry.py"
+      - "windows/winbuild/config/roofspan.env.template"
+      - "deploy/railway/**"
+      - "infra/config/production.endpoints.env.example"
       - ".github/workflows/hosted-mobile-pairing.yml"
   workflow_dispatch:
 
@@ -46,7 +58,7 @@ jobs:
         run: |
           pip install pytest pytest-xdist sqlalchemy==2.0.50 asyncpg psycopg[binary] \
             fastapi==0.110.1 httpx cryptography python-dotenv pydantic \
-            qrcode pillow PyJWT passlib bcrypt alembic
+            qrcode pillow PyJWT passlib bcrypt alembic websockets
           npm install --global yarn@1.22.22
 
       - name: Run Office hosted-pairing unit tests
@@ -56,15 +68,18 @@ jobs:
           CONTROL_PLANE_BASE_URL: https://cp.roofspan.io
         run: pytest -q -n 0 backend/tests/test_hosted_pairing_client.py
 
-      - name: Compile changed backend modules
+      - name: Compile changed pairing and Relay modules
         run: |
           python -m py_compile \
             backend/control_plane/installation_router.py \
             backend/licensing/config.py \
             backend/licensing/pairing_client.py \
+            backend/relay/server.py \
+            backend/routers/relay_connector.py \
             backend/server.py \
             backend/cp_asgi.py \
-            backend/tests/hosted_pairing_probe.py
+            backend/tests/hosted_pairing_probe.py \
+            windows/winbuild/relay_entry.py
 
       - name: Install locked Office frontend dependencies
         working-directory: frontend
@@ -85,15 +100,19 @@ jobs:
           grep -q 'cp.roofspan.io' /tmp/roofspan-expo-config.json
           grep -q 'relay.roofspan.io' /tmp/roofspan-expo-config.json
 
-      - name: Assert the obsolete split-Control-Plane behavior cannot return
+      - name: Assert the obsolete split identity and Relay behavior cannot return
         run: |
           ! grep -q 'INTERNAL_CP_BASE =.*localhost' backend/licensing/pairing_client.py
           grep -q 'CONTROL_PLANE_BASE_URL' backend/licensing/pairing_client.py
           grep -q 'pairing-qr-code' frontend/src/pages/admin/Users.jsx
           grep -q 'installation/register' backend/licensing/pairing_client.py
           grep -q 'revoke-self' backend/licensing/pairing_client.py
+          grep -q '/api/relay/connector/identity' windows/winbuild/relay_entry.py
+          ! grep -q 'private_key, installation_id = get_or_create_identity' windows/winbuild/relay_entry.py
+          grep -q 'app.include_router(relay_router)' backend/cp_asgi.py
+          grep -q '/api/relay/installation' windows/winbuild/config/roofspan.env.template
 
-  hosted-control-plane-contract:
+  hosted-control-plane-and-relay-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -116,10 +135,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Control Plane runtime dependencies
+      - name: Install central-services runtime dependencies
         run: pip install -r backend/requirements.txt
 
-      - name: Start disposable hosted Control Plane
+      - name: Start disposable hosted Control Plane and Relay
         env:
           PYTHONPATH: backend
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/postgres
@@ -129,24 +148,26 @@ jobs:
           CP_DEV_BOOTSTRAP_SECRET: dev-bootstrap-roofspan
           CP_DEV_SIGNING_KEYS_DIR: /tmp/roofspan-cp-keys
           ROOFSPAN_RELAY_ENDPOINT: wss://relay.roofspan.io
+          RELAY_ENV: dev
+          RELAY_REGISTRY: memory
         run: |
           mkdir -p /tmp/roofspan-cp-keys
-          python -m uvicorn cp_asgi:app --app-dir backend --host 127.0.0.1 --port 8765 > /tmp/roofspan-cp.log 2>&1 &
-          echo $! > /tmp/roofspan-cp.pid
+          python -m uvicorn cp_asgi:app --app-dir backend --host 127.0.0.1 --port 8765 > /tmp/roofspan-central.log 2>&1 &
+          echo $! > /tmp/roofspan-central.pid
 
-      - name: Prove register/status/QR-code resolve/user binding/revoke
+      - name: Prove registration, QR/code pairing, user binding, Relay routing, and revoke
         env:
           PYTHONPATH: backend
           CP_PROBE_BASE_URL: http://127.0.0.1:8765
           CP_DEV_BOOTSTRAP_SECRET: dev-bootstrap-roofspan
         run: |
           if ! python backend/tests/hosted_pairing_probe.py; then
-            cat /tmp/roofspan-cp.log
+            cat /tmp/roofspan-central.log
             exit 1
           fi
 
-      - name: Stop disposable Control Plane
+      - name: Stop disposable central services
         if: always()
         run: |
-          if [ -f /tmp/roofspan-cp.pid ]; then kill "$(cat /tmp/roofspan-cp.pid)" || true; fi
-          tail -n 120 /tmp/roofspan-cp.log || true
+          if [ -f /tmp/roofspan-central.pid ]; then kill "$(cat /tmp/roofspan-central.pid)" || true; fi
+          tail -n 160 /tmp/roofspan-central.log || true
