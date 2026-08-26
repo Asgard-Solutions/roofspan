@@ -42,7 +42,7 @@ jobs:
 
       - name: Install focused backend dependencies and Yarn 1
         run: |
-          pip install pytest sqlalchemy==2.0.50 asyncpg psycopg[binary] \
+          pip install pytest pytest-xdist sqlalchemy==2.0.50 asyncpg psycopg[binary] \
             fastapi==0.110.1 httpx cryptography python-dotenv pydantic \
             qrcode pillow PyJWT passlib bcrypt alembic
           npm install --global yarn@1.22.22
@@ -52,7 +52,7 @@ jobs:
           PYTHONPATH: backend
           DATABASE_URL: postgresql+asyncpg://roofspan:test@127.0.0.1:5432/roofspan
           CONTROL_PLANE_BASE_URL: https://cp.roofspan.io
-        run: pytest -q backend/tests/test_hosted_pairing_client.py
+        run: pytest -q -n 0 backend/tests/test_hosted_pairing_client.py
 
       - name: Compile changed backend modules
         run: |
