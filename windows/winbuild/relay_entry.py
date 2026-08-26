@@ -7,7 +7,9 @@ the non-secret hosted installation id through a loopback-only endpoint. Temporar
 Relay, DNS, or Internet outages are non-fatal: the Windows service stays running and retries with bounded
 backoff.
 """
+import json
 import os
+import sys
 import threading
 
 from roofspan_service import dispatch, load_runtime_config, make_service_class
@@ -15,6 +17,21 @@ from roofspan_service import dispatch, load_runtime_config, make_service_class
 SVC_NAME = "RoofSpanRelayConnector"
 SVC_DISPLAY = "RoofSpan Relay Connector"
 LOG_FILE = "relay-service.log"
+RELAY_CONNECTOR_CONTRACT = "hosted-installation-identity-v2"
+IDENTITY_ENDPOINT_PATH = "/api/relay/connector/identity"
+INSTALLATION_RELAY_PATH = "/api/relay/installation"
+
+
+def build_info() -> dict:
+    """Machine-readable identity used by build/stage/install release gates."""
+    return {
+        "service": "roofspan-relay-connector",
+        "build_sha": os.environ.get("ROOFSPAN_BUILD_SHA", "development"),
+        "version": os.environ.get("ROOFSPAN_VERSION", "development"),
+        "contract": RELAY_CONNECTOR_CONTRACT,
+        "identity_endpoint": IDENTITY_ENDPOINT_PATH,
+        "installation_relay_path": INSTALLATION_RELAY_PATH,
+    }
 
 
 class RelayWorker:
@@ -39,7 +56,7 @@ class RelayWorker:
             local_api = os.environ.get(
                 "ROOFSPAN_LOCAL_API_URL", "http://127.0.0.1:8001"
             ).rstrip("/")
-            identity_url = f"{local_api}/api/relay/connector/identity"
+            identity_url = f"{local_api}{IDENTITY_ENDPOINT_PATH}"
             private_key, _public_pem = get_or_create_identity()
 
             async def _connector_loop():
@@ -63,6 +80,8 @@ class RelayWorker:
                         relay_ws_url = str(data.get("relay_ws_url") or "").strip()
                         if not installation_id or not relay_ws_url:
                             raise RuntimeError("Office identity endpoint returned incomplete data")
+                        if not relay_ws_url.endswith(INSTALLATION_RELAY_PATH):
+                            raise RuntimeError("Office identity endpoint returned a non-canonical Relay route")
 
                         self._tunnel = InstallationTunnel(
                             relay_ws_url,
@@ -71,8 +90,11 @@ class RelayWorker:
                             local_api,
                         )
                         self.log.info(
-                            "relay: hosted installation identity ready; outbound tunnel -> %s",
+                            "relay: hosted installation identity ready; outbound tunnel -> %s "
+                            "(build_sha=%s contract=%s)",
                             relay_ws_url,
+                            build_info()["build_sha"],
+                            RELAY_CONNECTOR_CONTRACT,
                         )
                         backoff = 1.0
                         await self._tunnel.run()
@@ -98,7 +120,13 @@ class RelayWorker:
                 self._ready.set()
                 if on_ready:
                     on_ready()
-                self.log.info("relay: outbound connector loop started")
+                info = build_info()
+                self.log.info(
+                    "relay: outbound connector loop started (build_sha=%s version=%s contract=%s)",
+                    info["build_sha"],
+                    info["version"],
+                    info["contract"],
+                )
                 self._loop.run_until_complete(self._task)
             except asyncio.CancelledError:
                 self.log.info("relay: connector loop cancelled (stopping)")
@@ -139,6 +167,9 @@ def _worker_factory(logger):
 
 
 def main():
+    if "--build-info" in sys.argv[1:]:
+        print(json.dumps(build_info(), sort_keys=True))
+        return
     load_runtime_config()
     dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))
 
