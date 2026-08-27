@@ -86,7 +86,8 @@ export default function PhotoSection({ recordType, recordId }) {
     });
     setNote("");
     await load();
-    Alert.alert("Saved", "Photo saved and queued (will upload when online).");
+    syncNow().catch(() => {}); // attempt delivery to Office immediately instead of waiting for the next trigger
+    Alert.alert("Saved", "Photo saved. Uploading to Office now (or as soon as Office is reachable).");
   };
 
   const retryItem = async () => { await syncNow(); await load(); };

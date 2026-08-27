@@ -1,5 +1,8 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile photo capture — trigger sync immediately (2026-06)
+- `PhotoSection.persistAndQueue` queued the photo but never triggered a sync, so photos sat until the next trigger (and the message said "will upload when online" regardless of connectivity). Now calls `syncNow()` right after queuing (fire-and-forget) and shows an accurate "Uploading to Office now (or as soon as reachable)" message. Combined with the transport stale-socket reconnect fix, this delivers photos promptly. Babel-compiles. Needs EAS rebuild.
+
 ## Mobile sync stuck after initial connect + delete stuck items/photos (2026-06)
 - **Likely root cause of "sync only works on initial connect / last_seen stops":** `RelayTransport._connect()` reused `this.ws` whenever `readyState === 1`, but a WebSocket killed by a proxy/idle-timeout keeps reporting OPEN before `onclose` fires. Requests were sent into the dead socket → 30s hang → never synced, and the socket was never torn down so every later request reused it. Fix (`transport.js`): added `_teardown()` and call it on request timeout AND send failure, so the next sync reconnects fresh (fires a new authenticated `hello`, updating last_seen).
 - **Delete stuck items / photos (`More.js`, `sync.js`):** pending items (incl. photos) previously had NO remove action — only failed did. Added: per-item "Remove"/"Delete photo" button on pending items; `removeAllStuck()` (removes pending + failed) wired to a "Clear all stuck" bulk button (replaces "Remove all failed"); all with Undo. `removeMutation` already removes any state by client_id.
