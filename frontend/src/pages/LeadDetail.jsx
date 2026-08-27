@@ -224,10 +224,6 @@ export default function LeadDetail() {
                   {i.measurements && <div className="text-slate-500 whitespace-pre-wrap" data-testid={`inspection-measurements-${i.id}`}>Measurements: {i.measurements}</div>}
                   {i.notes && <div className="text-slate-500 whitespace-pre-wrap" data-testid={`inspection-notes-${i.id}`}>Notes: {i.notes}</div>}
                   {(i.inspector || i.created_by) && <div className="mt-1 text-xs text-slate-400" data-testid={`inspection-inspector-${i.id}`}>by {i.inspector || i.created_by}</div>}
-                  <div className="mt-2">
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Field photos</div>
-                    <PhotoGallery recordType="inspection" recordId={i.id} compact testid={`insp-photos-${i.id}`} />
-                  </div>
                 </div>
               ))}
             </div>
