@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile Field map — relay secret, offline prefetch, progress pins (2026-06)
+- **Relay ticket secret wired:** centralized in `relay/config.py` as `TICKET_SECRET` (env `RELAY_TICKET_SECRET`); `tickets.py` now uses it so all relay nodes share one key. Added to `require_production_config()` (REQUIRED in production/multi-node). Set a stable key in `backend/.env` for local/preview. Proven: a ticket minted before a backend restart still decodes after (returns 503 office_offline, not 401) — stable across restarts/nodes.
+- **Offline prefetch:** `src/offlineTiles.js` `downloadSectionArea()` builds an OSM+satellite style file and creates a MapLibre offline pack for the selected canvass section's bbox (zoom 13–18). "Download area for offline" button in the map header shows progress % / saved ✓ / retry.
+- **Progress pins:** new "Occupancy | Progress" color-mode toggle. Progress mode colors pins by door-knocking status — Knocked today (green), Callback (blue), Not home (amber), Contacted (teal), Not visited (slate), Do Not Knock (red) — derived from `last_outcome`/`last_visited_at`. Legend switches with the mode.
+- Tests: relay suite **25/25** (incl. cross-restart ticket stability). Mobile files babel-compile clean. Native rendering (progress pins, offline pack download/serve) needs a device dev-build check.
+- Ops: for the hosted relay, set `RELAY_TICKET_SECRET` env (Fernet key) on every node; production startup now fails clearly if it's missing.
+
+
 ## Mobile Field map — ticket hardening, filter chips, offline cache (2026-06)
 - **Tile ticket hardening (security):** replaced creds-in-URL tile auth with short-lived encrypted tickets. New `POST /api/relay/tile-ticket` (device creds + user token in BODY only) mints a Fernet-encrypted ticket (`backend/relay/tickets.py`, TTL 30m, key from `RELAY_TICKET_SECRET` or per-process). `GET /api/relay/tiles/{kind}/{z}/{x}/{y}` now reads the ticket from the `X-RoofSpan-Tile-Ticket` header, re-validates the device is still active/paired/entitled (prompt revocation), then routes with the embedded token. Tile URLs are now secret-free AND stable. Mobile: `src/tiles.js` (`mintTileTicket`, `tileTemplate`) + `MapLibre.addCustomHeader(...)` global header.
 - **Filter chips:** All / Owned / Rented / Unknown chips on the mobile map header filter both pins and the list (`matchesFilter` on `owner_occupied`), mirroring Office occupancy filters.

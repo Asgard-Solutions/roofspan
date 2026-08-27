@@ -37,6 +37,12 @@ MAX_ENVELOPE_BYTES = int(os.environ.get("RELAY_MAX_ENVELOPE_BYTES", str(28 * 102
 REGISTRY_TTL_SECONDS = int(os.environ.get("RELAY_REGISTRY_TTL", "45"))   # ownership key TTL
 HEARTBEAT_INTERVAL = float(os.environ.get("RELAY_HEARTBEAT_INTERVAL", "15"))  # renew well within TTL
 
+# Symmetric key (urlsafe base64, 32 bytes) that signs+encrypts short-lived map-tile tickets. In a
+# multi-node relay EVERY node must share this value so a ticket minted on one node is readable on the
+# node that later serves the tile. Optional in dev (a per-process key is generated) but REQUIRED in
+# production. Generate with: python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
+TICKET_SECRET = os.environ.get("RELAY_TICKET_SECRET", "").strip() or None
+
 
 def _resolve_node_id() -> tuple[str, str]:
     explicit = os.environ.get("RELAY_NODE_ID", "").strip()
@@ -80,5 +86,7 @@ def require_production_config() -> None:
         missing.append(
             "RELAY_NODE_ID, RAILWAY_REPLICA_ID, or ECS task metadata for a unique per-task node id"
         )
+    if not TICKET_SECRET:
+        missing.append("RELAY_TICKET_SECRET (shared Fernet key for map-tile tickets)")
     if missing:
         raise RuntimeError("RoofSpan Secure Relay production config missing: " + "; ".join(missing))

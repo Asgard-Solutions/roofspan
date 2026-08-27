@@ -8,6 +8,7 @@ import { usePairing } from "../pairingContext";
 import { putCache, getCache } from "../storage";
 import { C, PIN } from "../theme";
 import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
+import { downloadSectionArea, sectionBounds } from "../offlineTiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
 import { CACHE_SECTIONS, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
 
@@ -41,6 +42,44 @@ const LEGEND = [
   { key: "unknown", color: PIN.unknown, label: "Unknown" },
   { key: "dnk", color: PIN.dnk, label: "Do Not Knock" },
 ];
+
+// Door-knocking progress colors + legend (second pin coloring mode).
+const PROG = {
+  knocked_today: "#16A34A", // green — visited today
+  callback: "#2563EB",      // blue — needs a return visit
+  not_home: "#F59E0B",      // amber — no answer
+  contacted: "#0D9488",     // teal — spoken to previously
+  none: "#94A3B8",          // slate — not visited yet
+  dnk: PIN.dnk,             // red — do not knock
+};
+const PROGRESS_LEGEND = [
+  { key: "knocked_today", color: PROG.knocked_today, label: "Knocked today" },
+  { key: "callback", color: PROG.callback, label: "Callback" },
+  { key: "not_home", color: PROG.not_home, label: "Not home" },
+  { key: "contacted", color: PROG.contacted, label: "Contacted" },
+  { key: "none", color: PROG.none, label: "Not visited" },
+  { key: "dnk", color: PROG.dnk, label: "Do Not Knock" },
+];
+const PROGRESS_COLOR = [
+  "match", ["get", "progress"],
+  "dnk", PROG.dnk,
+  "knocked_today", PROG.knocked_today,
+  "callback", PROG.callback,
+  "not_home", PROG.not_home,
+  "contacted", PROG.contacted,
+  PROG.none,
+];
+
+function deriveProgress(p) {
+  if (p.do_not_knock) return "dnk";
+  const lv = p.last_visited_at ? new Date(p.last_visited_at) : null;
+  if (lv && !isNaN(lv.getTime()) && lv.toDateString() === new Date().toDateString()) return "knocked_today";
+  const o = p.last_outcome;
+  if (o === "callback" || o === "appointment") return "callback";
+  if (o === "no_answer") return "not_home";
+  if (o) return "contacted";
+  return "none";
+}
 
 const FILTERS = [
   { key: "all", label: "All" },
@@ -80,6 +119,8 @@ export default function MapScreen({ navigation }) {
   const [offlineNoCache, setOfflineNoCache] = useState(false);
   const [base, setBase] = useState("street"); // street | satellite | buildings
   const [filter, setFilter] = useState("all");
+  const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
+  const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
   const [ticketReady, setTicketReady] = useState(false);
 
   const loadSectionProps = useCallback(async (id) => {
@@ -142,7 +183,9 @@ export default function MapScreen({ navigation }) {
   const mapStyle = NATIVE_MAP_OK ? buildMapStyle(cfg) : null;
 
   const visibleFeatures = useMemo(
-    () => features.filter((f) => matchesFilter(f.properties || {}, filter)),
+    () => features
+      .map((f) => ({ ...f, properties: { ...f.properties, progress: deriveProgress(f.properties || {}) } }))
+      .filter((f) => matchesFilter(f.properties || {}, filter)),
     [features, filter]
   );
 
@@ -152,6 +195,42 @@ export default function MapScreen({ navigation }) {
   const buildingsUrl = tileTemplate(pairing, "buildings");
   const imageryReady = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured && satelliteUrl && buildingsUrl);
   const activeBase = imageryReady ? base : "street";
+
+  const startDownload = useCallback(async () => {
+    if (!selected || !satelliteUrl || !cfg || !cfg.osm_tile_url || !MapLibre) return;
+    setDl({ status: "downloading", pct: 0 });
+    try {
+      await downloadSectionArea({
+        MapLibre, section: selected, osmTileUrl: cfg.osm_tile_url, satelliteUrl,
+        onProgress: (pct) => setDl({ status: "downloading", pct }),
+      });
+      setDl({ status: "done", pct: 100 });
+    } catch (e) {
+      setDl({ status: "error", pct: 0 });
+    }
+  }, [selected, satelliteUrl, cfg]);
+
+  const colorModeSwitcher = (
+    <View style={s.switcher} testID="pin-color-mode">
+      {[["occupancy", "Occupancy"], ["progress", "Progress"]].map(([v, label]) => (
+        <TouchableOpacity key={v} onPress={() => setColorMode(v)} style={[s.segBtn, colorMode === v && s.segBtnActive]} testID={`colormode-${v}-button`}>
+          <Text style={[s.segText, colorMode === v && s.segTextActive]}>{label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+
+  const canPrefetch = imageryReady && selected && !!sectionBounds(selected);
+  const prefetchButton = canPrefetch ? (
+    <TouchableOpacity onPress={startDownload} disabled={dl.status === "downloading"} style={s.dlBtn} testID="download-area-button">
+      <Text style={s.dlBtnText}>
+        {dl.status === "downloading" ? `Downloading… ${dl.pct}%`
+          : dl.status === "done" ? "Area saved for offline ✓"
+          : dl.status === "error" ? "Download failed — tap to retry"
+          : "Download area for offline"}
+      </Text>
+    </TouchableOpacity>
+  ) : null;
 
   const baseSwitcher = imageryReady ? (
     <View style={s.switcher} testID="basemap-switcher">
@@ -194,14 +273,16 @@ export default function MapScreen({ navigation }) {
         </ScrollView>
       )}
       {baseSwitcher}
+      {imageryReady ? colorModeSwitcher : null}
       {filterChips}
+      {prefetchButton}
     </View>
   );
 
   const legend = (
     <View style={s.legend} testID="map-legend" pointerEvents="none">
-      <Text style={s.legendTitle}>Pins</Text>
-      {LEGEND.map((l) => (
+      <Text style={s.legendTitle}>{colorMode === "progress" ? "Progress" : "Pins"}</Text>
+      {(colorMode === "progress" ? PROGRESS_LEGEND : LEGEND).map((l) => (
         <View key={l.key} style={s.legendRow} testID={`legend-${l.key}`}>
           <View style={[s.legendDot, { backgroundColor: l.color }]} />
           <Text style={s.legendLabel}>{l.label}</Text>
@@ -289,7 +370,7 @@ export default function MapScreen({ navigation }) {
                 <LineLayer id="myarea-line" style={{ lineColor: secColor, lineWidth: 2.5 }} />
               </ShapeSource>
               <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
-                <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
+                <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: colorMode === "progress" ? PROGRESS_COLOR : PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
               </ShapeSource>
             </MapView>
             {legend}
@@ -327,6 +408,8 @@ const s = StyleSheet.create({
   filterDot: { width: 9, height: 9, borderRadius: 5, marginRight: 6 },
   filterText: { fontSize: 12, fontWeight: "700", color: C.sub },
   filterTextActive: { color: "#fff" },
+  dlBtn: { marginTop: 10, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
+  dlBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
   legend: { position: "absolute", left: 12, bottom: 12, backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: C.line, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   legendTitle: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8, color: C.sub, marginBottom: 6, textTransform: "uppercase" },
   legendRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },

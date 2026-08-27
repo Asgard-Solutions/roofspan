@@ -10,10 +10,11 @@ it is unreadable in transit/logs. Revocation still takes effect promptly: the ti
 that the installation and device are active on every request.
 """
 import json
-import os
 import time
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from relay import config as RC
 
 TTL_SECONDS = 30 * 60  # 30 minutes
 
@@ -23,11 +24,9 @@ _fernet: Fernet | None = None
 def _fernet_instance() -> Fernet:
     global _fernet
     if _fernet is None:
-        raw = os.environ.get("RELAY_TICKET_SECRET")
-        # A configured urlsafe-base64 32-byte Fernet key is required for multi-node relays so every
-        # node can read tickets. Without it we generate a stable per-process key: tickets are short
-        # lived, so a restart simply makes the Mobile app mint a fresh one.
-        key = raw.encode() if raw else Fernet.generate_key()
+        # Shared key from config (RELAY_TICKET_SECRET) so every relay node reads the same tickets.
+        # Dev fallback: a per-process key (tickets are short-lived, so a restart just re-mints).
+        key = RC.TICKET_SECRET.encode() if RC.TICKET_SECRET else Fernet.generate_key()
         _fernet = Fernet(key)
     return _fernet
 
