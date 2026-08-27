@@ -113,10 +113,10 @@ async function processMutation(m, send) {
       return { ...m, state: STATES.FAILED, error: message, errorCode: code, attempts };
     }
     // 5xx: transient, keep pending for later retry (same idempotency key).
-    return { ...m, state: STATES.PENDING, error: `HTTP ${s}`, attempts };
+    return { ...m, state: STATES.PENDING, error: isPhotoMutation(m) ? "Office server error — will retry" : `HTTP ${s}`, errorCode: `http_${s}`, attempts };
   } catch (e) {
     // Network/offline: keep pending. Never mark synced, never delete.
-    return { ...m, state: STATES.PENDING, error: "offline", attempts };
+    return { ...m, state: STATES.PENDING, error: isPhotoMutation(m) ? "Waiting for Office — will upload when reachable" : "Waiting for Office (not reachable)", errorCode: "offline", attempts };
   }
 }
 

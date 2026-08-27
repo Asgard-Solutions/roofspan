@@ -18,6 +18,25 @@ export function transportHealth() {
   return { lastOkAt: _lastOkAt, lastErrAt: _lastErrAt, online: _lastOkAt > 0 && _lastOkAt >= _lastErrAt };
 }
 
+// Force the relay socket to drop so the next request reconnects fresh (used by the tap-to-sync chip).
+export function forceReconnect() {
+  try { _relay && _relay._teardown && _relay._teardown(); } catch (e) {}
+}
+
+// Lightweight keepalive: periodically pings a cheap public endpoint through the tunnel so the
+// connection stays warm and drops are detected within seconds (not only on the next user action).
+let _hb = null;
+export function startTunnelHeartbeat(intervalMs = 20000) {
+  if (_hb) return;
+  const beat = async () => {
+    try { await getTransport().request({ method: "GET", path: "/version", headers: {} }); }
+    catch (e) { /* transportHealth already recorded the failure */ }
+  };
+  beat();
+  _hb = setInterval(beat, intervalMs);
+}
+export function stopTunnelHeartbeat() { if (_hb) { clearInterval(_hb); _hb = null; } }
+
 // pairingContext calls this so transport selection follows pairing state (no per-call SecureStore).
 export function setActivePairing(p) {
   _activePairing = p || null;

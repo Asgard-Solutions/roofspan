@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — heartbeat + tap-to-sync chip + per-photo error detail (2026-06)
+- **Keepalive heartbeat (`transport.js`):** `startTunnelHeartbeat()` (singleton, 20s) pings public `GET /api/version` through the tunnel to keep it warm and detect drops within seconds; `stopTunnelHeartbeat()` to stop. `forceReconnect()` tears down the relay socket for an immediate fresh reconnect.
+- **Tap-to-sync chip (`SyncStatusChip.jsx`):** now a TouchableOpacity — tapping forces `forceReconnect()` + `runSync()` and refreshes health; shows "Syncing…" while busy; starts the heartbeat on mount. Subtext "· tap to sync".
+- **Per-photo error detail (`queue.js` + `More.js`):** pending items now carry a meaningful reason — photos show "Waiting for Office — will upload when reachable" (offline) / "Office server error — will retry" (5xx); non-photos show "Waiting for Office (not reachable)" / `HTTP {s}`, with `errorCode`. Needs Attention renders `m.error` under each pending item (`att-reason-{client_id}`).
+- Verified: all files babel-compile; sync lifecycle test passes; `/api/version` returns 200 unauthenticated. Needs EAS rebuild.
+
 ## Mobile — live "Connected to Office / Reconnecting…" status chip (2026-06)
 - `transport.js`: module-level `_lastOkAt`/`_lastErrAt` updated on every relay response (ok), error frame, timeout, and teardown; exported `transportHealth()` → `{ online, lastOkAt, lastErrAt }` (online = a successful round-trip is more recent than the last error).
 - New `components/SyncStatusChip.jsx`: polls `transportHealth()` + `lastSyncAt()` every 4s; green "Connected to Office" vs amber "Reconnecting…", with "· Last synced {relative}". testids `home-sync-chip` / `more-sync-chip` (+ `-label`, `-last`).

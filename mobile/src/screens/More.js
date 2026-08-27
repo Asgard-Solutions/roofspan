@@ -197,6 +197,7 @@ export default function More({ navigation }) {
                     ) : null}
                     {m.state === "pending" ? (
                       <View style={s.attActions}>
+                        {m.error ? <Text style={s.attErrMuted} testID={`att-reason-${m.client_id}`}>{m.error}</Text> : null}
                         <TouchableOpacity style={s.attRemove} onPress={() => removeItem(m)} testID={`att-remove-${m.client_id}`}><Text style={s.attRemoveText}>{m.kind === "photo" ? "Delete photo" : "Remove"}</Text></TouchableOpacity>
                       </View>
                     ) : null}

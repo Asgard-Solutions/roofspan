@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet } from "react-native";
-import { transportHealth } from "../transport";
-import { lastSyncAt } from "../sync";
+import { TouchableOpacity, Text, StyleSheet, View } from "react-native";
+import { transportHealth, forceReconnect, startTunnelHeartbeat } from "../transport";
+import { lastSyncAt, runSync } from "../sync";
 
 function ago(ts) {
   if (!ts) return "never";
@@ -14,14 +14,16 @@ function ago(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Live "Connected to Office / Reconnecting…" chip so reps can see whether their work is getting
-// through, instead of sync failures piling up silently.
+// Live "Connected to Office / Reconnecting…" chip. A keepalive heartbeat keeps it fresh even when
+// idle, and tapping it forces an immediate reconnect + sync.
 export default function SyncStatusChip({ testid = "sync-status-chip" }) {
   const [health, setHealth] = useState({ online: false });
   const [last, setLast] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
+    startTunnelHeartbeat(); // singleton; keeps the tunnel warm + detects drops within seconds
     const tick = async () => {
       if (!alive) return;
       setHealth(transportHealth());
@@ -32,20 +34,28 @@ export default function SyncStatusChip({ testid = "sync-status-chip" }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  const onPress = async () => {
+    if (busy) return;
+    setBusy(true);
+    try { forceReconnect(); await runSync(); } catch (e) {}
+    setHealth(transportHealth());
+    try { setLast(await lastSyncAt()); } catch (e) {}
+    setBusy(false);
+  };
+
   const online = !!health.online;
+  const label = busy ? "Syncing…" : online ? "Connected to Office" : "Reconnecting…";
   return (
-    <View style={[s.chip, online ? s.chipOn : s.chipOff]} testID={testid}>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={[s.chip, online ? s.chipOn : s.chipOff]} testID={testid} accessibilityLabel="Tap to reconnect and sync">
       <View style={[s.dot, online ? s.dotOn : s.dotOff]} />
-      <Text style={[s.text, online ? s.textOn : s.textOff]} testID={`${testid}-label`}>
-        {online ? "Connected to Office" : "Reconnecting…"}
-      </Text>
-      <Text style={s.sub} testID={`${testid}-last`}>· Last synced {ago(last)}</Text>
-    </View>
+      <Text style={[s.text, online ? s.textOn : s.textOff]} testID={`${testid}-label`}>{label}</Text>
+      <Text style={s.sub} testID={`${testid}-last`}>· Last synced {ago(last)} · tap to sync</Text>
+    </TouchableOpacity>
   );
 }
 
 const s = StyleSheet.create({
-  chip: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1 },
+  chip: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, flexWrap: "wrap" },
   chipOn: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
   chipOff: { backgroundColor: "#FFFBEB", borderColor: "#FDE68A" },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
