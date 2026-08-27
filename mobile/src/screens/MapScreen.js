@@ -1,13 +1,13 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform, ScrollView } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Constants from "expo-constants";
 import { api } from "../api";
 import { getToken } from "../auth";
 import { usePairing } from "../pairingContext";
-import { relayHttpBase } from "../config";
 import { putCache, getCache } from "../storage";
 import { C, PIN } from "../theme";
+import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
 import { CACHE_SECTIONS, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
 
@@ -16,6 +16,15 @@ if (Platform.OS !== "web") {
   try { MapLibre = require("@maplibre/maplibre-react-native"); } catch (e) { MapLibre = null; }
 }
 const NATIVE_MAP_OK = MapLibre && isNativeMapAvailable(Constants.executionEnvironment);
+
+// Grow MapLibre's ambient tile cache once so recently viewed satellite/building tiles remain
+// available when a rep loses signal in the field. Best-effort; never blocks the map.
+let _ambientCacheReady = false;
+function ensureAmbientCache() {
+  if (_ambientCacheReady || !MapLibre || !MapLibre.offlineManager) return;
+  _ambientCacheReady = true;
+  try { MapLibre.offlineManager.setMaximumAmbientCacheSize(120 * 1024 * 1024); } catch (e) { /* noop */ }
+}
 
 // Data-driven pin color — MUST mirror the RoofSpan Office legend.
 const PIN_COLOR = [
@@ -33,16 +42,23 @@ const LEGEND = [
   { key: "dnk", color: PIN.dnk, label: "Do Not Knock" },
 ];
 
-// Build a relay tile-passthrough URL template (MapLibre substitutes {z}/{x}/{y}).
-function tileTemplate(kind, pairing, token) {
-  if (!pairing || !token) return null;
-  const q = [
-    `iid=${encodeURIComponent(pairing.installation_id)}`,
-    `did=${encodeURIComponent(pairing.device_id)}`,
-    `dc=${encodeURIComponent(pairing.device_credential)}`,
-    `tok=${encodeURIComponent(token)}`,
-  ].join("&");
-  return `${relayHttpBase(pairing.relay_endpoint)}/api/relay/tiles/${kind}/{z}/{x}/{y}?${q}`;
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "owned", label: "Owned" },
+  { key: "rented", label: "Rented" },
+  { key: "unknown", label: "Unknown" },
+];
+
+function matchesFilter(p, filter) {
+  if (filter === "all") return true;
+  if (filter === "owned") return p.owner_occupied === true;
+  if (filter === "rented") return p.owner_occupied === false;
+  if (filter === "unknown") return p.owner_occupied === null || p.owner_occupied === undefined;
+  return true;
+}
+
+function pinColorFor(p) {
+  return p.do_not_knock ? PIN.dnk : p.owner_occupied === true ? PIN.owned : p.owner_occupied === false ? PIN.rented : PIN.unknown;
 }
 
 class MapErrorBoundary extends React.Component {
@@ -62,8 +78,9 @@ export default function MapScreen({ navigation }) {
   const [cfg, setCfg] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [offlineNoCache, setOfflineNoCache] = useState(false);
-  const [token, setTokenState] = useState(null);
   const [base, setBase] = useState("street"); // street | satellite | buildings
+  const [filter, setFilter] = useState("all");
+  const [ticketReady, setTicketReady] = useState(false);
 
   const loadSectionProps = useCallback(async (id) => {
     if (!id) { setFeatures([]); return; }
@@ -78,27 +95,43 @@ export default function MapScreen({ navigation }) {
   }, []);
 
   const load = useCallback(async () => {
-    try { setTokenState(await getToken()); } catch (e) { /* keep prior token */ }
     let secs = [];
     let online = true;
+    let mapCfg = null;
     try {
       const [s, m] = await Promise.all([api.get("/mobile/canvass-sections"), api.get("/map-config")]);
       secs = s.data.sections || [];
-      setCfg(m.data);
+      mapCfg = m.data;
       await putCache(CACHE_SECTIONS, secs);
       await putCache("mapcfg", m.data);
     } catch (e) {
       online = false;
       secs = (await getCache(CACHE_SECTIONS)) || [];
-      setCfg((await getCache("mapcfg")) || null);
+      mapCfg = (await getCache("mapcfg")) || null;
     }
+    setCfg(mapCfg);
     setSections(secs);
     setOfflineNoCache(!online && secs.length === 0);
     const sel = pickDefaultSection(secs);
     setSelId(sel);
     await loadSectionProps(sel);
     setLoaded(true);
-  }, [loadSectionProps]);
+
+    // Best-effort tile authorization: mint a short-lived ticket and register it as a global header
+    // so tile URLs stay secret-free and stable. If offline, cached tiles still render from the
+    // ambient cache; only new tiles are unavailable until reconnected.
+    if (NATIVE_MAP_OK && mapCfg && mapCfg.maptiler_configured && pairing) {
+      ensureAmbientCache();
+      try {
+        const token = await getToken();
+        const ticket = await mintTileTicket(pairing, token);
+        if (ticket && MapLibre && MapLibre.addCustomHeader) {
+          MapLibre.addCustomHeader(TILE_TICKET_HEADER, ticket);
+          setTicketReady(true);
+        }
+      } catch (e) { /* keep any previously registered ticket */ }
+    }
+  }, [loadSectionProps, pairing]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -108,33 +141,48 @@ export default function MapScreen({ navigation }) {
   const selected = sections.find((s) => s.id === selId) || null;
   const mapStyle = NATIVE_MAP_OK ? buildMapStyle(cfg) : null;
 
-  // Satellite/buildings imagery is available only when the Office has MapTiler
-  // configured AND the device is paired with a live user token to authorize tiles.
-  const satelliteUrl = tileTemplate("satellite", pairing, token);
-  const buildingsUrl = tileTemplate("buildings", pairing, token);
-  const imageryReady = !!(cfg && cfg.maptiler_configured && satelliteUrl && buildingsUrl);
+  const visibleFeatures = useMemo(
+    () => features.filter((f) => matchesFilter(f.properties || {}, filter)),
+    [features, filter]
+  );
+
+  // Imagery is offered when the Office has MapTiler configured. Tiles use a stable URL + ticket header;
+  // when offline, previously viewed tiles are served from the ambient cache.
+  const satelliteUrl = tileTemplate(pairing, "satellite");
+  const buildingsUrl = tileTemplate(pairing, "buildings");
+  const imageryReady = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured && satelliteUrl && buildingsUrl);
   const activeBase = imageryReady ? base : "street";
 
   const baseSwitcher = imageryReady ? (
     <View style={s.switcher} testID="basemap-switcher">
       {[["street", "Street"], ["satellite", "Satellite"], ["buildings", "Buildings"]].map(([v, label]) => (
-        <TouchableOpacity
-          key={v}
-          onPress={() => setBase(v)}
-          style={[s.segBtn, activeBase === v && s.segBtnActive]}
-          testID={`basemap-${v}-button`}
-        >
+        <TouchableOpacity key={v} onPress={() => setBase(v)} style={[s.segBtn, activeBase === v && s.segBtnActive]} testID={`basemap-${v}-button`}>
           <Text style={[s.segText, activeBase === v && s.segTextActive]}>{label}</Text>
         </TouchableOpacity>
       ))}
     </View>
   ) : null;
 
+  const filterChips = (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }} testID="pin-filters">
+      {FILTERS.map((f) => {
+        const dot = f.key === "all" ? null : f.key === "owned" ? PIN.owned : f.key === "rented" ? PIN.rented : PIN.unknown;
+        return (
+          <TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} testID={`filter-${f.key}`}
+            style={[s.filterChip, filter === f.key && s.filterChipActive]}>
+            {dot ? <View style={[s.filterDot, { backgroundColor: dot }]} /> : null}
+            <Text style={[s.filterText, filter === f.key && s.filterTextActive]}>{f.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+
   const header = (
     <View style={s.hero} testID="my-area-header">
       <Text style={s.heroKicker}>MY AREA</Text>
       <Text style={s.heroTitle} testID="my-area-title">{selected ? selected.name : "No canvass area assigned"}</Text>
-      {selected ? <Text style={s.heroSub}>{features.length} properties</Text> : null}
+      {selected ? <Text style={s.heroSub}>{visibleFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text> : null}
       {sections.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
           {sections.map((sec) => (
@@ -146,6 +194,7 @@ export default function MapScreen({ navigation }) {
         </ScrollView>
       )}
       {baseSwitcher}
+      {filterChips}
     </View>
   );
 
@@ -185,17 +234,16 @@ export default function MapScreen({ navigation }) {
       {header}
       <FlatList
         style={{ flex: 1, paddingHorizontal: 14 }}
-        data={features}
+        data={visibleFeatures}
         keyExtractor={(f) => f.properties.id}
         ListHeaderComponent={<Text style={s.note}>{reason}</Text>}
-        ListEmptyComponent={<Text style={s.empty}>No properties in this section yet.</Text>}
+        ListEmptyComponent={<Text style={s.empty}>No properties match this filter.</Text>}
         renderItem={({ item }) => {
           const p = item.properties;
-          const dot = p.do_not_knock ? PIN.dnk : p.owner_occupied === true ? PIN.owned : p.owner_occupied === false ? PIN.rented : PIN.unknown;
           return (
             <TouchableOpacity style={[s.card, p.do_not_knock && s.dnkCard]} onPress={() => openProp(p.id)} testID={`map-prop-${p.id}`}>
               <View style={s.cardRow}>
-                <View style={[s.cardDot, { backgroundColor: dot }]} />
+                <View style={[s.cardDot, { backgroundColor: pinColorFor(p) }]} />
                 <Text style={[s.addr, p.do_not_knock && { color: "#fff" }]}>{p.address}</Text>
               </View>
               {p.do_not_knock ? <Text style={s.dnk}>DO NOT KNOCK</Text> : <Text style={s.type}>{p.property_type || "property"}</Text>}
@@ -208,7 +256,7 @@ export default function MapScreen({ navigation }) {
 
   if (NATIVE_MAP_OK && mapStyle) {
     const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
-    const fc = { type: "FeatureCollection", features };
+    const fc = { type: "FeatureCollection", features: visibleFeatures };
     const secColor = selected?.color || C.brand;
     const polyFc = buildSectionPolygonFC(selected);
     const center = selected?.geometry?.coordinates?.[0]?.[0] || safeCenter(cfg);
@@ -229,25 +277,10 @@ export default function MapScreen({ navigation }) {
 
               {activeBase === "buildings" && VectorSource && (
                 <VectorSource id="rs-buildings" tileUrlTemplates={[buildingsUrl]} minZoomLevel={14} maxZoomLevel={20}>
-                  <FillLayer
-                    id="rs-buildings-fill"
-                    sourceLayerID="building"
-                    minZoomLevel={14}
-                    style={{
-                      fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"],
-                      fillOpacity: 0.35,
-                    }}
-                  />
-                  <LineLayer
-                    id="rs-buildings-line"
-                    sourceLayerID="building"
-                    minZoomLevel={14}
-                    style={{
-                      lineColor: ["case", ["==", ["get", "class"], "residential"], "#C2410C", "#475569"],
-                      lineWidth: 1.25,
-                      lineOpacity: 0.9,
-                    }}
-                  />
+                  <FillLayer id="rs-buildings-fill" sourceLayerID="building" minZoomLevel={14}
+                    style={{ fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"], fillOpacity: 0.35 }} />
+                  <LineLayer id="rs-buildings-line" sourceLayerID="building" minZoomLevel={14}
+                    style={{ lineColor: ["case", ["==", ["get", "class"], "residential"], "#C2410C", "#475569"], lineWidth: 1.25, lineOpacity: 0.9 }} />
                 </VectorSource>
               )}
 
@@ -289,6 +322,11 @@ const s = StyleSheet.create({
   segBtnActive: { backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
   segText: { fontSize: 13, fontWeight: "700", color: C.sub },
   segTextActive: { color: C.ink },
+  filterChip: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8, backgroundColor: "#fff" },
+  filterChipActive: { backgroundColor: C.ink, borderColor: C.ink },
+  filterDot: { width: 9, height: 9, borderRadius: 5, marginRight: 6 },
+  filterText: { fontSize: 12, fontWeight: "700", color: C.sub },
+  filterTextActive: { color: "#fff" },
   legend: { position: "absolute", left: 12, bottom: 12, backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: C.line, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   legendTitle: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8, color: C.sub, marginBottom: 6, textTransform: "uppercase" },
   legendRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },

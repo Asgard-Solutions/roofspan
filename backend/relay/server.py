@@ -18,7 +18,8 @@ import uuid as uuidlib
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from fastapi import APIRouter, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from control_plane import readiness as cp_readiness
@@ -28,6 +29,7 @@ from control_plane.models import Installation, MobileDevice, Subscription
 from licensing import reqsig
 from relay import config as RC
 from relay import protocol as P
+from relay import tickets as RT
 from relay.hub import InstallationConn, RelayPayloadTooLarge, RelayUnavailable, hub
 
 log = logging.getLogger("roofspan.relay")
@@ -422,6 +424,13 @@ async def mobile_ws(ws: WebSocket):
 _TILE_KINDS = {"satellite", "buildings"}
 
 
+class TileTicketRequest(BaseModel):
+    installation_id: str
+    device_id: str
+    device_credential: str
+    token: str
+
+
 async def _authenticate_relay_device(db, installation_id: str, device_id: str, credential: str):
     """Reuse the Mobile WS authorization chain for stateless HTTP tile requests.
 
@@ -451,24 +460,70 @@ async def _authenticate_relay_device(db, installation_id: str, device_id: str, c
     return installation, None
 
 
+@router.post("/tile-ticket")
+async def relay_tile_ticket(payload: TileTicketRequest):
+    """Exchange device credentials + user token for a short-lived, opaque tile ticket.
+
+    Credentials appear only in this POST body (never a URL); the returned ticket is sent as a header
+    on subsequent tile requests, so tile URLs stay free of secrets and stable for offline caching.
+    """
+    if not await _require_control_plane_ready_http():
+        raise HTTPException(status_code=503, detail="control_plane_unavailable")
+    async with SessionLocal() as db:
+        _installation, err = await _authenticate_relay_device(
+            db, payload.installation_id, payload.device_id, payload.device_credential
+        )
+    if err:
+        raise HTTPException(status_code=403, detail=err)
+    ticket, ttl = RT.mint_ticket(payload.installation_id, payload.device_id, payload.token)
+    return {"ticket": ticket, "expires_in": ttl}
+
+
+async def _revalidate_device(db, installation_id: str, device_id: str):
+    """Confirm the installation + device are still active/entitled (revocation takes effect promptly).
+
+    The ticket already proves prior credential auth, so the HMAC credential is intentionally not
+    required here — we only re-check current activation/pairing/entitlement state."""
+    installation = await _load_installation(db, installation_id)
+    if installation is None or installation.status != "ACTIVE":
+        return None, "unknown_or_revoked_installation"
+    device = None
+    if device_id:
+        try:
+            device = (
+                await db.execute(select(MobileDevice).where(MobileDevice.id == uuidlib.UUID(device_id)))
+            ).scalar_one_or_none()
+        except (ValueError, TypeError):
+            device = None
+    if device is None or str(device.installation_id) != installation_id or device.status != "ACTIVE":
+        return None, "device_not_paired"
+    state = await _entitlement_state(db, installation.company_id)
+    if state not in ("ACTIVE", "GRACE"):
+        return None, "subscription_inactive"
+    return installation, None
+
+
 @router.get("/tiles/{kind}/{z}/{x}/{y}")
 async def relay_tile(
     kind: str,
     z: int,
     x: int,
     y: int,
-    iid: str = Query(..., description="installation id"),
-    did: str = Query(..., description="paired device id"),
-    dc: str = Query(..., description="device credential"),
-    tok: str = Query(..., description="local user bearer token"),
+    x_roofspan_tile_ticket: str | None = Header(default=None),
+    t: str | None = Query(default=None, description="ticket fallback (prefer the header)"),
 ):
     if kind not in _TILE_KINDS:
         raise HTTPException(status_code=404, detail="unknown tile kind")
     if not await _require_control_plane_ready_http():
         raise HTTPException(status_code=503, detail="control_plane_unavailable")
 
+    claims = RT.read_ticket(x_roofspan_tile_ticket or t or "")
+    if not claims:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_ticket")
+    iid, did, tok = claims["iid"], claims["did"], claims["tok"]
+
     async with SessionLocal() as db:
-        installation, err = await _authenticate_relay_device(db, iid, did, dc)
+        _installation, err = await _revalidate_device(db, iid, did)
     if err:
         raise HTTPException(status_code=403, detail=err)
 

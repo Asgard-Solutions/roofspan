@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile Field map — ticket hardening, filter chips, offline cache (2026-06)
+- **Tile ticket hardening (security):** replaced creds-in-URL tile auth with short-lived encrypted tickets. New `POST /api/relay/tile-ticket` (device creds + user token in BODY only) mints a Fernet-encrypted ticket (`backend/relay/tickets.py`, TTL 30m, key from `RELAY_TICKET_SECRET` or per-process). `GET /api/relay/tiles/{kind}/{z}/{x}/{y}` now reads the ticket from the `X-RoofSpan-Tile-Ticket` header, re-validates the device is still active/paired/entitled (prompt revocation), then routes with the embedded token. Tile URLs are now secret-free AND stable. Mobile: `src/tiles.js` (`mintTileTicket`, `tileTemplate`) + `MapLibre.addCustomHeader(...)` global header.
+- **Filter chips:** All / Owned / Rented / Unknown chips on the mobile map header filter both pins and the list (`matchesFilter` on `owner_occupied`), mirroring Office occupancy filters.
+- **Offline tile cache:** stable tile URLs let MapLibre's ambient cache serve recently viewed satellite/building tiles offline; cache raised to 120MB via `offlineManager.setMaximumAmbientCacheSize`.
+- Tests: `test_relay_tiles.py` rewritten for the ticket flow — **10 pass** (mint auth 403s, mint success, unknown kind 404, missing/invalid ticket 401, offline 503, revoked-after-mint 403, full authorized route→404 w/o MapTiler, bad token→401). Full relay suite **25/25**. Mobile files babel-compile clean; native rendering still needs a dev-build check.
+
+
 ## Mobile Field map — Satellite/Buildings + colored pins & legend (2026-06)
 - Goal: bring the RoofSpan Office map's Satellite & Buildings base views and the colored-pin legend to the RoofSpan Field (mobile) map.
 - Colored pins (mobile `MapScreen.js`): data-driven `circleColor` matching Office — Owned `#16A34A`, Rented `#D97706`, Unknown `#64748B`, Do Not Knock `#DC2626` (from `theme.js` `PIN`). On-map legend overlay + colored dots in the fallback list. Uses `owner_occupied`/`do_not_knock` already present in `/api/mobile/canvass-sections/{id}/properties`.
