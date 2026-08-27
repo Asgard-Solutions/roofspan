@@ -6,6 +6,7 @@ on:
       - "mobile/**"
       - "backend/services/object_storage.py"
       - "windows/installer/RoofSpan.wxs"
+      - "windows/winbuild/backend_entry.py"
       - "windows/winbuild/roofspan_service.py"
       - "windows/winbuild/config/roofspan.env.template"
       - "windows/tests/test_photo_storage_contract.py"
