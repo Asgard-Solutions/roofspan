@@ -29,13 +29,50 @@ export const api = {
 };
 
 // Offline-queue adapter: applies Idempotency-Key + If-Match, NEVER throws on status (the queue
-// interprets status codes). Photo mutations transport as multipart through the same transport.
+// interprets status codes). Photo mutations transport as multipart through the same transport, and
+// never silently fall through to the JSON path (queue.buildSendPlan enforces this).
+import queue from "./queue";
+
+// Optional Expo FileSystem (only present in the RN runtime). In plain Node it is unavailable and the
+// on-disk check is skipped — the pure metadata validation in buildSendPlan still applies.
+let _fsChecked = false;
+let _fs = null;
+function fsMod() {
+  if (!_fsChecked) {
+    _fsChecked = true;
+    try { _fs = require("expo-file-system/legacy"); } catch (e) { _fs = null; }
+  }
+  return _fs;
+}
+
+async function localFileOk(uri) {
+  const fs = fsMod();
+  if (!fs) return { ok: true }; // cannot verify outside RN → let the upload proceed
+  try {
+    const info = await fs.getInfoAsync(uri, { size: true });
+    if (!info || !info.exists) return { ok: false, code: "photo_file_missing", message: "Photo file unavailable" };
+    if (info.size === 0) return { ok: false, code: "photo_unreadable", message: "Photo could not be read" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, code: "photo_unreadable", message: "Photo could not be read" };
+  }
+}
+
 export async function send(m) {
   const headers = { "Idempotency-Key": m.idempotency_key };
   if (m.ifMatch) headers["If-Match"] = m.ifMatch;
   const h = await authHeaders(headers);
+
+  const plan = queue.buildSendPlan(m);
+  // Deterministic local failure — do NOT hit the network with a broken photo item.
+  if (plan.transport === "local_failure") {
+    return { status: plan.status, data: { detail: { code: plan.code, message: plan.message } } };
+  }
+
   try {
-    if (m.photo) {
+    if (plan.transport === "multipart") {
+      const chk = await localFileOk(m.photo.uri);
+      if (!chk.ok) return { status: 422, data: { detail: { code: chk.code, message: chk.message } } };
       const b = m.body || {};
       const data = { record_type: b.record_type, record_id: b.record_id };
       if (b.category) data.category = b.category;

@@ -6,8 +6,12 @@ import * as FileSystem from "expo-file-system/legacy";
 import { api } from "../api";
 import { API_BASE } from "../config";
 import { getToken } from "../auth";
-import { queueMutation, pendingSummary } from "../sync";
+import { queueMutation, pendingSummary, syncNow, removeMutation } from "../sync";
+import queue from "../queue";
 import { C, badge } from "../theme";
+
+const EXT_TO_TYPE = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif" };
+const TYPE_TO_EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" };
 
 // Preset categories (mirrors backend _CATS). Configurable admin intentionally NOT built (K.I.S.S.).
 const CATEGORIES = ["Overview", "Roof", "Damage", "Exterior", "Interior", "Measurement", "Before", "After", "Other"];
@@ -36,17 +40,24 @@ export default function PhotoSection({ recordType, recordId }) {
 
   const persistAndQueue = async (asset) => {
     try {
+      // Prefer metadata the picker provides; fall back to the URI extension.
+      let type = (asset.mimeType || "").toLowerCase();
+      let ext = ((asset.fileName || "").split(".").pop() || asset.uri.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!type) type = EXT_TO_TYPE[ext] || "";
+      if (!ext) ext = TYPE_TO_EXT[type] || "";
+      if (!type || !queue.SUPPORTED_PHOTO_TYPES.includes(type)) {
+        Alert.alert("Unsupported photo", "That image format isn't supported. Please choose a JPEG, PNG, WEBP, or HEIC photo.");
+        return;
+      }
       await FileSystem.makeDirectoryAsync(PHOTO_DIR, { intermediates: true }).catch(() => {});
-      const ext = (asset.uri.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
-      const dest = `${PHOTO_DIR}${Date.now()}.${ext}`;
+      const dest = `${PHOTO_DIR}${Date.now()}.${ext || "jpg"}`;
       await FileSystem.copyAsync({ from: asset.uri, to: dest });
-      const type = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
       await queueMutation({
         kind: "photo",
         method: "post",
         path: "/mobile/photos",
         body: { record_type: recordType, record_id: recordId, category, description: note || null },
-        photo: { uri: dest, name: `photo.${ext}`, type },
+        photo: { uri: dest, name: `photo.${ext || "jpg"}`, type },
         label: `${category} photo`,
       });
       setNote("");
@@ -55,6 +66,19 @@ export default function PhotoSection({ recordType, recordId }) {
     } catch (e) {
       Alert.alert("Error", "Could not save photo.");
     }
+  };
+
+  const retryItem = async () => { await syncNow(); await load(); };
+
+  const removeItem = (m) => {
+    Alert.alert(
+      "Remove failed photo?",
+      "This photo cannot be uploaded because its local file is unavailable. Removing it will only remove this failed photo upload. Other offline work will not be affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: async () => { await removeMutation(m.client_id); await load(); } },
+      ]
+    );
   };
 
   const takePhoto = async () => {
@@ -91,15 +115,35 @@ export default function PhotoSection({ recordType, recordId }) {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.grid}>
-        {pending.map((m) => (
-          <View key={m.client_id} style={s.thumb} testID={`photo-pending-${m.client_id}`}>
-            <Image source={{ uri: m.photo.uri }} style={s.img} />
-            <View style={[s.pill, { backgroundColor: badge[m.state] ? badge[m.state].bg : badge.pending.bg }]}>
-              <Text style={[s.pillText, { color: badge[m.state] ? badge[m.state].fg : badge.pending.fg }]}>{(badge[m.state] || badge.pending).label}</Text>
+        {pending.map((m) => {
+          const uri = m && m.photo && typeof m.photo.uri === "string" ? m.photo.uri : null;
+          const failed = m.state === "failed";
+          const b = m.body || {};
+          return (
+            <View key={m.client_id} style={s.thumb} testID={`photo-pending-${m.client_id}`}>
+              {uri ? (
+                <Image source={{ uri }} style={s.img} onError={() => {}} />
+              ) : (
+                <View style={[s.img, s.imgMissing]} testID={`photo-missing-${m.client_id}`}>
+                  <Text style={s.imgMissingText}>{failed ? "Photo needs attention" : "Photo file unavailable"}</Text>
+                </View>
+              )}
+              <View style={[s.pill, { backgroundColor: badge[m.state] ? badge[m.state].bg : badge.pending.bg }]}>
+                <Text style={[s.pillText, { color: badge[m.state] ? badge[m.state].fg : badge.pending.fg }]}>{(badge[m.state] || badge.pending).label}</Text>
+              </View>
+              <Text style={s.cap}>{b.category || "Photo"}</Text>
+              {failed ? (
+                <>
+                  <Text style={s.errText} testID={`photo-error-${m.client_id}`}>{m.error || "Upload failed"}</Text>
+                  <View style={s.recoverRow}>
+                    <TouchableOpacity style={s.retryBtn} onPress={retryItem} testID={`photo-retry-${m.client_id}`}><Text style={s.retryText}>Retry</Text></TouchableOpacity>
+                    <TouchableOpacity style={s.removeBtn} onPress={() => removeItem(m)} testID={`photo-remove-${m.client_id}`}><Text style={s.removeText}>Remove</Text></TouchableOpacity>
+                  </View>
+                </>
+              ) : null}
             </View>
-            <Text style={s.cap}>{m.body.category}</Text>
-          </View>
-        ))}
+          );
+        })}
         {serverPhotos.map((p) => (
           <View key={p.id} style={s.thumb} testID={`photo-synced-${p.id}`}>
             <Image source={{ uri: `${API_BASE}${p.content_url}`, headers: token ? { Authorization: `Bearer ${token}` } : undefined }} style={s.img} />
@@ -129,6 +173,14 @@ const s = StyleSheet.create({
   grid: { marginTop: 12, flexGrow: 0 },
   thumb: { marginRight: 10, width: 110 },
   img: { width: 110, height: 110, borderRadius: 10, backgroundColor: "#E2E8F0" },
+  imgMissing: { alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.line, padding: 6 },
+  imgMissingText: { fontSize: 11, fontWeight: "700", color: C.sub, textAlign: "center" },
+  errText: { fontSize: 11, color: "#B91C1C", marginTop: 2, fontWeight: "600" },
+  recoverRow: { flexDirection: "row", gap: 6, marginTop: 6 },
+  retryBtn: { flex: 1, backgroundColor: C.brand, borderRadius: 8, paddingVertical: 6, alignItems: "center" },
+  retryText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  removeBtn: { flex: 1, borderWidth: 1, borderColor: "#B91C1C", borderRadius: 8, paddingVertical: 6, alignItems: "center" },
+  removeText: { color: "#B91C1C", fontWeight: "800", fontSize: 12 },
   pill: { position: "absolute", top: 6, left: 6, borderRadius: 8, paddingVertical: 2, paddingHorizontal: 6 },
   pillText: { fontSize: 10, fontWeight: "800" },
   cap: { fontSize: 12, color: C.sub, marginTop: 4, fontWeight: "700" },

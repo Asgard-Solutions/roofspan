@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — photo capture crash + failed photo sync FIX (2026-06)
+- **Root cause:** `queue.js makeMutation()` didn't accept/persist `photo`, so the object passed by `PhotoSection.persistAndQueue` was dropped → (1) `m.photo.uri` deref crashed the UI, (2) `api.send` `if (m.photo)` was false → photo POSTed as JSON → HTTP 422.
+- **Fixes:** `queue.js` — `makeMutation` now persists `photo`; added pure helpers `isPhotoMutation/validatePhotoMeta/buildSendPlan/photoErrorLabel` + `SUPPORTED_PHOTO_TYPES`; 4xx errors enriched (errorCode + friendly message). `api.js send` uses `buildSendPlan` (photo → multipart, malformed → deterministic local_failure `photo_file_missing`, never JSON), plus lazy Expo FileSystem existence/size check. `PhotoSection.js` crash-safe render (placeholder "Photo file unavailable"/"Photo needs attention"), Retry + Remove (confirm) recovery controls, MIME/fileName from ImagePicker + local unsupported-type reject. `storage.removeMutation` (scoped single-row delete) + `sync.removeMutation`.
+- Metadata survives capture→queue→SQLite→restart→retry; idempotency_key unchanged (dedup preserved). Backend `POST /api/mobile/photos` unchanged (201, multipart file/record_type/record_id, replayed dedup) — matches client.
+- Tests: new `src/tests/photo.node.test.js` (5 pass) — persistence, JSON durability, send-plan, full offline lifecycle (restart→multipart→201→synced→idempotent retry, single record), malformed-legacy no-crash. Proved old makeMutation fails the regression. All RN files babel-compile. Pre-existing `sync.node.test.js` network 404 unrelated. Device/Relay/camera lifecycle needs a dev-build check (can't run here). NOT yet pushed — use Save to GitHub.
+
+
 ## Marketing site — differentiator & positioning upgrade (2026-06)
 - Repositioned `roofspan-website` from "generic roofing CRM" to the full property→canvass→rep→lead→job→materials story. No redesign; built on existing Next.js/Tailwind/design system.
 - Hero: new headline "From neighborhood to finished roof." + verified body + value-line chips ("Know the property. Assign the rep. Win the job. Order the materials. Run the roof."). Hero visual now Territory Map + Mobile My Area. Status badge/CTAs/pricing preserved.

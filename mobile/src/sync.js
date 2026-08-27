@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, loadPending, loadAllMutations, putCache, getCache, getScope } from "./storage";
+import { enqueue, saveMutation, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation } from "./storage";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -47,6 +47,13 @@ export async function runSync() {
 async function _markSynced() { await putCache(LAST_SYNC, new Date().toISOString()); }
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
 export async function syncNow() { return runSync(); }
+
+// Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the
+// selected item is removed; all other offline work is preserved. Then refresh listeners.
+export async function removeMutation(client_id) {
+  await _removeMutation(client_id);
+  _emit({ type: "queued" });
+}
 
 // Simple salesperson-facing status derived from the durable queue.
 export async function pendingSummary() {

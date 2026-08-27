@@ -37,6 +37,17 @@ export async function enqueue(m) {
 
 export async function saveMutation(m) { return enqueue(m); }
 
+// Remove exactly ONE mutation (used by the "Remove failed photo" recovery control). Scoped so a
+// device can only delete its own account's row; never touches other Leads/Jobs/Visits/Inspections.
+export async function removeMutation(client_id) {
+  const d = await db();
+  const scope = getScope();
+  await d.runAsync(
+    "DELETE FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+    client_id, scope
+  );
+}
+
 // Pending (not-yet-synced) mutations for the ACTIVE scope only.
 export async function loadPending() {
   const d = await db();
