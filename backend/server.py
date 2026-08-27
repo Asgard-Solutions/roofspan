@@ -119,7 +119,9 @@ if licensing_config.LICENSING_MODE == "dev":
 app.include_router(control_plane_router)
 app.include_router(control_plane_installation_router)
 from relay.server import router as relay_router  # noqa: E402
+from relay.photo_proxy import router as relay_photo_router  # noqa: E402
 app.include_router(relay_router)
+app.include_router(relay_photo_router)
 
 # Local mock ABC Supply server for development/testing (mounted only when ABC_MOCK_ENABLED is set).
 from integrations.abc_supply.config import mock_enabled as _abc_mock_enabled  # noqa: E402
