@@ -1,5 +1,17 @@
 # RoofSpan — Product Requirements & Status
 
+## Marketing site — real app screenshots (2026-06)
+- Replaced the CSS-drawn `AppMock`/`PhoneMock` placeholders on `roofspan-website` with REAL captured screenshots of the running apps.
+- Office (desktop, 1440x900, logged in as owner): captured Dashboard + Jobs via Playwright/Chromium against the live preview.
+- Mobile (phone frame): the Expo app is native-only and crashes on web (`createPermissionHook` from expo-camera). Used a temporary `.web.js` harness (App.web.js + cache.web.js/sync.web.js shims — Metro prefers `.web` on web) to render the REAL Home/Leads/Jobs screen components with representative field data; captured, then DELETED the harness (native builds untouched).
+- Assets: `roofspan-website/public/screenshots/{office-dashboard,office-jobs,mobile-home,mobile-leads}.png`. `components/ui.jsx` `AppMock`/`PhoneMock` now take `src`/`label`/`alt` props and render `<img>` inside browser/phone frames. Hero = dashboard + mobile-home; ProductProof = office-jobs + mobile-leads (copy updated: "These are real screens...").
+- Build + 12/12 Jest tests green.
+
+## Vercel deploy fix + contact email (2026-06)
+- Contact email now `support@roofspan.io` everywhere (config default + `.env` + README + Jest test line 79). Site code already used `CONTACT_EMAIL`.
+- Vercel 404 root cause: monorepo subdir + Next static export (`output: 'export'` → `out/`, no `routes-manifest.json`). Fix: `framework: null` (treat as static). Added root `/app/vercel.json` (builds `roofspan-website`, output `roofspan-website/out`) and `roofspan-website/vercel.json` (framework null, output `out`). Dashboard: set Framework Preset = Other, Root Directory = roofspan-website.
+
+
 ## RoofSpan Mobile — Salesperson App: P4–P7 DONE (2026-06)
 - **P4 My Area Map:** Backend `GET /api/mobile/canvass-sections/{id}/properties` enriched with `last_outcome`, `last_visited_at`, `has_lead` (per signed-in rep) — canvass suite green. New mobile `Property.js` screen (DNK banner, owner, visit history, record-visit incl. DNK optimistic, create-lead-from-property → NewLead with preset, inspection, photos). `MapScreen.openProp` now opens Property; Map wrapped in a `MapStack` (MyArea → Property → NewLead → Inspection). No territory/RentCast/section-edit controls anywhere in mobile.
 - **P5 Jobs:** Mobile `Jobs.js` (read-through cache + offline banner) and `JobDetail.js` (cache, status chips, scope/materials read-only, field-note updates, photos) drive the tested `GET/PATCH /api/mobile/jobs/{id}` with If-Match conflict + optimistic cache writes. No blank-create, no delete. Direct-UUID GET/PATCH of another rep's job = 403 (P1 tests).

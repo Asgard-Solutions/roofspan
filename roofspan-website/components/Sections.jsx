@@ -86,7 +86,7 @@ export function ProductProof() {
     <section className="bg-slate-soft py-20" aria-labelledby="proof-h">
       <div className="container-x grid items-center gap-12 lg:grid-cols-2">
         <div>
-          <SectionHeading id="proof-h" eyebrow="Product proof" title="Built around the real roofing workflow" sub="RoofSpan is shaped by how roofing companies actually run jobs. Explore representative views of the Office and Mobile experience below — real screenshots will replace these examples as we roll out." />
+          <SectionHeading id="proof-h" eyebrow="Product proof" title="Built around the real roofing workflow" sub="These are real screens from RoofSpan Office and the RoofSpan Mobile field app — the same tools your office and crews use every day." />
           <ul className="mt-6 space-y-3">
             {["Jobs, leads, and properties in one place", "Inspections and photos tied to the right job", "Office and free Mobile companion in sync"].map((t) => (
               <li key={t} className="flex items-start gap-3 text-slate-body"><span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-safety" aria-hidden="true" />{t}</li>
@@ -94,8 +94,8 @@ export function ProductProof() {
           </ul>
         </div>
         <div className="flex items-center justify-center gap-4">
-          <div className="w-full max-w-sm"><AppMock /></div>
-          <div className="hidden self-end sm:block"><PhoneMock /></div>
+          <div className="w-full max-w-sm"><AppMock src="/screenshots/office-jobs.png" label="RoofSpan Office · Jobs" alt="RoofSpan Office jobs list with job numbers, scope, status, and value" /></div>
+          <div className="hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-leads.png" alt="RoofSpan Mobile leads list with field lead statuses" /></div>
         </div>
       </div>
     </section>
