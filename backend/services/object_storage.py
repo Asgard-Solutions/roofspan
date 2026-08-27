@@ -63,6 +63,35 @@ def _local_path(base: str, path: str) -> str:
     return full
 
 
+def ensure_storage_ready() -> str | None:
+    """Prove the configured local photo directory is writable before Office reports ready.
+
+    The Windows service runs as ``NT SERVICE\\RoofSpanBackend``. A missing/incorrect ACL previously
+    surfaced only when a field rep uploaded a photo, producing HTTP 502 and an endlessly Pending queue
+    item. This probe converts that hidden runtime failure into a deterministic Office startup error.
+    Hosted preview/proxy mode returns ``None`` because it has no local directory to probe.
+    """
+    base = _local_dir()
+    if not base:
+        return None
+    os.makedirs(base, exist_ok=True)
+    probe = os.path.join(base, f".roofspan-photo-storage-probe-{uuid.uuid4().hex}")
+    try:
+        with open(probe, "wb") as f:
+            f.write(b"roofspan-photo-storage-ok")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as exc:
+        raise RuntimeError(f"RoofSpan photo storage is not writable: {base}") from exc
+    finally:
+        try:
+            if os.path.exists(probe):
+                os.remove(probe)
+        except OSError:
+            pass
+    return base
+
+
 # ---- Emergent managed proxy --------------------------------------------------------------------
 def _base() -> str:
     return (os.environ.get("INTEGRATION_PROXY_URL") or "https://integrations.emergentagent.com").rstrip("/") \
