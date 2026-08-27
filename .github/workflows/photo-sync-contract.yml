@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "mobile/**"
+      - "backend/relay/server.py"
       - "backend/services/object_storage.py"
       - "windows/installer/RoofSpan.wxs"
       - "windows/winbuild/backend_entry.py"
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - "mobile/**"
+      - "backend/relay/server.py"
       - "backend/services/object_storage.py"
       - "windows/**"
       - ".github/workflows/photo-sync-contract.yml"
@@ -38,9 +40,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Verify durable photo queue and relay framing
+      - name: Verify durable photo queue, relay framing, and synced-photo display path
         working-directory: mobile
         run: |
           node --test src/tests/photo.node.test.js
           node --test src/tests/photo_transport_contract.node.test.js
+          node --test src/tests/photo_display_contract.node.test.js
           node src/tests/transport.node.test.js
