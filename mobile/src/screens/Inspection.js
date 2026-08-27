@@ -6,6 +6,22 @@ import { queueMutation } from "../sync";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 
+function InspectionField({ label, value, onChange, placeholder, testID }) {
+  return (
+    <View style={{ marginBottom: 12 }}>
+      <Text style={s.label}>{label}</Text>
+      <TextInput
+        style={s.input}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        multiline
+        testID={testID}
+      />
+    </View>
+  );
+}
+
 export default function Inspection({ route, navigation }) {
   const { lead_id, property_id } = route.params || {};
   const [existing, setExisting] = useState(null);
@@ -38,21 +54,14 @@ export default function Inspection({ route, navigation }) {
     navigation.goBack();
   };
 
-  const F = ({ label, k, ph }) => (
-    <View style={{ marginBottom: 12 }}>
-      <Text style={s.label}>{label}</Text>
-      <TextInput style={s.input} value={form[k]} onChangeText={set(k)} placeholder={ph} multiline testID={`insp-${k}`} />
-    </View>
-  );
-
   return (
     <ScrollView style={s.wrap} contentContainerStyle={{ paddingBottom: 40 }}>
       <Text style={s.h}>{existing ? "Update inspection" : "New inspection"}</Text>
-      <F label="Roof condition" k="roof_condition" ph="e.g. Fair — granule loss" />
-      <F label="Findings" k="findings" ph="What you observed" />
-      <F label="Recommended work" k="recommended_work" ph="What should be done" />
-      <F label="Measurements" k="measurements" ph="e.g. 24 sq, 6:12 pitch" />
-      <F label="Notes" k="notes" ph="Anything else" />
+      <InspectionField label="Roof condition" value={form.roof_condition} onChange={set("roof_condition")} placeholder="e.g. Fair — granule loss" testID="insp-roof_condition" />
+      <InspectionField label="Findings" value={form.findings} onChange={set("findings")} placeholder="What you observed" testID="insp-findings" />
+      <InspectionField label="Recommended work" value={form.recommended_work} onChange={set("recommended_work")} placeholder="What should be done" testID="insp-recommended_work" />
+      <InspectionField label="Measurements" value={form.measurements} onChange={set("measurements")} placeholder="e.g. 24 sq, 6:12 pitch" testID="insp-measurements" />
+      <InspectionField label="Notes" value={form.notes} onChange={set("notes")} placeholder="Anything else" testID="insp-notes" />
       <TouchableOpacity style={s.btn} onPress={save} testID="insp-save"><Text style={s.btnText}>Save inspection</Text></TouchableOpacity>
 
       <PhotoSection recordType={lead_id ? "lead" : "property"} recordId={lead_id || property_id} />
