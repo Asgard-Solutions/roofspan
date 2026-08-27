@@ -9,6 +9,8 @@ The ticket payload (installation id, device id, local user token, expiry) is enc
 it is unreadable in transit/logs. Revocation still takes effect promptly: the tile endpoint re-checks
 that the installation and device are active on every request.
 """
+import base64
+import hashlib
 import json
 import time
 
@@ -21,13 +23,31 @@ TTL_SECONDS = 30 * 60  # 30 minutes
 _fernet: Fernet | None = None
 
 
+def _ticket_key() -> bytes:
+    """Return a stable Fernet key for the configured Relay ticket secret.
+
+    Existing Fernet-formatted secrets are preserved byte-for-byte. A normal shared secret is
+    deterministically derived into the 32-byte urlsafe-base64 form Fernet requires, so production
+    configuration cannot fail lazily with HTTP 500 during ticket minting and every relay node still
+    derives the same encryption key from the same shared secret.
+    """
+    if not RC.TICKET_SECRET:
+        # Dev fallback: process-local tickets; production requires a shared secret at startup.
+        return Fernet.generate_key()
+
+    raw = RC.TICKET_SECRET.encode()
+    try:
+        # Validate backward-compatible Fernet keys without changing them.
+        Fernet(raw)
+        return raw
+    except (ValueError, TypeError):
+        return base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+
+
 def _fernet_instance() -> Fernet:
     global _fernet
     if _fernet is None:
-        # Shared key from config (RELAY_TICKET_SECRET) so every relay node reads the same tickets.
-        # Dev fallback: a per-process key (tickets are short-lived, so a restart just re-mints).
-        key = RC.TICKET_SECRET.encode() if RC.TICKET_SECRET else Fernet.generate_key()
-        _fernet = Fernet(key)
+        _fernet = Fernet(_ticket_key())
     return _fernet
 
 
