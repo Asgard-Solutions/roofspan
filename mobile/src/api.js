@@ -1,13 +1,57 @@
 // Mobile networking facade. Delegates to the active MobileApiTransport (Relay in production,
 // DirectHttp in dev). Screens keep using api.get(...); the queue keeps using send(...).
+//
+// Silent session renewal: any authenticated request that comes back 401 triggers a single, shared
+// refresh of the access token (using the long-lived refresh token) and is then retried once. If the
+// refresh itself fails, the session is truly over — tokens are cleared and the app is signalled to
+// return to sign-in. Pending offline work is never dropped.
 import { getTransport } from "./transport";
-import { getToken } from "./auth";
+import { getToken, getRefreshToken, saveTokens, clearTokens, notifySessionExpired } from "./auth";
 
 async function authHeaders(extra) {
   const t = await getToken();
   const h = { ...(extra || {}) };
   if (t) h.Authorization = `Bearer ${t}`;
   return h;
+}
+
+// ---- Silent access-token refresh (single-flight) ---------------------------------------------
+let _refreshPromise = null;
+
+async function _doRefresh() {
+  const rt = await getRefreshToken();
+  if (!rt) return false;
+  let r;
+  try {
+    r = await getTransport().request({ method: "POST", path: "/auth/refresh", data: { refresh_token: rt }, headers: {} });
+  } catch (e) {
+    return false; // network/relay hiccup — leave tokens as-is and retry later
+  }
+  if (r && r.status === 200 && r.data && r.data.access_token) {
+    await saveTokens({ access_token: r.data.access_token, refresh_token: r.data.refresh_token });
+    return true;
+  }
+  if (r && r.status === 401) {
+    // Refresh token rejected (expired / revoked / reuse) → session is genuinely over.
+    await clearTokens();
+    notifySessionExpired();
+    return false;
+  }
+  return false; // 5xx / offline — transient, keep tokens for a later attempt
+}
+
+export async function refreshAccessToken() {
+  if (!_refreshPromise) _refreshPromise = _doRefresh().finally(() => { _refreshPromise = null; });
+  return _refreshPromise;
+}
+
+// Run an authenticated request; on 401, refresh once and retry with the new token.
+async function _authedRequest(base) {
+  let r = await getTransport().request({ ...base, headers: await authHeaders(base.headers) });
+  if (r && r.status === 401 && (await refreshAccessToken())) {
+    r = await getTransport().request({ ...base, headers: await authHeaders(base.headers) });
+  }
+  return r;
 }
 
 function _throwOn4xx(r) {
@@ -21,10 +65,10 @@ function _throwOn4xx(r) {
 
 export const api = {
   async get(url, cfg = {}) {
-    return _throwOn4xx(await getTransport().request({ method: "GET", path: url, params: cfg.params, headers: await authHeaders(cfg.headers) }));
+    return _throwOn4xx(await _authedRequest({ method: "GET", path: url, params: cfg.params, headers: cfg.headers }));
   },
   async request({ url, method = "GET", params, data, headers } = {}) {
-    return _throwOn4xx(await getTransport().request({ method, path: url, params, data, headers: await authHeaders(headers) }));
+    return _throwOn4xx(await _authedRequest({ method, path: url, params, data, headers }));
   },
 };
 
@@ -58,7 +102,8 @@ async function localFileOk(uri) {
   }
 }
 
-export async function send(m) {
+// One network attempt for a queued mutation with the CURRENT access token.
+async function _sendOnce(m) {
   const headers = { "Idempotency-Key": m.idempotency_key };
   if (m.ifMatch) headers["If-Match"] = m.ifMatch;
   const h = await authHeaders(headers);
@@ -86,4 +131,13 @@ export async function send(m) {
     if (e && e.response) return { status: e.response.status, data: e.response.data };
     return { status: 0, data: null };
   }
+}
+
+export async function send(m) {
+  let res = await _sendOnce(m);
+  // Expired access token → silently renew and retry once (same idempotency key = safe).
+  if (res && res.status === 401 && (await refreshAccessToken())) {
+    res = await _sendOnce(m);
+  }
+  return res;
 }

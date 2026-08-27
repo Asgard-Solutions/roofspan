@@ -1,5 +1,6 @@
 import os
 import base64
+import secrets
 from datetime import datetime, timezone, timedelta
 
 import jwt
@@ -51,6 +52,37 @@ def create_access_token(user_id: str, email: str, role: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
+
+
+# ---- Refresh tokens (long-lived; rotated with reuse detection) ----
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "60"))
+
+
+def new_token_id() -> str:
+    """Opaque, unguessable id used for a refresh token's jti / rotation family."""
+    return secrets.token_hex(16)
+
+
+def create_refresh_token(user_id: str, jti: str, family_id: str):
+    """Return (signed_refresh_jwt, expires_at). The jti is tracked server-side so the token is
+    revocable and rotated with reuse detection."""
+    expires = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user_id),
+        "jti": jti,
+        "family": family_id,
+        "type": "refresh",
+        "exp": expires,
+    }
+    return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM), expires
+
+
+def decode_refresh_token(token: str) -> dict:
+    """Decode + verify a refresh token JWT. Raises jwt.InvalidTokenError / ExpiredSignatureError."""
+    payload = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("not a refresh token")
+    return payload
 
 
 # ---- Secret encryption (AES-GCM) ----

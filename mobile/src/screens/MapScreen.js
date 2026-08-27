@@ -122,7 +122,17 @@ export default function MapScreen({ navigation }) {
   const [cfg, setCfg] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [offlineNoCache, setOfflineNoCache] = useState(false);
-  const [base, setBase] = useState("street"); // street | satellite | buildings
+  const [base, setBase] = useState("street"); // street | satellite
+  const [overlayBuildings, setOverlayBuildings] = useState(false);
+  const [imageryLoading, setImageryLoading] = useState(false);
+  const loadingTimer = React.useRef(null);
+  const flashLoading = () => {
+    setImageryLoading(true);
+    if (loadingTimer.current) clearTimeout(loadingTimer.current);
+    loadingTimer.current = setTimeout(() => setImageryLoading(false), 2800);
+  };
+  const chooseBase = (v) => { setBase(v); if (v === "satellite") flashLoading(); };
+  const toggleBuildings = () => { setOverlayBuildings((v) => { if (!v) flashLoading(); return !v; }); };
   const [filter, setFilter] = useState("all");
   const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
   const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
@@ -239,11 +249,14 @@ export default function MapScreen({ navigation }) {
 
   const baseSwitcher = imageryReady ? (
     <View style={s.switcher} testID="basemap-switcher">
-      {[["street", "Street"], ["satellite", "Satellite"], ["buildings", "Buildings"]].map(([v, label]) => (
-        <TouchableOpacity key={v} onPress={() => setBase(v)} style={[s.segBtn, activeBase === v && s.segBtnActive]} testID={`basemap-${v}-button`}>
+      {[["street", "Street"], ["satellite", "Satellite"]].map(([v, label]) => (
+        <TouchableOpacity key={v} onPress={() => chooseBase(v)} style={[s.segBtn, activeBase === v && s.segBtnActive]} testID={`basemap-${v}-button`}>
           <Text style={[s.segText, activeBase === v && s.segTextActive]}>{label}</Text>
         </TouchableOpacity>
       ))}
+      <TouchableOpacity onPress={toggleBuildings} style={[s.segBtn, overlayBuildings && s.segBtnActive]} testID="basemap-buildings-toggle">
+        <Text style={[s.segText, overlayBuildings && s.segTextActive]}>Buildings</Text>
+      </TouchableOpacity>
     </View>
   ) : null;
 

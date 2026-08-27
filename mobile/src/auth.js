@@ -6,12 +6,35 @@ import { signInThroughRelay } from "./relay";
 import { setUserScope } from "./storage";
 
 const TOKEN_KEY = "roofspan_token";
+const REFRESH_KEY = "roofspan_refresh";
 const USER_KEY = "roofspan_user";
 const AuthCtx = createContext(null);
 
 export async function getToken() {
   return SecureStore.getItemAsync(TOKEN_KEY);
 }
+
+export async function getRefreshToken() {
+  return SecureStore.getItemAsync(REFRESH_KEY);
+}
+
+// Persist a fresh token pair (used by silent refresh). Missing values are left untouched.
+export async function saveTokens({ access_token, refresh_token } = {}) {
+  if (access_token) await SecureStore.setItemAsync(TOKEN_KEY, access_token);
+  if (refresh_token) await SecureStore.setItemAsync(REFRESH_KEY, refresh_token);
+}
+
+export async function clearTokens() {
+  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await SecureStore.deleteItemAsync(REFRESH_KEY);
+}
+
+// Module-level hook so non-React code (the networking layer) can force a sign-out when a refresh
+// token is finally rejected. The AuthProvider registers a handler that clears the signed-in user,
+// which routes the app back to the Login screen. Pending offline work is preserved.
+let _onSessionExpired = null;
+export function setSessionExpiredHandler(cb) { _onSessionExpired = cb; }
+export function notifySessionExpired() { if (_onSessionExpired) { try { _onSessionExpired(); } catch (e) {} } }
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -25,17 +48,26 @@ export function AuthProvider({ children }) {
     })();
   }, []);
 
-  const _persist = async (access_token, u) => {
+  // When a refresh finally fails, drop the session (keep offline queue) so the app shows sign-in.
+  useEffect(() => {
+    setSessionExpiredHandler(() => { setUserScope(null); setUser(null); });
+    return () => setSessionExpiredHandler(null);
+  }, []);
+
+  const _persist = async (access_token, refresh_token, u) => {
     await SecureStore.setItemAsync(TOKEN_KEY, access_token); // secure device storage
+    if (refresh_token) await SecureStore.setItemAsync(REFRESH_KEY, refresh_token);
     await SecureStore.setItemAsync(USER_KEY, JSON.stringify(u));
     setUserScope(u.id); // scope cache + queue to this signed-in salesperson (data isolation §29)
     setUser(u);
+    // Kick a sync so any work queued while signed out (or after a session expiry) flushes now.
+    try { require("./sync").syncNow(); } catch (e) { /* sync module not ready */ }
     return u;
   };
 
   const login = async (email, password) => {
     const r = await axios.post(`${API}/auth/login`, { email, password });
-    return _persist(r.data.access_token, r.data.user);
+    return _persist(r.data.access_token, r.data.refresh_token, r.data.user);
   };
 
   // Sign in with the local RoofSpan account, transported THROUGH the relay to the local FastAPI.
@@ -46,11 +78,11 @@ export function AuthProvider({ children }) {
       err.code = r.code || (r.status === 401 ? "bad_credentials" : "error");
       throw err;
     }
-    return _persist(r.data.access_token, r.data.user);
+    return _persist(r.data.access_token, r.data.refresh_token, r.data.user);
   };
 
   const logout = async () => {
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
+    await clearTokens();
     await SecureStore.deleteItemAsync(USER_KEY);
     setUserScope(null); // stop exposing this user's scoped cache; pending work is retained, not dropped
     setUser(null);

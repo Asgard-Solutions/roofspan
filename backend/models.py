@@ -460,6 +460,23 @@ class IdempotencyKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class RefreshToken(Base):
+    """Server-tracked refresh tokens enabling silent access-token renewal for the Mobile app.
+
+    Rotation with reuse detection: each refresh mints a new jti in the same family and revokes the
+    old one. If a revoked (already-rotated) jti is ever presented again, the whole family is revoked
+    (a signal of token theft/replay)."""
+    __tablename__ = "refresh_tokens"
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    family_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    replaced_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 # ---------- Phase 4: Operations ----------
 
 class Material(Base):

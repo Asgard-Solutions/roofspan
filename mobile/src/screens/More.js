@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Linking } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Linking } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
@@ -98,7 +98,7 @@ export default function More({ navigation }) {
   const openBillingWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
 
   return (
-    <View style={s.wrap}>
+    <ScrollView style={s.wrap} contentContainerStyle={s.wrapContent} testID="more-scroll">
       <Text style={s.h}>Account</Text>
       <View style={s.card}>
         <Text style={s.name}>{user?.full_name || user?.email}</Text>
@@ -199,12 +199,13 @@ export default function More({ navigation }) {
       >
         <Text style={s.unpairText}>Disconnect / Unpair Device</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const s = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: "#F8FAFC", padding: 16 },
+  wrap: { flex: 1, backgroundColor: "#F8FAFC" },
+  wrapContent: { padding: 16, paddingBottom: 40 },
   h: { fontSize: 16, fontWeight: "700", color: C.sub, marginTop: 18, marginBottom: 8 },
   card: { backgroundColor: "#fff", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.line },
   name: { fontSize: 18, fontWeight: "800", color: C.ink },
