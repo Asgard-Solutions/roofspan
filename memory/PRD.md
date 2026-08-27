@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Relay device credential — one-time legacy backfill + closed fallback (2026-06)
+- Added `_authorize_or_backfill_credential(db, device, credential)` in `relay/server.py`, wired into BOTH the mobile WebSocket `/mobile` `hello` (primary connection) and the tile-ticket mint (`_authenticate_relay_device`):
+  - `credential_hash` present → enforce (constant-time compare) as before.
+  - `credential_hash` NULL + a credential presented → ADOPT it (store sha256, commit) — one-time backfill; the device is fully enforced from then on.
+  - NULL + no credential → deny (this REPLACES the prior temporary tiles-only fallback, so it's more secure).
+- Effect: legacy devices quietly upgrade to a durable per-device credential on their next connect; real devices (already have `credential_hash`) are unaffected.
+- Verified end-to-end on-pod (mint path): NULL→adopt (200, hash = sha256(cred)); wrong cred later → 403; correct cred → 200; NULL+empty → 403 (no adoption). Server-side only; no mobile rebuild.
+
 ## Mobile photos not syncing to Office — local filesystem storage (2026-06)
 - **Root cause:** `POST /api/mobile/photos` calls `services.object_storage.put_object`, which uploaded to the **Emergent managed object-storage proxy** (`integrations.emergentagent.com`) using `EMERGENT_LLM_KEY`. On a self-hosted Windows Office that key/proxy isn't configured/reachable → `put_object` raised → endpoint returned **502** → mobile treated 5xx as transient → photos stuck **"Pending"** forever (non-photo mutations synced fine because they don't touch storage).
 - **Fix (`services/object_storage.py`, server-side only):** dual backend. Uses **local filesystem** when `PHOTO_STORAGE_DIR` is set OR when `EMERGENT_LLM_KEY` is absent (self-hosted auto-fallback). Photos are written under that dir using the same relative object path stored on the `Photo` row (`roofspan/photos/{record_type}/{record_id}/{uuid}.{ext}`); `get_object` reads from there. Path-traversal components are stripped. The Emergent proxy path is preserved for the hosted/cloud preview (`EMERGENT_LLM_KEY` set + `PHOTO_STORAGE_DIR` unset).

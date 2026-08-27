@@ -295,18 +295,8 @@ async def mobile_ws(ws: WebSocket):
                 await ws.close()
                 return
 
-            import hashlib as _hashlib
-            import hmac as _hmac
-
             credential = hello.get("device_credential") or ""
-            if (
-                not device.credential_hash
-                or not credential
-                or not _hmac.compare_digest(
-                    _hashlib.sha256(credential.encode()).hexdigest(),
-                    device.credential_hash,
-                )
-            ):
+            if not await _authorize_or_backfill_credential(db, device, credential):
                 await _send(ws, {"type": P.T_ERROR, "code": "device_auth_failed"})
                 await ws.close()
                 return
@@ -431,6 +421,26 @@ class TileTicketRequest(BaseModel):
     token: str | None = None
 
 
+async def _authorize_or_backfill_credential(db, device, credential: str) -> bool:
+    """Verify a device's durable per-device credential, with a one-time legacy backfill.
+
+    - If the device already has a `credential_hash`, enforce it (constant-time compare).
+    - If the device predates durable credentials (`credential_hash` is NULL) and presents a non-empty
+      credential, ADOPT it now (store its hash) so every subsequent connection is fully enforced. This
+      quietly upgrades legacy devices on their next connect and closes the legacy tiles-only fallback.
+    - If there is no stored hash AND no credential presented, deny.
+    """
+    if device.credential_hash:
+        return bool(credential) and hmac.compare_digest(
+            hashlib.sha256(credential.encode()).hexdigest(), device.credential_hash
+        )
+    if credential:
+        device.credential_hash = hashlib.sha256(credential.encode()).hexdigest()
+        await db.commit()
+        return True
+    return False
+
+
 async def _authenticate_relay_device(db, installation_id: str, device_id: str, credential: str):
     """Reuse the Mobile WS authorization chain for stateless HTTP tile requests.
 
@@ -448,16 +458,8 @@ async def _authenticate_relay_device(db, installation_id: str, device_id: str, c
             device = None
     if device is None or str(device.installation_id) != installation_id or device.status != "ACTIVE":
         return None, "device_not_paired"
-    if device.credential_hash:
-        # Enforce the durable per-device credential whenever one has been provisioned.
-        if not credential or not hmac.compare_digest(
-            hashlib.sha256(credential.encode()).hexdigest(), device.credential_hash
-        ):
-            return None, "device_auth_failed"
-    # else: legacy device paired before durable credentials existed. `credential_hash` was added by a
-    # later Control-Plane migration, so pre-existing devices carry NULL. Such a device is still ACTIVE
-    # + paired + entitled (verified here), so it is allowed to obtain a tile ticket. The ticket grants
-    # ONLY org-level map imagery (never user data), so this legacy fallback does not widen access.
+    if not await _authorize_or_backfill_credential(db, device, credential):
+        return None, "device_auth_failed"
     state = await _entitlement_state(db, installation.company_id)
     if state not in ("ACTIVE", "GRACE"):
         return None, "subscription_inactive"
