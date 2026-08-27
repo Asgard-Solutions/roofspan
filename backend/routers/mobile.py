@@ -131,7 +131,10 @@ async def create_inspection(payload: MobileInspectionIn, request: Request, idemp
             await mauthz.assert_property_access(db, payload.property_id, user)
         if not payload.lead_id and not payload.property_id:
             raise HTTPException(status_code=403, detail="An inspection must be tied to your lead or property.")
-    i = Inspection(**payload.model_dump(), created_by=user.email)
+    data = payload.model_dump()
+    if not data.get("inspection_date"):
+        data["inspection_date"] = datetime.now(timezone.utc)
+    i = Inspection(**data, created_by=user.email)
     db.add(i)
     await db.flush()
     if idempotency_key:
@@ -171,6 +174,7 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
     return {"id": str(i.id), "lead_id": str(i.lead_id) if i.lead_id else None,
             "property_id": str(i.property_id) if i.property_id else None,
             "customer_id": str(i.customer_id) if i.customer_id else None,
+            "inspection_date": i.inspection_date.isoformat() if i.inspection_date else None,
             "inspector": i.inspector, "roof_condition": i.roof_condition, "findings": i.findings,
             "recommended_work": i.recommended_work, "measurements": i.measurements, "notes": i.notes,
             "if_match": _token(i), "created_by": i.created_by, "replayed": replayed}

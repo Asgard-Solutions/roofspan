@@ -23,8 +23,8 @@ assert.ok(
 
 assert.strictEqual(
   (source.match(/<InspectionField\b/g) || []).length,
-  5,
-  "all five inspection text fields must use the stable module-scope field component"
+  6,
+  "all six inspection text fields must use the stable module-scope field component"
 );
 
 console.log("PASS inspection fields keep a stable component identity across keystrokes");
