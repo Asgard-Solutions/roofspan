@@ -14,7 +14,7 @@ This module provides:
                              SCM lifecycle: START_PENDING -> (worker ready) -> RUNNING ->
                              STOP_PENDING -> clean terminate -> STOPPED, with a nonzero exit on init
                              failure. pywin32 is imported lazily so this module stays importable (and
-                             unit-testable) on non-Windows CI.
+                             unit-testable) on Linux CI.
   * drive_lifecycle()      - the same lifecycle contract without pywin32, so the ordering/readiness/
                              stop semantics are unit-tested on Linux against a fake worker.
 
@@ -86,6 +86,10 @@ def load_runtime_config() -> None:
 
     os.environ.setdefault("ROOFSPAN_STATIC_DIR", os.path.join(root, "frontend"))
     os.environ.setdefault("INSTALLATION_KEYS_DIR", os.path.join(droot, "identity"))
+    # Machine-owned Field photos are persistent customer data. Existing installs can have a preserved
+    # roofspan.env created before PHOTO_STORAGE_DIR existed, so this runtime default is mandatory in
+    # addition to the shipped template and MSI ImagesDir ACL.
+    os.environ.setdefault("PHOTO_STORAGE_DIR", os.path.join(droot, "images"))
     os.environ.setdefault("ROOFSPAN_UPDATE_PUBLIC_KEY",
                           os.path.join(root, "config-templates", "update_public_key.pem"))
     # Production defaults (outbound relay + signed-update manifest). NOT derived from a user shell.
