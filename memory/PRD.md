@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## Website — Real RoofSpan Office map screenshots (2026-06)
+- Replaced the placeholder `office-map.jpg` with three REAL Office map captures the user provided, optimized to JPEG (satellite clustered 447KB, property pins 362KB, property detail 157KB) in `public/screenshots/`.
+- `Gallery.jsx` OFFICE row now shows: Satellite Territory Map, Property Pins, Property Detail (+ existing Jobs, Dashboard). `Hero.jsx` and `Sections.jsx` AppMock now use `office-map-satellite.jpg`. Old `office-map.jpg` removed (no remaining references).
+- Verified: `yarn build` passes; static `out/` serves all three images (200); hero + product-tour screenshots confirm correct rendering. Needs redeploy via Save to GitHub → Vercel.
+
 ## Mobile — Silent session renewal (refresh tokens) + More page scroll fix (2026-06)
 - **Root cause of "not everything syncs" (HTTP 401):** the access JWT expires after 12h (`ACCESS_TOKEN_EXPIRE_MINUTES=720`) and there was NO refresh mechanism. Once a rep's token expired, queued mutations failed with 401 while cached screens still looked fine, so the rep never realized they were silently logged out.
 - **Fix — refresh tokens with rotation + reuse detection:**

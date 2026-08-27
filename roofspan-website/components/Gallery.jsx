@@ -4,7 +4,9 @@ import { X, ChevronLeft, ChevronRight, Expand } from "lucide-react";
 import { SectionHeading } from "./ui";
 
 const OFFICE = [
-  { src: "/screenshots/office-map.jpg", title: "RoofSpan Office · Territory & Property Map", alt: "RoofSpan Office territory map with canvass sections and property pins for roofing sales planning", w: 1300, h: 1358 },
+  { src: "/screenshots/office-map-satellite.jpg", title: "RoofSpan Office · Satellite Territory Map", alt: "RoofSpan Office satellite map showing 8,029 properties clustered across a territory for roofing canvass planning", w: 1919, h: 1033 },
+  { src: "/screenshots/office-map-pins.jpg", title: "RoofSpan Office · Property Pins", alt: "RoofSpan Office satellite view with individual owned, rented and unknown property pins across neighborhood streets", w: 1919, h: 1033 },
+  { src: "/screenshots/office-property-detail.jpg", title: "RoofSpan Office · Property Detail", alt: "RoofSpan Office property detail panel with owner info, record-a-visit, field photos and convert-to-lead", w: 1919, h: 1032 },
   { src: "/screenshots/office-jobs.png", title: "RoofSpan Office · Jobs", alt: "RoofSpan Office jobs list with job numbers, scope, status and value", w: 1600, h: 1000 },
   { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
 ];
