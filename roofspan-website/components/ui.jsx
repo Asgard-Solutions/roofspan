@@ -1,5 +1,3 @@
-import { ClipboardList, Camera, MapPin, Hammer, Boxes, Users2 } from "lucide-react";
-
 export function SectionHeading({ eyebrow, title, sub, dark = false, id }) {
   return (
     <div className="max-w-2xl">
@@ -10,56 +8,28 @@ export function SectionHeading({ eyebrow, title, sub, dark = false, id }) {
   );
 }
 
-// In-code representation of the RoofSpan Office interface. Uses OBVIOUSLY FICTIONAL example data and
-// no invented metrics. Structured so a real redacted screenshot can replace it without page redesign.
-export function AppMock() {
-  const jobs = [
-    { id: "JOB-1042", name: "Alderman Residence", city: "Springfield · Example St", status: "Inspection" },
-    { id: "JOB-1043", name: "Ridgeline Warehouse", city: "Example City · Depot Rd", status: "Estimate" },
-    { id: "JOB-1044", name: "Maple Court HOA", city: "Sample Town · Maple Ct", status: "Scheduled" },
-  ];
+// Real RoofSpan Office screenshot inside a browser-chrome frame.
+export function AppMock({ src = "/screenshots/office-dashboard.png", label = "RoofSpan Office · Dashboard", alt = "RoofSpan Office dashboard showing live users, recent activity, and inventory metrics" }) {
   return (
-    <div className="card overflow-hidden" role="img" aria-label="Example RoofSpan Office job list with fictional sample data">
+    <div className="card overflow-hidden ring-1 ring-slate-line/60" data-testid="app-screenshot">
       <div className="flex items-center gap-2 border-b border-slate-line bg-slate-soft px-4 py-3">
         <span className="h-3 w-3 rounded-full bg-safety" />
         <span className="h-3 w-3 rounded-full bg-brand-400" />
-        <span className="h-3 w-3 rounded-full bg-slate-line" />
-        <span className="ml-3 text-xs font-semibold text-slate-muted">RoofSpan Office · Jobs</span>
+        <span className="h-3 w-3 rounded-full bg-emerald-400" />
+        <span className="ml-3 truncate text-xs font-semibold text-slate-muted">{label}</span>
       </div>
-      <div className="grid grid-cols-3 gap-2 p-4 text-center">
-        {[["Leads", ClipboardList], ["Inspections", Camera], ["Properties", MapPin]].map(([l, Icon]) => (
-          <div key={l} className="rounded-lg bg-slate-soft py-3">
-            <Icon className="mx-auto h-5 w-5 text-brand" aria-hidden="true" />
-            <p className="mt-1 text-xs font-semibold text-slate-ink">{l}</p>
-          </div>
-        ))}
-      </div>
-      <ul className="divide-y divide-slate-line px-4 pb-4">
-        {jobs.map((j) => (
-          <li key={j.id} className="flex items-center justify-between py-3">
-            <div className="text-left">
-              <p className="text-sm font-semibold text-slate-ink">{j.name}</p>
-              <p className="text-xs text-slate-muted">{j.id} · {j.city}</p>
-            </div>
-            <span className="rounded-full bg-brand/10 px-3 py-1 text-xs font-bold text-brand">{j.status}</span>
-          </li>
-        ))}
-      </ul>
+      <img src={src} alt={alt} loading="lazy" className="block w-full" width={1440} height={900} />
     </div>
   );
 }
 
-export function PhoneMock() {
+// Real RoofSpan Mobile screenshot inside a phone frame.
+export function PhoneMock({ src = "/screenshots/mobile-home.png", alt = "RoofSpan Mobile field app home screen" }) {
   return (
-    <div className="card w-44 shrink-0 overflow-hidden rounded-[1.75rem] border-4 border-navy" role="img" aria-label="Example RoofSpan Mobile screen with fictional sample data">
-      <div className="bg-navy px-3 py-2 text-center text-[10px] font-bold text-white">RoofSpan Mobile</div>
-      <div className="space-y-2 p-3">
-        {[["Alderman Residence", Camera], ["Ridgeline Warehouse", Hammer], ["Maple Court HOA", Boxes], ["New lead — Example Ave", Users2]].map(([t, Icon]) => (
-          <div key={t} className="flex items-center gap-2 rounded-lg bg-slate-soft px-2 py-2">
-            <Icon className="h-4 w-4 text-brand" aria-hidden="true" />
-            <span className="text-[11px] font-medium text-slate-ink">{t}</span>
-          </div>
-        ))}
+    <div className="relative w-48 shrink-0 rounded-[2.25rem] border-[6px] border-navy bg-navy shadow-card" data-testid="mobile-screenshot">
+      <div className="absolute left-1/2 top-2 z-10 h-4 w-20 -translate-x-1/2 rounded-full bg-navy" aria-hidden="true" />
+      <div className="overflow-hidden rounded-[1.75rem]">
+        <img src={src} alt={alt} loading="lazy" className="block w-full" width={400} height={860} />
       </div>
     </div>
   );
