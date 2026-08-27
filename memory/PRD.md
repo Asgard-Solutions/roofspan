@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — live "Connected to Office / Reconnecting…" status chip (2026-06)
+- `transport.js`: module-level `_lastOkAt`/`_lastErrAt` updated on every relay response (ok), error frame, timeout, and teardown; exported `transportHealth()` → `{ online, lastOkAt, lastErrAt }` (online = a successful round-trip is more recent than the last error).
+- New `components/SyncStatusChip.jsx`: polls `transportHealth()` + `lastSyncAt()` every 4s; green "Connected to Office" vs amber "Reconnecting…", with "· Last synced {relative}". testids `home-sync-chip` / `more-sync-chip` (+ `-label`, `-last`).
+- Wired into `Home.js` ("My Day") and `More.js` (Sync status). Makes silent sync failures visible. Babel-compiles. Needs EAS rebuild.
+
 ## Mobile photo capture — trigger sync immediately (2026-06)
 - `PhotoSection.persistAndQueue` queued the photo but never triggered a sync, so photos sat until the next trigger (and the message said "will upload when online" regardless of connectivity). Now calls `syncNow()` right after queuing (fire-and-forget) and shows an accurate "Uploading to Office now (or as soon as reachable)" message. Combined with the transport stale-socket reconnect fix, this delivers photos promptly. Babel-compiles. Needs EAS rebuild.
 

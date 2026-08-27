@@ -3,6 +3,7 @@ import { View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity } 
 import { useFocusEffect } from "@react-navigation/native";
 import { cache } from "../cache";
 import { pendingSummary, runSync, lastSyncAt } from "../sync";
+import SyncStatusChip from "../components/SyncStatusChip";
 import { C, badge } from "../theme";
 
 const ACTION_STATUSES = ["new", "contacted", "interested", "qualified"];
@@ -42,6 +43,7 @@ export default function Home({ navigation }) {
   return (
     <ScrollView style={s.wrap} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}>
       <Text style={s.h}>My Day</Text>
+      <SyncStatusChip testid="home-sync-chip" />
       <View style={s.row}>
         <Stat label="Open leads" value={open.length} onPress={goLeads} testID="stat-open-leads" />
         <Stat label="Today's jobs" value={todayJobs.length} onPress={goJobs} testID="stat-today-jobs" />

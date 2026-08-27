@@ -11,6 +11,13 @@ let _activePairing = null;
 let _relay = null;
 let _direct = null;
 
+// Shared connection-health signal so the UI can show reps whether their work is reaching Office.
+let _lastOkAt = 0;   // last successful tunnel round-trip (a response frame came back)
+let _lastErrAt = 0;  // last tunnel error/timeout/disconnect
+export function transportHealth() {
+  return { lastOkAt: _lastOkAt, lastErrAt: _lastErrAt, online: _lastOkAt > 0 && _lastOkAt >= _lastErrAt };
+}
+
 // pairingContext calls this so transport selection follows pairing state (no per-call SecureStore).
 export function setActivePairing(p) {
   _activePairing = p || null;
@@ -50,8 +57,8 @@ class RelayTransport {
     if (!p) return;
     clearTimeout(p.timer);
     this.pending.delete(rid);
-    if (f.type === "response") p.resolve(parseResponseFrame(f));
-    else if (f.type === "error") p.reject(_netErr("relay_request_error", f.code));
+    if (f.type === "response") { _lastOkAt = Date.now(); p.resolve(parseResponseFrame(f)); }
+    else if (f.type === "error") { _lastErrAt = Date.now(); p.reject(_netErr("relay_request_error", f.code)); }
   }
   _connect() {
     if (this.ws && this.ws.readyState === 1) return Promise.resolve(this.ws);
@@ -85,6 +92,7 @@ class RelayTransport {
   _teardown() {
     // Force a fresh reconnect on the next request. A WebSocket killed by a proxy/idle-timeout can
     // still report readyState OPEN, so we must not trust it after a timeout/send failure.
+    _lastErrAt = Date.now();
     try { this.ws && this.ws.close(); } catch (e) {}
     this.ws = null;
   }

@@ -4,6 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
 import { pendingSummary, runSync, removeMutation, removeAllFailed, removeAllStuck, restoreMutations } from "../sync";
+import SyncStatusChip from "../components/SyncStatusChip";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
@@ -145,6 +146,7 @@ export default function More({ navigation }) {
       )}
 
       <Text style={s.h}>Sync status</Text>
+      <SyncStatusChip testid="more-sync-chip" />
       <View style={s.card} testID="more-sync">
         {["pending", "failed", "conflict", "synced"].map((k) => (
           <View key={k} style={s.syncRow}>
