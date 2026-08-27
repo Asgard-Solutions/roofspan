@@ -15,7 +15,7 @@ import { Image as ImageIcon, Loader2, User, Clock } from "lucide-react";
  *   compact:    boolean (smaller thumbnails, for nested use inside a card)
  *   testid:     optional data-testid prefix
  */
-export default function PhotoGallery({ recordType, recordId, compact = false, testid }) {
+export default function PhotoGallery({ recordType, recordId, compact = false, hideWhenEmpty = false, testid }) {
   const [photos, setPhotos] = useState([]);
   const [urls, setUrls] = useState({}); // photoId -> objectURL
   const [loading, setLoading] = useState(true);
@@ -76,6 +76,7 @@ export default function PhotoGallery({ recordType, recordId, compact = false, te
   };
 
   if (loading) {
+    if (hideWhenEmpty) return null;
     return (
       <div className="flex items-center gap-2 py-3 text-sm text-slate-400" data-testid={`${tid}-loading`}>
         <Loader2 className="h-4 w-4 animate-spin" /> Loading photos…
@@ -84,6 +85,7 @@ export default function PhotoGallery({ recordType, recordId, compact = false, te
   }
 
   if (!photos.length) {
+    if (hideWhenEmpty) return null;
     return <p className="text-sm text-slate-500" data-testid={`${tid}-empty`}>No field photos yet.</p>;
   }
 

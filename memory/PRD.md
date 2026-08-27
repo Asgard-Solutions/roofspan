@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Office — field photo thumbnails on property + visit history (2026-06)
+- `PhotoGallery.jsx` already rendered property-level field photos (auth'd blob object URLs, lightbox with uploader/timestamp). Added a `hideWhenEmpty` prop (renders nothing while loading/empty) for quiet nested use.
+- `PropertySheet.jsx`: each visit in the History list now shows a compact `PhotoGallery` (`recordType="visit"`, `hideWhenEmpty`), so roof/exterior shots taken during a specific visit appear right under that visit — in addition to the existing all-property gallery.
+- Backend already supports `record_type=visit` for photo upload + list. Verified e2e on-pod: create visit → upload visit photo (201) → list returns it (count=1). Frontend compiles clean.
+- Note: visually confirming the sheet requires placed property pins on the map (many are currently unresolved) — the Mapbox geocoding backfill would surface them.
+
 ## Relay device credential — one-time legacy backfill + closed fallback (2026-06)
 - Added `_authorize_or_backfill_credential(db, device, credential)` in `relay/server.py`, wired into BOTH the mobile WebSocket `/mobile` `hello` (primary connection) and the tile-ticket mint (`_authenticate_relay_device`):
   - `credential_hash` present → enforce (constant-time compare) as before.

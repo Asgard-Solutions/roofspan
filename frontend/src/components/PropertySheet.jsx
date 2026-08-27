@@ -236,6 +236,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                     <div key={v.id} className="rounded-md border border-border px-3 py-2 text-sm">
                       <div className="flex justify-between"><span className="font-medium text-slate-800">{OUTCOMES.find((o) => o.value === v.outcome)?.label || v.outcome}</span><span className="text-xs text-slate-400">{new Date(v.visited_at).toLocaleDateString()}</span></div>
                       {v.notes && <div className="text-slate-500">{v.notes}</div>}
+                      <div className="mt-2"><PhotoGallery recordType="visit" recordId={v.id} compact hideWhenEmpty testid={`visit-photos-${v.id}`} /></div>
                     </div>
                   ))}
                 </div>
