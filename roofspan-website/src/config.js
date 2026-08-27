@@ -68,8 +68,10 @@ export function productStatus() {
 
 export const SITE_NAV = [
   { href: "#product", label: "Product", testid: "site-nav-product" },
-  { href: "#how-it-works", label: "How It Works", testid: "site-nav-how" },
-  { href: "#why", label: "Why RoofSpan", testid: "site-nav-why" },
+  { href: "#sales", label: "Sales & Canvassing", testid: "site-nav-sales" },
+  { href: "#abc", label: "ABC Supply", testid: "site-nav-abc" },
+  { href: "#tour", label: "Product Tour", testid: "site-nav-tour" },
   { href: "#pricing", label: "Pricing", testid: "site-nav-pricing" },
-  { href: "#data", label: "Security & Data", testid: "site-nav-data" },
+  { href: "#data", label: "Data & Security", testid: "site-nav-data" },
+  { href: "#faq", label: "FAQ", testid: "site-nav-faq" },
 ];

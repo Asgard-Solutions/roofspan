@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Marketing site — differentiator & positioning upgrade (2026-06)
+- Repositioned `roofspan-website` from "generic roofing CRM" to the full property→canvass→rep→lead→job→materials story. No redesign; built on existing Next.js/Tailwind/design system.
+- Hero: new headline "From neighborhood to finished roof." + verified body + value-line chips ("Know the property. Assign the rep. Win the job. Order the materials. Run the roof."). Hero visual now Territory Map + Mobile My Area. Status badge/CTAs/pricing preserved.
+- New sections (`Sections.jsx`): `BigThree` ("More than roofing CRM" — Property Intelligence, Territory & Canvass, ABC Supply), `MapToMaterial` (7-step lifecycle, id=how-it-works), `MobileArea` ("Give every salesperson their own area", id=sales), `AbcSupply` (dedicated, id=abc). Improved `Product` cards + 6 `Differentiators`. FAQ expanded (property/canvass/My Area/ABC/ownership) via `content.js` (also feeds FAQ schema).
+- Accuracy rules honored: owner-occupied/non-owner-occupied only (no renter identity); "available info varies by source/location"; ABC Supply named (no multi-supplier claims); pricing≠availability note; offline = "locally cached + queued updates that sync"; pricing/commercial truths unchanged (config.js untouched for pricing).
+- Nav (`config.js SITE_NAV`): Product / Sales & Canvassing / ABC Supply / Product Tour / Pricing / Data & Security / FAQ (anchor nav). Gallery reordered (Office: Map→Jobs→Dashboard; Field: My Area→Leads→Jobs→My Day) with updated titles/alt.
+- SEO (`layout.jsx`): new title "RoofSpan — Roofing CRM, Canvassing & Operations Software", broadened description, keywords, SoftwareApplication `featureList`, FAQ schema auto-updates.
+- Tests: `yarn build` static export OK; Jest **12/12**; Playwright E2E **1/1** (updated hero assertion). NOTE: not yet pushed — user must use "Save to GitHub" (agent cannot push).
+
+
 ## Mobile Field map — relay secret, offline prefetch, progress pins (2026-06)
 - **Relay ticket secret wired:** centralized in `relay/config.py` as `TICKET_SECRET` (env `RELAY_TICKET_SECRET`); `tickets.py` now uses it so all relay nodes share one key. Added to `require_production_config()` (REQUIRED in production/multi-node). Set a stable key in `backend/.env` for local/preview. Proven: a ticket minted before a backend restart still decodes after (returns 503 office_offline, not 401) — stable across restarts/nodes.
 - **Offline prefetch:** `src/offlineTiles.js` `downloadSectionArea()` builds an OSM+satellite style file and creates a MapLibre offline pack for the selected canvass section's bbox (zoom 13–18). "Download area for offline" button in the map header shows progress % / saved ✓ / retry.

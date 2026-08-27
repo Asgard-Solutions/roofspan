@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 // Primary conversion journey: land -> navigate -> use calculator -> submit early-access form.
 test("visitor can reach and complete the early-access conversion flow", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("h1")).toContainText(/roofing job/i);
+  await expect(page.locator("h1")).toContainText(/finished roof/i);
   await expect(page.getByTestId("status-badge")).toContainText(/early access/i);
   await expect(page.getByTestId("hero-primary-cta")).toContainText(/Join Early Access/i);
 

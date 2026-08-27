@@ -4,15 +4,15 @@ import { X, ChevronLeft, ChevronRight, Expand } from "lucide-react";
 import { SectionHeading } from "./ui";
 
 const OFFICE = [
-  { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
+  { src: "/screenshots/office-map.jpg", title: "RoofSpan Office · Territory & Property Map", alt: "RoofSpan Office territory map with canvass sections and property pins for roofing sales planning", w: 1300, h: 1358 },
   { src: "/screenshots/office-jobs.png", title: "RoofSpan Office · Jobs", alt: "RoofSpan Office jobs list with job numbers, scope, status and value", w: 1600, h: 1000 },
-  { src: "/screenshots/office-map.jpg", title: "RoofSpan Office · Territory Map", alt: "RoofSpan Office property acquisition territory map", w: 1300, h: 1358 },
+  { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
 ];
 const FIELD = [
-  { src: "/screenshots/mobile-home.png", title: "RoofSpan Field · My Day", alt: "RoofSpan Mobile field app My Day home screen", w: 800, h: 1720 },
-  { src: "/screenshots/mobile-leads.png", title: "RoofSpan Field · Leads", alt: "RoofSpan Mobile field app leads list", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-area.png", title: "RoofSpan Field · My Area", alt: "RoofSpan Mobile My Area — a salesperson's assigned canvass section with property pins", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-leads.png", title: "RoofSpan Field · Leads", alt: "RoofSpan Mobile field app leads created from properties", w: 800, h: 1720 },
   { src: "/screenshots/mobile-jobs.png", title: "RoofSpan Field · Jobs", alt: "RoofSpan Mobile field app jobs list", w: 800, h: 1720 },
-  { src: "/screenshots/mobile-area.png", title: "RoofSpan Field · My Area", alt: "RoofSpan Mobile field app assigned territory area", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-home.png", title: "RoofSpan Field · My Day", alt: "RoofSpan Mobile field app My Day home screen", w: 800, h: 1720 },
 ];
 const ALL = [...OFFICE, ...FIELD];
 
