@@ -18,6 +18,11 @@ if (Platform.OS !== "web") {
 }
 const NATIVE_MAP_OK = MapLibre && isNativeMapAvailable(Constants.executionEnvironment);
 
+// When satellite is selected we must NOT keep the opaque OSM base underneath (that's why satellite
+// looked like it "wasn't rendering"). Office hides its OSM layer for satellite; on native we swap to a
+// background-only style so the satellite raster child IS the visible base — matching Office.
+const SATELLITE_BG_STYLE = { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b1b2b" } }] };
+
 // Grow MapLibre's ambient tile cache once so recently viewed satellite/building tiles remain
 // available when a rep loses signal in the field. Best-effort; never blocks the map.
 let _ambientCacheReady = false;
@@ -347,7 +352,7 @@ export default function MapScreen({ navigation }) {
         <View style={{ flex: 1 }} testID="map-container">
           {header}
           <View style={{ flex: 1 }}>
-            <MapView style={{ flex: 1 }} mapStyle={mapStyle} testID="map-view">
+            <MapView style={{ flex: 1 }} mapStyle={activeBase === "satellite" ? SATELLITE_BG_STYLE : mapStyle} testID="map-view">
               <Camera zoomLevel={safeZoom(cfg)} centerCoordinate={center} />
 
               {activeBase === "satellite" && RasterSource && (

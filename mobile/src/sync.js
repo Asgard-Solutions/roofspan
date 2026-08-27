@@ -89,15 +89,27 @@ export async function syncNow() { _resetBackoff(); return runSync(); }
 // Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the
 // selected item is removed; all other offline work is preserved. Then refresh listeners.
 export async function removeMutation(client_id) {
+  const all = await loadAllMutations();
+  const removed = all.find((x) => x.client_id === client_id) || null;
   await _removeMutation(client_id);
   _emit({ type: "queued" });
+  return removed;
 }
 
 // Bulk recovery: remove every failed mutation for the active scope in one action. Pending/synced/
-// conflict work and other scopes are untouched.
+// conflict work and other scopes are untouched. Returns the removed rows so the UI can offer Undo.
 export async function removeAllFailed() {
+  const all = await loadAllMutations();
+  const removed = all.filter((x) => x.state === "failed");
   await _removeFailed();
   _emit({ type: "queued" });
+  return removed;
+}
+
+// Undo support: re-insert previously removed mutation rows exactly as they were.
+export async function restoreMutations(list) {
+  for (const m of (list || [])) await saveMutation(m);
+  if (list && list.length) _emit({ type: "queued" });
 }
 
 // Recovery control: swap the local file on an existing (failed/pending) photo mutation WITHOUT losing

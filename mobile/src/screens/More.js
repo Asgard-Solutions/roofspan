@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, Linking } from "react-
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
-import { pendingSummary, runSync, removeMutation, removeAllFailed } from "../sync";
+import { pendingSummary, runSync, removeMutation, removeAllFailed, restoreMutations } from "../sync";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
@@ -13,6 +13,21 @@ export default function More({ navigation }) {
   const [counts, setCounts] = useState({ pending: 0, failed: 0, conflict: 0, synced: 0 });
   const [attention, setAttention] = useState([]);
   const [syncing, setSyncing] = useState(false);
+  const [undo, setUndo] = useState(null); // { items:[], label:"" }
+  const undoTimer = React.useRef(null);
+  const showUndo = (items, label) => {
+    if (!items || !items.length) return;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo({ items, label });
+    undoTimer.current = setTimeout(() => setUndo(null), 6000);
+  };
+  const doUndo = async () => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    const items = undo ? undo.items : [];
+    setUndo(null);
+    await restoreMutations(items);
+    load();
+  };
 
   const load = useCallback(async () => {
     const { counts: c, items } = await pendingSummary();
@@ -39,7 +54,7 @@ export default function More({ navigation }) {
       "Removing this will only remove this one failed update. Your other offline work (leads, jobs, visits, inspections and other photos) will not be affected.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Remove", style: "destructive", onPress: async () => { await removeMutation(m.client_id); load(); } },
+        { text: "Remove", style: "destructive", onPress: async () => { const r = await removeMutation(m.client_id); load(); showUndo(r ? [r] : [], "Removed 1 failed update"); } },
       ]
     );
   };
@@ -69,7 +84,7 @@ export default function More({ navigation }) {
       `This will remove ${counts.failed} failed update${counts.failed === 1 ? "" : "s"} for your account only. Pending work, conflicts, and other offline data will not be affected.`,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Remove all", style: "destructive", onPress: async () => { await removeAllFailed(); load(); } },
+        { text: "Remove all", style: "destructive", onPress: async () => { const r = await removeAllFailed(); load(); showUndo(r, `Removed ${r.length} failed upload${r.length === 1 ? "" : "s"}`); } },
       ]
     );
   };
@@ -114,6 +129,13 @@ export default function More({ navigation }) {
           <Text style={s.syncBtnText}>{syncing ? "Syncing…" : "Sync now"}</Text>
         </TouchableOpacity>
       </View>
+
+      {undo ? (
+        <View style={s.undoBar} testID="undo-bar">
+          <Text style={s.undoText}>{undo.label}</Text>
+          <TouchableOpacity onPress={doUndo} testID="undo-button"><Text style={s.undoAction}>Undo</Text></TouchableOpacity>
+        </View>
+      ) : null}
 
       {attention.length > 0 && (
         <>
@@ -209,6 +231,9 @@ const s = StyleSheet.create({
   bulkRetryText: { color: "#fff", fontWeight: "800", fontSize: 13 },
   bulkRemove: { flex: 1, borderWidth: 1, borderColor: C.danger, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
   bulkRemoveText: { color: C.danger, fontWeight: "800", fontSize: 13 },
+  undoBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: C.ink, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 16, marginBottom: 10 },
+  undoText: { color: "#fff", fontWeight: "700", fontSize: 13, flex: 1, paddingRight: 12 },
+  undoAction: { color: "#F97316", fontWeight: "900", fontSize: 14 },
   attHint: { color: C.sub, fontSize: 12, marginTop: 10, lineHeight: 17 },
   pill: { borderRadius: 8, paddingVertical: 3, paddingHorizontal: 8 },
   pillText: { fontSize: 11, fontWeight: "800" },

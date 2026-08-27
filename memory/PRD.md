@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — satellite render fix + Undo remove (2026-06)
+- **Satellite bug fix (`MapScreen.js`):** root cause — satellite tiles rendered as a child raster ON TOP of the opaque OSM base from `mapStyle`, but child layers sit under/behind the style base, so OSM covered satellite (you saw the street map). Fix mirrors Office (which hides OSM for satellite): when `activeBase === "satellite"` the MapView now uses a background-only style (`SATELLITE_BG_STYLE`) so the satellite raster child is the visible base. Street/Buildings unchanged (OSM style + buildings overlay).
+- **Undo remove (`More.js` + `sync.js`):** `removeMutation`/`removeAllFailed` now return the removed rows; new `sync.restoreMutations(list)` re-inserts them. Sync Center shows a 6s "Removed N failed upload(s) — Undo" bar (rendered outside the attention list so it persists after the list empties) for both single and bulk removes.
+- Verified: files babel-compile; `photo.node.test.js` 6/6 pass. Native satellite render needs a dev-build check (MapTiler configured in Office). Not yet pushed — use Save to GitHub.
+
+
 ## Mobile — Sync Center bulk recovery (2026-06)
 - Added "Retry all" (runs `syncNow` → revives retryable failed photos + processes pending) and "Remove all failed" (scoped bulk delete, confirmation shows the count) to the More screen's "Needs attention" section; buttons appear only when `counts.failed > 0`.
 - New `storage.removeFailedMutations()` (DELETE state='failed' for active scope only) + `sync.removeAllFailed()`. Never touches pending/synced/conflict rows or other scopes.
