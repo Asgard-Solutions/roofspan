@@ -8,26 +8,29 @@ import { relayHttpBase } from "./config";
 
 export const TILE_TICKET_HEADER = "X-RoofSpan-Tile-Ticket";
 
-// Exchange device credentials + user token for a short-lived tile ticket (credentials travel in the
-// POST body only). Returns the ticket string, or null when unavailable/offline.
+// Exchange device credentials for a short-lived tile ticket (credentials travel in the POST body
+// only). Imagery is org-level, so the user token is optional. Returns { ticket, status, detail } so
+// callers can surface the real reason (device auth, control plane, offline) instead of a blank fail.
 export async function mintTileTicket(pairing, token) {
-  if (!pairing || !token) return null;
+  if (!pairing) return { ticket: null, status: 0, detail: "not_paired" };
   try {
+    const body = {
+      installation_id: pairing.installation_id,
+      device_id: pairing.device_id,
+      device_credential: pairing.device_credential,
+    };
+    if (token) body.token = token;
     const r = await axios.post(
       `${relayHttpBase(pairing.relay_endpoint)}/api/relay/tile-ticket`,
-      {
-        installation_id: pairing.installation_id,
-        device_id: pairing.device_id,
-        device_credential: pairing.device_credential,
-        token,
-      },
+      body,
       { timeout: 15000, validateStatus: () => true }
     );
-    if (r.status === 200 && r.data && r.data.ticket) return r.data.ticket;
+    if (r.status === 200 && r.data && r.data.ticket) return { ticket: r.data.ticket, status: 200, detail: null };
+    const detail = (r.data && (r.data.detail || r.data.message)) || `HTTP ${r.status}`;
+    return { ticket: null, status: r.status, detail: String(detail) };
   } catch (e) {
-    /* offline / relay unreachable — caller falls back to cached tiles */
+    return { ticket: null, status: 0, detail: "relay_unreachable" };
   }
-  return null;
 }
 
 // Stable tile URL template; MapLibre substitutes {z}/{x}/{y}. The short-lived ticket is carried as a

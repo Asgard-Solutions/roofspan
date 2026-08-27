@@ -56,6 +56,8 @@ def read_ticket(ticket: str) -> dict | None:
         return None
     if int(claims.get("exp", 0)) < int(time.time()):
         return None
-    if not (claims.get("iid") and claims.get("did") and claims.get("tok")):
+    # Org-level imagery: the embedded user token is no longer required (the Office connector authorizes
+    # tile fetches with an org-scoped token). Only the installation + device identity must be present.
+    if not (claims.get("iid") and claims.get("did")):
         return None
     return claims

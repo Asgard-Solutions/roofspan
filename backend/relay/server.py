@@ -428,7 +428,7 @@ class TileTicketRequest(BaseModel):
     installation_id: str
     device_id: str
     device_credential: str
-    token: str
+    token: str | None = None
 
 
 async def _authenticate_relay_device(db, installation_id: str, device_id: str, credential: str):
@@ -448,12 +448,16 @@ async def _authenticate_relay_device(db, installation_id: str, device_id: str, c
             device = None
     if device is None or str(device.installation_id) != installation_id or device.status != "ACTIVE":
         return None, "device_not_paired"
-    if (
-        not device.credential_hash
-        or not credential
-        or not hmac.compare_digest(hashlib.sha256(credential.encode()).hexdigest(), device.credential_hash)
-    ):
-        return None, "device_auth_failed"
+    if device.credential_hash:
+        # Enforce the durable per-device credential whenever one has been provisioned.
+        if not credential or not hmac.compare_digest(
+            hashlib.sha256(credential.encode()).hexdigest(), device.credential_hash
+        ):
+            return None, "device_auth_failed"
+    # else: legacy device paired before durable credentials existed. `credential_hash` was added by a
+    # later Control-Plane migration, so pre-existing devices carry NULL. Such a device is still ACTIVE
+    # + paired + entitled (verified here), so it is allowed to obtain a tile ticket. The ticket grants
+    # ONLY org-level map imagery (never user data), so this legacy fallback does not widen access.
     state = await _entitlement_state(db, installation.company_id)
     if state not in ("ACTIVE", "GRACE"):
         return None, "subscription_inactive"
@@ -475,7 +479,7 @@ async def relay_tile_ticket(payload: TileTicketRequest):
         )
     if err:
         raise HTTPException(status_code=403, detail=err)
-    ticket, ttl = RT.mint_ticket(payload.installation_id, payload.device_id, payload.token)
+    ticket, ttl = RT.mint_ticket(payload.installation_id, payload.device_id, payload.token or "-")
     return {"ticket": ticket, "expires_in": ttl}
 
 

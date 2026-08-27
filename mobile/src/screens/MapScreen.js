@@ -126,6 +126,7 @@ export default function MapScreen({ navigation }) {
   const [overlayBuildings, setOverlayBuildings] = useState(false);
   const [imageryLoading, setImageryLoading] = useState(false);
   const [imageryError, setImageryError] = useState(false);
+  const [imageryMsg, setImageryMsg] = useState(null);
   const mintingRef = React.useRef(false);
   const loadingTimer = React.useRef(null);
   const flashLoading = () => {
@@ -182,10 +183,11 @@ export default function MapScreen({ navigation }) {
       ensureAmbientCache();
       try {
         const token = await getToken();
-        const t = await mintTileTicket(pairing, token);
-        if (t) {
-          setTicket(t);
-          if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, t); } catch (e) {} }
+        const res = await mintTileTicket(pairing, token);
+        if (res.ticket) {
+          setTicket(res.ticket);
+          setImageryMsg(null);
+          if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
         }
       } catch (e) { /* keep any previously registered ticket */ }
     }
@@ -224,12 +226,14 @@ export default function MapScreen({ navigation }) {
     setImageryError(false);
     try {
       const token = await getToken();
-      const t = await mintTileTicket(pairing, token);
-      if (t) {
-        setTicket(t);
-        if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, t); } catch (e) {} }
+      const res = await mintTileTicket(pairing, token);
+      if (res.ticket) {
+        setTicket(res.ticket);
+        setImageryMsg(null);
+        if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
       } else {
         setImageryError(true);
+        setImageryMsg(res.detail || null);
       }
     } catch (e) {
       setImageryError(true);
@@ -421,7 +425,7 @@ export default function MapScreen({ navigation }) {
             {(activeBase === "satellite" || overlayBuildings) && (!satelliteUrl || imageryLoading) ? (
               <View style={s.imgHintWrap} pointerEvents="box-none">
                 <TouchableOpacity style={s.imgHint} onPress={ensureTicket} disabled={!!satelliteUrl && imageryLoading} testID="imagery-hint">
-                  <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? "Imagery unavailable — tap to retry" : "Loading imagery…"}</Text>
+                  <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? (imageryMsg ? `Imagery unavailable: ${imageryMsg}` : "Imagery unavailable — tap to retry") : "Loading imagery…"}</Text>
                 </TouchableOpacity>
               </View>
             ) : null}
