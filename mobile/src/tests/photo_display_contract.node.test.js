@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 function read(rel) {
-  return fs.readFileSync(path.join(__dirname, "..", "..", rel), "utf8");
+  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
 }
 
 test("paired synced photos render through Relay, never the Control Plane base", () => {
