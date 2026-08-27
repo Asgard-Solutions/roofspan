@@ -2,18 +2,19 @@
 
 Two backends, selected automatically so both self-hosted and cloud installs work:
 
-1. LOCAL FILESYSTEM (self-hosted Office, e.g. Windows `C:\\Program Files\\RoofSpan Office\\Images`):
-   used when `PHOTO_STORAGE_DIR` is set, OR whenever the Emergent object-storage proxy is not
-   configured (no `EMERGENT_LLM_KEY`). Photos are written under that directory using the same
-   relative object path stored on the Photo row, so nothing else in the app changes.
+1. LOCAL FILESYSTEM (self-hosted Office): used when ``PHOTO_STORAGE_DIR`` is set, or whenever the
+   Emergent object-storage proxy is not configured. Windows Office data belongs under
+   ``C:\\ProgramData\\RoofSpan\\images`` (never inside Program Files) so the virtual service account can
+   write it and upgrades cannot replace it.
 
-2. EMERGENT MANAGED PROXY (hosted preview/cloud): used only when `EMERGENT_LLM_KEY` is present and
-   `PHOTO_STORAGE_DIR` is unset.
+2. EMERGENT MANAGED PROXY (hosted preview/cloud): used only when ``EMERGENT_LLM_KEY`` is present and
+   ``PHOTO_STORAGE_DIR`` is unset.
 
 This is deliberately separate from backup off-site copies (a plain filesystem copy that never uses a
 cloud API).
 """
 import os
+import uuid
 
 import requests
 from dotenv import load_dotenv
@@ -25,27 +26,70 @@ _storage_key = None
 
 
 # ---- Backend selection -------------------------------------------------------------------------
+def _self_hosted_dir() -> str:
+    """Return a persistent writable photo root for self-hosted Office."""
+    data_root = os.environ.get("ROOFSPAN_DATA_ROOT")
+    if data_root:
+        return os.path.join(data_root, "images")
+    if os.name == "nt":
+        program_data = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+        return os.path.join(program_data, "RoofSpan", "images")
+    # Dev/Linux fallback keeps current local-development behavior.
+    return os.path.join(_BACKEND_DIR, "data", "photos")
+
+
 def _local_dir() -> str | None:
     """Return the local photo directory when local storage should be used, else None (use proxy)."""
-    configured = os.environ.get("PHOTO_STORAGE_DIR")
+    configured = (os.environ.get("PHOTO_STORAGE_DIR") or "").strip()
     if configured:
-        return configured
-    # Self-hosted fallback: if the managed proxy is not configured, never depend on a cloud service —
-    # keep photos on local disk so field uploads always land somewhere the Office can serve.
+        return os.path.abspath(os.path.expandvars(configured))
+    # Self-hosted fallback: if the managed proxy is not configured, never depend on a cloud service.
     if not os.environ.get("EMERGENT_LLM_KEY"):
-        return os.path.join(_BACKEND_DIR, "data", "photos")
+        return _self_hosted_dir()
     return None
 
 
 def _local_path(base: str, path: str) -> str:
-    """Resolve a relative object path under `base`, blocking path traversal."""
+    """Resolve a relative object path under ``base``, blocking path traversal."""
     rel = (path or "").replace("\\", "/").strip("/")
     parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
-    full = os.path.normpath(os.path.join(base, *parts))
     base_abs = os.path.abspath(base)
-    if not os.path.abspath(full).startswith(base_abs):
-        raise ValueError("invalid object path")
+    full = os.path.abspath(os.path.normpath(os.path.join(base_abs, *parts)))
+    try:
+        if os.path.commonpath([base_abs, full]) != base_abs:
+            raise ValueError("invalid object path")
+    except ValueError:
+        raise ValueError("invalid object path") from None
     return full
+
+
+def ensure_storage_ready() -> str | None:
+    """Prove the configured local photo directory is writable before Office reports ready.
+
+    The Windows service runs as ``NT SERVICE\\RoofSpanBackend``. A missing/incorrect ACL previously
+    surfaced only when a field rep uploaded a photo, producing HTTP 502 and an endlessly Pending queue
+    item. This probe converts that hidden runtime failure into a deterministic Office startup error.
+    Hosted preview/proxy mode returns ``None`` because it has no local directory to probe.
+    """
+    base = _local_dir()
+    if not base:
+        return None
+    os.makedirs(base, exist_ok=True)
+    probe = os.path.join(base, f".roofspan-photo-storage-probe-{uuid.uuid4().hex}")
+    try:
+        with open(probe, "wb") as f:
+            f.write(b"roofspan-photo-storage-ok")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as exc:
+        raise RuntimeError(f"RoofSpan photo storage is not writable: {base}") from exc
+    finally:
+        try:
+            if os.path.exists(probe):
+                os.remove(probe)
+        except OSError:
+            pass
+    return base
 
 
 # ---- Emergent managed proxy --------------------------------------------------------------------
@@ -70,9 +114,23 @@ def put_object(path: str, data: bytes, content_type: str = "application/octet-st
     base = _local_dir()
     if base:
         full = _local_path(base, path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "wb") as f:
-            f.write(data)
+        parent = os.path.dirname(full)
+        os.makedirs(parent, exist_ok=True)
+        # Write-then-replace prevents a process/service interruption from leaving a partial image at
+        # the authoritative object path. The temp file is on the same volume so os.replace is atomic.
+        tmp = f"{full}.tmp-{uuid.uuid4().hex}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, full)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
         return {"path": path, "bytes": len(data), "backend": "local", "dir": base}
     key = init_storage()
     url = f"{_base()}/objects/{path}"
@@ -88,19 +146,28 @@ def put_upload(path: str, data: bytes, local_base: str | None = None,
                content_type: str = "application/octet-stream") -> dict:
     """Persist a user-uploaded file through the same dual-mode storage as photos.
 
-    Self-hosted (a `local_base` is given, e.g. the Office backup directory, or the managed proxy is
-    not configured) -> local disk with an atomic rename. Hosted installs (managed proxy configured,
-    no local base) -> Emergent managed object store, so uploads are never pinned to ephemeral
-    pod-only storage. Mirrors `put_object` so both deployment shapes are covered by one path.
+    Self-hosted (a ``local_base`` is given, e.g. the Office backup directory, or the managed proxy is
+    not configured) -> local disk with a durable atomic rename. Hosted installs (managed proxy
+    configured, no local base) -> Emergent managed object store, so uploads are never pinned to
+    ephemeral pod-only storage.
     """
     base = local_base or _local_dir()
     if base:
         full = _local_path(base, path)
         os.makedirs(os.path.dirname(full), exist_ok=True)
-        tmp = full + ".partial"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, full)
+        tmp = f"{full}.tmp-{uuid.uuid4().hex}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, full)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
         return {"path": path, "bytes": len(data), "backend": "local", "dir": base, "full": full}
     res = put_object(path, data, content_type)
     res.setdefault("backend", "proxy")

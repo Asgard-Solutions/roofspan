@@ -1,0 +1,46 @@
+name: photo-sync-contract
+
+on:
+  push:
+    paths:
+      - "mobile/**"
+      - "backend/services/object_storage.py"
+      - "windows/installer/RoofSpan.wxs"
+      - "windows/winbuild/backend_entry.py"
+      - "windows/winbuild/roofspan_service.py"
+      - "windows/winbuild/config/roofspan.env.template"
+      - "windows/tests/test_photo_storage_contract.py"
+      - ".github/workflows/photo-sync-contract.yml"
+  pull_request:
+    paths:
+      - "mobile/**"
+      - "backend/services/object_storage.py"
+      - "windows/**"
+      - ".github/workflows/photo-sync-contract.yml"
+
+jobs:
+  storage-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install pytest
+      - name: Verify installed Office photo-storage contract
+        run: pytest -q windows/tests/test_photo_storage_contract.py
+
+  mobile-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify durable photo queue and relay framing
+        working-directory: mobile
+        run: |
+          node --test src/tests/photo.node.test.js
+          node --test src/tests/photo_transport_contract.node.test.js
+          node src/tests/transport.node.test.js

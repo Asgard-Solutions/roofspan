@@ -43,6 +43,7 @@
         <Directory Id="IdentityDir" Name="identity" />
         <Directory Id="LogsDir" Name="logs" />
         <Directory Id="ConfigDir" Name="config" />
+        <Directory Id="ImagesDir" Name="images" />
       </Directory>
     </StandardDirectory>
 
@@ -146,6 +147,14 @@
       </CreateFolder>
     </Component>
 
+    <Component Id="ImagesDirAcl" Directory="ImagesDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="ImagesDir"
+                     Type="string" Value="[ImagesDir]" KeyPath="yes" />
+      <CreateFolder>
+        <util:PermissionEx User="RoofSpanBackend" Domain="NT SERVICE" GenericRead="yes" GenericWrite="yes" GenericExecute="yes" />
+      </CreateFolder>
+    </Component>
+
     <Component Id="IdentityDirAcl" Directory="IdentityDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
       <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="IdentityDir"
                      Type="string" Value="[IdentityDir]" KeyPath="yes" />
@@ -175,6 +184,7 @@
       <ComponentGroupRef Id="ServiceInternals" />
       <ComponentRef Id="DataDirs" />
       <ComponentRef Id="LogsDirAcl" />
+      <ComponentRef Id="ImagesDirAcl" />
       <ComponentRef Id="IdentityDirAcl" />
       <ComponentRef Id="ConfigDirAcl" />
     </Feature>
