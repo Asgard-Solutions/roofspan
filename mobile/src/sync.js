@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation } from "./storage";
+import { enqueue, saveMutation, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -90,6 +90,13 @@ export async function syncNow() { _resetBackoff(); return runSync(); }
 // selected item is removed; all other offline work is preserved. Then refresh listeners.
 export async function removeMutation(client_id) {
   await _removeMutation(client_id);
+  _emit({ type: "queued" });
+}
+
+// Bulk recovery: remove every failed mutation for the active scope in one action. Pending/synced/
+// conflict work and other scopes are untouched.
+export async function removeAllFailed() {
+  await _removeFailed();
   _emit({ type: "queued" });
 }
 

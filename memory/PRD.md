@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — Sync Center bulk recovery (2026-06)
+- Added "Retry all" (runs `syncNow` → revives retryable failed photos + processes pending) and "Remove all failed" (scoped bulk delete, confirmation shows the count) to the More screen's "Needs attention" section; buttons appear only when `counts.failed > 0`.
+- New `storage.removeFailedMutations()` (DELETE state='failed' for active scope only) + `sync.removeAllFailed()`. Never touches pending/synced/conflict rows or other scopes.
+- Verified: files babel-compile; `photo.node.test.js` 6/6 pass. Native check via dev build. Not yet pushed — use Save to GitHub.
+
+
 ## Mobile — Auto-retry backoff + Conflict resolver shortcut (2026-06)
 - **Auto-retry backoff (`sync.js`):** while transient work remains, sync re-runs on exponential backoff (15s→30s→60s→2m→5m, capped). Retryable failed PHOTOS are quietly revived to pending each pass (capped at 6 auto-attempts) so reps rarely tap Retry. Backoff resets on reconnect, foreground, new mutation, and manual Sync. Permanent failures (`photo_file_missing`/`photo_unreadable`/`photo_unsupported_type`/413/415) are never auto-retried — classified by new pure `queue.isPermanentFailure(m)`.
 - **Conflict resolver (`More.js`):** conflict items in the Sync Center now have a "Review & update" button that opens the affected record via nested navigation (`routeFor` maps lead/job/visit/inspection/photo → LeadsTab/LeadDetail, JobsTab/JobDetail, Map/Property).

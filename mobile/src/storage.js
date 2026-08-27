@@ -48,6 +48,17 @@ export async function removeMutation(client_id) {
   );
 }
 
+// Remove ALL failed mutations for the active scope (Sync Center "Remove all failed"). Never touches
+// pending/synced/conflict rows, and never other scopes.
+export async function removeFailedMutations() {
+  const d = await db();
+  const scope = getScope();
+  await d.runAsync(
+    "DELETE FROM pending_mutations WHERE state = 'failed' AND (scope = ? OR scope IS NULL)",
+    scope
+  );
+}
+
 // Pending (not-yet-synced) mutations for the ACTIVE scope only.
 export async function loadPending() {
   const d = await db();

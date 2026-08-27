@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, Linking } from "react-
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
-import { pendingSummary, runSync, removeMutation } from "../sync";
+import { pendingSummary, runSync, removeMutation, removeAllFailed } from "../sync";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
@@ -63,6 +63,17 @@ export default function More({ navigation }) {
     return null;
   };
 
+  const removeAllFailedItems = () => {
+    Alert.alert(
+      "Remove all failed uploads?",
+      `This will remove ${counts.failed} failed update${counts.failed === 1 ? "" : "s"} for your account only. Pending work, conflicts, and other offline data will not be affected.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove all", style: "destructive", onPress: async () => { await removeAllFailed(); load(); } },
+      ]
+    );
+  };
+
   const reviewConflict = (m) => {
     const r = routeFor(m);
     if (!r || !navigation) { Alert.alert("Review update", "Open the affected Lead, Job or Property to review the latest details, then re-apply your change."); return; }
@@ -107,6 +118,12 @@ export default function More({ navigation }) {
       {attention.length > 0 && (
         <>
           <Text style={s.h}>Needs attention</Text>
+          {counts.failed > 0 ? (
+            <View style={s.bulkRow} testID="more-bulk-actions">
+              <TouchableOpacity style={s.bulkRetry} onPress={syncNow} disabled={syncing} testID="more-retry-all"><Text style={s.bulkRetryText}>{syncing ? "Retrying…" : "Retry all"}</Text></TouchableOpacity>
+              <TouchableOpacity style={s.bulkRemove} onPress={removeAllFailedItems} testID="more-remove-all-failed"><Text style={s.bulkRemoveText}>Remove all failed</Text></TouchableOpacity>
+            </View>
+          ) : null}
           <View style={s.card} testID="more-attention">
             {attention.map((m) => {
               const b = badge[m.state] || badge.pending;
@@ -187,6 +204,11 @@ const s = StyleSheet.create({
   attRemoveText: { color: C.danger, fontWeight: "800", fontSize: 12 },
   attReview: { backgroundColor: C.ink, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 16, alignItems: "center" },
   attReviewText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  bulkRow: { flexDirection: "row", gap: 10, marginBottom: 10 },
+  bulkRetry: { flex: 1, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
+  bulkRetryText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  bulkRemove: { flex: 1, borderWidth: 1, borderColor: C.danger, borderRadius: 10, paddingVertical: 10, alignItems: "center" },
+  bulkRemoveText: { color: C.danger, fontWeight: "800", fontSize: 13 },
   attHint: { color: C.sub, fontSize: 12, marginTop: 10, lineHeight: 17 },
   pill: { borderRadius: 8, paddingVertical: 3, paddingHorizontal: 8 },
   pillText: { fontSize: 11, fontWeight: "800" },
