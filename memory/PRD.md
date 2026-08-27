@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Office — photo download + bulk geocoding backfill (2026-06)
+- **Photo download:** `PhotoGallery.jsx` lightbox now has a "Download full-size" button (anchor on the auth-fetched blob URL, filename `roofspan-{category}-{id8}.jpg`). Frontend compiles clean.
+- **Bulk geocoding backfill:** new `POST /api/properties/locate-unresolved?limit=N` (MANAGE_ROLES) in `routers/properties.py`. Iterates RentCast properties not yet resolved, runs `locate_property_now` (Mapbox Permanent Geocoding), skips already-resolved (saves quota). Returns categorized report: `resolved / unresolved_no_match / skipped_no_street_address / failed / skipped_already_resolved`.
+- **Verified:** Mapbox geocoding token configured (len 93) and functional — "1600 Amphitheatre Parkway" → status `located`, rooftop, 37.422525/-122.0855, HTTP 200. On this pod the 156 unresolved are synthetic fixtures ("P-DNK", 2.5,2.5, no street address) → all `skipped_no_street_address` (0 real failures). Live Office has real RentCast addresses → will resolve. geojson already serves 788 placed properties.
+- **Run on live:** owner/admin `POST /api/properties/locate-unresolved` once after deploy to place the real unresolved addresses. (A one-click Office admin button is a good next add.)
+
 ## Office — field photo thumbnails on property + visit history (2026-06)
 - `PhotoGallery.jsx` already rendered property-level field photos (auth'd blob object URLs, lightbox with uploader/timestamp). Added a `hideWhenEmpty` prop (renders nothing while loading/empty) for quiet nested use.
 - `PropertySheet.jsx`: each visit in the History list now shows a compact `PhotoGallery` (`recordType="visit"`, `hideWhenEmpty`), so roof/exterior shots taken during a specific visit appear right under that visit — in addition to the existing all-property gallery.

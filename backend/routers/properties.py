@@ -166,6 +166,50 @@ async def _locate_property(property_id: str, request: Request, user: User, db: A
     return result
 
 
+@router.post("/locate-unresolved")
+async def locate_unresolved(
+    request: Request,
+    limit: int = Query(500, le=2000),
+    user: User = Depends(require_roles(*MANAGE_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk backfill: run Mapbox Permanent Geocoding on RentCast properties that are not yet resolved
+    to a property-level pin, so they appear on the map. Already-resolved properties are skipped to
+    conserve geocoding quota."""
+    from location_upgrade import locate_property_now
+
+    rows = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
+    processed = resolved = unresolved = no_address = failed = skipped = 0
+    for p in rows:
+        if processed >= limit:
+            break
+        diag = _location_diagnostics(p)
+        if diag and diag.get("location_resolved") is True:
+            skipped += 1
+            continue
+        processed += 1
+        try:
+            result = await locate_property_now(str(p.id))
+            if result.get("resolved"):
+                resolved += 1
+            else:
+                unresolved += 1
+        except ValueError:
+            no_address += 1  # property has no usable street address to geocode
+        except Exception:
+            failed += 1
+
+    summary = {"total_rentcast": len(rows), "processed": processed, "resolved": resolved,
+               "unresolved_no_match": unresolved, "skipped_no_street_address": no_address,
+               "failed": failed, "skipped_already_resolved": skipped}
+    try:
+        await log_action(db, user=user, action="property.locate_bulk", entity_type="property",
+                         entity_id=user.id, detail=summary, request=request)
+    except Exception:
+        pass
+    return summary
+
+
 @router.post("/{property_id}/locate")
 async def locate_property(
     property_id: str,

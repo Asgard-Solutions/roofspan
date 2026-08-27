@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { api, apiError } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Image as ImageIcon, Loader2, User, Clock } from "lucide-react";
+import { Image as ImageIcon, Loader2, User, Clock, Download } from "lucide-react";
 
 /**
  * Read-only Office-side photo gallery for field evidence.
@@ -137,6 +137,16 @@ export default function PhotoGallery({ recordType, recordId, compact = false, hi
                   <div className="flex h-48 w-full items-center justify-center text-slate-300"><ImageIcon className="h-8 w-8" /></div>
                 )}
               </div>
+              {urls[active.id] && (
+                <a
+                  href={urls[active.id]}
+                  download={`roofspan-${(active.category || "field-photo").replace(/[^a-z0-9]+/gi, "-")}-${String(active.id).slice(0, 8)}.jpg`}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  data-testid={`${tid}-download`}
+                >
+                  <Download className="h-4 w-4 text-orange-600" /> Download full-size
+                </a>
+              )}
               <div className="space-y-2 text-sm">
                 {active.category && (
                   <div><Badge variant="secondary" className="bg-orange-50 text-orange-700">{active.category}</Badge></div>
