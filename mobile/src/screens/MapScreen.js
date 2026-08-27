@@ -126,7 +126,7 @@ export default function MapScreen({ navigation }) {
   const [filter, setFilter] = useState("all");
   const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
   const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
-  const [ticketReady, setTicketReady] = useState(false);
+  const [ticket, setTicket] = useState(null);
 
   const loadSectionProps = useCallback(async (id) => {
     if (!id) { setFeatures([]); return; }
@@ -170,10 +170,10 @@ export default function MapScreen({ navigation }) {
       ensureAmbientCache();
       try {
         const token = await getToken();
-        const ticket = await mintTileTicket(pairing, token);
-        if (ticket && MapLibre && MapLibre.addCustomHeader) {
-          MapLibre.addCustomHeader(TILE_TICKET_HEADER, ticket);
-          setTicketReady(true);
+        const t = await mintTileTicket(pairing, token);
+        if (t) {
+          setTicket(t);
+          if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, t); } catch (e) {} }
         }
       } catch (e) { /* keep any previously registered ticket */ }
     }
@@ -196,8 +196,8 @@ export default function MapScreen({ navigation }) {
 
   // Imagery is offered when the Office has MapTiler configured. Tiles use a stable URL + ticket header;
   // when offline, previously viewed tiles are served from the ambient cache.
-  const satelliteUrl = tileTemplate(pairing, "satellite");
-  const buildingsUrl = tileTemplate(pairing, "buildings");
+  const satelliteUrl = tileTemplate(pairing, "satellite", ticket);
+  const buildingsUrl = tileTemplate(pairing, "buildings", ticket);
   const imageryReady = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured && satelliteUrl && buildingsUrl);
   const activeBase = imageryReady ? base : "street";
 

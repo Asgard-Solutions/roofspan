@@ -1,6 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
-## Mobile — satellite render fix + Undo remove (2026-06)
+## Mobile — satellite/building tiles now load (ticket via URL) (2026-06)
+- Root cause of blank satellite/building imagery on device: MapLibre-native raster/vector sources do NOT reliably send custom headers on tile requests, so the `X-RoofSpan-Tile-Ticket` header approach failed → relay returned 401 → blank (satellite showed only the bg; buildings showed no footprints while OSM/street worked because it's an unauthenticated public URL).
+- Fix: `tiles.js tileTemplate(pairing, kind, ticket)` now appends the short-lived ticket as `?t=<ticket>` (the relay tile endpoint already accepts `t` as well as the header). `MapScreen.js` stores the minted ticket string and builds satellite/buildings URLs with it; `imageryReady` now requires the ticket. Header still set as a harmless secondary. Verified `?t=` auth end-to-end (returns 503 office_offline = decoded + routed, not 401).
+- Combined with the prior layering fix (background-only style for satellite), satellite + building tiles should render on device like Office. Needs dev-build confirmation (live Office tunnel + MapTiler key).
+
+
 - **Satellite bug fix (`MapScreen.js`):** root cause — satellite tiles rendered as a child raster ON TOP of the opaque OSM base from `mapStyle`, but child layers sit under/behind the style base, so OSM covered satellite (you saw the street map). Fix mirrors Office (which hides OSM for satellite): when `activeBase === "satellite"` the MapView now uses a background-only style (`SATELLITE_BG_STYLE`) so the satellite raster child is the visible base. Street/Buildings unchanged (OSM style + buildings overlay).
 - **Undo remove (`More.js` + `sync.js`):** `removeMutation`/`removeAllFailed` now return the removed rows; new `sync.restoreMutations(list)` re-inserts them. Sync Center shows a 6s "Removed N failed upload(s) — Undo" bar (rendered outside the attention list so it persists after the list empties) for both single and bulk removes.
 - Verified: files babel-compile; `photo.node.test.js` 6/6 pass. Native satellite render needs a dev-build check (MapTiler configured in Office). Not yet pushed — use Save to GitHub.

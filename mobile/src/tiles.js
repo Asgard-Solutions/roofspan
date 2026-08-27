@@ -30,8 +30,10 @@ export async function mintTileTicket(pairing, token) {
   return null;
 }
 
-// Stable tile URL template (no secrets); MapLibre substitutes {z}/{x}/{y} and sends the ticket header.
-export function tileTemplate(pairing, kind) {
-  if (!pairing) return null;
-  return `${relayHttpBase(pairing.relay_endpoint)}/api/relay/tiles/${kind}/{z}/{x}/{y}`;
+// Stable tile URL template; MapLibre substitutes {z}/{x}/{y}. The short-lived ticket is carried as a
+// query param (`t`) because MapLibre-native raster/vector sources do not reliably send custom headers
+// on tile requests. The relay tile endpoint accepts the ticket via `t` as well as the header.
+export function tileTemplate(pairing, kind, ticket) {
+  if (!pairing || !ticket) return null;
+  return `${relayHttpBase(pairing.relay_endpoint)}/api/relay/tiles/${kind}/{z}/{x}/{y}?t=${encodeURIComponent(ticket)}`;
 }
