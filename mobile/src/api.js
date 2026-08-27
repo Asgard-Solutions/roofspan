@@ -94,11 +94,9 @@ async function localFileOk(uri) {
   if (!fs) return { ok: true }; // cannot verify outside RN → let the upload proceed
   try {
     const info = await fs.getInfoAsync(uri, { size: true });
-    if (!info || !info.exists) return { ok: false, code: "photo_file_missing", message: "Photo file unavailable" };
-    if (info.size === 0) return { ok: false, code: "photo_unreadable", message: "Photo could not be read" };
-    return { ok: true };
+    return queue.validateLocalPhotoInfo(info);
   } catch (e) {
-    return { ok: false, code: "photo_unreadable", message: "Photo could not be read" };
+    return { ok: false, status: 422, code: "photo_unreadable", message: "Photo could not be read" };
   }
 }
 
@@ -117,7 +115,7 @@ async function _sendOnce(m) {
   try {
     if (plan.transport === "multipart") {
       const chk = await localFileOk(m.photo.uri);
-      if (!chk.ok) return { status: 422, data: { detail: { code: chk.code, message: chk.message } } };
+      if (!chk.ok) return { status: chk.status || 422, data: { detail: { code: chk.code, message: chk.message } } };
       const b = m.body || {};
       const data = { record_type: b.record_type, record_id: b.record_id };
       if (b.category) data.category = b.category;
