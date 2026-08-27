@@ -1,6 +1,7 @@
 import Header from "../components/Header";
 import Hero from "../components/Hero";
-import { Product, HowItWorks, Roles, Differentiators, ProductProof, DataSecurity, Faq } from "../components/Sections";
+import { Product, HowItWorks, Roles, Differentiators, DataSecurity, Faq } from "../components/Sections";
+import Gallery from "../components/Gallery";
 import Pricing from "../components/Pricing";
 import { FinalCta, Footer } from "../components/Footer";
 
@@ -14,7 +15,7 @@ export default function Home() {
         <HowItWorks />
         <Roles />
         <Differentiators />
-        <ProductProof />
+        <Gallery />
         <Pricing />
         <DataSecurity />
         <Faq />

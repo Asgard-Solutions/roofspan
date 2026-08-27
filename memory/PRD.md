@@ -1,6 +1,8 @@
 # RoofSpan — Product Requirements & Status
 
 ## Marketing site — real app screenshots (2026-06)
+- Product tour gallery: `components/Gallery.jsx` (client) — 3 Office screens (Dashboard, Jobs, Territory Map) in browser frames + 4 Field/Mobile screens (My Day, Leads, Jobs, My Area) in a phone lineup. Click any screen → full-size LIGHTBOX (backdrop, prev/next, Esc/arrow keys, close, caption). Replaced the old static `ProductProof` block in `app/page.jsx` (ProductProof now dead code in Sections.jsx). Removed the "This website" card from DataSecurity (now 2 pieces: Office + Mobile).
+- Assets in `public/screenshots/` (PIL-optimized: office pngs capped 1600w, map cropped to clean canvas as .jpg, mobile pngs capped 800w).
 - Replaced the CSS-drawn `AppMock`/`PhoneMock` placeholders on `roofspan-website` with REAL captured screenshots of the running apps.
 - Office (desktop, 1440x900, logged in as owner): captured Dashboard + Jobs via Playwright/Chromium against the live preview.
 - Mobile (phone frame): the Expo app is native-only and crashes on web (`createPermissionHook` from expo-camera). Used a temporary `.web.js` harness (App.web.js + cache.web.js/sync.web.js shims — Metro prefers `.web` on web) to render the REAL Home/Leads/Jobs screen components with representative field data; captured, then DELETED the harness (native builds untouched).
