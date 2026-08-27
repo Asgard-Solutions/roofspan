@@ -34,7 +34,15 @@ export default function Hero() {
           <p className="mt-5 text-sm text-slate-300/70">Transparent pricing from <span className="font-semibold text-white">${STARTING_PRICE}/month</span> · Office + free Mobile companion</p>
         </div>
         <div className="relative flex items-center justify-center gap-4">
-          <div className="w-full max-w-md"><AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map showing thousands of properties clustered for canvass planning" /></div>
+          <div className="relative w-full max-w-md">
+            <AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map showing thousands of properties clustered for canvass planning" />
+            <span className="callout absolute left-3 top-14 z-10 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold text-slate-ink shadow-lift ring-1 ring-black/5" style={{ animationDelay: ".35s" }} data-testid="hero-callout-properties">
+              <span className="h-2 w-2 rounded-full bg-brand" aria-hidden="true" /> 8,029 properties
+            </span>
+            <span className="callout absolute bottom-16 left-6 z-10 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold text-slate-ink shadow-lift ring-1 ring-black/5" style={{ animationDelay: ".55s" }} data-testid="hero-callout-sections">
+              <span className="h-2 w-2 rounded-full bg-safety" aria-hidden="true" /> Canvass sections
+            </span>
+          </div>
           <div className="-ml-16 hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-area.png" alt="RoofSpan Mobile My Area — a salesperson's assigned canvass section" /></div>
         </div>
       </div>

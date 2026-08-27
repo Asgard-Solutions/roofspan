@@ -4,17 +4,17 @@ import { X, ChevronLeft, ChevronRight, Expand } from "lucide-react";
 import { SectionHeading } from "./ui";
 
 const OFFICE = [
-  { src: "/screenshots/office-map-satellite.jpg", title: "RoofSpan Office · Satellite Territory Map", alt: "RoofSpan Office satellite map showing 8,029 properties clustered across a territory for roofing canvass planning", w: 1919, h: 1033 },
-  { src: "/screenshots/office-map-pins.jpg", title: "RoofSpan Office · Property Pins", alt: "RoofSpan Office satellite view with individual owned, rented and unknown property pins across neighborhood streets", w: 1919, h: 1033 },
-  { src: "/screenshots/office-property-detail.jpg", title: "RoofSpan Office · Property Detail", alt: "RoofSpan Office property detail panel with owner info, record-a-visit, field photos and convert-to-lead", w: 1919, h: 1032 },
-  { src: "/screenshots/office-jobs.png", title: "RoofSpan Office · Jobs", alt: "RoofSpan Office jobs list with job numbers, scope, status and value", w: 1600, h: 1000 },
-  { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
+  { src: "/screenshots/office-map-satellite.jpg", title: "RoofSpan Office · Satellite Territory Map", desc: "Every property in your market on one satellite map — clustered so whole territories read at a glance.", alt: "RoofSpan Office satellite map showing 8,029 properties clustered across a territory for roofing canvass planning", w: 1919, h: 1033 },
+  { src: "/screenshots/office-map-pins.jpg", title: "RoofSpan Office · Property Pins", desc: "Zoom to street level — each home color-coded owned, rented or unknown for precise door-to-door planning.", alt: "RoofSpan Office satellite view with individual owned, rented and unknown property pins across neighborhood streets", w: 1919, h: 1033 },
+  { src: "/screenshots/office-property-detail.jpg", title: "RoofSpan Office · Property Detail", desc: "Open any property for owner details, visit history and field photos — then convert it to a lead in one click.", alt: "RoofSpan Office property detail panel with owner info, record-a-visit, field photos and convert-to-lead", w: 1919, h: 1032 },
+  { src: "/screenshots/office-jobs.png", title: "RoofSpan Office · Jobs", desc: "Track every job's number, scope, status and value from sold to closed out.", alt: "RoofSpan Office jobs list with job numbers, scope, status and value", w: 1600, h: 1000 },
+  { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", desc: "A live command center: active users, recent field activity and inventory at a glance.", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
 ];
 const FIELD = [
-  { src: "/screenshots/mobile-area.png", title: "RoofSpan Field · My Area", alt: "RoofSpan Mobile My Area — a salesperson's assigned canvass section with property pins", w: 800, h: 1720 },
-  { src: "/screenshots/mobile-leads.png", title: "RoofSpan Field · Leads", alt: "RoofSpan Mobile field app leads created from properties", w: 800, h: 1720 },
-  { src: "/screenshots/mobile-jobs.png", title: "RoofSpan Field · Jobs", alt: "RoofSpan Mobile field app jobs list", w: 800, h: 1720 },
-  { src: "/screenshots/mobile-home.png", title: "RoofSpan Field · My Day", alt: "RoofSpan Mobile field app My Day home screen", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-area.png", title: "RoofSpan Field · My Area", desc: "Each rep's assigned canvass section with property pins — their day, mapped.", alt: "RoofSpan Mobile My Area — a salesperson's assigned canvass section with property pins", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-leads.png", title: "RoofSpan Field · Leads", desc: "Leads created from properties in the field, synced straight back to the office.", alt: "RoofSpan Mobile field app leads created from properties", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-jobs.png", title: "RoofSpan Field · Jobs", desc: "The rep's job list, always current — even offline.", alt: "RoofSpan Mobile field app jobs list", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-home.png", title: "RoofSpan Field · My Day", desc: "A salesperson's home screen: today's route, doors and tasks.", alt: "RoofSpan Mobile field app My Day home screen", w: 800, h: 1720 },
 ];
 const ALL = [...OFFICE, ...FIELD];
 
@@ -80,8 +80,11 @@ export default function Gallery() {
           </button>
           <figure className="flex max-h-full max-w-5xl flex-col items-center" onClick={(e) => e.stopPropagation()}>
             <img src={active.src} alt={active.alt} width={active.w} height={active.h}
-              className="max-h-[80vh] w-auto rounded-xl object-contain shadow-2xl ring-1 ring-white/10" data-testid="lightbox-image" />
-            <figcaption className="mt-4 text-sm font-semibold text-slate-200">{active.title}</figcaption>
+              className="max-h-[74vh] w-auto rounded-xl object-contain shadow-2xl ring-1 ring-white/10" data-testid="lightbox-image" />
+            <figcaption className="mt-4 max-w-xl text-center" data-testid="lightbox-caption">
+              <p className="text-sm font-semibold text-slate-100">{active.title}</p>
+              {active.desc ? <p className="mt-1 text-sm text-slate-300/80">{active.desc}</p> : null}
+            </figcaption>
           </figure>
         </div>
       )}

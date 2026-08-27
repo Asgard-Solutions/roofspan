@@ -34,3 +34,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
   background-image: radial-gradient(rgba(255,255,255,.9) 1px, transparent 1px);
   background-size: 4px 4px;
 }
+
+/* Subtle map callout reveal (hero) */
+@keyframes calloutIn { from { opacity: 0; transform: translateY(6px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.callout { animation: calloutIn .6s ease-out both; }

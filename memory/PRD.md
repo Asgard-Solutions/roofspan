@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Website — Territory intelligence banner, hero map callouts, lightbox captions (2026-06)
+- **Lightbox captions:** every gallery item now carries a one-line `desc`; the lightbox figcaption shows title + description (`Gallery.jsx`).
+- **Hero map callouts:** subtle frosted pills ("8,029 properties", "Canvass sections") overlay the satellite AppMock, revealed with a `.callout` CSS keyframe (`Hero.jsx`, `globals.css`).
+- **Territory Intelligence banner:** new full-width `TerritoryBanner.jsx` (client) — satellite map as a navy-gradient backdrop with 4 stat cards (8,029 mapped · 3,652 located · 7,529 checked · 100% coverage) that fade/rise in on scroll via IntersectionObserver (respects reduced-motion). Inserted after `BigThree` in `page.jsx`.
+- Verified: `yarn build` passes; screenshots confirm hero callouts, banner stat reveal, and lightbox caption all render. Needs redeploy via Save to GitHub → Vercel.
+
 ## Website — Real RoofSpan Office map screenshots (2026-06)
 - Replaced the placeholder `office-map.jpg` with three REAL Office map captures the user provided, optimized to JPEG (satellite clustered 447KB, property pins 362KB, property detail 157KB) in `public/screenshots/`.
 - `Gallery.jsx` OFFICE row now shows: Satellite Territory Map, Property Pins, Property Detail (+ existing Jobs, Dashboard). `Hero.jsx` and `Sections.jsx` AppMock now use `office-map-satellite.jpg`. Old `office-map.jpg` removed (no remaining references).
