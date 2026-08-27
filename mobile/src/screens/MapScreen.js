@@ -125,14 +125,16 @@ export default function MapScreen({ navigation }) {
   const [base, setBase] = useState("street"); // street | satellite
   const [overlayBuildings, setOverlayBuildings] = useState(false);
   const [imageryLoading, setImageryLoading] = useState(false);
+  const [imageryError, setImageryError] = useState(false);
+  const mintingRef = React.useRef(false);
   const loadingTimer = React.useRef(null);
   const flashLoading = () => {
     setImageryLoading(true);
     if (loadingTimer.current) clearTimeout(loadingTimer.current);
     loadingTimer.current = setTimeout(() => setImageryLoading(false), 2800);
   };
-  const chooseBase = (v) => { setBase(v); if (v === "satellite") flashLoading(); };
-  const toggleBuildings = () => { setOverlayBuildings((v) => { if (!v) flashLoading(); return !v; }); };
+  const chooseBase = (v) => { setBase(v); if (v === "satellite") { flashLoading(); ensureTicket(); } };
+  const toggleBuildings = () => { setOverlayBuildings((v) => { const nv = !v; if (nv) { flashLoading(); ensureTicket(); } return nv; }); };
   const [filter, setFilter] = useState("all");
   const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
   const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
@@ -208,8 +210,33 @@ export default function MapScreen({ navigation }) {
   // when offline, previously viewed tiles are served from the ambient cache.
   const satelliteUrl = tileTemplate(pairing, "satellite", ticket);
   const buildingsUrl = tileTemplate(pairing, "buildings", ticket);
-  const imageryReady = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured && satelliteUrl && buildingsUrl);
-  const activeBase = imageryReady ? base : "street";
+  // imageryAvailable => the Office supports satellite imagery, so ALWAYS offer the option (the switcher
+  // must never silently vanish). imageryReady => we also hold a tile ticket, so tiles can actually draw.
+  const imageryAvailable = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured);
+  const imageryReady = imageryAvailable && !!satelliteUrl && !!buildingsUrl;
+  const activeBase = imageryAvailable ? base : "street";
+
+  // Mint a tile ticket on demand (also attempted eagerly in load()). Keeps the Satellite/Buildings
+  // options usable and lets them recover gracefully if the ticket was not ready or a mint failed.
+  const ensureTicket = useCallback(async () => {
+    if (ticket || mintingRef.current || !imageryAvailable || !pairing) return;
+    mintingRef.current = true;
+    setImageryError(false);
+    try {
+      const token = await getToken();
+      const t = await mintTileTicket(pairing, token);
+      if (t) {
+        setTicket(t);
+        if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, t); } catch (e) {} }
+      } else {
+        setImageryError(true);
+      }
+    } catch (e) {
+      setImageryError(true);
+    } finally {
+      mintingRef.current = false;
+    }
+  }, [ticket, imageryAvailable, pairing]);
 
   const startDownload = useCallback(async () => {
     if (!selected || !satelliteUrl || !cfg || !cfg.osm_tile_url || !MapLibre) return;
@@ -247,7 +274,7 @@ export default function MapScreen({ navigation }) {
     </TouchableOpacity>
   ) : null;
 
-  const baseSwitcher = imageryReady ? (
+  const baseSwitcher = imageryAvailable ? (
     <View style={s.switcher} testID="basemap-switcher">
       {[["street", "Street"], ["satellite", "Satellite"]].map(([v, label]) => (
         <TouchableOpacity key={v} onPress={() => chooseBase(v)} style={[s.segBtn, activeBase === v && s.segBtnActive]} testID={`basemap-${v}-button`}>
@@ -291,7 +318,7 @@ export default function MapScreen({ navigation }) {
         </ScrollView>
       )}
       {baseSwitcher}
-      {imageryReady ? colorModeSwitcher : null}
+      {imageryAvailable ? colorModeSwitcher : null}
       {filterChips}
       {prefetchButton}
     </View>
@@ -365,16 +392,16 @@ export default function MapScreen({ navigation }) {
         <View style={{ flex: 1 }} testID="map-container">
           {header}
           <View style={{ flex: 1 }}>
-            <MapView style={{ flex: 1 }} mapStyle={activeBase === "satellite" ? SATELLITE_BG_STYLE : mapStyle} testID="map-view">
+            <MapView style={{ flex: 1 }} mapStyle={activeBase === "satellite" && satelliteUrl ? SATELLITE_BG_STYLE : mapStyle} testID="map-view">
               <Camera zoomLevel={safeZoom(cfg)} centerCoordinate={center} />
 
-              {activeBase === "satellite" && RasterSource && (
+              {activeBase === "satellite" && satelliteUrl && RasterSource && (
                 <RasterSource id="rs-satellite" tileUrlTemplates={[satelliteUrl]} tileSize={512}>
                   <RasterLayer id="rs-satellite-layer" style={{}} />
                 </RasterSource>
               )}
 
-              {activeBase === "buildings" && VectorSource && (
+              {overlayBuildings && buildingsUrl && VectorSource && (
                 <VectorSource id="rs-buildings" tileUrlTemplates={[buildingsUrl]} minZoomLevel={14} maxZoomLevel={20}>
                   <FillLayer id="rs-buildings-fill" sourceLayerID="building" minZoomLevel={14}
                     style={{ fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"], fillOpacity: 0.35 }} />
@@ -391,6 +418,13 @@ export default function MapScreen({ navigation }) {
                 <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: colorMode === "progress" ? PROGRESS_COLOR : PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
               </ShapeSource>
             </MapView>
+            {(activeBase === "satellite" || overlayBuildings) && (!satelliteUrl || imageryLoading) ? (
+              <View style={s.imgHintWrap} pointerEvents="box-none">
+                <TouchableOpacity style={s.imgHint} onPress={ensureTicket} disabled={!!satelliteUrl && imageryLoading} testID="imagery-hint">
+                  <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? "Imagery unavailable — tap to retry" : "Loading imagery…"}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
             {legend}
           </View>
         </View>
@@ -428,6 +462,9 @@ const s = StyleSheet.create({
   filterTextActive: { color: "#fff" },
   dlBtn: { marginTop: 10, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   dlBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  imgHintWrap: { position: "absolute", top: 12, left: 0, right: 0, alignItems: "center" },
+  imgHint: { backgroundColor: "rgba(15,27,43,0.92)", borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  imgHintText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   legend: { position: "absolute", left: 12, bottom: 12, backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: C.line, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   legendTitle: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8, color: C.sub, marginBottom: 6, textTransform: "uppercase" },
   legendRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },

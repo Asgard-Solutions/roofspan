@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile map — Satellite option "disappeared": robustness fix + diagnosis (2026-06)
+- **Not removed:** satellite is still the 2nd basemap button; "Buildings" became a separate overlay toggle (from the prior fork's "Buildings Over Satellite" work, which was bundled into commit ae720e0). The whole `basemap-switcher` was *silently hidden* whenever `imageryReady` was false.
+- **Root cause of it vanishing:** the switcher gated on `imageryReady = NATIVE_MAP_OK && maptiler_configured && satelliteUrl && buildingsUrl`. `satelliteUrl` is null until a tile ticket is minted; and `maptiler_configured` is false when the Office has no usable MapTiler key. On this pod `/api/map-config` returns `maptiler_configured:false` — the most likely reason on the user's build too.
+- **Fix (`MapScreen.js`):** introduced `imageryAvailable = NATIVE_MAP_OK && cfg.maptiler_configured`; the Satellite/Buildings switcher + pin-color modes now show whenever imagery is available (never silently vanish). Tile ticket is minted **on demand** via `ensureTicket()` when Satellite/Buildings is tapped (in addition to the eager mint in `load()`), with a "Loading imagery… / tap to retry" hint overlay. Guarded the satellite raster + `mapStyle` against a null URL (no black screen). **Fixed the broken Buildings overlay** — render now keys off `overlayBuildings && buildingsUrl` instead of the impossible `activeBase === "buildings"`. `imageryReady` now only gates offline prefetch (which truly needs a ticket).
+- **User action to restore Satellite:** RoofSpan Office → Settings → Integrations → MapTiler → paste + enable API key (then Settings → Maps → enable Satellite). Without a usable MapTiler key `maptiler_configured` stays false and no imagery can be shown.
+- Verified: babel compiles; mapconfig/canvass/sync node tests pass. Native map needs on-device (EAS/dev build) verification — cannot render in the web harness.
+
 ## Website — Territory intelligence banner, hero map callouts, lightbox captions (2026-06)
 - **Lightbox captions:** every gallery item now carries a one-line `desc`; the lightbox figcaption shows title + description (`Gallery.jsx`).
 - **Hero map callouts:** subtle frosted pills ("8,029 properties", "Canvass sections") overlay the satellite AppMock, revealed with a `.callout` CSS keyframe (`Hero.jsx`, `globals.css`).
