@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from models import AppConfig, IntegrationSetting, User, AuditLog
-from core import require_roles, get_current_user, SENSITIVE_ROLES, log_action
+from core import require_roles, get_current_user, require_tile_access, SENSITIVE_ROLES, log_action
 from schemas import MapConfigOut, MapConfigUpdate, CompanyProfile
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -348,7 +348,7 @@ async def update_company(payload: CompanyProfile, request: Request, user: User =
 
 # ---- MapTiler satellite tile proxy (keeps provider key server-side) ----
 @router.get("/map/tiles/satellite/{z}/{x}/{y}")
-async def satellite_tile(z: int, x: int, y: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def satellite_tile(z: int, x: int, y: int, _: bool = Depends(require_tile_access), db: AsyncSession = Depends(get_db)):
     key = await _maptiler_key(db)
     if not key:
         raise HTTPException(status_code=404, detail="Satellite imagery is not configured")

@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile map — org-level tile authorization (decouple imagery from per-user session) (2026-06)
+- **User report:** on the rebuilt app the Satellite/Buildings switcher now shows (prior fix worked) but tiles fail with "Imagery unavailable — tap to retry". Root cause: the tile proxy (`/api/map/tiles/satellite`, `/api/map/tiles/buildings`) required `get_current_user`, and the relay forwarded the **individual salesperson's access token**; when it expired, org imagery broke. The MapTiler key is org-level, so tile serving must not depend on a single user.
+- **Fix (server-side only — no mobile rebuild needed):**
+  - `core.py`: `create_tile_token()` (short-lived, 10 min, `{"type":"tile"}`, HS256 same secret) + `require_tile_access` dependency accepting `type in {"access","tile"}`.
+  - `routers/settings.py` `satellite_tile` + `routers/building_tiles.py` `buildings_tile`: now `Depends(require_tile_access)` instead of `get_current_user` (browser app still authorizes via its access token).
+  - `relay/tunnel_client.py`: the Office connector swaps the forwarded token for a fresh office-signed **tile token** on `GET /api/map/tiles/*`, so tunnelled tile fetches never depend on a rep's (expiring) session. Relay can't forge tile tokens (no office JWT secret).
+- **Verified (curl matrix):** tile-token & access-token → 403 (reached MapTiler w/ fake key = authorized; real key = 200 image); no-token / expired-access / refresh-token → 401; tile-token on `/api/auth/me` and `/api/mobile/leads` → 401 (type gating intact). Backend healthy.
+- **Deploy note:** this is Office-backend code — the user must deploy the updated Office backend; their current rebuilt mobile app works with it unchanged.
+
 ## Mobile map — Satellite option "disappeared": robustness fix + diagnosis (2026-06)
 - **Not removed:** satellite is still the 2nd basemap button; "Buildings" became a separate overlay toggle (from the prior fork's "Buildings Over Satellite" work, which was bundled into commit ae720e0). The whole `basemap-switcher` was *silently hidden* whenever `imageryReady` was false.
 - **Root cause of it vanishing:** the switcher gated on `imageryReady = NATIVE_MAP_OK && maptiler_configured && satelliteUrl && buildingsUrl`. `satelliteUrl` is null until a tile ticket is minted; and `maptiler_configured` is false when the Office has no usable MapTiler key. On this pod `/api/map-config` returns `maptiler_configured:false` — the most likely reason on the user's build too.

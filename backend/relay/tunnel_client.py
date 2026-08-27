@@ -36,6 +36,15 @@ class InstallationTunnel:
             headers = dict(frame.get("headers", {}) or {})
             for h in ("host", "Host", "content-length", "Content-Length"):
                 headers.pop(h, None)
+            # Org-level map imagery: authorize tile-proxy fetches with a short-lived, office-signed
+            # tile token instead of the salesperson's (expiring) access token. Keeps the MapTiler key
+            # org-wide so a rep's expired session never blanks the map.
+            if frame.get("method", "GET").upper() == "GET" and path.startswith("/api/map/tiles/"):
+                try:
+                    from core import create_tile_token
+                    headers["Authorization"] = f"Bearer {create_tile_token()}"
+                except Exception:
+                    pass
             mp = frame.get("multipart")
             async with httpx.AsyncClient(timeout=60) as c:
                 if mp and isinstance(mp, dict):

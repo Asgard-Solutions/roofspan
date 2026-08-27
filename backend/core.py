@@ -128,6 +128,39 @@ async def get_current_user(
     return user
 
 
+# ---- Tile access (org-level map imagery, decoupled from any single user's session) ----
+TILE_TOKEN_EXPIRE_MINUTES = int(os.environ.get("TILE_TOKEN_EXPIRE_MINUTES", "10"))
+
+
+def create_tile_token() -> str:
+    """Short-lived, org-scoped token the Office's own relay connector mints to authorize map-tile
+    proxy requests. The MapTiler key is org-level, so imagery must not depend on the individual
+    salesperson's access token (which expires)."""
+    payload = {
+        "type": "tile",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=TILE_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
+
+
+async def require_tile_access(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> bool:
+    """Authorize a map-tile proxy request. Accepts EITHER a normal user access token (browser app)
+    OR a tile-scoped token (relay-tunneled mobile). No per-user identity is needed to serve org-level
+    imagery. The `type` claim keeps tile tokens unusable on user endpoints and vice versa."""
+    token = creds.credentials if creds else None
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("type") not in ("access", "tile"):
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    return True
+
+
 def require_roles(*roles: str):
     async def checker(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:

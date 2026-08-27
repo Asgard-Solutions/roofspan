@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core import decrypt_secret, get_current_user
+from core import decrypt_secret, require_tile_access
 from db import get_db
-from models import IntegrationSetting, User
+from models import IntegrationSetting
 
 router = APIRouter(prefix="/api/map/tiles", tags=["map"])
 
@@ -29,7 +29,7 @@ async def buildings_tile(
     z: int,
     x: int,
     y: int,
-    user: User = Depends(get_current_user),
+    _: bool = Depends(require_tile_access),
     db: AsyncSession = Depends(get_db),
 ):
     """Proxy MapTiler Buildings vector tiles so the provider key never reaches the browser."""
