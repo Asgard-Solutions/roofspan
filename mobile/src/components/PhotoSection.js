@@ -4,8 +4,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { api } from "../api";
-import { API_BASE } from "../config";
 import { getToken } from "../auth";
+import { usePairing } from "../pairingContext";
+import { mintPhotoTicket, photoContentSource } from "../photoContent";
 import { queueMutation, pendingSummary, syncNow, removeMutation, replacePhoto } from "../sync";
 import queue from "../queue";
 import { C, badge } from "../theme";
@@ -20,21 +21,33 @@ const PHOTO_DIR = FileSystem.documentDirectory + "roofspan_photos/";
 // Field photo capture + offline queue. Captured/selected files are copied to the app's document
 // directory so they survive restarts, then queued (upload on reconnect). The local copy is kept.
 export default function PhotoSection({ recordType, recordId }) {
+  const pairingCtx = usePairing();
+  const pairing = pairingCtx ? pairingCtx.pairing : null;
   const [serverPhotos, setServerPhotos] = useState([]);
   const [pending, setPending] = useState([]);
   const [category, setCategory] = useState("Overview");
   const [note, setNote] = useState("");
   const [token, setToken] = useState(null);
+  const [photoTicket, setPhotoTicket] = useState(null);
 
   const load = useCallback(async () => {
-    getToken().then(setToken);
+    const currentToken = await getToken();
+    setToken(currentToken);
+
+    if (pairing && currentToken) {
+      const auth = await mintPhotoTicket(pairing, currentToken);
+      setPhotoTicket(auth.ticket || null);
+    } else {
+      setPhotoTicket(null);
+    }
+
     try {
       const r = await api.get("/mobile/photos", { params: { record_type: recordType, record_id: recordId } });
       setServerPhotos(r.data || []);
     } catch (e) { /* offline: keep last */ }
     const { items } = await pendingSummary();
     setPending(items.filter((m) => m.kind === "photo" && m.state !== "synced" && m.body && m.body.record_id === recordId));
-  }, [recordType, recordId]);
+  }, [recordType, recordId, pairing]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -177,13 +190,22 @@ export default function PhotoSection({ recordType, recordId }) {
             </View>
           );
         })}
-        {serverPhotos.map((p) => (
-          <View key={p.id} style={s.thumb} testID={`photo-synced-${p.id}`}>
-            <Image source={{ uri: `${API_BASE}${p.content_url}`, headers: token ? { Authorization: `Bearer ${token}` } : undefined }} style={s.img} />
-            <View style={[s.pill, { backgroundColor: badge.synced.bg }]}><Text style={[s.pillText, { color: badge.synced.fg }]}>Synced</Text></View>
-            <Text style={s.cap}>{p.category || "—"}</Text>
-          </View>
-        ))}
+        {serverPhotos.map((p) => {
+          const source = photoContentSource(pairing, p, photoTicket, token);
+          return (
+            <View key={p.id} style={s.thumb} testID={`photo-synced-${p.id}`}>
+              {source ? (
+                <Image source={source} style={s.img} />
+              ) : (
+                <View style={[s.img, s.imgMissing]} testID={`photo-unavailable-${p.id}`}>
+                  <Text style={s.imgMissingText}>Photo unavailable</Text>
+                </View>
+              )}
+              <View style={[s.pill, { backgroundColor: badge.synced.bg }]}><Text style={[s.pillText, { color: badge.synced.fg }]}>Synced</Text></View>
+              <Text style={s.cap}>{p.category || "—"}</Text>
+            </View>
+          );
+        })}
         {pending.length === 0 && serverPhotos.length === 0 && <Text style={s.empty}>No photos yet.</Text>}
       </ScrollView>
     </View>
