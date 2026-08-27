@@ -82,6 +82,15 @@ function photoErrorLabel(codeOrStatus) {
   return map[codeOrStatus] || `Upload failed (${codeOrStatus})`;
 }
 
+// A permanent failure needs user action (Replace/Remove) and must NOT be auto-retried. Everything
+// else that failed transiently is safe for gentle background auto-retry with backoff.
+const PERMANENT_PHOTO_CODES = ["photo_file_missing", "photo_unreadable", "photo_unsupported_type", "http_413", "http_415"];
+function isPermanentFailure(m) {
+  if (!m || m.state !== "failed") return false;
+  if (isPhotoMutation(m)) return PERMANENT_PHOTO_CODES.includes(m.errorCode);
+  return true; // non-photo failed mutations are left as-is (no behavior change)
+}
+
 // send(mutation) -> Promise<{status, data}>. Throws on network failure (offline).
 async function processMutation(m, send) {
   const attempts = (m.attempts || 0) + 1;
@@ -126,5 +135,5 @@ async function processQueue(items, send) {
 
 module.exports = {
   STATES, uuidv4, makeMutation, processMutation, processQueue,
-  SUPPORTED_PHOTO_TYPES, isPhotoMutation, validatePhotoMeta, buildSendPlan, photoErrorLabel,
+  SUPPORTED_PHOTO_TYPES, isPhotoMutation, validatePhotoMeta, buildSendPlan, photoErrorLabel, isPermanentFailure,
 };

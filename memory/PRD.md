@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — Auto-retry backoff + Conflict resolver shortcut (2026-06)
+- **Auto-retry backoff (`sync.js`):** while transient work remains, sync re-runs on exponential backoff (15s→30s→60s→2m→5m, capped). Retryable failed PHOTOS are quietly revived to pending each pass (capped at 6 auto-attempts) so reps rarely tap Retry. Backoff resets on reconnect, foreground, new mutation, and manual Sync. Permanent failures (`photo_file_missing`/`photo_unreadable`/`photo_unsupported_type`/413/415) are never auto-retried — classified by new pure `queue.isPermanentFailure(m)`.
+- **Conflict resolver (`More.js`):** conflict items in the Sync Center now have a "Review & update" button that opens the affected record via nested navigation (`routeFor` maps lead/job/visit/inspection/photo → LeadsTab/LeadDetail, JobsTab/JobDetail, Map/Property).
+- Tests: `photo.node.test.js` **6/6** (added `isPermanentFailure` classification test). All changed RN files babel-compile. Full suite: only the pre-existing unrelated `sync.node.test.js` network 404 fails. Native behavior needs a dev-build check. Not yet pushed — use Save to GitHub.
+
+
 ## Mobile — Replace Photo + Sync Center (2026-06)
 - **Replace Photo:** failed photo items in `PhotoSection.js` now have a "Replace" action (Take photo / Library) that re-shoots without losing category/note/record — new `sync.replacePhoto(client_id, photo)` swaps the local file, keeps the SAME idempotency_key, resets to pending, and re-syncs. Refactored capture into shared `captureFrom`/`buildPhoto` helpers.
 - **Sync Center:** the More screen "Needs attention" list now has per-item **Retry** and **Remove** (confirmed) on failed uploads so reps can recover any failed item in one place; removal is scoped to the single mutation (other offline work untouched).

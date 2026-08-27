@@ -7,7 +7,7 @@ import { pendingSummary, runSync, removeMutation } from "../sync";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
-export default function More() {
+export default function More({ navigation }) {
   const { user, logout } = useAuth();
   const { unpair } = usePairing();
   const [counts, setCounts] = useState({ pending: 0, failed: 0, conflict: 0, synced: 0 });
@@ -42,6 +42,31 @@ export default function More() {
         { text: "Remove", style: "destructive", onPress: async () => { await removeMutation(m.client_id); load(); } },
       ]
     );
+  };
+
+  // Map a queued mutation back to the screen that owns its record, for the conflict "Review & update"
+  // shortcut. Nested navigation targets the owning tab's stack.
+  const routeFor = (m) => {
+    const b = m.body || {};
+    const idm = (m.path || "").match(/\/(leads|jobs|inspections)\/([^/?]+)/);
+    const pathId = idm ? idm[2] : null;
+    const k = m.kind || "";
+    if (k.startsWith("lead") && pathId) return { tab: "LeadsTab", screen: "LeadDetail", params: { id: pathId } };
+    if (k.startsWith("job") && pathId) return { tab: "JobsTab", screen: "JobDetail", params: { id: pathId } };
+    if (k === "visit" && b.property_id) return { tab: "Map", screen: "Property", params: { id: b.property_id } };
+    if (k.startsWith("inspection") && b.property_id) return { tab: "Map", screen: "Property", params: { id: b.property_id } };
+    if (k === "photo" && b.record_id) {
+      if (b.record_type === "job") return { tab: "JobsTab", screen: "JobDetail", params: { id: b.record_id } };
+      if (b.record_type === "lead") return { tab: "LeadsTab", screen: "LeadDetail", params: { id: b.record_id } };
+      if (b.record_type === "property") return { tab: "Map", screen: "Property", params: { id: b.record_id } };
+    }
+    return null;
+  };
+
+  const reviewConflict = (m) => {
+    const r = routeFor(m);
+    if (!r || !navigation) { Alert.alert("Review update", "Open the affected Lead, Job or Property to review the latest details, then re-apply your change."); return; }
+    navigation.navigate(r.tab, { screen: r.screen, params: r.params });
   };
   const isAdmin = user?.role === "owner" || user?.role === "administrator";
   const openBillingWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
@@ -90,6 +115,11 @@ export default function More() {
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={s.attLabel}>{labelFor(m)}</Text>
                     {m.state === "conflict" && m.error ? <Text style={s.attErr}>{m.error}</Text> : null}
+                    {m.state === "conflict" ? (
+                      <View style={s.attActions}>
+                        <TouchableOpacity style={s.attReview} onPress={() => reviewConflict(m)} testID={`att-review-${m.client_id}`}><Text style={s.attReviewText}>Review & update</Text></TouchableOpacity>
+                      </View>
+                    ) : null}
                     {m.state === "failed" && m.error ? <Text style={s.attErrMuted}>{m.error}</Text> : null}
                     {m.state === "failed" ? (
                       <View style={s.attActions}>
@@ -155,6 +185,8 @@ const s = StyleSheet.create({
   attRetryText: { color: "#fff", fontWeight: "800", fontSize: 12 },
   attRemove: { borderWidth: 1, borderColor: C.danger, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 16, alignItems: "center" },
   attRemoveText: { color: C.danger, fontWeight: "800", fontSize: 12 },
+  attReview: { backgroundColor: C.ink, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 16, alignItems: "center" },
+  attReviewText: { color: "#fff", fontWeight: "800", fontSize: 12 },
   attHint: { color: C.sub, fontSize: 12, marginTop: 10, lineHeight: 17 },
   pill: { borderRadius: 8, paddingVertical: 3, paddingHorizontal: 8 },
   pillText: { fontSize: 11, fontWeight: "800" },

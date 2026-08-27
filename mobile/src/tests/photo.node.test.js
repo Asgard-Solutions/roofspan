@@ -105,3 +105,14 @@ test("malformed legacy photo mutation fails deterministically (no crash, no JSON
   assert.strictEqual(out.error, "Photo file unavailable");
   assert.strictEqual(backend.photos.length, 0, "malformed item must never reach the backend as a photo");
 });
+
+// ---- Auto-retry backoff classification ----
+test("isPermanentFailure: local photo issues are permanent; transient photo/backend hiccups are retryable", () => {
+  const perm = { state: "failed", kind: "photo", photo: {}, errorCode: "photo_file_missing" };
+  assert.strictEqual(queue.isPermanentFailure(perm), true);
+  assert.strictEqual(queue.isPermanentFailure({ state: "failed", kind: "photo", photo: {}, errorCode: "http_413" }), true);
+  // a transient/backend-side photo failure is safe to auto-retry
+  assert.strictEqual(queue.isPermanentFailure({ state: "failed", kind: "photo", photo: {}, errorCode: "http_422" }), false);
+  // pending items are never "permanent failures"
+  assert.strictEqual(queue.isPermanentFailure({ state: "pending", kind: "photo", photo: {} }), false);
+});
