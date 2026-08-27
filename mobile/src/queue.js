@@ -7,6 +7,9 @@ const STATES = { PENDING: "pending", SYNCED: "synced", FAILED: "failed", CONFLIC
 // Formats the Office /api/mobile/photos endpoint accepts. Reject others locally instead of queuing
 // an item the backend will 4xx.
 const SUPPORTED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
+// Relay photos are base64-encoded into a single WebSocket frame. Keep the raw file comfortably below
+// the 16 MiB WebSocket message ceiling after base64 expansion + JSON framing.
+const MAX_RELAY_PHOTO_BYTES = 8 * 1024 * 1024;
 
 function uuidv4() {
   // RFC4122-ish v4; adequate for client-generated stable IDs / idempotency keys.
@@ -54,6 +57,20 @@ function validatePhotoMeta(photo) {
   }
   if (!SUPPORTED_PHOTO_TYPES.includes(photo.type)) {
     return { ok: false, code: "photo_unsupported_type", message: "Unsupported photo type" };
+  }
+  return { ok: true };
+}
+
+// Validate device file facts gathered by expo-file-system before Relay base64 encoding.
+function validateLocalPhotoInfo(info) {
+  if (!info || !info.exists) {
+    return { ok: false, status: 422, code: "photo_file_missing", message: "Photo file unavailable" };
+  }
+  if (info.size === 0) {
+    return { ok: false, status: 422, code: "photo_unreadable", message: "Photo could not be read" };
+  }
+  if (typeof info.size === "number" && info.size > MAX_RELAY_PHOTO_BYTES) {
+    return { ok: false, status: 413, code: "http_413", message: "Photo is too large" };
   }
   return { ok: true };
 }
@@ -135,5 +152,6 @@ async function processQueue(items, send) {
 
 module.exports = {
   STATES, uuidv4, makeMutation, processMutation, processQueue,
-  SUPPORTED_PHOTO_TYPES, isPhotoMutation, validatePhotoMeta, buildSendPlan, photoErrorLabel, isPermanentFailure,
+  SUPPORTED_PHOTO_TYPES, MAX_RELAY_PHOTO_BYTES, isPhotoMutation, validatePhotoMeta, validateLocalPhotoInfo,
+  buildSendPlan, photoErrorLabel, isPermanentFailure,
 };

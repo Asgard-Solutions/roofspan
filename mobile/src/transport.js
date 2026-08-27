@@ -2,7 +2,7 @@
 // build backend URLs or WebSocket frames. RelayTransport is the production/remote path
 // (Mobile -> Relay -> installation tunnel -> local FastAPI); DirectHttpTransport is dev/local only.
 import axios from "axios";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { API, relayWsUrl } from "./config";
 import { RELAY_PROTOCOL_VERSION } from "./pairing";
 import { buildRequestFrame, parseResponseFrame } from "./transportCore";
@@ -116,7 +116,8 @@ class RelayTransport {
     this.ws = null;
   }
   async request({ method, path, params, headers, data, multipart }) {
-    // File reading stays in the transport layer (never spread through screens).
+    // File reading stays in the transport layer (never spread through screens). SDK 54 keeps
+    // readAsStringAsync in expo-file-system/legacy; using the bare module throws at runtime.
     if (multipart && multipart.file && multipart.file.uri && !multipart.file.b64) {
       const enc = (FileSystem.EncodingType && FileSystem.EncodingType.Base64) || "base64";
       const b64 = await FileSystem.readAsStringAsync(multipart.file.uri, { encoding: enc });
