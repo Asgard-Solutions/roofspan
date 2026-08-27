@@ -106,13 +106,12 @@ export function DataSecurity() {
   const layers = [
     { t: "RoofSpan Office", d: "Installs and runs on your company's own Windows machine. Your operational roofing database lives with your installation." },
     { t: "RoofSpan Mobile", d: "Free companion apps that securely pair with your Office installation so field crews can work while away from the office." },
-    { t: "This website", d: "A public marketing and download site only. It has no login and holds none of your operational data." },
   ];
   return (
     <section id="data" className="bg-white py-20" aria-labelledby="data-h">
       <div className="container-x">
-        <SectionHeading id="data-h" eyebrow="Security & data" title="Your operation runs on a system you control" sub="RoofSpan is built around three clearly separate pieces. Here's how they fit together." />
-        <div className="mt-10 grid gap-4 md:grid-cols-3">
+        <SectionHeading id="data-h" eyebrow="Security & data" title="Your operation runs on a system you control" sub="RoofSpan is built around two clearly separate pieces. Here's how they fit together." />
+        <div className="mt-10 grid gap-4 md:grid-cols-2">
           {layers.map((l) => (
             <div key={l.t} className="card p-6" data-testid={`data-${l.t.split(" ")[1] ? l.t.split(" ")[1].toLowerCase() : "site"}`}>
               <h3 className="font-display text-lg font-bold text-slate-ink">{l.t}</h3>
