@@ -12,6 +12,15 @@ export const C = {
   dnk: "#DC2626",
 };
 
+// Property pin colors — MUST match RoofSpan Office map legend exactly.
+export const PIN = {
+  owned: "#16A34A",   // Owner-occupied
+  rented: "#D97706",  // Rented / tenant-occupied
+  unknown: "#64748B", // Occupancy unknown
+  dnk: "#DC2626",     // Do Not Knock
+};
+
+
 export const badge = {
   pending: { bg: "#FEF3C7", fg: "#92400E", label: "Pending" },
   failed: { bg: "#FEE2E2", fg: "#991B1B", label: "Failed" },

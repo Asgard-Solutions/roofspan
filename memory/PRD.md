@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile Field map — Satellite/Buildings + colored pins & legend (2026-06)
+- Goal: bring the RoofSpan Office map's Satellite & Buildings base views and the colored-pin legend to the RoofSpan Field (mobile) map.
+- Colored pins (mobile `MapScreen.js`): data-driven `circleColor` matching Office — Owned `#16A34A`, Rented `#D97706`, Unknown `#64748B`, Do Not Knock `#DC2626` (from `theme.js` `PIN`). On-map legend overlay + colored dots in the fallback list. Uses `owner_occupied`/`do_not_knock` already present in `/api/mobile/canvass-sections/{id}/properties`.
+- Base switcher (Street/Satellite/Buildings) shown only when `map-config.maptiler_configured` AND device paired + user token available. Satellite = RasterSource(512); Buildings = VectorSource `sourceLayerID:"building"` residential vs other fill/outline (mirrors Office colors).
+- Satellite/Building TILE DELIVERY (chosen option a — Relay passthrough): new authed endpoint `GET /api/relay/tiles/{kind}/{z}/{x}/{y}` in `backend/relay/server.py`. Authenticates the device (installation ACTIVE + device paired + credential HMAC + entitlement, reusing the mobile-WS chain), then routes the tile request down the SAME installation tunnel to the Office's MapTiler proxy (`/api/map/tiles/...`). MapTiler key never leaves the Office. Mobile builds tile URLs via `config.js relayHttpBase()` with `iid/did/dc/tok` query params.
+- Tests: `backend/tests/test_relay_tiles.py` — 6 pass (unknown kind→404, unpaired→403, bad cred→403, no tunnel→503 office_offline, full authorized passthrough routes to Office→404 w/o MapTiler, bad user token→401). Existing `test_relay.py` (15) still green. Mobile files babel-compile clean; native map rendering must be verified on a dev build (can't e2e native maps here).
+- FOLLOW-UP (security hardening): tile URLs currently carry `device_credential`+user JWT as query params (HTTPS-encrypted in transit but may land in access logs). Consider short-lived signed tile tickets.
+
+
 ## Marketing site — real app screenshots (2026-06)
 - Product tour gallery: `components/Gallery.jsx` (client) — 3 Office screens (Dashboard, Jobs, Territory Map) in browser frames + 4 Field/Mobile screens (My Day, Leads, Jobs, My Area) in a phone lineup. Click any screen → full-size LIGHTBOX (backdrop, prev/next, Esc/arrow keys, close, caption). Replaced the old static `ProductProof` block in `app/page.jsx` (ProductProof now dead code in Sections.jsx). Removed the "This website" card from DataSecurity (now 2 pieces: Office + Mobile).
 - Assets in `public/screenshots/` (PIL-optimized: office pngs capped 1600w, map cropped to clean canvas as .jpg, mobile pngs capped 800w).

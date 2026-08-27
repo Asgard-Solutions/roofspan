@@ -10,12 +10,15 @@ Authorization chain: installation exists + not revoked + entitled (ACTIVE/GRACE)
 revoked; local user JWT + RBAC are enforced by the LOCAL FastAPI when the tunnel forwards the request.
 The relay is not the RBAC authority and never persists roofing-business payloads.
 """
+import asyncio
+import hashlib
+import hmac
 import logging
 import uuid as uuidlib
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from control_plane import readiness as cp_readiness
@@ -402,3 +405,103 @@ async def mobile_ws(ws: WebSocket):
         pass
     except Exception as exc:  # noqa: BLE001
         log.warning("relay mobile ws error: %s", str(exc)[:200])
+
+
+
+# ============================================================================
+# HTTP tile passthrough (satellite / buildings)
+# ----------------------------------------------------------------------------
+# The Mobile map engine (MapLibre native) can only fetch map tiles over plain
+# HTTPS — it cannot speak the Relay WebSocket protocol. This authenticated GET
+# endpoint lets the phone fetch the SAME MapTiler satellite/building tiles the
+# Office browser uses: the device is authenticated here (installation active +
+# device paired + entitled), then the tile request is routed down the existing
+# installation tunnel to the Office's server-side MapTiler proxy. The provider
+# key never leaves the Office PC and the relay persists nothing.
+# ============================================================================
+_TILE_KINDS = {"satellite", "buildings"}
+
+
+async def _authenticate_relay_device(db, installation_id: str, device_id: str, credential: str):
+    """Reuse the Mobile WS authorization chain for stateless HTTP tile requests.
+
+    Returns (installation, None) on success or (None, error_code)."""
+    installation = await _load_installation(db, installation_id)
+    if installation is None or installation.status != "ACTIVE":
+        return None, "unknown_or_revoked_installation"
+    device = None
+    if device_id:
+        try:
+            device = (
+                await db.execute(select(MobileDevice).where(MobileDevice.id == uuidlib.UUID(device_id)))
+            ).scalar_one_or_none()
+        except (ValueError, TypeError):
+            device = None
+    if device is None or str(device.installation_id) != installation_id or device.status != "ACTIVE":
+        return None, "device_not_paired"
+    if (
+        not device.credential_hash
+        or not credential
+        or not hmac.compare_digest(hashlib.sha256(credential.encode()).hexdigest(), device.credential_hash)
+    ):
+        return None, "device_auth_failed"
+    state = await _entitlement_state(db, installation.company_id)
+    if state not in ("ACTIVE", "GRACE"):
+        return None, "subscription_inactive"
+    return installation, None
+
+
+@router.get("/tiles/{kind}/{z}/{x}/{y}")
+async def relay_tile(
+    kind: str,
+    z: int,
+    x: int,
+    y: int,
+    iid: str = Query(..., description="installation id"),
+    did: str = Query(..., description="paired device id"),
+    dc: str = Query(..., description="device credential"),
+    tok: str = Query(..., description="local user bearer token"),
+):
+    if kind not in _TILE_KINDS:
+        raise HTTPException(status_code=404, detail="unknown tile kind")
+    if not await _require_control_plane_ready_http():
+        raise HTTPException(status_code=503, detail="control_plane_unavailable")
+
+    async with SessionLocal() as db:
+        installation, err = await _authenticate_relay_device(db, iid, did, dc)
+    if err:
+        raise HTTPException(status_code=403, detail=err)
+
+    request_frame = {
+        "type": P.T_REQUEST,
+        "request_id": uuidlib.uuid4().hex,
+        "method": "GET",
+        "path": f"/api/map/tiles/{kind}/{z}/{x}/{y}",
+        "query": "",
+        "headers": {"Authorization": f"Bearer {tok}"},
+        "body": "",
+    }
+    try:
+        response = await hub.route(iid, request_frame, REQUEST_TIMEOUT)
+    except RelayUnavailable:
+        raise HTTPException(status_code=503, detail="office_offline")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="tile_timeout")
+
+    status = response.get("status") or 502
+    if status == 204:
+        return Response(status_code=204)
+    if status != 200:
+        # Propagate the Office response (401 bad token, 404 not configured, etc.).
+        raise HTTPException(status_code=status, detail="tile_unavailable")
+    content = P.b64d(response.get("body", ""))
+    content_type = (response.get("headers", {}) or {}).get("content-type", "application/octet-stream")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+async def _require_control_plane_ready_http() -> bool:
+    return cp_readiness.snapshot()["ready"]

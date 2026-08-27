@@ -34,6 +34,14 @@ export function relayWsUrl(pairingEndpoint = "") {
   return `${origin}/api/relay/mobile`;
 }
 
+// HTTPS origin of the same Relay service, used for the native map-tile passthrough
+// (MapLibre native fetches tiles over HTTPS; it cannot use the Relay WebSocket).
+export function relayHttpBase(pairingEndpoint = "") {
+  let origin = cleanBase(pairingEndpoint) || RELAY_WSS_BASE;
+  origin = origin.replace(/\/api\/relay\/(mobile|tunnel|installation)$/i, "");
+  return origin.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+}
+
 // RoofSpan web application (billing/account management lives on the web, never in-app purchasing).
 export const WEB_APP_URL = cleanBase(
   process.env.EXPO_PUBLIC_WEB_APP_URL || extra.webAppUrl || "https://roofspan.io"
