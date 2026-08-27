@@ -57,7 +57,15 @@ class BackendWorker:
         # 1) Provision/reuse the local DB credentials.
         self._provision_database()
 
-        # 2) Run migrations BEFORE uvicorn. This is deliberate: Alembic failures now propagate directly
+        # 2) Prove Field-photo persistence is actually writable under the service identity. This must
+        # happen before uvicorn/SCM readiness so an ACL/path regression cannot become silent Pending
+        # photo uploads on field devices.
+        from services.object_storage import ensure_storage_ready
+        photo_dir = ensure_storage_ready()
+        if photo_dir:
+            self.log.info("backend: photo storage ready at %s", photo_dir)
+
+        # 3) Run migrations BEFORE uvicorn. This is deliberate: Alembic failures now propagate directly
         # through the worker/service wrapper with their original traceback instead of being swallowed by
         # uvicorn's lifespan machinery and reduced to "server.started == False".
         from migrations_runner import run_migrations
@@ -65,7 +73,7 @@ class BackendWorker:
         run_migrations()
         os.environ["ROOFSPAN_MIGRATIONS_PREAPPLIED"] = "1"
 
-        # 3) Start the existing app. log_config=None prevents uvicorn from replacing the service's logging
+        # 4) Start the existing app. log_config=None prevents uvicorn from replacing the service's logging
         # configuration; use_colors=False keeps the no-console SCM path safe.
         config = uvicorn.Config("server:app", host="127.0.0.1", port=8001,
                                 log_level="info", loop="asyncio", lifespan="on",
