@@ -55,6 +55,19 @@ export async function removeMutation(client_id) {
   _emit({ type: "queued" });
 }
 
+// Recovery control: swap the local file on an existing (failed/pending) photo mutation WITHOUT losing
+// its category/note/record or its idempotency key, then re-queue for upload.
+export async function replacePhoto(client_id, photo) {
+  const all = await loadAllMutations();
+  const m = all.find((x) => x.client_id === client_id);
+  if (!m) return null;
+  const updated = { ...m, photo, state: "pending", error: null, errorCode: null, attempts: 0 };
+  await saveMutation(updated);
+  _emit({ type: "queued" });
+  runSync().catch(() => {});
+  return updated;
+}
+
 // Simple salesperson-facing status derived from the durable queue.
 export async function pendingSummary() {
   const all = await loadAllMutations();

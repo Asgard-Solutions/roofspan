@@ -6,7 +6,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { api } from "../api";
 import { API_BASE } from "../config";
 import { getToken } from "../auth";
-import { queueMutation, pendingSummary, syncNow, removeMutation } from "../sync";
+import { queueMutation, pendingSummary, syncNow, removeMutation, replacePhoto } from "../sync";
 import queue from "../queue";
 import { C, badge } from "../theme";
 
@@ -38,34 +38,55 @@ export default function PhotoSection({ recordType, recordId }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const persistAndQueue = async (asset) => {
+  // Copy a picked/captured asset into durable storage and return {uri,name,type}, or null (with an
+  // alert) if the format is unsupported / the copy fails. Shared by capture, library, and replace.
+  const buildPhoto = async (asset) => {
     try {
-      // Prefer metadata the picker provides; fall back to the URI extension.
       let type = (asset.mimeType || "").toLowerCase();
       let ext = ((asset.fileName || "").split(".").pop() || asset.uri.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       if (!type) type = EXT_TO_TYPE[ext] || "";
       if (!ext) ext = TYPE_TO_EXT[type] || "";
       if (!type || !queue.SUPPORTED_PHOTO_TYPES.includes(type)) {
         Alert.alert("Unsupported photo", "That image format isn't supported. Please choose a JPEG, PNG, WEBP, or HEIC photo.");
-        return;
+        return null;
       }
       await FileSystem.makeDirectoryAsync(PHOTO_DIR, { intermediates: true }).catch(() => {});
       const dest = `${PHOTO_DIR}${Date.now()}.${ext || "jpg"}`;
       await FileSystem.copyAsync({ from: asset.uri, to: dest });
-      await queueMutation({
-        kind: "photo",
-        method: "post",
-        path: "/mobile/photos",
-        body: { record_type: recordType, record_id: recordId, category, description: note || null },
-        photo: { uri: dest, name: `photo.${ext || "jpg"}`, type },
-        label: `${category} photo`,
-      });
-      setNote("");
-      await load();
-      Alert.alert("Saved", "Photo saved and queued (will upload when online).");
+      return { uri: dest, name: `photo.${ext || "jpg"}`, type };
     } catch (e) {
       Alert.alert("Error", "Could not save photo.");
+      return null;
     }
+  };
+
+  const captureFrom = async (source) => {
+    if (source === "camera") {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) { Alert.alert("Permission needed", "Camera access is required."); return null; }
+      const res = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
+      return !res.canceled && res.assets && res.assets[0] ? res.assets[0] : null;
+    }
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Photo library access is required."); return null; }
+    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ["images"] });
+    return !res.canceled && res.assets && res.assets[0] ? res.assets[0] : null;
+  };
+
+  const persistAndQueue = async (asset) => {
+    const photo = await buildPhoto(asset);
+    if (!photo) return;
+    await queueMutation({
+      kind: "photo",
+      method: "post",
+      path: "/mobile/photos",
+      body: { record_type: recordType, record_id: recordId, category, description: note || null },
+      photo,
+      label: `${category} photo`,
+    });
+    setNote("");
+    await load();
+    Alert.alert("Saved", "Photo saved and queued (will upload when online).");
   };
 
   const retryItem = async () => { await syncNow(); await load(); };
@@ -81,19 +102,29 @@ export default function PhotoSection({ recordType, recordId }) {
     );
   };
 
-  const takePhoto = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return Alert.alert("Permission needed", "Camera access is required.");
-    const res = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
-    if (!res.canceled && res.assets && res.assets[0]) persistAndQueue(res.assets[0]);
+  // Re-shoot a failed photo, keeping its category/note/record and idempotency key.
+  const replaceItem = (m) => {
+    Alert.alert(
+      "Replace photo",
+      "Choose a new photo for this upload. Your note and category are kept.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Take photo", onPress: () => doReplace(m, "camera") },
+        { text: "Library", onPress: () => doReplace(m, "library") },
+      ]
+    );
+  };
+  const doReplace = async (m, source) => {
+    const asset = await captureFrom(source);
+    if (!asset) return;
+    const photo = await buildPhoto(asset);
+    if (!photo) return;
+    await replacePhoto(m.client_id, photo);
+    await load();
   };
 
-  const pickPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return Alert.alert("Permission needed", "Photo library access is required.");
-    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ["images"] });
-    if (!res.canceled && res.assets && res.assets[0]) persistAndQueue(res.assets[0]);
-  };
+  const takePhoto = async () => { const a = await captureFrom("camera"); if (a) persistAndQueue(a); };
+  const pickPhoto = async () => { const a = await captureFrom("library"); if (a) persistAndQueue(a); };
 
   return (
     <View testID="photo-section">
@@ -137,6 +168,7 @@ export default function PhotoSection({ recordType, recordId }) {
                   <Text style={s.errText} testID={`photo-error-${m.client_id}`}>{m.error || "Upload failed"}</Text>
                   <View style={s.recoverRow}>
                     <TouchableOpacity style={s.retryBtn} onPress={retryItem} testID={`photo-retry-${m.client_id}`}><Text style={s.retryText}>Retry</Text></TouchableOpacity>
+                    <TouchableOpacity style={s.replaceBtn} onPress={() => replaceItem(m)} testID={`photo-replace-${m.client_id}`}><Text style={s.replaceText}>Replace</Text></TouchableOpacity>
                     <TouchableOpacity style={s.removeBtn} onPress={() => removeItem(m)} testID={`photo-remove-${m.client_id}`}><Text style={s.removeText}>Remove</Text></TouchableOpacity>
                   </View>
                 </>
@@ -179,6 +211,8 @@ const s = StyleSheet.create({
   recoverRow: { flexDirection: "row", gap: 6, marginTop: 6 },
   retryBtn: { flex: 1, backgroundColor: C.brand, borderRadius: 8, paddingVertical: 6, alignItems: "center" },
   retryText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  replaceBtn: { flex: 1, borderWidth: 1, borderColor: C.brand, borderRadius: 8, paddingVertical: 6, alignItems: "center" },
+  replaceText: { color: C.brand, fontWeight: "800", fontSize: 12 },
   removeBtn: { flex: 1, borderWidth: 1, borderColor: "#B91C1C", borderRadius: 8, paddingVertical: 6, alignItems: "center" },
   removeText: { color: "#B91C1C", fontWeight: "800", fontSize: 12 },
   pill: { position: "absolute", top: 6, left: 6, borderRadius: 8, paddingVertical: 2, paddingHorizontal: 6 },

@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile — Replace Photo + Sync Center (2026-06)
+- **Replace Photo:** failed photo items in `PhotoSection.js` now have a "Replace" action (Take photo / Library) that re-shoots without losing category/note/record — new `sync.replacePhoto(client_id, photo)` swaps the local file, keeps the SAME idempotency_key, resets to pending, and re-syncs. Refactored capture into shared `captureFrom`/`buildPhoto` helpers.
+- **Sync Center:** the More screen "Needs attention" list now has per-item **Retry** and **Remove** (confirmed) on failed uploads so reps can recover any failed item in one place; removal is scoped to the single mutation (other offline work untouched).
+- Verified: all touched RN files babel-compile; `photo.node.test.js` 5/5 still pass. Native interaction needs a dev-build check. Not yet pushed — use Save to GitHub.
+
+
 ## Mobile — photo capture crash + failed photo sync FIX (2026-06)
 - **Root cause:** `queue.js makeMutation()` didn't accept/persist `photo`, so the object passed by `PhotoSection.persistAndQueue` was dropped → (1) `m.photo.uri` deref crashed the UI, (2) `api.send` `if (m.photo)` was false → photo POSTed as JSON → HTTP 422.
 - **Fixes:** `queue.js` — `makeMutation` now persists `photo`; added pure helpers `isPhotoMutation/validatePhotoMeta/buildSendPlan/photoErrorLabel` + `SUPPORTED_PHOTO_TYPES`; 4xx errors enriched (errorCode + friendly message). `api.js send` uses `buildSendPlan` (photo → multipart, malformed → deterministic local_failure `photo_file_missing`, never JSON), plus lazy Expo FileSystem existence/size check. `PhotoSection.js` crash-safe render (placeholder "Photo file unavailable"/"Photo needs attention"), Retry + Remove (confirm) recovery controls, MIME/fileName from ImagePicker + local unsupported-type reject. `storage.removeMutation` (scoped single-row delete) + `sync.removeMutation`.

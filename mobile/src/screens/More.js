@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, Linking } from "react-
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
-import { pendingSummary, runSync } from "../sync";
+import { pendingSummary, runSync, removeMutation } from "../sync";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
@@ -32,6 +32,17 @@ export default function More() {
   };
 
   const labelFor = (m) => m.label || (m.kind ? m.kind.replace(/_/g, " ") : "Field update");
+
+  const removeFailed = (m) => {
+    Alert.alert(
+      "Remove failed update?",
+      "Removing this will only remove this one failed update. Your other offline work (leads, jobs, visits, inspections and other photos) will not be affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: async () => { await removeMutation(m.client_id); load(); } },
+      ]
+    );
+  };
   const isAdmin = user?.role === "owner" || user?.role === "administrator";
   const openBillingWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});
 
@@ -80,6 +91,12 @@ export default function More() {
                     <Text style={s.attLabel}>{labelFor(m)}</Text>
                     {m.state === "conflict" && m.error ? <Text style={s.attErr}>{m.error}</Text> : null}
                     {m.state === "failed" && m.error ? <Text style={s.attErrMuted}>{m.error}</Text> : null}
+                    {m.state === "failed" ? (
+                      <View style={s.attActions}>
+                        <TouchableOpacity style={s.attRetry} onPress={syncNow} testID={`att-retry-${m.client_id}`}><Text style={s.attRetryText}>Retry</Text></TouchableOpacity>
+                        <TouchableOpacity style={s.attRemove} onPress={() => removeFailed(m)} testID={`att-remove-${m.client_id}`}><Text style={s.attRemoveText}>Remove</Text></TouchableOpacity>
+                      </View>
+                    ) : null}
                   </View>
                   <View style={[s.pill, { backgroundColor: b.bg }]}><Text style={[s.pillText, { color: b.fg }]}>{b.label}</Text></View>
                 </View>
@@ -133,6 +150,11 @@ const s = StyleSheet.create({
   attLabel: { color: C.ink, fontSize: 15, fontWeight: "700", textTransform: "capitalize" },
   attErr: { color: C.warn, fontSize: 12, marginTop: 2 },
   attErrMuted: { color: C.sub, fontSize: 12, marginTop: 2 },
+  attActions: { flexDirection: "row", gap: 8, marginTop: 8 },
+  attRetry: { backgroundColor: C.brand, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 16, alignItems: "center" },
+  attRetryText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  attRemove: { borderWidth: 1, borderColor: C.danger, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 16, alignItems: "center" },
+  attRemoveText: { color: C.danger, fontWeight: "800", fontSize: 12 },
   attHint: { color: C.sub, fontSize: 12, marginTop: 10, lineHeight: 17 },
   pill: { borderRadius: 8, paddingVertical: 3, paddingHorizontal: 8 },
   pillText: { fontSize: 11, fontWeight: "800" },
