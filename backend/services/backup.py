@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse, unquote
 
 from services import pg_tools
+from services import object_storage
 
 
 def _default_backup_dir() -> str:
@@ -231,21 +232,31 @@ async def restore_backup(path: str) -> str:
 
 
 def save_upload(raw_name: str, data: bytes) -> dict:
-    """Store an externally-provided dump so it can be restored. Validates the pg magic header."""
+    """Store an externally-provided dump so it can be restored. Validates the pg magic header.
+
+    The write goes through the shared dual-mode object storage: self-hosted installs land the dump
+    in the local backup directory (where list/download/restore read it), while hosted installs use
+    the managed object store instead of ephemeral pod disk.
+    """
     if data[:5] != PG_DUMP_MAGIC:
         raise ValueError("File is not a valid RoofSpan backup (expected a PostgreSQL custom-format dump).")
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = os.path.join(BACKUP_DIR, f"roofspan_{ts}_import.dump")
-    tmp = out + ".partial"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, out)
-    st = os.stat(out)
+    name = f"roofspan_{ts}_import.dump"
+    res = object_storage.put_upload(name, data, local_base=BACKUP_DIR,
+                                    content_type="application/octet-stream")
+    full = res.get("full")
+    if full and os.path.exists(full):
+        st = os.stat(full)
+        created_at = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        size_bytes = st.st_size
+    else:
+        created_at = datetime.now(timezone.utc).isoformat()
+        size_bytes = res.get("bytes", len(data))
     return {
-        "filename": os.path.basename(out),
-        "size_bytes": st.st_size,
-        "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+        "filename": name,
+        "size_bytes": size_bytes,
+        "created_at": created_at,
     }
 
 

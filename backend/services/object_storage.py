@@ -84,6 +84,29 @@ def put_object(path: str, data: bytes, content_type: str = "application/octet-st
     return resp.json()
 
 
+def put_upload(path: str, data: bytes, local_base: str | None = None,
+               content_type: str = "application/octet-stream") -> dict:
+    """Persist a user-uploaded file through the same dual-mode storage as photos.
+
+    Self-hosted (a `local_base` is given, e.g. the Office backup directory, or the managed proxy is
+    not configured) -> local disk with an atomic rename. Hosted installs (managed proxy configured,
+    no local base) -> Emergent managed object store, so uploads are never pinned to ephemeral
+    pod-only storage. Mirrors `put_object` so both deployment shapes are covered by one path.
+    """
+    base = local_base or _local_dir()
+    if base:
+        full = _local_path(base, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        tmp = full + ".partial"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, full)
+        return {"path": path, "bytes": len(data), "backend": "local", "dir": base, "full": full}
+    res = put_object(path, data, content_type)
+    res.setdefault("backend", "proxy")
+    return res
+
+
 def get_object(path: str) -> bytes:
     base = _local_dir()
     if base:
