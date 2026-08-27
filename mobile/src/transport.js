@@ -82,6 +82,12 @@ class RelayTransport {
     }).finally(() => { this._connecting = null; });
     return this._connecting;
   }
+  _teardown() {
+    // Force a fresh reconnect on the next request. A WebSocket killed by a proxy/idle-timeout can
+    // still report readyState OPEN, so we must not trust it after a timeout/send failure.
+    try { this.ws && this.ws.close(); } catch (e) {}
+    this.ws = null;
+  }
   async request({ method, path, params, headers, data, multipart }) {
     // File reading stays in the transport layer (never spread through screens).
     if (multipart && multipart.file && multipart.file.uri && !multipart.file.b64) {
@@ -94,10 +100,14 @@ class RelayTransport {
     const rid = Math.random().toString(36).slice(2);
     const frame = buildRequestFrame({ rid, method, path: "/api" + path, params, headers, data, multipart });
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(rid); reject(_netErr("relay_request_timeout", "request_timeout")); }, 30000);
+      const timer = setTimeout(() => {
+        this.pending.delete(rid);
+        this._teardown(); // socket is unresponsive — drop it so the next sync reconnects fresh
+        reject(_netErr("relay_request_timeout", "request_timeout"));
+      }, 30000);
       this.pending.set(rid, { resolve, reject, timer });
       try { this.ws.send(JSON.stringify(frame)); }
-      catch (e) { clearTimeout(timer); this.pending.delete(rid); reject(_netErr("relay_send_failed")); }
+      catch (e) { clearTimeout(timer); this.pending.delete(rid); this._teardown(); reject(_netErr("relay_send_failed")); }
     });
   }
 }

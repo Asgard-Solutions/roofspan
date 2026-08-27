@@ -106,6 +106,16 @@ export async function removeAllFailed() {
   return removed;
 }
 
+// Bulk recovery: remove every stuck item (pending OR failed) for the active scope. Use when items
+// refuse to sync and the rep wants a clean slate. Conflicts/synced and other scopes are untouched.
+export async function removeAllStuck() {
+  const all = await loadAllMutations();
+  const removed = all.filter((x) => x.state === "pending" || x.state === "failed");
+  for (const m of removed) await _removeMutation(m.client_id);
+  _emit({ type: "queued" });
+  return removed;
+}
+
 // Undo support: re-insert previously removed mutation rows exactly as they were.
 export async function restoreMutations(list) {
   for (const m of (list || [])) await saveMutation(m);

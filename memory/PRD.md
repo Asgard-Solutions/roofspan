@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Mobile sync stuck after initial connect + delete stuck items/photos (2026-06)
+- **Likely root cause of "sync only works on initial connect / last_seen stops":** `RelayTransport._connect()` reused `this.ws` whenever `readyState === 1`, but a WebSocket killed by a proxy/idle-timeout keeps reporting OPEN before `onclose` fires. Requests were sent into the dead socket → 30s hang → never synced, and the socket was never torn down so every later request reused it. Fix (`transport.js`): added `_teardown()` and call it on request timeout AND send failure, so the next sync reconnects fresh (fires a new authenticated `hello`, updating last_seen).
+- **Delete stuck items / photos (`More.js`, `sync.js`):** pending items (incl. photos) previously had NO remove action — only failed did. Added: per-item "Remove"/"Delete photo" button on pending items; `removeAllStuck()` (removes pending + failed) wired to a "Clear all stuck" bulk button (replaces "Remove all failed"); all with Undo. `removeMutation` already removes any state by client_id.
+- Verified: all three files babel-compile; sync lifecycle node test passes. These are MOBILE changes → require an EAS/dev rebuild.
+- **Still needs live diagnosis:** full sync + photo delivery + last_seen run through the live mobile→relay→Office tunnel, which can't be exercised in this preview. The transport fix is the most probable cause of the "initial-connect-only" symptom; photos also require the local-storage backend (prior fix) deployed. Ask user for relay/Office logs or the on-map error text if it persists after rebuild+deploy.
+
 ## Office — photo download + bulk geocoding backfill (2026-06)
 - **Photo download:** `PhotoGallery.jsx` lightbox now has a "Download full-size" button (anchor on the auth-fetched blob URL, filename `roofspan-{category}-{id8}.jpg`). Frontend compiles clean.
 - **Bulk geocoding backfill:** new `POST /api/properties/locate-unresolved?limit=N` (MANAGE_ROLES) in `routers/properties.py`. Iterates RentCast properties not yet resolved, runs `locate_property_now` (Mapbox Permanent Geocoding), skips already-resolved (saves quota). Returns categorized report: `resolved / unresolved_no_match / skipped_no_street_address / failed / skipped_already_resolved`.

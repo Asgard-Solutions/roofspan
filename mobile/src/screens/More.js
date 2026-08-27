@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Linking } 
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
-import { pendingSummary, runSync, removeMutation, removeAllFailed, restoreMutations } from "../sync";
+import { pendingSummary, runSync, removeMutation, removeAllFailed, removeAllStuck, restoreMutations } from "../sync";
 import { API_BASE, WEB_APP_URL } from "../config";
 import { C, badge } from "../theme";
 
@@ -55,6 +55,33 @@ export default function More({ navigation }) {
       [
         { text: "Cancel", style: "cancel" },
         { text: "Remove", style: "destructive", onPress: async () => { const r = await removeMutation(m.client_id); load(); showUndo(r ? [r] : [], "Removed 1 failed update"); } },
+      ]
+    );
+  };
+
+  // Delete a single stuck item (pending or a photo that won't upload). Only this item is removed.
+  const removeItem = (m) => {
+    const isPhoto = m.kind === "photo";
+    Alert.alert(
+      isPhoto ? "Delete this photo?" : "Remove this item?",
+      isPhoto
+        ? "This removes the photo from your device queue so it stops trying to send. It will NOT delete any photo already saved to the office. Your other offline work is unaffected."
+        : "This removes this one pending change from your device so it stops trying to sync. Your other offline work (leads, jobs, visits and photos) is unaffected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: isPhoto ? "Delete photo" : "Remove", style: "destructive", onPress: async () => { const r = await removeMutation(m.client_id); load(); showUndo(r ? [r] : [], isPhoto ? "Deleted 1 photo" : "Removed 1 item"); } },
+      ]
+    );
+  };
+
+  const removeAllStuckItems = () => {
+    const n = (counts.pending || 0) + (counts.failed || 0);
+    Alert.alert(
+      "Clear all stuck items?",
+      `This removes all ${n} waiting change${n === 1 ? "" : "s"} (pending and failed) from your device so they stop trying to sync. Conflicts and already-synced work are not affected.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear all", style: "destructive", onPress: async () => { const r = await removeAllStuck(); load(); showUndo(r, `Cleared ${r.length} stuck item${r.length === 1 ? "" : "s"}`); } },
       ]
     );
   };
@@ -140,10 +167,10 @@ export default function More({ navigation }) {
       {attention.length > 0 && (
         <>
           <Text style={s.h}>Needs attention</Text>
-          {counts.failed > 0 ? (
+          {(counts.failed > 0 || counts.pending > 0) ? (
             <View style={s.bulkRow} testID="more-bulk-actions">
               <TouchableOpacity style={s.bulkRetry} onPress={syncNow} disabled={syncing} testID="more-retry-all"><Text style={s.bulkRetryText}>{syncing ? "Retrying…" : "Retry all"}</Text></TouchableOpacity>
-              <TouchableOpacity style={s.bulkRemove} onPress={removeAllFailedItems} testID="more-remove-all-failed"><Text style={s.bulkRemoveText}>Remove all failed</Text></TouchableOpacity>
+              <TouchableOpacity style={s.bulkRemove} onPress={removeAllStuckItems} testID="more-remove-all-stuck"><Text style={s.bulkRemoveText}>Clear all stuck</Text></TouchableOpacity>
             </View>
           ) : null}
           <View style={s.card} testID="more-attention">
@@ -164,6 +191,11 @@ export default function More({ navigation }) {
                       <View style={s.attActions}>
                         <TouchableOpacity style={s.attRetry} onPress={syncNow} testID={`att-retry-${m.client_id}`}><Text style={s.attRetryText}>Retry</Text></TouchableOpacity>
                         <TouchableOpacity style={s.attRemove} onPress={() => removeFailed(m)} testID={`att-remove-${m.client_id}`}><Text style={s.attRemoveText}>Remove</Text></TouchableOpacity>
+                      </View>
+                    ) : null}
+                    {m.state === "pending" ? (
+                      <View style={s.attActions}>
+                        <TouchableOpacity style={s.attRemove} onPress={() => removeItem(m)} testID={`att-remove-${m.client_id}`}><Text style={s.attRemoveText}>{m.kind === "photo" ? "Delete photo" : "Remove"}</Text></TouchableOpacity>
                       </View>
                     ) : null}
                   </View>
