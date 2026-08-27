@@ -1,0 +1,25 @@
+name: mobile-inspection-focus
+
+on:
+  push:
+    paths:
+      - "mobile/src/screens/Inspection.js"
+      - "mobile/src/tests/inspection_focus_contract.node.test.js"
+      - ".github/workflows/mobile-inspection-focus.yml"
+  pull_request:
+    paths:
+      - "mobile/src/screens/Inspection.js"
+      - "mobile/src/tests/inspection_focus_contract.node.test.js"
+      - ".github/workflows/mobile-inspection-focus.yml"
+
+jobs:
+  inspection-focus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify inspection inputs keep focus across keystrokes
+        working-directory: mobile
+        run: node src/tests/inspection_focus_contract.node.test.js
