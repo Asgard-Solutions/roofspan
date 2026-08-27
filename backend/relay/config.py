@@ -7,10 +7,11 @@ Environments:
   RELAY_ENV = "dev" (default; memory registry ok, single-node) | "production" (Valkey required).
 
 Node identity (RELAY_NODE_ID):
-  * Production REQUIRES a unique per-task node id. It is resolved in this order:
-      1. RELAY_NODE_ID env (authoritative; source="env")
-      2. ECS Task metadata (ECS_CONTAINER_METADATA_URI_V4 -> TaskARN task id; source="ecs")
-      3. dev/test process-stable uuid fallback (source="random")
+  * Production REQUIRES a unique per-task/per-replica node id. It is resolved in this order:
+      1. RELAY_NODE_ID env (authoritative override; source="env")
+      2. Railway replica id (RAILWAY_REPLICA_ID; source="railway")
+      3. ECS Task metadata (ECS_CONTAINER_METADATA_URI_V4 -> TaskARN task id; source="ecs")
+      4. dev/test process-stable uuid fallback (source="random")
   * A random fallback is NEVER acceptable in production — startup fails clearly if a unique
     identity cannot be established (see require_production_config).
 """
@@ -41,6 +42,11 @@ def _resolve_node_id() -> tuple[str, str]:
     explicit = os.environ.get("RELAY_NODE_ID", "").strip()
     if explicit:
         return explicit, "env"
+
+    railway_replica = os.environ.get("RAILWAY_REPLICA_ID", "").strip()
+    if railway_replica:
+        return f"railway-{railway_replica}", "railway"
+
     meta = os.environ.get("ECS_CONTAINER_METADATA_URI_V4", "").strip()
     if meta:
         try:  # pragma: no cover - requires the live ECS metadata endpoint
@@ -71,6 +77,8 @@ def require_production_config() -> None:
     if not RELAY_VALKEY_URL:
         missing.append("RELAY_VALKEY_URL")
     if NODE_ID_SOURCE == "random":
-        missing.append("RELAY_NODE_ID (or ECS task metadata for a unique per-task node id)")
+        missing.append(
+            "RELAY_NODE_ID, RAILWAY_REPLICA_ID, or ECS task metadata for a unique per-task node id"
+        )
     if missing:
         raise RuntimeError("RoofSpan Secure Relay production config missing: " + "; ".join(missing))
