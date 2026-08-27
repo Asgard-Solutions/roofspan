@@ -1,4 +1,4 @@
-"""Regression contract for RoofSpan Field photo persistence on installed Windows Office.
+r"""Regression contract for RoofSpan Field photo persistence on installed Windows Office.
 
 These tests intentionally cover the production boundary that the mobile-only tests cannot:
 RoofSpanBackend runs as NT SERVICE\RoofSpanBackend and therefore needs an explicit, persistent,
@@ -61,8 +61,19 @@ def test_installer_creates_persistent_images_dir_with_backend_write_acl():
     assert '<ComponentRef Id="ImagesDirAcl" />' in wxs
 
 
-def test_object_storage_has_programdata_safe_windows_fallback():
+def test_object_storage_has_programdata_safe_windows_fallback_and_atomic_write():
     src = (ROOT / "backend" / "services" / "object_storage.py").read_text(encoding="utf-8")
     assert "ROOFSPAN_DATA_ROOT" in src
     assert "PROGRAMDATA" in src
     assert '"images"' in src
+    assert "os.replace(" in src, "local photo writes must be atomic"
+    assert "os.fsync(" in src, "photo bytes must be flushed before the authoritative path is replaced"
+
+
+def test_backend_refuses_to_start_when_photo_storage_is_not_writable():
+    storage = (ROOT / "backend" / "services" / "object_storage.py").read_text(encoding="utf-8")
+    entry = (WINBUILD / "backend_entry.py").read_text(encoding="utf-8")
+    assert "def ensure_storage_ready" in storage
+    assert "ensure_storage_ready()" in entry
+    assert entry.index("ensure_storage_ready()") < entry.index('uvicorn.Config("server:app"'), \
+        "photo-storage write probe must run before Office reports the backend ready"
