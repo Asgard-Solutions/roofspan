@@ -43,7 +43,7 @@ export default function Hero() {
               <span className="h-2 w-2 rounded-full bg-safety" aria-hidden="true" /> Canvass sections
             </span>
           </div>
-          <div className="-ml-16 hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-area.png" alt="RoofSpan Mobile My Area — a salesperson's assigned canvass section" /></div>
+          <div className="-ml-16 hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-area.webp" alt="RoofSpan Mobile My Area — a salesperson's assigned canvass section on satellite view" /></div>
         </div>
       </div>
     </section>

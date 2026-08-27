@@ -11,7 +11,7 @@ const OFFICE = [
   { src: "/screenshots/office-dashboard.png", title: "RoofSpan Office · Dashboard", desc: "A live command center: active users, recent field activity and inventory at a glance.", alt: "RoofSpan Office dashboard with active users, recent activity, and inventory metrics", w: 1600, h: 1000 },
 ];
 const FIELD = [
-  { src: "/screenshots/mobile-area.png", title: "RoofSpan Field · My Area", desc: "Each rep's assigned canvass section with property pins — their day, mapped.", alt: "RoofSpan Mobile My Area — a salesperson's assigned canvass section with property pins", w: 800, h: 1720 },
+  { src: "/screenshots/mobile-area.webp", title: "RoofSpan Field · My Area", desc: "Each rep's assigned canvass section on a satellite map — every door color-coded owned, rented or unknown, ready to work offline.", alt: "RoofSpan Mobile My Area — a salesperson's assigned canvass section on satellite view with owned, rented and unknown property pins", w: 923, h: 2000 },
   { src: "/screenshots/mobile-leads.png", title: "RoofSpan Field · Leads", desc: "Leads created from properties in the field, synced straight back to the office.", alt: "RoofSpan Mobile field app leads created from properties", w: 800, h: 1720 },
   { src: "/screenshots/mobile-jobs.png", title: "RoofSpan Field · Jobs", desc: "The rep's job list, always current — even offline.", alt: "RoofSpan Mobile field app jobs list", w: 800, h: 1720 },
   { src: "/screenshots/mobile-home.png", title: "RoofSpan Field · My Day", desc: "A salesperson's home screen: today's route, doors and tasks.", alt: "RoofSpan Mobile field app My Day home screen", w: 800, h: 1720 },

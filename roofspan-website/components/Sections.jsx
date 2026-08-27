@@ -86,7 +86,7 @@ export function MobileArea() {
         </div>
         <div className="flex items-center justify-center gap-4">
           <div className="w-full max-w-sm"><AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map with property pins and canvass sections" /></div>
-          <div className="hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-area.png" alt="RoofSpan Mobile My Area — assigned canvass section with property pins" /></div>
+          <div className="hidden self-end sm:block"><PhoneMock src="/screenshots/mobile-area.webp" alt="RoofSpan Mobile My Area — assigned canvass section on satellite view with property pins" /></div>
         </div>
       </div>
     </section>
