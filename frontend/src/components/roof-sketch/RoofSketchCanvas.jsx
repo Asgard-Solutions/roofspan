@@ -9,6 +9,13 @@ import { toast } from "sonner";
 
 const EDGE_COLOR = { eave: "#2563eb", rake: "#7c3aed", ridge: "#dc2626", hip: "#ea580c", valley: "#0891b2", sidewall: "#16a34a", headwall: "#ca8a04", transition: "#db2777", unclassified: "#94a3b8" };
 const PROTECTED_MSG = "This edge is mapped, confirmed, or locked. Clear the confirmed length and/or unmap/unlock it before changing its topology.";
+const INVALID_MSG = "That change would leave the roof geometry invalid, so it was not applied.";
+const rejectMsg = (reason) =>
+  reason === "edge_protected" || reason === "protected_edge_collapse" || reason === "protected_duplicate_collapse"
+    ? PROTECTED_MSG
+    : reason === "duplicate_edge_creation"
+    ? "Those points are already connected — that move would duplicate an edge."
+    : INVALID_MSG;
 
 // Native SVG roof-sketch canvas: zoom/pan, select, connected-graph draw, facet creation, penetrations,
 // shared-vertex drag, snapping, and validation markers. All model mutations go through pure commands.
@@ -105,11 +112,13 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
   const edgeDouble = (e, edge) => {
     e.stopPropagation();
     if (readOnly || mode !== "select") return;
+    if (editMode === "manual_polygon") return; // no graph split in manual polygon mode
     const m = toModel(e.clientX, e.clientY);
     const cur = ctl.getDoc();
     const r = splitEdgeSafe(cur, edge.id, m.x, m.y, { endpointTol: 8 / view.k });
     if (r.ok) ctl.commitFrom(cur, r.doc);
     else if (r.reason === "edge_protected") toast.error(PROTECTED_MSG);
+    else if (r.reason === "facet_would_be_invalid") toast.error(INVALID_MSG);
   };
 
   const onMove = (e) => {
@@ -151,7 +160,7 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
       if (!d.moved || !d.snap) return; // pure click, no gesture
       const res = applyVertexDrop(d.startDoc, d.vertexId, d.snap);
       if (res.ok) { ctl.commitFrom(d.startDoc, res.doc); }
-      else { ctl.previewSilent(d.startDoc); if (res.reason === "edge_protected") toast.error(PROTECTED_MSG); } // restore original unchanged
+      else { ctl.previewSilent(d.startDoc); toast.error(rejectMsg(res.reason)); } // restore original unchanged
       return;
     }
     if (d.penId && d.moved) ctl.commitFrom(d.startDoc, ctl.getDoc());

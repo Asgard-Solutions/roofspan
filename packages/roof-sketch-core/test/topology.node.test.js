@@ -194,4 +194,18 @@ assert.ok(has(v.errors, "self_intersection")); ok("bowtie facet => self_intersec
   assert.ok(has(validateSketch(d).errors, "duplicate_facet")); ok("rotation-equivalent concave manual facets => duplicate_facet");
 }
 
+// --- duplicate graph edge (unordered endpoints) is a hard error in connected_graph mode ---
+{
+  const d = createSketchDocument({ structureId: "s1" });
+  d.vertices = [{ id: "a", x: 0, y: 0 }, { id: "b", x: 10, y: 0 }, { id: "c", x: 20, y: 0 }];
+  d.edges = [{ id: "e1", v1: "a", v2: "b", type: "eave" }, { id: "e2", v1: "b", v2: "a", type: "rake" }];
+  const errs = validateSketch(d).errors;
+  assert.ok(has(errs, "duplicate_edge")); ok("A-B / B-A -> duplicate_edge (graph edges are unordered)");
+  const dup = errs.find((e) => e.code === "duplicate_edge");
+  assert.ok(dup.edge_id && dup.other_edge_id); ok("duplicate_edge names both involved edge ids");
+
+  d.edges = [{ id: "e1", v1: "a", v2: "b", type: "eave" }, { id: "e2", v1: "b", v2: "c", type: "rake" }];
+  assert.ok(!has(validateSketch(d).errors, "duplicate_edge")); ok("A-B / B-C is NOT a duplicate");
+}
+
 console.log("\nTOPOLOGY HARDENING: all " + n + " assertions passed");

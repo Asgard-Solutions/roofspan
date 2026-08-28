@@ -1,6 +1,6 @@
 // Pure editor commands. Each returns the NEXT canonical sketch document (never mutates the input).
 // The shared @roofspan/roof-sketch-core remains the single source of geometry/validation/proposal math.
-import { normalizeSketchDocument, calibrateScale, distance, projectPointToSegment } from "@roofspan/roof-sketch-core";
+import { normalizeSketchDocument, calibrateScale, distance, projectPointToSegment, validateSketch } from "@roofspan/roof-sketch-core";
 
 let _seq = 0;
 export const nid = (p) => `${p}_${Date.now().toString(36)}${(_seq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -29,6 +29,15 @@ export function addVertex(doc, x, y) {
 export function moveVertex(doc, vertexId, x, y) {
   const d = clone(doc);
   d.vertices = d.vertices.map((v) => (v.id === vertexId ? { ...v, x: Number(x), y: Number(y) } : v));
+  return d;
+}
+
+// Final (committed) free move of a vertex: also invalidates stale graph decisions for every incident
+// edge whose geometry changed. Use ONLY on pointer-up (previewSilent keeps using plain moveVertex).
+export function moveVertexFinal(doc, vertexId, x, y) {
+  const incident = (doc.edges || []).filter((e) => e.v1 === vertexId || e.v2 === vertexId).map((e) => e.id);
+  const d = moveVertex(doc, vertexId, x, y);
+  d.proposal_decisions = incident.reduce((list, id) => dropEdgeDecisions(list, id), d.proposal_decisions || []);
   return d;
 }
 
@@ -249,6 +258,20 @@ function dropEdgeDecisions(list, edgeId) {
   return (list || []).filter((x) => !(x.target_type === "edge" && String(x.target_id) === String(edgeId)));
 }
 
+// Pure mutation safety gate (uses the shared-core validator only). A successful topology mutation must
+// not introduce a NEW hard structural error relative to the input. Returns { ok, newErrors }.
+export function validateMutation(before, after) {
+  const count = (doc) => {
+    const errs = validateSketch(doc).errors || [];
+    const m = {};
+    errs.forEach((e) => { m[e.code] = (m[e.code] || 0) + 1; });
+    return m;
+  };
+  const b = count(before), a = count(after);
+  const newErrors = Object.keys(a).filter((code) => (a[code] || 0) > (b[code] || 0));
+  return { ok: newErrors.length === 0, newErrors };
+}
+
 // Split an edge at the point projected onto its own segment. Rejects protected edges and near-endpoint
 // clicks (reuse the endpoint instead of making a zero-length child). Updates EVERY facet loop that used
 // the edge, preserving each loop's direction. endpointTol is in model units.
@@ -280,6 +303,8 @@ export function splitEdgeSafe(doc, edgeId, x, y, { endpointTol = 1e-6 } = {}) {
     return { ...f, edgeIds: ids.slice(0, i).concat(inserted).concat(ids.slice(i + 1)), vertexIds: [] };
   });
   d.proposal_decisions = dropEdgeDecisions(d.proposal_decisions, edgeId);
+  const gate = validateMutation(doc, d);
+  if (!gate.ok) return { ok: false, reason: "facet_would_be_invalid", detail: gate.newErrors, doc };
   return { ok: true, doc: d, vertexId: nv.id, edgeIds: [ea.id, eb.id] };
 }
 
@@ -289,8 +314,14 @@ export function mergeVertices(doc, movingVertexId, targetVertexId) {
   if (doc.edit_mode !== "connected_graph") return { ok: false, reason: "connected_graph_required", doc };
   if (movingVertexId === targetVertexId) return { ok: false, reason: "same_vertex", doc };
   if (!vById(doc, movingVertexId) || !vById(doc, targetVertexId)) return { ok: false, reason: "vertex_not_found", doc };
-  const d = clone(doc);
   const rewire = (id) => (id === movingVertexId ? targetVertexId : id);
+  // A protected edge that would collapse into a self-loop (moving & target already joined) must never
+  // be silently deleted — reject before any mutation.
+  const selfLoopProtected = (doc.edges || []).some((e) => rewire(e.v1) === rewire(e.v2) && edgeIsProtected(e));
+  if (selfLoopProtected) return { ok: false, reason: "protected_edge_collapse", doc };
+  // Every edge incident to the moving vertex changes geometry (or is removed) -> its graph decision is stale.
+  const incidentToMoving = (doc.edges || []).filter((e) => e.v1 === movingVertexId || e.v2 === movingVertexId).map((e) => e.id);
+  const d = clone(doc);
   let edges = d.edges.map((e) => ({ ...e, v1: rewire(e.v1), v2: rewire(e.v2) }));
   const removed = [];
   edges = edges.filter((e) => { if (e.v1 === e.v2) { removed.push(e.id); return false; } return true; });
@@ -306,17 +337,30 @@ export function mergeVertices(doc, movingVertexId, targetVertexId) {
     if (a.type === "unclassified" && e.type !== "unclassified") a.type = e.type; // keep the classification, order-independent
     removed.push(e.id); // drop the duplicate; keep byPair[k]
   }
-  edges = edges.filter((e) => !removed.includes(e.id));
-  const remap = (id) => { const e0 = d.edges.find((x) => x.id === id); if (!e0) return id; return keptFor[pairKey(rewire(e0.v1), rewire(e0.v2))] || id; };
+  const removedSet = new Set(removed);
+  edges = edges.filter((e) => !removedSet.has(e.id));
+  // Map a source edge id to its surviving representative: removed self-loop -> dropped; collapsed
+  // duplicate -> kept edge; otherwise itself. Removed self-loops have NO replacement (dropped entirely).
+  const survives = new Set(edges.map((e) => e.id));
+  const remap = (id) => {
+    if (survives.has(id)) return id;
+    const e0 = d.edges.find((x) => x.id === id); if (!e0) return null;
+    const k = pairKey(rewire(e0.v1), rewire(e0.v2));
+    return keptFor[k] || null; // null => drop from the loop (self-loop with no replacement)
+  };
   d.edges = edges;
   d.vertices = d.vertices.filter((v) => v.id !== movingVertexId);
   d.facets = d.facets.map((f) => {
     if (!f.edgeIds || !f.edgeIds.length) return f;
-    const mapped = f.edgeIds.map(remap).filter((id, i, arr) => id !== arr[i - 1]); // drop consecutive dupes
-    return { ...f, edgeIds: mapped };
+    const mapped = f.edgeIds.map(remap).filter((id) => id != null).filter((id, i, arr) => id !== arr[i - 1]);
+    // cyclic consecutive-dupe collapse (a facet boundary is a cycle)
+    const seq = mapped.filter((id, i, arr) => id !== arr[(i - 1 + arr.length) % arr.length]);
+    return { ...f, edgeIds: seq, vertexIds: [] }; // edge loop stays authoritative; clear stale mirrors
   });
-  // any edge id that no longer exists (self-loop / collapsed duplicate) can carry no proposal decision.
-  d.proposal_decisions = removed.reduce((list, id) => dropEdgeDecisions(list, id), d.proposal_decisions);
+  // drop stale graph decisions for removed AND rewired (endpoint-changed) edges (never relational UUIDs)
+  d.proposal_decisions = [...removed, ...incidentToMoving].reduce((list, id) => dropEdgeDecisions(list, id), d.proposal_decisions);
+  const gate = validateMutation(doc, d);
+  if (!gate.ok) return { ok: false, reason: "facet_would_be_invalid", detail: gate.newErrors, doc };
   return { ok: true, doc: d };
 }
 
@@ -334,9 +378,16 @@ export function insertExistingVertexIntoEdge(doc, vertexId, edgeId, x, y, { endp
   if (!v) return { ok: false, reason: "vertex_not_found", doc };
   const a = vById(doc, e.v1), b = vById(doc, e.v2);
   if (!a || !b) return { ok: false, reason: "broken_edge_reference", doc };
+  // The two proposed child pairs must not duplicate an existing graph edge (other than the target being
+  // replaced). Existing edges may carry different semantics, so never silently deduplicate.
+  const others = (doc.edges || []).filter((x2) => x2.id !== edgeId).map((x2) => pairKey(x2.v1, x2.v2));
+  if (others.includes(pairKey(e.v1, vertexId)) || others.includes(pairKey(vertexId, e.v2))) return { ok: false, reason: "duplicate_edge_creation", doc };
   const proj = projectPointToSegment([Number(x), Number(y)], [a.x, a.y], [b.x, b.y]);
   if (distance(proj.point, [a.x, a.y]) <= endpointTol) return { ok: false, reason: "endpoint_reuse", vertexId: e.v1, doc };
   if (distance(proj.point, [b.x, b.y]) <= endpointTol) return { ok: false, reason: "endpoint_reuse", vertexId: e.v2, doc };
+  // Moving the existing vertex changes the geometry of every edge incident to it -> those graph
+  // decisions (plus the replaced target's) are stale.
+  const incident = (doc.edges || []).filter((x2) => x2.v1 === vertexId || x2.v2 === vertexId).map((x2) => x2.id);
   const d = clone(doc);
   d.vertices = d.vertices.map((vv) => (vv.id === vertexId ? { ...vv, x: proj.point[0], y: proj.point[1] } : vv));
   const ea = { id: nid("e"), v1: e.v1, v2: vertexId, ...safeEdgeMeta(e) };
@@ -351,7 +402,9 @@ export function insertExistingVertexIntoEdge(doc, vertexId, edgeId, x, y, { endp
     const inserted = prevTouchesV1 ? [ea.id, eb.id] : [eb.id, ea.id];
     return { ...f, edgeIds: ids.slice(0, i).concat(inserted).concat(ids.slice(i + 1)), vertexIds: [] };
   });
-  d.proposal_decisions = dropEdgeDecisions(d.proposal_decisions, edgeId);
+  d.proposal_decisions = [edgeId, ...incident].reduce((list, id) => dropEdgeDecisions(list, id), d.proposal_decisions);
+  const gate = validateMutation(doc, d);
+  if (!gate.ok) return { ok: false, reason: "facet_would_be_invalid", detail: gate.newErrors, doc };
   return { ok: true, doc: d, vertexId, edgeIds: [ea.id, eb.id] };
 }
 
@@ -401,5 +454,7 @@ export function joinEdges(doc, aId, bId, { resultType } = {}) {
     return { ...f, edgeIds: seq, vertexIds: [] };
   });
   d.proposal_decisions = dropEdgeDecisions(dropEdgeDecisions(d.proposal_decisions, bId), aId);
+  const gate = validateMutation(doc, d);
+  if (!gate.ok) return { ok: false, reason: "facet_would_be_invalid", detail: gate.newErrors, doc };
   return { ok: true, doc: d, edgeId: joined.id };
 }

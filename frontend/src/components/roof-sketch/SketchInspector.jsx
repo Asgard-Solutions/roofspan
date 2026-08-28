@@ -11,7 +11,7 @@ const EDGE_LABEL = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", val
 function JoinControl({ doc, edge, onJoin }) {
   const [neighbor, setNeighbor] = useState("");
   const [resultType, setResultType] = useState("");
-  if (edgeIsProtected(edge)) return <div className="text-[11px] text-slate-400" data-testid="join-protected">Mapped/locked edge — unmap or unlock to change topology.</div>;
+  if (edgeIsProtected(edge)) return <div className="text-[11px] text-slate-400" data-testid="join-protected">Mapped, confirmed, or locked edge — clear the confirmed length and/or unmap/unlock it before changing topology.</div>;
   const cands = (doc.edges || []).filter((e) => e.id !== edge.id).map((e) => {
     const shared = [e.v1, e.v2].filter((v) => v === edge.v1 || v === edge.v2);
     if (shared.length !== 1) return null;

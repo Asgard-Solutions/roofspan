@@ -270,6 +270,7 @@ function validateSketch(input) {
   const push = (arr, o) => arr.push(o);
 
   // --- edge-level integrity ---
+  const pairSeen = {};
   (doc.edges || []).forEach((e) => {
     const a = vmap[e.v1], b = vmap[e.v2];
     if (!a || !b) {
@@ -278,6 +279,13 @@ function validateSketch(input) {
     }
     if (distance([a.x, a.y], [b.x, b.y]) < 1e-6) {
       push(errors, { code: "zero_length_edge", edge_id: e.id, message: "Edge has zero length" });
+    }
+    // Defense-in-depth: two distinct graph edges with the same unordered endpoint pair are a hard
+    // topology error (connected_graph only; manual_polygon boundaries are vertexId-based).
+    if (connected) {
+      const key = [e.v1, e.v2].slice().sort().join("::");
+      if (pairSeen[key]) push(errors, { code: "duplicate_edge", edge_id: e.id, other_edge_id: pairSeen[key], message: "Two graph edges share the same endpoints" });
+      else pairSeen[key] = e.id;
     }
   });
 
