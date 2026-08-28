@@ -3,6 +3,7 @@ name: Roof Takeoff Contract
 on:
   push:
     branches:
+      - main
       - agent/roof-measurement-full-completion
       - agent/roof-sketch-foundation-hardening
     paths:
@@ -46,6 +47,7 @@ on:
       - "backend/tests/test_measurement_sketch_clone.py"
       - "backend/tests/test_measurement_sketch_authz.py"
       - "backend/tests/test_measurement_sketch_api.py"
+      - "backend/tests/test_measurement_sketch_api_live.py"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
@@ -91,6 +93,7 @@ on:
       - "backend/tests/test_measurement_sketch_clone.py"
       - "backend/tests/test_measurement_sketch_authz.py"
       - "backend/tests/test_measurement_sketch_api.py"
+      - "backend/tests/test_measurement_sketch_api_live.py"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"

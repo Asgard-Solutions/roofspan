@@ -205,6 +205,43 @@ function facetComponents(doc) {
   return roots.size;
 }
 
+// SINGLE authoritative boundary resolver. Both validation AND the proposal engine MUST use this so
+// there is only one geometry interpretation.
+//   connected_graph -> ordered edgeIds loop is authoritative (vertexIds are only a redundant mirror)
+//   manual_polygon   -> vertexIds are the polygon boundary
+// Returns { points, vertexIds, error } where error (or null) is a hard structural failure.
+function resolveFacetBoundary(doc, facet, vmap, emap) {
+  vmap = vmap || vertexMap(doc);
+  emap = emap || edgeMap(doc);
+  const connected = doc.edit_mode === "connected_graph";
+  const hasEdgeIds = Array.isArray(facet.edgeIds) && facet.edgeIds.length > 0;
+  if (connected) {
+    if (!hasEdgeIds) {
+      return { points: [], vertexIds: [], error: { code: "facet_missing_edges",
+        message: "Connected-graph facet must define an authoritative ordered edgeIds boundary" } };
+    }
+    const missing = facet.edgeIds.filter((eid) => !emap[eid]);
+    if (missing.length) {
+      return { points: [], vertexIds: [], error: { code: "broken_edge_reference", edge_ids: missing,
+        message: "Facet references an edge that does not exist" } };
+    }
+    const derived = edgeLoopVertices(facet.edgeIds.map((eid) => emap[eid]));
+    if (!derived) {
+      return { points: [], vertexIds: [], error: { code: "open_facet_loop",
+        message: "Facet edge list does not form a single closed connected loop" } };
+    }
+    // The edge loop is authoritative. Redundant vertexIds, if supplied, must match it exactly.
+    let error = null;
+    if (Array.isArray(facet.vertexIds) && facet.vertexIds.length && !sameCycle(derived, facet.vertexIds)) {
+      error = { code: "facet_boundary_mismatch", message: "Facet vertexIds contradict the authoritative edge loop" };
+    }
+    return { points: loopPoints(derived, vmap), vertexIds: derived, error }; // points always from the edge loop
+  }
+  // manual_polygon: vertexIds are the boundary; no edge-graph connectivity required.
+  const ids = facet.vertexIds || [];
+  return { points: loopPoints(ids, vmap), vertexIds: ids, error: null };
+}
+
 function validateSketch(input) {
   const doc = normalizeSketchDocument(input);
   const vmap = vertexMap(doc);
@@ -226,44 +263,15 @@ function validateSketch(input) {
     }
   });
 
-  // --- per-facet boundary resolution + loop/geometry checks ---
+  // --- per-facet boundary resolution + loop/geometry checks (single authoritative resolver) ---
   const facetPolys = {}; // facet.id -> ordered [x,y] points (only for structurally valid facets)
   (doc.facets || []).forEach((f) => {
-    const hasEdgeIds = Array.isArray(f.edgeIds) && f.edgeIds.length > 0;
-    let orderedVertexIds = null;
-
-    if (hasEdgeIds) {
-      // Every claimed edge must actually exist (a shared edge claimed but absent is a hard error).
-      const missing = f.edgeIds.filter((eid) => !emap[eid]);
-      if (missing.length) {
-        push(errors, { code: "broken_edge_reference", facet_id: f.id, edge_ids: missing,
-          message: "Facet references an edge that does not exist" });
-        return;
-      }
-      const orderedEdges = f.edgeIds.map((eid) => emap[eid]);
-      const derived = edgeLoopVertices(orderedEdges);
-      if (!derived) {
-        push(errors, { code: "open_facet_loop", facet_id: f.id,
-          message: "Facet edge list does not form a single closed connected loop" });
-        return;
-      }
-      // The edge loop is authoritative. If vertexIds are also supplied they must match it exactly.
-      if (Array.isArray(f.vertexIds) && f.vertexIds.length && !sameCycle(derived, f.vertexIds)) {
-        push(errors, { code: "facet_boundary_mismatch", facet_id: f.id,
-          message: "Facet vertexIds contradict the authoritative edge loop" });
-        return;
-      }
-      orderedVertexIds = derived;
-    } else {
-      // manual_polygon / legacy: fall back to the vertexIds boundary.
-      orderedVertexIds = f.vertexIds || [];
-      if (connected) {
-        push(warnings, { code: "facet_missing_edges", facet_id: f.id,
-          message: "Connected-graph facet has no edge list; using vertex boundary" });
-      }
+    const res = resolveFacetBoundary(doc, f, vmap, emap);
+    if (res.error) {
+      push(errors, Object.assign({ facet_id: f.id }, res.error));
+      return;
     }
-
-    const pts = loopPoints(orderedVertexIds, vmap);
+    const pts = res.points;
     if (pts.length < 3) {
       push(errors, { code: "open_facet_loop", facet_id: f.id, message: "Facet has fewer than 3 vertices" });
       return;
@@ -328,5 +336,5 @@ function validateSketch(input) {
 module.exports = {
   findSharedEdges, validateSketch, polygonSelfIntersects, facetPoints, vertexMap, edgeMap,
   edgeLoopVertices, sameCycle, polygonsOverlap, segmentsCollinearOverlap, pointStrictlyInside,
-  facetComponents, loopPoints,
+  facetComponents, loopPoints, resolveFacetBoundary,
 };

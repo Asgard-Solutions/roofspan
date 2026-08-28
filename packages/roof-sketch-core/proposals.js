@@ -3,7 +3,7 @@
 // locked measurements. Unresolved scale => no dimensional proposals at all.
 const { distance, polygonArea, pitchAdjustedArea } = require("./geometry");
 const { normalizeSketchDocument } = require("./schema");
-const { facetPoints, vertexMap } = require("./topology");
+const { resolveFacetBoundary, vertexMap, edgeMap } = require("./topology");
 
 function round2(x) { return Math.round(x * 100) / 100; }
 
@@ -31,11 +31,16 @@ function deriveProposals(input) {
   }
 
   const vmap = vertexMap(doc);
+  const emap = edgeMap(doc);
 
-  // Facet areas (pitch-adjusted, converted to real sq ft).
+  // Facet areas (pitch-adjusted, converted to real sq ft). Uses the SAME authoritative boundary as
+  // validation: connected_graph derives from the ordered edge loop, manual_polygon from vertexIds.
+  // A facet whose boundary is structurally broken (e.g. contradictory vertexIds, missing edges) is
+  // skipped — the proposal engine never quietly falls back to a contradictory vertex boundary.
   (doc.facets || []).forEach((f) => {
-    const pts = facetPoints(doc, f, vmap);
-    if (pts.length < 3) return;
+    const res = resolveFacetBoundary(doc, f, vmap, emap);
+    if (res.error || res.points.length < 3) return;
+    const pts = res.points;
     const planUnits = polygonArea(pts);
     const planSqft = planUnits * fpu * fpu;
     const proposed = round2(pitchAdjustedArea(planSqft, f.pitch_rise || 0));

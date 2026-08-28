@@ -69,8 +69,11 @@ async def seed_lead(db, *, property_id, assigned_user_id) -> Lead:
     return lead
 
 
-async def teardown(db, *, set_ids=(), lead_ids=(), property_ids=(), user_ids=()):
+async def teardown(db, *, set_ids=(), lead_ids=(), property_ids=(), user_ids=(), audit_entity_ids=()):
     """Delete only what a test created. Loud on failure (no bare except)."""
+    from models import AuditLog
+    for eid in audit_entity_ids:
+        await db.execute(delete(AuditLog).where(AuditLog.entity_id == str(eid)))
     for sid in set_ids:
         await db.execute(delete(MeasurementSet).where(MeasurementSet.id == sid))
     for lid in lead_ids:

@@ -1,5 +1,42 @@
 # RoofSpan — Product Requirements & Status
 
+## Roof Sketch Foundation — CLOSURE PASS (2026-06) — code complete & locally green; CI push pending
+Follows the earlier hardening pass. Addresses the final GitHub-review blockers. Editors (Plan 1 Task 4/6)
+and Plan 2 imports remain NOT started. Base commit `770037d` (== remote main). Changes staged locally,
+awaiting **Save to GitHub** (agent cannot push; git writes go through Save-to-GitHub).
+
+1. **CI runs on `main`**: `.github/workflows/roof-takeoff-contract.yml` push branches now include `main`
+   (kept PR triggers + sketch path filters). Ensures the contract runs when sketch/measurement files land on main.
+2. **connected_graph REQUIRES authoritative edgeIds**: `topology.js` — a connected facet with no/empty
+   `edgeIds` is now a HARD error `facet_missing_edges` (moved out of warnings). No vertex-only fallback in
+   canonical connected mode. manual_polygon still uses vertexIds.
+3. **Single authoritative boundary**: new `resolveFacetBoundary(doc, facet)` in `topology.js` (exported) —
+   connected derives points from the ordered edge loop, manual from vertexIds. `proposals.js` now uses it
+   (was `facetPoints`→vertexIds), so a connected facet with edgeIds and no vertexIds produces a correct area
+   proposal, and a facet with contradictory vertexIds is skipped (never uses the wrong boundary).
+   New tests: `packages/roof-sketch-core/test/edge_authority.node.test.js` (10 assertions).
+4. **Clone normalizes after remap**: `clone_sketches()` now runs the remapped document through
+   `_normalize_document()` (structure/edit_mode/schema_version reconciled with the new row); fails loudly on
+   an un-cloneable legacy doc. Clone test asserts row/document metadata agree.
+5. **A/B PUT on the REAL route**: `test_measurement_sketch_authz.py` now calls the actual `put_sketch`
+   handler (A→A/B→B allowed, cross-rep 403, owner/admin/office broad) instead of only `_scope`.
+6. **Hermetic HTTP contract, 0 skips**: `test_measurement_sketch_api.py` rewritten to use httpx
+   `ASGITransport` against the real FastAPI app with a `get_current_user` dependency override (generated
+   principals, no live server / no password / no arbitrary property). Covers create→v1, update→v2,
+   stale→409+server payload, malformed→422, locked→409, and A/B direct-UUID PUT. The old live smoke moved
+   to optional `test_measurement_sketch_api_live.py` (skips without RS_TEST_* — not a CI gate).
+7-11. Concurrency (2), clone remap, topology hardening, pinned field deps
+   (`react-native-svg@15.12.1` + `@roofspan/roof-sketch-core` file:) and test-safety guards all preserved.
+
+**Local verification (all green)**: node core 26 + topology 22 + edge_authority 10; mobile test:sketch (incl
+sketch-cache 15) after `npm ci`; backend sketch service/concurrency(2)/clone/authz/api = 6 passed, **0 skips**
+(live smoke is the only skip, in its separate optional file); regressions
+takeoff/measurement/completion/lifecycle/photos/categories all pass; mobile `test:sync` green against the
+pod backend URL. Single Alembic head `e0f1a2b3c4d5`. `server` imports with only DATABASE_URL (CI-safe).
+**PENDING**: Save-to-GitHub push to main + actual `Roof Takeoff Contract` Actions run (agent cannot push or
+read the private Actions runs).
+
+
 ## Roof Sketch Foundation — FINAL Hardening Pass COMPLETE & GREEN (2026-06)
 Branch `agent/roof-sketch-foundation-hardening` (from remote main `7b4ddf9`). STOP condition met — the
 Office/Field sketch editors (Plan 1 Task 4/6) and Plan 2 (aerial imports) are NOT started yet, per user.

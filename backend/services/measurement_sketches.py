@@ -207,6 +207,11 @@ async def clone_sketches(db: AsyncSession, from_revision_id, to_revision_id, str
             continue
         new_doc = _remap_sketch_document(r.document or {}, structure_id_map, facet_id_map, penetration_id_map)
         new_doc["structure_id"] = str(new_struct)  # authoritative
+        # Canonical normalization AFTER remap: reconcile the cloned document with its new authoritative
+        # row fields (structure/edit_mode/schema_version). Fails loudly (422) if a legacy source sketch
+        # cannot be safely cloned — never silently propagate a contradictory document into a new revision.
+        new_doc = _normalize_document(new_doc, structure_id=str(new_struct),
+                                      edit_mode=r.edit_mode, schema_version=r.schema_version)
         db.add(MeasurementSketchDocument(
             revision_id=to_revision_id, structure_id=new_struct, schema_version=r.schema_version,
             document_version=1, edit_mode=r.edit_mode, document=new_doc,

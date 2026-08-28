@@ -4,6 +4,6 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "test": "node test/roofSketchCore.node.test.js && node test/topology.node.test.js"
+    "test": "node test/roofSketchCore.node.test.js && node test/topology.node.test.js && node test/edge_authority.node.test.js"
   }
 }

@@ -18,11 +18,21 @@ from models import MeasurementStructure
 from schemas_measurements import MeasurementRevisionIn, StructureIn
 from services import measurements as msvc
 from services import measurement_sketches as ssvc
-from routers.measurement_sketches import _scope, list_sketches, get_sketch
+from routers.measurement_sketches import _scope, list_sketches, get_sketch, put_sketch
+from schemas_sketch import SketchWriteIn
+from starlette.requests import Request
 
 from _sketch_fixtures import FakeUser, seed_property, seed_user, seed_lead, teardown, run_isolated
 
 DOC = {"schema_version": 1, "edit_mode": "connected_graph", "vertices": [], "edges": [], "facets": []}
+
+
+def _req():
+    return Request({"type": "http", "method": "PUT", "path": "/", "headers": [], "client": ("test", 1234), "query_string": b""})
+
+
+def _write(ev):
+    return SketchWriteIn(document=dict(DOC), edit_mode="connected_graph", schema_version=1, expected_version=ev)
 
 
 async def _revision_for(db, user, prop, lead):
@@ -81,13 +91,21 @@ async def _scenario():
             await _denied(get_sketch(ra, sA, userB, db))
             assert (await get_sketch(rb, sB, userB, db))["structure_id"] == sB
 
-            # --- PUT direct-UUID authorizes via the same _scope BEFORE any write ---
-            await _denied(_scope(db, rb, userA))
-            await _denied(_scope(db, ra, userB))
+            # --- PUT authorization on the ACTUAL put_sketch route (not just the helper) ---
+            # A -> A allowed (existing v1 -> v2); A -> B denied
+            assert (await put_sketch(ra, sA, _write(1), _req(), userA, db))["document_version"] == 2
+            await _denied(put_sketch(rb, sB, _write(1), _req(), userA, db))
+            # B -> A denied; B -> B allowed (existing v1 -> v2)
+            await _denied(put_sketch(ra, sA, _write(2), _req(), userB, db))
+            assert (await put_sketch(rb, sB, _write(1), _req(), userB, db))["document_version"] == 2
+            # office roles may PUT either revision by direct UUID
+            assert (await put_sketch(ra, sA, _write(2), _req(), owner, db))["document_version"] == 3
+            assert (await put_sketch(rb, sB, _write(2), _req(), admin, db))["document_version"] == 3
+            assert (await put_sketch(ra, sA, _write(3), _req(), office, db))["document_version"] == 4
         finally:
             await teardown(db, set_ids=[x for x in (set_a, set_b) if x],
                            lead_ids=[leadA.id, leadB.id], property_ids=[propA.id, propB.id],
-                           user_ids=[userA.id, userB.id])
+                           user_ids=[userA.id, userB.id], audit_entity_ids=[sA, sB])
 
 
 def test_ab_authorization_contract():

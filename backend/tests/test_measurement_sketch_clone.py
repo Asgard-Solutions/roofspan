@@ -91,6 +91,11 @@ async def _scenario():
             assert doc["facets"][0]["edgeIds"] == ["e1", "e2", "e3", "e4"]
             assert doc["penetrations"][0]["id"] == "pen-graph-1"
             assert sketches[0]["document_version"] == 1
+
+            # --- canonical normalization AFTER remap: embedded metadata agrees with the row columns ---
+            assert doc["structure_id"] == sketches[0]["structure_id"] == ns_id
+            assert doc["edit_mode"] == sketches[0]["edit_mode"] == "connected_graph"
+            assert doc["schema_version"] == sketches[0]["schema_version"] == 1
         finally:
             await teardown(db, set_ids=[set_id] if set_id else [], property_ids=[prop.id])
 
