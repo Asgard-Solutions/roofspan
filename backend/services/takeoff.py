@@ -1,7 +1,8 @@
-"""Versioned roof takeoff service (Increment B + change comparison used by Increment C)."""
+"""Versioned roof takeoff service with explicit revision/change guards."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
 from fastapi import HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,10 @@ from services import measurements as measurement_svc
 from services import estimating as calc
 from services import inventory_core as inv_core
 from services import pricing as pricing_svc
-from services.takeoff_core import resolve_waste_percent, weighted_roof_waste_percent, metric_value, package_quantity
+from services.takeoff_core import (
+    resolve_waste_percent, weighted_roof_waste_percent, metric_value,
+    package_quantity, normalized_product_coverage,
+)
 
 
 async def company_default_waste(db: AsyncSession) -> float:
@@ -172,6 +176,93 @@ async def _validated_inputs(db: AsyncSession, estimate_id: str, payload):
     return estimate, measurement, template_rev
 
 
+async def _packaging_for_line(db: AsyncSession, material_id, line_unit: str, calculated_quantity: float, explicit_coverage=None) -> dict:
+    """Resolve package/order quantity without hard-coding roofing package assumptions."""
+    if explicit_coverage not in (None, "") and float(explicit_coverage) > 0:
+        coverage = float(explicit_coverage)
+        return {
+            "order_quantity": package_quantity(calculated_quantity, coverage_per_package=coverage),
+            "coverage_per_package": coverage,
+            "coverage_source": "template_rule",
+            "package_conversion_factor": None,
+            "purchase_unit": None,
+        }
+
+    material = await db.get(Material, material_id) if material_id else None
+    if material:
+        coverage = normalized_product_coverage(material.coverage_amount, material.coverage_unit, line_unit)
+        if coverage:
+            return {
+                "order_quantity": package_quantity(calculated_quantity, coverage_per_package=coverage),
+                "coverage_per_package": coverage,
+                "coverage_source": "material_catalog",
+                "package_conversion_factor": None,
+                "purchase_unit": material.purchase_unit,
+            }
+
+    sm = None
+    if material_id:
+        sm = await inv_core.preferred_supplier_material(db, material_id) or await inv_core.best_known_supplier_material(db, material_id)
+    conversion = float(sm.conversion_factor or 0) if sm else 0
+    if conversion > 0:
+        return {
+            "order_quantity": package_quantity(calculated_quantity, conversion_factor=conversion),
+            "coverage_per_package": None,
+            "coverage_source": "supplier_conversion",
+            "package_conversion_factor": conversion,
+            "purchase_unit": sm.supplier_uom,
+        }
+    return {
+        "order_quantity": None,
+        "coverage_per_package": None,
+        "coverage_source": None,
+        "package_conversion_factor": None,
+        "purchase_unit": material.purchase_unit if material else None,
+    }
+
+
+def _scoped_squares(totals: dict) -> float:
+    value = totals.get("takeoff_squares")
+    if value is None:
+        value = totals.get("total_squares", 0)
+    return float(value or 0)
+
+
+async def _previous_waste_change(db: AsyncSession, estimate_id, current_percent: float, current_totals: dict) -> dict | None:
+    previous = (await db.execute(select(EstimateTakeoff).where(
+        EstimateTakeoff.estimate_id == estimate_id
+    ).order_by(EstimateTakeoff.generated_at.desc(), EstimateTakeoff.id.desc()))).scalars().first()
+    if not previous:
+        return None
+    previous_measurement = await db.get(MeasurementRevision, previous.measurement_revision_id)
+    if not previous_measurement:
+        return None
+    previous_out = await measurement_svc.build_out(db, previous_measurement)
+    previous_totals = previous_out.get("totals") or {}
+    previous_base = resolve_waste_percent(
+        previous.company_default_waste_percent,
+        template=previous.template_waste_percent,
+        estimate=previous.estimate_waste_override,
+    )
+    previous_overrides = previous.structure_waste_overrides or {}
+    previous_percent = weighted_roof_waste_percent(
+        previous_totals.get("area_by_structure") or [],
+        base_waste=previous_base,
+        structure_overrides=previous_overrides,
+    ) if previous_overrides else previous_base
+    previous_extra = _scoped_squares(previous_totals) * float(previous_percent or 0) / 100.0
+    current_extra = _scoped_squares(current_totals) * float(current_percent or 0) / 100.0
+    return {
+        "previous_percent": round(float(previous_percent or 0), 4),
+        "current_percent": round(float(current_percent or 0), 4),
+        "percent_delta": round(float(current_percent or 0) - float(previous_percent or 0), 4),
+        "previous_extra_squares": round(previous_extra, 4),
+        "current_extra_squares": round(current_extra, 4),
+        "extra_squares_delta": round(current_extra - previous_extra, 4),
+        "previous_takeoff_id": str(previous.id),
+    }
+
+
 async def preview(db: AsyncSession, estimate_id: str, payload) -> dict:
     estimate, measurement, template_rev = await _validated_inputs(db, estimate_id, payload)
     mout = await measurement_svc.build_out(db, measurement)
@@ -197,10 +288,11 @@ async def preview(db: AsyncSession, estimate_id: str, payload) -> dict:
             company_waste, template=template_rev.default_waste_percent,
             assembly=rule.assembly_waste_percent, estimate=payload.estimate_waste_override,
         )
+        roof_metric = rule.metric_key.startswith("roof_squares") or rule.metric_key.startswith("roof_area_sqft")
         effective_rule_waste = weighted_roof_waste_percent(
             totals.get("area_by_structure") or [], base_waste=rule_base_waste,
             structure_overrides=structure_overrides,
-        ) if structure_overrides and rule.metric_key in ("roof_squares", "roof_area_sqft") else rule_base_waste
+        ) if structure_overrides and roof_metric else rule_base_waste
         snap = rule.assembly_snapshot or {}
         for item in snap.get("items") or []:
             measured = round(basis_qty * float(item.get("quantity_factor") or 0), 4)
@@ -212,35 +304,50 @@ async def preview(db: AsyncSession, estimate_id: str, payload) -> dict:
             else:
                 waste = 0.0
             calculated = calc.calculated_quantity(measured, waste)
-            explicit_coverage = rule.coverage_per_package if (str(item.get("unit") or "").upper() == "SQ" and not is_labor) else None
+            packaging = await _packaging_for_line(
+                db, item.get("material_id"), item.get("unit") or "EA", calculated,
+                explicit_coverage=None if is_labor else rule.coverage_per_package,
+            ) if not is_labor else {
+                "order_quantity": None, "coverage_per_package": None, "coverage_source": None,
+                "package_conversion_factor": None, "purchase_unit": None,
+            }
+            provenance = {
+                "rule_id": str(rule.id), "rule_name": rule.name, "metric_key": rule.metric_key,
+                "raw_metric_value": raw, "quantity_factor": rule.quantity_factor,
+                "measurement_revision_id": str(measurement.id), "measurement_revision_number": measurement.revision_number,
+                "template_revision_id": str(template_rev.id), "template_revision_number": template_rev.revision_number,
+                "assembly_id": str(rule.assembly_id) if rule.assembly_id else None,
+                "assembly_version": rule.assembly_version, "applied_waste_percent": waste,
+                "coverage_source": packaging["coverage_source"],
+                "coverage_per_package": packaging["coverage_per_package"],
+                "package_conversion_factor": packaging["package_conversion_factor"],
+            }
             out_lines.append({
                 "description": item.get("description") or rule.name,
                 "unit": item.get("unit") or "EA",
                 "measured_quantity": measured,
                 "waste_percent": waste,
                 "quantity": calculated,
+                "order_quantity": packaging["order_quantity"],
+                "purchase_unit": packaging["purchase_unit"],
+                "coverage_per_package": packaging["coverage_per_package"],
+                "coverage_source": packaging["coverage_source"],
+                "package_conversion_factor": packaging["package_conversion_factor"],
                 "material_id": item.get("material_id"),
                 "line_kind": "labor" if is_labor else ("material" if item.get("material_id") else "custom"),
                 "assembly_id": str(rule.assembly_id) if rule.assembly_id else None,
                 "assembly_version": rule.assembly_version,
                 "assembly_name": rule.assembly_name,
-                "explicit_coverage_per_package": explicit_coverage,
-                "takeoff_provenance": {
-                    "rule_id": str(rule.id), "rule_name": rule.name, "metric_key": rule.metric_key,
-                    "raw_metric_value": raw, "quantity_factor": rule.quantity_factor,
-                    "measurement_revision_id": str(measurement.id), "measurement_revision_number": measurement.revision_number,
-                    "template_revision_id": str(template_rev.id), "template_revision_number": template_rev.revision_number,
-                    "assembly_id": str(rule.assembly_id) if rule.assembly_id else None,
-                    "assembly_version": rule.assembly_version, "applied_waste_percent": waste,
-                },
+                "takeoff_provenance": provenance,
             })
     ids, modified = await _existing_generated_state(db, estimate.id)
+    waste_change = await _previous_waste_change(db, estimate.id, roof_waste, totals)
     return {
         "estimate_id": str(estimate.id),
         "measurement_revision_id": str(measurement.id), "measurement_revision_number": measurement.revision_number,
         "template_revision_id": str(template_rev.id), "template_revision_number": template_rev.revision_number,
         "company_default_waste_percent": company_waste, "template_waste_percent": template_rev.default_waste_percent,
-        "effective_roof_waste_percent": roof_waste, "lines": out_lines,
+        "effective_roof_waste_percent": roof_waste, "waste_change": waste_change, "lines": out_lines,
         "generated_line_ids_to_replace": ids, "manually_modified_generated_lines": modified,
         "review_required": bool(modified),
     }
@@ -258,7 +365,7 @@ async def _snapshot_cost(db: AsyncSession, line: dict) -> None:
     line["material_cost"] = float(sm.current_cost or 0)
     line["base_cost"] = float(sm.current_cost or 0)
     line["conversion_factor"] = sm.conversion_factor
-    line["purchase_unit"] = sm.supplier_uom
+    line["purchase_unit"] = line.get("purchase_unit") or sm.supplier_uom
     line["supplier_item_number"] = sm.supplier_item_number
     line["cost_source"] = sm.price_status or "manual"
     if sm.supplier_id:
@@ -300,23 +407,19 @@ async def apply(db: AsyncSession, estimate_id: str, payload, user) -> dict:
     for raw in p["lines"]:
         line = dict(raw)
         provenance = line.pop("takeoff_provenance")
-        coverage = line.pop("explicit_coverage_per_package", None)
         if line.get("line_kind") == "labor":
             line["labor_cost"] = 0
             line["material_cost"] = 0
         else:
             await _snapshot_cost(db, line)
         if estimate.price_book_id and (line.get("material_id") or line.get("assembly_id")):
-            rule = await pricing_svc.find_rule(db, estimate.price_book_id, line.get("material_id"), line.get("assembly_id"))
-            if rule:
+            price_rule = await pricing_svc.find_rule(db, estimate.price_book_id, line.get("material_id"), line.get("assembly_id"))
+            if price_rule:
                 ucost = calc.unit_cost(line.get("material_cost"), line.get("labor_cost"), line.get("equipment_cost"), line.get("subcontract_cost"))
-                priced = pricing_svc.apply_rule(rule, ucost)
+                priced = pricing_svc.apply_rule(price_rule, ucost)
                 if priced is not None:
                     line["selling_unit_price"] = priced
         calc.compute_line(line)
-        explicit_order = package_quantity(line["quantity"], coverage_per_package=coverage, conversion_factor=None)
-        if explicit_order is not None:
-            line["order_quantity"] = explicit_order
         dbline = EstimateLineItem(
             estimate_id=estimate.id, description=line.get("description") or "", quantity=line["quantity"],
             unit=line.get("unit") or "EA", unit_price=line["unit_price"], line_total=line["line_total"], sort=sort,
@@ -335,6 +438,8 @@ async def apply(db: AsyncSession, estimate_id: str, payload, user) -> dict:
         )
         db.add(dbline)
         await db.flush()
+        provenance["order_quantity"] = dbline.order_quantity
+        provenance["purchase_unit"] = dbline.purchase_unit
         provenance["generated_line_snapshot"] = _line_signature(dbline)
         db.add(EstimateTakeoffLine(
             takeoff_id=takeoff.id, estimate_line_item_id=dbline.id, rule_id=provenance.get("rule_id"),
@@ -342,7 +447,8 @@ async def apply(db: AsyncSession, estimate_id: str, payload, user) -> dict:
             measured_quantity=dbline.measured_quantity, applied_waste_percent=dbline.waste_percent,
             calculated_quantity=dbline.quantity, order_quantity=dbline.order_quantity, provenance=provenance,
         ))
-        created.append(str(dbline.id)); sort += 1
+        created.append(str(dbline.id))
+        sort += 1
 
     all_lines = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == estimate.id))).scalars().all()
     summary = calc.summarize([{
@@ -359,15 +465,30 @@ async def apply(db: AsyncSession, estimate_id: str, payload, user) -> dict:
 
 def _metric_map(out: dict) -> dict:
     totals, summary = out.get("totals") or {}, out.get("summary") or {}
-    edges = totals.get("edge_totals") or {}
+    edges = totals.get("takeoff_edge_totals")
+    if edges is None:
+        edges = totals.get("edge_totals") or {}
+    roof_area = totals.get("takeoff_area_sqft")
+    roof_squares = totals.get("takeoff_squares")
+    pitch_rows = totals.get("takeoff_area_by_pitch")
+    if roof_area is None:
+        roof_area = totals.get("total_area_sqft", 0)
+    if roof_squares is None:
+        roof_squares = totals.get("total_squares", 0)
+    if pitch_rows is None:
+        pitch_rows = totals.get("area_by_pitch") or []
     return {
-        "roof_area_sqft": totals.get("total_area_sqft", 0), "roof_squares": totals.get("total_squares", 0),
-        "predominant_pitch": totals.get("predominant_pitch"), "area_by_pitch": totals.get("area_by_pitch") or [],
-        **edges, "penetration_counts": totals.get("penetration_counts") or {},
-        "existing_layers": summary.get("existing_layers"), "damaged_deck_sf": summary.get("damaged_deck_sf"),
-        "replacement_sheets": summary.get("replacement_sheets"), "stories": summary.get("stories"),
-        "steep_access": summary.get("steep_access"), "high_access": summary.get("high_access"),
-        "long_carry": summary.get("long_carry"), "restricted_access": summary.get("restricted_access"),
+        "roof_area_sqft": roof_area, "roof_squares": roof_squares,
+        "predominant_pitch": totals.get("takeoff_predominant_pitch", totals.get("predominant_pitch")),
+        "area_by_pitch": pitch_rows, "area_by_structure": totals.get("area_by_structure") or [],
+        **edges,
+        "penetration_counts": totals.get("takeoff_penetration_counts", totals.get("penetration_counts") or {}),
+        "existing_layers": summary.get("existing_layers"), "existing_condition": summary.get("existing_condition"),
+        "drip_edge_lf": summary.get("drip_edge_lf"), "damaged_deck_sf": summary.get("damaged_deck_sf"),
+        "replacement_sheets": summary.get("replacement_sheets"), "stories": totals.get("max_stories", summary.get("stories")),
+        "height_ft": totals.get("max_height_ft"), "steep_access": summary.get("steep_access"),
+        "high_access": summary.get("high_access"), "long_carry": summary.get("long_carry"),
+        "restricted_access": summary.get("restricted_access"),
     }
 
 
@@ -389,7 +510,8 @@ async def status(db: AsyncSession, estimate_id: str) -> dict:
     changed = bool(latest and str(latest.id) != str(used.id))
     changes = []
     if changed and used and latest:
-        before, after = _metric_map(await measurement_svc.build_out(db, used)), _metric_map(await measurement_svc.build_out(db, latest))
+        before = _metric_map(await measurement_svc.build_out(db, used))
+        after = _metric_map(await measurement_svc.build_out(db, latest))
         for key in before.keys() | after.keys():
             if before.get(key) != after.get(key):
                 changes.append({"metric": key, "from": before.get(key), "to": after.get(key)})
