@@ -110,7 +110,7 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     const cur = ctl.getDoc();
     const r = splitEdgeSafe(cur, edge.id, m.x, m.y, { endpointTol: 8 / view.k });
     if (r.ok) ctl.commitFrom(cur, r.doc);
-    else if (r.reason === "edge_protected") toast.error("This edge is linked to a confirmed measurement and cannot be split automatically. Unmap/unlock the edge first if you intend to change its topology.");
+    else if (r.reason === "edge_protected") toast.error("This edge is mapped, confirmed, or locked. Clear the confirmed length and/or unmap/unlock it before changing its topology.");
   };
 
   const onMove = (e) => {

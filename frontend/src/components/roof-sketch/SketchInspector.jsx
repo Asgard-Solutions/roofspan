@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { EDGE_TYPES, distance } from "@roofspan/roof-sketch-core";
+import { EDGE_TYPES, distance, edgeGeometryLengthFeet } from "@roofspan/roof-sketch-core";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +54,7 @@ export default function SketchInspector({ doc, selection, cmd, readOnly, relFace
   const pen = sel.type === "penetration" ? (doc.penetrations || []).find((p) => p.id === sel.id) : null;
 
   const edgeLenUnits = edge ? distance([vById(doc, edge.v1)?.x, vById(doc, edge.v1)?.y], [vById(doc, edge.v2)?.x, vById(doc, edge.v2)?.y]) : 0;
-  const edgeLenFt = fpu ? edgeLenUnits * fpu : null;
+  const edgeLenFt = edge ? edgeGeometryLengthFeet(doc, edge) : null;
 
   // one-to-one: MeasurementFacet/Edge ids already used by OTHER sketch entities are disabled.
   const usedFacetIds = new Set((doc.facets || []).filter((f) => f.measurement_facet_id).map((f) => String(f.measurement_facet_id)));
@@ -100,7 +100,7 @@ export default function SketchInspector({ doc, selection, cmd, readOnly, relFace
         {edge.measurement_edge_id && !edgeValid && <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="edge-map-invalid">Linked measurement edge no longer exists in this structure — treated as Unmapped. Pick a valid edge.</div>}
       </div>
       <div className="text-xs text-slate-500">Geometry: {edgeLenFt == null ? `${edgeLenUnits.toFixed(1)} units (unscaled)` : `${edgeLenFt.toFixed(1)} ft`}</div>
-      {!readOnly && <JoinControl doc={doc} edge={edge} onJoin={cmd.join} />}
+      {!readOnly && doc.edit_mode === "connected_graph" && <JoinControl doc={doc} edge={edge} onJoin={cmd.join} />}
       <div className="flex items-end gap-2">
         <div className="flex-1"><div className="text-[11px] text-slate-400">Confirmed length (ft)</div>
           <Input type="number" step="0.1" value={edge.confirmed_length_ft ?? ""} disabled={readOnly} onChange={(e) => cmd.setConfirmedEdgeLength(edge.id, e.target.value)} data-testid="edge-confirmed-input" /></div>

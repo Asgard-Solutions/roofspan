@@ -1,5 +1,28 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 3 FINAL Closure — Geometry Integrity Fixes (2026-06) — PARTIAL: data-integrity defects fixed & green; live-gesture wiring DEFERRED
+Fixed the pure data-integrity defects flagged in review. Live canvas pointer-gesture wiring is NOT done
+this pass (documented below).
+- #13 connected_graph guards on `splitEdgeSafe`/`mergeVertices`/`joinEdges` (reject `connected_graph_required`); Join control hidden + double-click split no-op in manual_polygon.
+- #14 SketchInspector edge LF now derives from shared `edgeGeometryLengthFeet` (canvas already did). deriveProposals uses `distance*feetPerUnit` which is numerically identical — NOT refactored to the helper (low-risk equivalence, noted).
+- #15 locked-edge discrepancy direction corrected to `geometry - confirmed` (+2 for 20 vs 18).
+- #16 `mergeVertices` now rejects duplicate-edge collapse if EITHER edge is protected (`protected_duplicate_collapse`) — no one-sided metadata loss.
+- #17 duplicate collapse type resolution is order-independent (keeps the classification; rejects two different classifications).
+- #19 `joinEdges` facet-boundary replacement is now cyclic (last→first pair collapses to ONE joined edge).
+- #20 join drops stale graph decisions for BOTH source edge ids. #28 protected messages mention confirmed length.
+
+**Contracts green:** commands 18 / mapping 18 / saveLifecycle 19 / saveCloseLifecycle 29 / proposalLifecycle
+24 / geometryOps **39** (adds manual-mode guards, protected-duplicate reject, discrepancy +2). Shared core
+26/28/10. Office `CI=false yarn build` OK. `frontend/yarn.lock` unchanged.
+
+**DEFERRED (NOT done this pass, budget):** live canvas pointer-gesture wiring in RoofSketchCanvas
+(#1–#12): snapping.js live draw snap markers, direct-edge-click routing, draw-to-edge interior split
+gesture, vertex-drag→merge and vertex-drag→edge-insert on pointer-up, drag-preview edit-generation
+suppression; the `insertExistingVertexIntoEdge` command (#7); and the live-gesture/history interaction
+contracts (#22–#27 for gestures). The underlying pure engine (splitEdgeSafe/mergeVertices/joinEdges/
+snapping/edgeDimensions) is complete and contract-tested. LIVE OFFICE WALKTHROUGH: NOT RUNNABLE HERE.
+
+
 ## Task 4 Phase 3 — Canvas Geometry Closure (2026-06) — CODE COMPLETE (engine+contracts+partial UI) & LOCALLY GREEN; no git ops
 Final Office canvas geometry engine + deterministic contracts. Geometry stays authoritative in
 `@roofspan/roof-sketch-core`; editor commands stay pure.
