@@ -52,6 +52,11 @@ on:
       - "backend/tests/test_measurement_sketch_authz.py"
       - "backend/tests/test_measurement_sketch_api.py"
       - "backend/tests/test_measurement_sketch_api_live.py"
+      - "backend/tests/test_measurement_sketch_survival.py"
+      - "backend/services/measurements.py"
+      - "backend/schemas_measurements.py"
+      - "backend/routers/measurements.py"
+      - "frontend/src/components/MeasurementWorksheet.jsx"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
@@ -102,6 +107,11 @@ on:
       - "backend/tests/test_measurement_sketch_authz.py"
       - "backend/tests/test_measurement_sketch_api.py"
       - "backend/tests/test_measurement_sketch_api_live.py"
+      - "backend/tests/test_measurement_sketch_survival.py"
+      - "backend/services/measurements.py"
+      - "backend/schemas_measurements.py"
+      - "backend/routers/measurements.py"
+      - "frontend/src/components/MeasurementWorksheet.jsx"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
@@ -197,7 +207,7 @@ jobs:
       - name: Apply database migrations
         working-directory: backend
         run: alembic -c alembic.ini upgrade head
-      - name: Run roof sketch backend contracts (service, concurrency, clone, A/B authz)
+      - name: Run roof sketch backend contracts (service, concurrency, clone, A/B authz, identity survival)
         run: >-
           pytest -q
           backend/tests/test_measurement_sketch_service.py
@@ -205,6 +215,7 @@ jobs:
           backend/tests/test_measurement_sketch_clone.py
           backend/tests/test_measurement_sketch_authz.py
           backend/tests/test_measurement_sketch_api.py
+          backend/tests/test_measurement_sketch_survival.py
 
   mobile-contract:
     runs-on: ubuntu-latest

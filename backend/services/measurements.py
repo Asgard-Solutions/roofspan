@@ -4,10 +4,11 @@ Owns whole-document create/replace with client-ref linkage, derived physical + t
 the draft -> field_complete -> office_verified -> locked state machine, immutable revision cloning,
 and measurement photo lineage. Estimating assumptions remain outside this service.
 """
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
@@ -15,7 +16,7 @@ from models import (
     MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
 )
 from measurement_extension_models import MeasurementRevisionExtension
-from services.measurement_core import derive_measurement_totals, photo_relink_plan
+from services.measurement_core import derive_measurement_totals
 from core import MANAGE_ROLES, FIELD_ROLES
 
 VERIFY_ROLES = MANAGE_ROLES  # owner | administrator | office
@@ -180,29 +181,249 @@ async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevisio
     return rev
 
 
-async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
-    """Replace an editable revision while preserving photos for logical children that survive."""
-    if not is_editable(rev):
-        raise HTTPException(status_code=409, detail="This revision is verified/locked and cannot be edited. Create a new revision instead.")
+def _is_server_ref(val) -> bool:
+    """A ref that is a real server UUID means the client is claiming an existing persisted row owned by
+    this revision. Temporary client keys (e.g. 'r-abc123') are NOT UUIDs and always denote a NEW row."""
+    if val is None:
+        return False
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
 
-    old_ids_by_type = {
-        "measurement_structure": [str(x) for x in (await db.execute(select(MeasurementStructure.id).where(MeasurementStructure.revision_id == rev.id))).scalars().all()],
-        "measurement_facet": [str(x) for x in (await db.execute(select(MeasurementFacet.id).where(MeasurementFacet.revision_id == rev.id))).scalars().all()],
-        "measurement_penetration": [str(x) for x in (await db.execute(select(MeasurementPenetration.id).where(MeasurementPenetration.revision_id == rev.id))).scalars().all()],
+
+def _stale_reference():
+    # Generic message on purpose: never disclose whether a foreign UUID exists elsewhere.
+    raise HTTPException(
+        status_code=409,
+        detail="A referenced measurement item is stale or does not belong to this revision. Reload the worksheet and try again.",
+    )
+
+
+async def _reconcile_children(db: AsyncSession, rev: MeasurementRevision, payload) -> dict[str, list[str]]:
+    """Identity-preserving reconciliation of an editable revision's children.
+
+    A server-UUID `ref` claims an existing row owned by THIS revision -> UPDATE in place (its UUID is
+    kept, so its roof sketch document and photos are untouched). A temporary/absent ref -> INSERT. An
+    existing row omitted from the payload -> DELETE (intentional; sketch CASCADE fires by design). A
+    UUID ref/id that does not belong to this revision is rejected (409) rather than silently reused or
+    re-inserted. Returns the ids of children that were intentionally deleted (for photo retention)."""
+    rid = rev.id
+
+    # ---------------- structures ----------------
+    existing_structs = {str(x.id): x for x in (await db.execute(select(MeasurementStructure).where(MeasurementStructure.revision_id == rid))).scalars().all()}
+    struct_map: dict[str, str] = {}
+    structure_scope: dict[str, bool] = {}
+    seen_struct: set[str] = set()
+    for s in (payload.structures or []):
+        ref = s.ref
+        row = None
+        if _is_server_ref(ref):
+            row = existing_structs.get(str(ref))
+            if row is None:
+                _stale_reference()
+            seen_struct.add(str(row.id))
+        if row is not None:
+            row.name = s.name or ""
+            row.structure_type = s.structure_type or "main_house"
+            row.stories = s.stories
+            row.approx_height_ft = s.approx_height_ft
+            row.attachment = s.attachment
+            row.notes = s.notes
+            row.sort = s.sort or 0
+        else:
+            row = MeasurementStructure(
+                revision_id=rid, name=s.name or "", structure_type=s.structure_type or "main_house",
+                stories=s.stories, approx_height_ft=s.approx_height_ft, attachment=s.attachment,
+                notes=s.notes, sort=s.sort or 0,
+            )
+            db.add(row)
+            await db.flush()
+        structure_scope[str(row.id)] = bool(getattr(s, "included_in_scope", True))
+        if ref:
+            struct_map[str(ref)] = str(row.id)
+    final_struct_ids = set(structure_scope.keys())
+    deleted_struct_ids = [sid for sid in existing_structs if sid not in seen_struct]
+    for sid in deleted_struct_ids:
+        await db.delete(existing_structs[sid])
+    await db.flush()
+
+    def _resolve_structure(f) -> str | None:
+        if f.structure_ref and str(f.structure_ref) in struct_map:
+            return struct_map[str(f.structure_ref)]
+        if _is_server_ref(f.structure_ref):
+            if str(f.structure_ref) in final_struct_ids:
+                return str(f.structure_ref)
+            _stale_reference()
+        if f.structure_id:
+            if str(f.structure_id) in final_struct_ids:
+                return str(f.structure_id)
+            _stale_reference()
+        return None
+
+    # ---------------- facets ----------------
+    existing_facets = {str(x.id): x for x in (await db.execute(select(MeasurementFacet).where(MeasurementFacet.revision_id == rid))).scalars().all()}
+    facet_map: dict[str, str] = {}
+    seen_facet: set[str] = set()
+    all_facet_ids: set[str] = set()
+    for f in (payload.facets or []):
+        sid = _resolve_structure(f)
+        ref = f.ref
+        row = None
+        if _is_server_ref(ref):
+            row = existing_facets.get(str(ref))
+            if row is None:
+                _stale_reference()
+            seen_facet.add(str(row.id))
+        if row is not None:
+            row.structure_id = sid
+            row.facet_label = f.facet_label or ""
+            row.pitch_rise = f.pitch_rise
+            row.area_sqft = f.area_sqft or 0
+            row.width_ft = f.width_ft
+            row.length_ft = f.length_ft
+            row.orientation_azimuth = f.orientation_azimuth
+            row.roof_material = f.roof_material
+            row.notes = f.notes
+            row.geometry = f.geometry
+            row.sort = f.sort or 0
+        else:
+            row = MeasurementFacet(
+                revision_id=rid, structure_id=sid, facet_label=f.facet_label or "",
+                pitch_rise=f.pitch_rise, area_sqft=f.area_sqft or 0, width_ft=f.width_ft, length_ft=f.length_ft,
+                orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material, notes=f.notes,
+                geometry=f.geometry, sort=f.sort or 0,
+            )
+            db.add(row)
+            await db.flush()
+        all_facet_ids.add(str(row.id))
+        if ref:
+            facet_map[str(ref)] = str(row.id)
+    deleted_facet_ids = [fid for fid in existing_facets if fid not in seen_facet]
+    for fid in deleted_facet_ids:
+        await db.delete(existing_facets[fid])
+    await db.flush()
+
+    def _fid(ref, fid) -> str | None:
+        if ref and str(ref) in facet_map:
+            return facet_map[str(ref)]
+        if _is_server_ref(ref):
+            if str(ref) in all_facet_ids:
+                return str(ref)
+            _stale_reference()
+        if fid:
+            if str(fid) in all_facet_ids:
+                return str(fid)
+            _stale_reference()
+        return None
+
+    # ---------------- edges ----------------
+    existing_edges = {str(x.id): x for x in (await db.execute(select(MeasurementEdge).where(MeasurementEdge.revision_id == rid))).scalars().all()}
+    seen_edge: set[str] = set()
+    for e in (payload.edges or []):
+        ref = getattr(e, "ref", None)
+        row = None
+        if _is_server_ref(ref):
+            row = existing_edges.get(str(ref))
+            if row is None:
+                _stale_reference()
+            seen_edge.add(str(row.id))
+        primary = _fid(e.facet_ref, e.facet_id)
+        secondary = _fid(e.facet_ref_secondary, e.facet_id_secondary)
+        if row is not None:
+            row.edge_type = e.edge_type or "eave"
+            row.length_ft = e.length_ft or 0
+            row.facet_id = primary
+            row.facet_id_secondary = secondary
+            row.label = e.label
+            row.notes = e.notes
+            row.sort = e.sort or 0
+        else:
+            db.add(MeasurementEdge(
+                revision_id=rid, edge_type=e.edge_type or "eave", length_ft=e.length_ft or 0,
+                facet_id=primary, facet_id_secondary=secondary, label=e.label, notes=e.notes, sort=e.sort or 0,
+            ))
+    deleted_edge_ids = [eid for eid in existing_edges if eid not in seen_edge]
+    for eid in deleted_edge_ids:
+        await db.delete(existing_edges[eid])
+    await db.flush()
+
+    # ---------------- penetrations ----------------
+    existing_pens = {str(x.id): x for x in (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == rid))).scalars().all()}
+    seen_pen: set[str] = set()
+    for p in (payload.penetrations or []):
+        ref = p.ref
+        row = None
+        if _is_server_ref(ref):
+            row = existing_pens.get(str(ref))
+            if row is None:
+                _stale_reference()
+            seen_pen.add(str(row.id))
+        fid = _fid(p.facet_ref, p.facet_id)
+        if row is not None:
+            row.pen_type = p.pen_type or "pipe_boot"
+            row.quantity = p.quantity or 1
+            row.facet_id = fid
+            row.diameter_in = p.diameter_in
+            row.width_in = p.width_in
+            row.length_in = p.length_in
+            row.notes = p.notes
+            row.sort = p.sort or 0
+        else:
+            db.add(MeasurementPenetration(
+                revision_id=rid, pen_type=p.pen_type or "pipe_boot", quantity=p.quantity or 1,
+                facet_id=fid, diameter_in=p.diameter_in, width_in=p.width_in,
+                length_in=p.length_in, notes=p.notes, sort=p.sort or 0,
+            ))
+    deleted_pen_ids = [pid for pid in existing_pens if pid not in seen_pen]
+    for pid in deleted_pen_ids:
+        await db.delete(existing_pens[pid])
+    await db.flush()
+
+    # ---------------- summary (singleton per revision, no ref) ----------------
+    existing_summary = (await db.execute(select(MeasurementSummary).where(MeasurementSummary.revision_id == rid))).scalars().first()
+    existing_condition = None
+    drip_edge_lf = None
+    if payload.summary is not None:
+        summary_data = payload.summary.model_dump()
+        existing_condition = summary_data.pop("existing_condition", None)
+        drip_edge_lf = summary_data.pop("drip_edge_lf", None)
+        if existing_summary is not None:
+            for k, v in summary_data.items():
+                setattr(existing_summary, k, v)
+        else:
+            db.add(MeasurementSummary(revision_id=rid, **summary_data))
+    elif existing_summary is not None:
+        await db.delete(existing_summary)
+    await db.flush()
+
+    # Extension structure_scope tracks EXACTLY the final structures; deleted ids drop out naturally.
+    await _save_extension(
+        db, rev.id, structure_scope=structure_scope,
+        existing_condition=existing_condition, drip_edge_lf=drip_edge_lf,
+    )
+
+    return {
+        "measurement_structure": deleted_struct_ids,
+        "measurement_facet": deleted_facet_ids,
+        "measurement_penetration": deleted_pen_ids,
     }
 
-    for model in (MeasurementEdge, MeasurementPenetration, MeasurementFacet, MeasurementStructure):
-        await db.execute(delete(model).where(model.revision_id == rev.id))
-    await db.execute(delete(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))
-    await db.flush()
+
+async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
+    """Identity-preserving editable-revision save. Surviving children keep their UUIDs (so their roof
+    sketch documents and photos are untouched); only intentionally removed children are deleted."""
+    if not is_editable(rev):
+        raise HTTPException(status_code=409, detail="This revision is verified/locked and cannot be edited. Create a new revision instead.")
+    deleted_ids_by_type = await _reconcile_children(db, rev, payload)
     if payload.source:
         rev.source = payload.source
     rev.provider = payload.provider
     rev.report_id = payload.report_id
     rev.reported_area_sqft = payload.reported_area_sqft
     rev.notes = payload.notes
-    replacement_ids_by_ref = await _insert_children(db, rev, payload)
-    await _relink_replaced_photos(db, str(rev.id), old_ids_by_type, replacement_ids_by_ref)
+    await _retain_deleted_child_photos(db, str(rev.id), deleted_ids_by_type)
     rev.updated_at = _now()
 
 
@@ -244,13 +465,17 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
         db.add(r)
         await db.flush()
         fmap[str(f.id)] = r.id
+    emap: dict[str, str] = {}
     for e in edges:
-        db.add(MeasurementEdge(
+        r = MeasurementEdge(
             revision_id=new.id, edge_type=e.edge_type, length_ft=e.length_ft,
             facet_id=fmap.get(str(e.facet_id)) if e.facet_id else None,
             facet_id_secondary=fmap.get(str(e.facet_id_secondary)) if e.facet_id_secondary else None,
             label=e.label, notes=e.notes, sort=e.sort,
-        ))
+        )
+        db.add(r)
+        await db.flush()
+        emap[str(e.id)] = str(r.id)
     for p in pens:
         r = MeasurementPenetration(
             revision_id=new.id, pen_type=p.pen_type, quantity=p.quantity,
@@ -289,6 +514,7 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
         {str(o): str(nw) for o, nw in smap.items()},
         {str(o): str(nw) for o, nw in fmap.items()},
         {str(o): str(nw) for o, nw in pmap.items()},
+        {str(o): str(nw) for o, nw in emap.items()},
     )
     return new
 
@@ -455,14 +681,16 @@ async def resolve_revision_for_photo(db: AsyncSession, record_type: str, record_
     return rev, s
 
 
-async def _relink_replaced_photos(db: AsyncSession, revision_id: str, old_ids_by_type: dict, replacement_ids_by_ref: dict) -> None:
-    """Keep photo evidence attached when an editable whole-document save recreates child rows."""
-    plan = photo_relink_plan(revision_id, old_ids_by_type, replacement_ids_by_ref)
-    for (old_type, old_id), (new_type, new_id) in plan.items():
-        rows = (await db.execute(select(Photo).where(Photo.record_type == old_type, Photo.record_id == str(old_id)))).scalars().all()
-        for photo in rows:
-            photo.record_type = new_type
-            photo.record_id = str(new_id)
+async def _retain_deleted_child_photos(db: AsyncSession, revision_id: str, deleted_ids_by_type: dict) -> None:
+    """When a child is intentionally removed during an editable save, its photos are retained on the
+    measurement revision so field/office evidence is never silently orphaned. Surviving children keep
+    their UUIDs, so their photos require NO relinking at all (never moved unnecessarily)."""
+    for record_type, ids in (deleted_ids_by_type or {}).items():
+        for old_id in ids or []:
+            rows = (await db.execute(select(Photo).where(Photo.record_type == record_type, Photo.record_id == str(old_id)))).scalars().all()
+            for photo in rows:
+                photo.record_type = "measurement_revision"
+                photo.record_id = str(revision_id)
     await db.flush()
 
 
