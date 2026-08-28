@@ -1,5 +1,6 @@
 /* RoofSpan Field — roof measurement offline cache/draft contract (pure Node). */
 const mc = require("../measurementCache");
+const queue = require("../queue");
 
 let failures = 0;
 function ok(cond, msg) {
@@ -24,6 +25,9 @@ ok(draft.body.structures.length === 1, "draft preserves the editable whole-docum
 const next = mc.mergeDraft(draft, { facets: [{ ref: "f1", area_sqft: 100 }] });
 ok(next.client_id === "client-123", "editing a draft keeps the same queued create mutation identity");
 ok(next.body.structures.length === 1 && next.body.facets.length === 1, "draft edits merge without losing prior measurement sections");
+
+const mutation = queue.makeMutation({ kind: "measurement", method: "post", path: "/mobile/measurements", clientId: "client-123" });
+ok(mutation.client_id === "client-123" && mutation.idempotency_key === "client-123", "measurement draft can reuse one durable queue/idempotency identity");
 
 ok(mc.isLocalDraft({ local_draft: true, client_id: "x" }) === true, "local draft marker recognized");
 ok(mc.isLocalDraft({ id: "server-id" }) === false, "server revision is not treated as a local draft");
