@@ -129,3 +129,9 @@ export function finalizeAfterSave(decisions, savedValueOf) {
 export function isMappingValid(relationalId, validIdSet) {
   return relationalId != null && validIdSet.has(String(relationalId));
 }
+
+// A persisted pending decision may only be applied to the Worksheet draft if its relational target still
+// exists in the current scoped set. A stale/invalid target must NEVER be silently redirected or applied.
+export function canApplyPending(dec, validIdSet) {
+  return !!dec && dec.decision === PENDING && isMappingValid(dec.target_id, validIdSet);
+}

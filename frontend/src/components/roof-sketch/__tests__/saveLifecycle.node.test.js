@@ -78,4 +78,33 @@ for (const kind of ["conflict", "validation", "error"]) {
   assert.ok(!L.isDirty(st) && st.serverVersion === 9 && st.phase === "saved"); ok("adoptServerVersion resets to a clean baseline at the server version");
 }
 
+// ---- prepareSketchSave: params captured synchronously, snapshot detached, existing-sketch CAS ----
+{
+  let st = L.initSaveState(7);
+  st = L.markEdited(st); st = L.markEdited(st); st = L.markEdited(st); // editGeneration 3
+  const doc = { edit_mode: "connected_graph", facets: [{ id: "f1", label: "A" }] };
+  const prep = L.prepareSketchSave(st, doc);
+  assert.strictEqual(prep.expectedVersion, 7); ok("prepareSketchSave captures the real CAS version (7) for an existing sketch");
+  assert.strictEqual(prep.snapshotGeneration, 3); ok("prepareSketchSave captures the current edit generation (3)");
+  assert.notStrictEqual(prep.expectedVersion, null); ok("existing-sketch expected_version is NEVER null");
+  // mutate the SOURCE document after preparing -> snapshot must be untouched (detached/frozen)
+  doc.facets[0].label = "B"; doc.facets.push({ id: "f2" });
+  assert.strictEqual(prep.snapshotDocument.facets[0].label, "A"); ok("snapshot document is detached (source mutation does not leak in)");
+  assert.strictEqual(prep.snapshotDocument.facets.length, 1); ok("snapshot document structure frozen at prepare time");
+  // commit next state, then Edit B while the save is pending, then Save(A) resolves at server v8
+  st = prep.nextSaveState;
+  st = L.markEdited(st); // Edit B -> generation 4
+  st = L.resolveSaveSuccess(st, prep.snapshotGeneration, 8);
+  assert.strictEqual(st.serverVersion, 8); ok("save success advances CAS version to 8");
+  assert.ok(L.isDirty(st)); ok("edit during save keeps editor dirty (Edit B not masked)");
+  assert.strictEqual(st.lastPersistedGeneration, 3); ok("only the saved generation (3) is marked persisted");
+}
+
+// ---- brand-new sketch: expected_version null/0 remains valid ----
+{
+  const st = L.markEdited(L.initSaveState(null));
+  const prep = L.prepareSketchSave(st, { edit_mode: "connected_graph" });
+  assert.strictEqual(prep.expectedVersion, null); ok("brand-new sketch expected_version is null (backend create path)");
+}
+
 console.log("\nROOF SKETCH SAVE LIFECYCLE: all " + n + " assertions passed");

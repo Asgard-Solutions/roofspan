@@ -1,5 +1,34 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 2 FINAL Closure Corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
+Three integration defects fixed on top of the approved Phase 2 architecture (baseline main `02206393`, CI run
+33204137410 green). Architecture NOT rewritten.
+
+1. **Save-request preparation (BLOCKER):** `RoofSketchEditor.doSave()` previously captured `snapshotGeneration`/
+   `expectedVersion` via side effects INSIDE a `setSave(prev=>…)` updater — unsafe React that could send
+   `expected_version=undefined→null` for an existing sketch and get a false 409. Added pure
+   `SL.prepareSketchSave(currentSaveState, currentDocument)` and a synced `saveRef`; `doSave` now prepares
+   synchronously outside any updater and sends a `structuredClone` (detached) document snapshot.
+2. **Finalization discovery failure:** `MeasurementWorksheet.finalizePending()` no longer silently returns when
+   `listSketches` fails — it warns (measurement stays saved, proposals stay pending). Per-sketch CAS/422/error
+   already warned via the `failed` counter.
+3. **Invalid reopened pending target:** added `PL.canApplyPending(dec, validIdSet)`; the reopened-pending UI now
+   disables "Apply to Worksheet Draft" and shows an invalid-mapping message for stale targets — never calls
+   `onMeasurementChanged`, never dirties the Worksheet, never shows a false success, never silently redirects.
+
+**New/extended contracts (CI office-build, all four run before Build Office UI):** saveLifecycle **19** (adds
+prepareSketchSave: real CAS version for existing sketch / null for new, detached snapshot, edit-during-save
+stays dirty); proposalLifecycle **24** (adds invalid pending facet+edge cannot Apply, no callback/no false
+success); mapping **18**; commands **18**.
+
+**Local verification (all green):** office contracts 18/18/19/24; office `CI=false yarn build` OK. Backend
+(33) / shared core (26/28/10) / mobile (edge-identity 4, sketch-cache 15) unchanged this pass and remain
+green. `frontend/yarn.lock` untouched. Files changed (6): `MeasurementWorksheet.jsx`, `RoofSketchEditor.jsx`,
+`saveLifecycle.js`, `proposalLifecycle.js`, `__tests__/saveLifecycle.node.test.js`,
+`__tests__/proposalLifecycle.node.test.js`. **PENDING:** user Save-to-GitHub → all 5 Roof Takeoff Contract
+jobs green → STOP for independent review. Do NOT start Phase 3 / Field editor / Plan 2.
+
+
 ## Task 4 Closure Phase 2 — Mapping, Save Safety & Proposal Lifecycle (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
 Office Roof Sketch Editor state-integrity + proposal-workflow architecture. Frontend/state only (no backend
 measurement-persistence redesign; Phase 1 reconciliation preserved). New deterministic pure modules are the

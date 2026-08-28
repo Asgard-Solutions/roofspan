@@ -27,6 +27,8 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
 
   const [loading, setLoading] = useState(true);
   const [save, setSave] = useState(() => SL.initSaveState(null));
+  const saveRef = useRef(save);
+  useEffect(() => { saveRef.current = save; }, [save]);
   const [mode, setMode] = useState("select");
   const [selection, setSelection] = useState(null);
   const [conflict, setConflict] = useState(null);
@@ -106,14 +108,14 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   }, [doUndo, doRedo, deleteSelected]);
 
   const doSave = async () => {
-    // Freeze BOTH the generation and the exact document snapshot so an edit made while this request is
-    // in flight can never be masked as "saved".
-    const snapshotDocument = docRef.current;
-    let snapshotGeneration, expectedVersion;
-    setSave((s) => { const b = SL.beginSave(s); snapshotGeneration = b.snapshotGeneration; expectedVersion = b.expectedVersion; return b.next; });
+    // Prepare the request SYNCHRONOUSLY from the current state (via saveRef), never from side effects
+    // inside a state updater. Freeze a detached document snapshot so later local edits can't change it.
+    const prep = SL.prepareSketchSave(saveRef.current, docRef.current);
+    saveRef.current = prep.nextSaveState;
+    setSave(prep.nextSaveState);
     setConflict(null); setValidationMsg(null);
-    const res = await saveSketch(revision.id, structure.id, { document: snapshotDocument, editMode: snapshotDocument.edit_mode, expectedVersion });
-    if (res.ok) { setSave((s) => SL.resolveSaveSuccess(s, snapshotGeneration, res.record.document_version)); toast.success("Roof sketch saved."); return true; }
+    const res = await saveSketch(revision.id, structure.id, { document: prep.snapshotDocument, editMode: prep.snapshotDocument.edit_mode, expectedVersion: prep.expectedVersion });
+    if (res.ok) { const g = prep.snapshotGeneration; setSave((s) => SL.resolveSaveSuccess(s, g, res.record.document_version)); toast.success("Roof sketch saved."); return true; }
     if (res.kind === "conflict") { setSave((s) => SL.resolveSaveFailure(s, "conflict")); setConflict(res.server); toast.error("Sketch was changed by someone else."); }
     else if (res.kind === "validation") { setSave((s) => SL.resolveSaveFailure(s, "validation")); setValidationMsg(res.message); toast.error("Server rejected the sketch."); }
     else if (res.kind === "locked") { setSave((s) => SL.resolveSaveFailure(s, "error")); toast.error(res.message); }
@@ -162,9 +164,11 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
 
   // Reopened persisted pending decisions (do NOT auto-apply to the Worksheet).
   const pendingDecisions = (doc.proposal_decisions || []).filter((d) => d.decision === PL.PENDING);
+  const validIdSet = useMemo(() => new Set([...relFacets.map((f) => String(f.id)), ...relEdges.map((e) => String(e.id))]), [relFacets, relEdges]);
   const applyPending = (dec) => {
+    if (!PL.canApplyPending(dec, validIdSet)) { toast.error("This pending proposal's measurement mapping is no longer valid and cannot be applied."); return; }
     const rel = dec.target_type === "facet" ? relFacetsById[dec.target_id] : relEdgesById[dec.target_id];
-    const currentValue = rel ? (dec.target_type === "facet" ? Number(rel.area_sqft) || 0 : Number(rel.length_ft) || 0) : null;
+    const currentValue = dec.target_type === "facet" ? Number(rel.area_sqft) || 0 : Number(rel.length_ft) || 0;
     const out = PL.applyPendingToDraft({ session: sessionRef.current }, dec, currentValue);
     sessionRef.current = out.session;
     if (onMeasurementChanged) onMeasurementChanged(out.draftChange);
@@ -229,10 +233,12 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
               const rel = d.target_type === "facet" ? relFacetsById[d.target_id] : relEdgesById[d.target_id];
               const unit = d.metric === "area_sqft" ? "SF" : "LF";
               const cur = rel ? (d.target_type === "facet" ? rel.area_sqft : rel.length_ft) : null;
+              const canApply = PL.canApplyPending(d, validIdSet);
               return <div key={`${d.target_type}-${d.target_id}-${d.metric}`} className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900" data-testid={`pending-${d.target_id}`}>
                 <div>Proposed: <b>{Number(d.proposed_value ?? d.value).toFixed(unit === "SF" ? 0 : 1)} {unit}</b> · Worksheet currently: {cur == null ? "—" : `${Number(cur).toFixed(unit === "SF" ? 0 : 1)} ${unit}`}</div>
+                {!canApply && <div className="mt-1 text-[11px] text-rose-700" data-testid={`pending-invalid-${d.target_id}`}>This pending proposal's measurement mapping is no longer valid. Re-map this sketch entity or choose Keep Current.</div>}
                 {!readOnly && <div className="mt-1 flex gap-2">
-                  <Button size="sm" onClick={() => applyPending(d)} data-testid={`apply-pending-${d.target_id}`}>Apply to Worksheet Draft</Button>
+                  <Button size="sm" disabled={!canApply} onClick={() => applyPending(d)} data-testid={`apply-pending-${d.target_id}`}>Apply to Worksheet Draft</Button>
                   <Button size="sm" variant="outline" onClick={() => keepPending(d)} data-testid={`keep-pending-${d.target_id}`}>Keep Current</Button>
                 </div>}
               </div>;

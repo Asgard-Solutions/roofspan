@@ -56,3 +56,22 @@ export function resolveSaveFailure(state, kind) {
 export function adoptServerVersion(state, newServerVersion) {
   return { ...state, editGeneration: 0, lastPersistedGeneration: 0, serverVersion: newServerVersion, saving: false, inflight: null, phase: "saved" };
 }
+
+// Deep, detached clone so a document sent to the server can never be mutated by later local edits.
+export function detachDocument(doc) {
+  if (typeof structuredClone === "function") return structuredClone(doc);
+  return JSON.parse(JSON.stringify(doc));
+}
+
+// Integration-level save-request preparation. MUST be called synchronously in the event handler (NOT
+// inside a React state updater) so the request params (generation, CAS version, frozen document) are
+// captured deterministically. Returns everything doSave() needs plus the next reducer state to commit.
+export function prepareSketchSave(currentSaveState, currentDocument) {
+  const b = beginSave(currentSaveState);
+  return {
+    nextSaveState: b.next,
+    snapshotGeneration: b.snapshotGeneration,
+    expectedVersion: b.expectedVersion,        // null ONLY for a brand-new sketch; real version otherwise
+    snapshotDocument: detachDocument(currentDocument),
+  };
+}
