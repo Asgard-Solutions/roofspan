@@ -21,7 +21,7 @@ def test_report_delta_missing_pitch_zero_area_and_uniform_pitch_are_soft_warning
     assert "VALLEY_LENGTH_MISSING" in codes
     assert "ZERO_AREA_FACET" in codes
     assert "UNIFORM_PITCH_SANITY" in codes
-    assert "FACET_PITCH_MISSING" not in codes  # zero-area placeholder does not create a pitch warning
+    assert "FACET_PITCH_MISSING" not in codes
 
 
 def test_positive_area_facet_without_pitch_warns():
@@ -34,13 +34,40 @@ def test_positive_area_facet_without_pitch_warns():
     assert any(w["code"] == "FACET_PITCH_MISSING" for w in warnings)
 
 
+def test_measured_roof_with_every_structure_excluded_warns_but_does_not_block():
+    measurement = {
+        "totals": {"edge_totals": {}, "total_area_sqft": 1500, "takeoff_area_sqft": 0},
+        "structures": [{"id": "s1", "name": "Main House", "included_in_scope": False}],
+        "facets": [{"id": "f1", "structure_id": "s1", "facet_label": "F1", "area_sqft": 1500, "pitch_rise": 6}],
+        "edges": [],
+    }
+    warnings = build_warnings(measurement)
+    warning = next(w for w in warnings if w["code"] == "NO_TAKEOFF_SCOPE")
+    assert warning["severity"] == "warning"
+
+
+def test_included_structure_without_any_roof_area_warns():
+    measurement = {
+        "totals": {"edge_totals": {}, "total_area_sqft": 500, "takeoff_area_sqft": 500},
+        "structures": [
+            {"id": "house", "name": "Main House", "included_in_scope": True},
+            {"id": "porch", "name": "Porch", "included_in_scope": True},
+        ],
+        "facets": [{"id": "f1", "structure_id": "house", "facet_label": "F1", "area_sqft": 500, "pitch_rise": 4}],
+        "edges": [],
+    }
+    warnings = build_warnings(measurement)
+    assert any(w["code"] == "INCLUDED_STRUCTURE_EMPTY" and "Porch" in w["message"] for w in warnings)
+
+
 def test_clean_measurement_has_no_warnings():
     measurement = {
         "totals": {"reported_area_sqft": 1000, "total_area_sqft": 1000, "reported_area_delta_sqft": 0,
-                   "edge_totals": {"valley_lf": 20}},
+                   "takeoff_area_sqft": 1000, "edge_totals": {"valley_lf": 20}},
+        "structures": [{"id": "house", "name": "Main House", "included_in_scope": True}],
         "facets": [
-            {"id": "1", "facet_label": "F1", "area_sqft": 500, "pitch_rise": 6},
-            {"id": "2", "facet_label": "F2", "area_sqft": 500, "pitch_rise": 4},
+            {"id": "1", "structure_id": "house", "facet_label": "F1", "area_sqft": 500, "pitch_rise": 6},
+            {"id": "2", "structure_id": "house", "facet_label": "F2", "area_sqft": 500, "pitch_rise": 4},
         ],
         "edges": [{"edge_type": "valley", "length_ft": 20}],
     }

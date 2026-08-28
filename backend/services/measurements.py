@@ -1,24 +1,25 @@
-"""Roof Measurement service (Increment A).
+"""Roof Measurement service.
 
-Owns: whole-document create/replace with client-ref linkage, derived totals, the status state machine
-(draft -> field_complete -> office_verified -> locked, plus return-to-field), immutability, and
-cloning a verified/locked revision into a new editable draft. No estimating logic lives here.
+Owns whole-document create/replace with client-ref linkage, derived physical + takeoff-scoped totals,
+the draft -> field_complete -> office_verified -> locked state machine, immutable revision cloning,
+and measurement photo lineage. Estimating assumptions remain outside this service.
 """
 from datetime import datetime, timezone
+
+from fastapi import HTTPException
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException
 
 from models import (
     MeasurementSet, MeasurementRevision, MeasurementStructure, MeasurementFacet,
     MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
 )
+from measurement_extension_models import MeasurementRevisionExtension
+from services.measurement_core import derive_measurement_totals, photo_relink_plan
 from core import MANAGE_ROLES, FIELD_ROLES
 
 VERIFY_ROLES = MANAGE_ROLES  # owner | administrator | office
-
 STATUSES = ["draft", "field_complete", "office_verified", "locked"]
-EDGE_KEYS = ["eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"]
 
 
 def _now():
@@ -27,6 +28,30 @@ def _now():
 
 def is_editable(rev: MeasurementRevision) -> bool:
     return (rev.status in ("draft", "field_complete")) and not rev.is_immutable
+
+
+async def _extension(db: AsyncSession, revision_id) -> MeasurementRevisionExtension | None:
+    return await db.get(MeasurementRevisionExtension, revision_id)
+
+
+async def _save_extension(
+    db: AsyncSession,
+    revision_id,
+    *,
+    structure_scope: dict | None = None,
+    existing_condition=None,
+    drip_edge_lf=None,
+) -> MeasurementRevisionExtension:
+    row = await db.get(MeasurementRevisionExtension, revision_id)
+    if row is None:
+        row = MeasurementRevisionExtension(revision_id=revision_id)
+        db.add(row)
+    row.structure_scope = dict(structure_scope or {})
+    row.existing_condition = existing_condition
+    row.drip_edge_lf = drip_edge_lf
+    row.updated_at = _now()
+    await db.flush()
+    return row
 
 
 # ---------------- set / revision creation ----------------
@@ -54,9 +79,10 @@ async def _next_revision_number(db: AsyncSession, set_id) -> int:
     return int(n or 0) + 1
 
 
-async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
-    """Insert structures/facets/edges/penetrations/summary, resolving client refs to new UUIDs."""
+async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) -> dict[str, dict[str, str]]:
+    """Insert the whole measurement document and return client-ref -> server-id lineage maps."""
     struct_map: dict[str, str] = {}
+    structure_scope: dict[str, bool] = {}
     for s in (payload.structures or []):
         row = MeasurementStructure(
             revision_id=rev.id, name=s.name or "", structure_type=s.structure_type or "main_house",
@@ -65,14 +91,15 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         )
         db.add(row)
         await db.flush()
+        structure_scope[str(row.id)] = bool(getattr(s, "included_in_scope", True))
         if s.ref:
-            struct_map[s.ref] = str(row.id)
+            struct_map[str(s.ref)] = str(row.id)
 
     facet_map: dict[str, str] = {}
     for f in (payload.facets or []):
         sid = None
-        if f.structure_ref and f.structure_ref in struct_map:
-            sid = struct_map[f.structure_ref]
+        if f.structure_ref and str(f.structure_ref) in struct_map:
+            sid = struct_map[str(f.structure_ref)]
         elif f.structure_id:
             sid = f.structure_id
         row = MeasurementFacet(
@@ -84,11 +111,11 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         db.add(row)
         await db.flush()
         if f.ref:
-            facet_map[f.ref] = str(row.id)
+            facet_map[str(f.ref)] = str(row.id)
 
     def _fid(ref, fid):
-        if ref and ref in facet_map:
-            return facet_map[ref]
+        if ref and str(ref) in facet_map:
+            return facet_map[str(ref)]
         return fid or None
 
     for e in (payload.edges or []):
@@ -97,15 +124,37 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
             facet_id=_fid(e.facet_ref, e.facet_id), facet_id_secondary=_fid(e.facet_ref_secondary, e.facet_id_secondary),
             label=e.label, notes=e.notes, sort=e.sort or 0,
         ))
+
+    penetration_map: dict[str, str] = {}
     for p in (payload.penetrations or []):
-        db.add(MeasurementPenetration(
+        row = MeasurementPenetration(
             revision_id=rev.id, pen_type=p.pen_type or "pipe_boot", quantity=p.quantity or 1,
             facet_id=_fid(p.facet_ref, p.facet_id), diameter_in=p.diameter_in, width_in=p.width_in,
             length_in=p.length_in, notes=p.notes, sort=p.sort or 0,
-        ))
+        )
+        db.add(row)
+        await db.flush()
+        if getattr(p, "ref", None):
+            penetration_map[str(p.ref)] = str(row.id)
+
+    existing_condition = None
+    drip_edge_lf = None
     if payload.summary is not None:
-        db.add(MeasurementSummary(revision_id=rev.id, **payload.summary.model_dump()))
+        summary_data = payload.summary.model_dump()
+        existing_condition = summary_data.pop("existing_condition", None)
+        drip_edge_lf = summary_data.pop("drip_edge_lf", None)
+        db.add(MeasurementSummary(revision_id=rev.id, **summary_data))
+
     await db.flush()
+    await _save_extension(
+        db, rev.id, structure_scope=structure_scope,
+        existing_condition=existing_condition, drip_edge_lf=drip_edge_lf,
+    )
+    return {
+        "measurement_structure": struct_map,
+        "measurement_facet": facet_map,
+        "measurement_penetration": penetration_map,
+    }
 
 
 async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevision:
@@ -132,21 +181,28 @@ async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevisio
 
 
 async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
-    """Replace a DRAFT/field-complete revision's contents wholesale (matches offline whole-document sync)."""
+    """Replace an editable revision while preserving photos for logical children that survive."""
     if not is_editable(rev):
         raise HTTPException(status_code=409, detail="This revision is verified/locked and cannot be edited. Create a new revision instead.")
+
+    old_ids_by_type = {
+        "measurement_structure": [str(x) for x in (await db.execute(select(MeasurementStructure.id).where(MeasurementStructure.revision_id == rev.id))).scalars().all()],
+        "measurement_facet": [str(x) for x in (await db.execute(select(MeasurementFacet.id).where(MeasurementFacet.revision_id == rev.id))).scalars().all()],
+        "measurement_penetration": [str(x) for x in (await db.execute(select(MeasurementPenetration.id).where(MeasurementPenetration.revision_id == rev.id))).scalars().all()],
+    }
+
     for model in (MeasurementEdge, MeasurementPenetration, MeasurementFacet, MeasurementStructure):
         await db.execute(delete(model).where(model.revision_id == rev.id))
     await db.execute(delete(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))
     await db.flush()
-    # metadata that may change on a draft edit
     if payload.source:
         rev.source = payload.source
     rev.provider = payload.provider
     rev.report_id = payload.report_id
     rev.reported_area_sqft = payload.reported_area_sqft
     rev.notes = payload.notes
-    await _insert_children(db, rev, payload)
+    replacement_ids_by_ref = await _insert_children(db, rev, payload)
+    await _relink_replaced_photos(db, str(rev.id), old_ids_by_type, replacement_ids_by_ref)
     rev.updated_at = _now()
 
 
@@ -164,34 +220,59 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
     edges = (await db.execute(select(MeasurementEdge).where(MeasurementEdge.revision_id == rev.id))).scalars().all()
     pens = (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == rev.id))).scalars().all()
     summ = (await db.execute(select(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))).scalars().first()
+    ext = await _extension(db, rev.id)
+    old_scope = (ext.structure_scope or {}) if ext else {}
+
     smap: dict[str, str] = {}
     fmap: dict[str, str] = {}
     pmap: dict[str, str] = {}
     for s in structs:
-        r = MeasurementStructure(revision_id=new.id, name=s.name, structure_type=s.structure_type, stories=s.stories,
-                                 approx_height_ft=s.approx_height_ft, attachment=s.attachment, notes=s.notes, sort=s.sort)
-        db.add(r); await db.flush(); smap[str(s.id)] = r.id
+        r = MeasurementStructure(
+            revision_id=new.id, name=s.name, structure_type=s.structure_type, stories=s.stories,
+            approx_height_ft=s.approx_height_ft, attachment=s.attachment, notes=s.notes, sort=s.sort,
+        )
+        db.add(r)
+        await db.flush()
+        smap[str(s.id)] = r.id
     for f in facets:
-        r = MeasurementFacet(revision_id=new.id, structure_id=smap.get(str(f.structure_id)) if f.structure_id else None,
-                             facet_label=f.facet_label, pitch_rise=f.pitch_rise, area_sqft=f.area_sqft, width_ft=f.width_ft,
-                             length_ft=f.length_ft, orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material,
-                             notes=f.notes, geometry=f.geometry, sort=f.sort)
-        db.add(r); await db.flush(); fmap[str(f.id)] = r.id
+        r = MeasurementFacet(
+            revision_id=new.id, structure_id=smap.get(str(f.structure_id)) if f.structure_id else None,
+            facet_label=f.facet_label, pitch_rise=f.pitch_rise, area_sqft=f.area_sqft, width_ft=f.width_ft,
+            length_ft=f.length_ft, orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material,
+            notes=f.notes, geometry=f.geometry, sort=f.sort,
+        )
+        db.add(r)
+        await db.flush()
+        fmap[str(f.id)] = r.id
     for e in edges:
-        db.add(MeasurementEdge(revision_id=new.id, edge_type=e.edge_type, length_ft=e.length_ft,
-                               facet_id=fmap.get(str(e.facet_id)) if e.facet_id else None,
-                               facet_id_secondary=fmap.get(str(e.facet_id_secondary)) if e.facet_id_secondary else None,
-                               label=e.label, notes=e.notes, sort=e.sort))
+        db.add(MeasurementEdge(
+            revision_id=new.id, edge_type=e.edge_type, length_ft=e.length_ft,
+            facet_id=fmap.get(str(e.facet_id)) if e.facet_id else None,
+            facet_id_secondary=fmap.get(str(e.facet_id_secondary)) if e.facet_id_secondary else None,
+            label=e.label, notes=e.notes, sort=e.sort,
+        ))
     for p in pens:
-        r = MeasurementPenetration(revision_id=new.id, pen_type=p.pen_type, quantity=p.quantity,
-                                   facet_id=fmap.get(str(p.facet_id)) if p.facet_id else None,
-                                   diameter_in=p.diameter_in, width_in=p.width_in, length_in=p.length_in,
-                                   notes=p.notes, sort=p.sort)
-        db.add(r); await db.flush(); pmap[str(p.id)] = r.id
+        r = MeasurementPenetration(
+            revision_id=new.id, pen_type=p.pen_type, quantity=p.quantity,
+            facet_id=fmap.get(str(p.facet_id)) if p.facet_id else None,
+            diameter_in=p.diameter_in, width_in=p.width_in, length_in=p.length_in,
+            notes=p.notes, sort=p.sort,
+        )
+        db.add(r)
+        await db.flush()
+        pmap[str(p.id)] = r.id
     if summ:
         cols = {c.name: getattr(summ, c.name) for c in MeasurementSummary.__table__.columns if c.name not in ("id", "revision_id")}
         db.add(MeasurementSummary(revision_id=new.id, **cols))
     await db.flush()
+
+    new_scope = {str(new_id): bool(old_scope.get(str(old_id), True)) for old_id, new_id in smap.items()}
+    await _save_extension(
+        db, new.id, structure_scope=new_scope,
+        existing_condition=ext.existing_condition if ext else None,
+        drip_edge_lf=ext.drip_edge_lf if ext else None,
+    )
+
     # Preserve photo attachments across the clone (new DB rows reuse the same stored object_path).
     id_remap = {("measurement_revision", str(rev.id)): str(new.id)}
     for old, nw in smap.items():
@@ -222,25 +303,34 @@ async def transition_status(db: AsyncSession, rev: MeasurementRevision, to: str,
             raise HTTPException(status_code=409, detail=f"Cannot mark Field Complete from '{cur}'")
         if not _has_role(user, FIELD_ROLES):
             raise HTTPException(status_code=403, detail="Not permitted to mark Field Complete")
-        rev.status = "field_complete"; rev.field_complete_by = email; rev.field_complete_at = _now()
+        rev.status = "field_complete"
+        rev.field_complete_by = email
+        rev.field_complete_at = _now()
     elif to == "office_verified":
         if cur not in ("field_complete", "draft"):
             raise HTTPException(status_code=409, detail=f"Cannot verify from '{cur}'")
         if not _has_role(user, VERIFY_ROLES):
             raise HTTPException(status_code=403, detail="Only Office/Owner/Admin can Office Verify")
-        rev.status = "office_verified"; rev.verified_by = email; rev.verified_at = _now()
+        rev.status = "office_verified"
+        rev.verified_by = email
+        rev.verified_at = _now()
     elif to == "locked":
         if cur != "office_verified":
             raise HTTPException(status_code=409, detail="Only an Office Verified revision can be locked")
         if not _has_role(user, VERIFY_ROLES):
             raise HTTPException(status_code=403, detail="Only Office/Owner/Admin can lock")
-        rev.status = "locked"; rev.locked_by = email; rev.locked_at = _now(); rev.is_immutable = True
-    elif to == "draft":  # return to field
+        rev.status = "locked"
+        rev.locked_by = email
+        rev.locked_at = _now()
+        rev.is_immutable = True
+    elif to == "draft":
         if cur not in ("field_complete", "office_verified"):
             raise HTTPException(status_code=409, detail=f"Cannot return to Draft from '{cur}'")
         if not _has_role(user, VERIFY_ROLES):
             raise HTTPException(status_code=403, detail="Only Office/Owner/Admin can return a measurement to the field")
-        rev.status = "draft"; rev.verified_by = None; rev.verified_at = None
+        rev.status = "draft"
+        rev.verified_by = None
+        rev.verified_at = None
     rev.updated_at = _now()
     return rev
 
@@ -253,66 +343,46 @@ async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
     edges = (await db.execute(select(MeasurementEdge).where(MeasurementEdge.revision_id == rev.id).order_by(MeasurementEdge.sort))).scalars().all()
     pens = (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == rev.id).order_by(MeasurementPenetration.sort))).scalars().all()
     summ = (await db.execute(select(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))).scalars().first()
+    ext = await _extension(db, rev.id)
+    scope = (ext.structure_scope or {}) if ext else {}
 
-    total_area = round(sum(f.area_sqft or 0 for f in facets), 2)
-    # area by pitch
-    pitch_areas: dict = {}
-    for f in facets:
-        key = f.pitch_rise
-        pitch_areas[key] = pitch_areas.get(key, 0) + (f.area_sqft or 0)
-    area_by_pitch = [
-        {"pitch": k, "area_sqft": round(v, 2), "squares": round(v / 100, 2)}
-        for k, v in sorted(pitch_areas.items(), key=lambda kv: (kv[0] is None, kv[0] or 0))
-    ]
-    predominant_pitch = None
-    if pitch_areas:
-        predominant_pitch = max(pitch_areas.items(), key=lambda kv: kv[1])[0]
-    # area by structure
-    sname = {str(x.id): x.name or x.structure_type for x in structs}
-    struct_areas: dict = {}
-    for f in facets:
-        key = str(f.structure_id) if f.structure_id else None
-        struct_areas[key] = struct_areas.get(key, 0) + (f.area_sqft or 0)
-    area_by_structure = [
-        {"structure_id": k, "name": sname.get(k, "Unassigned") if k else "Unassigned",
-         "area_sqft": round(v, 2), "squares": round(v / 100, 2)}
-        for k, v in struct_areas.items()
-    ]
-    # edge totals
-    edge_totals = {f"{k}_lf": 0.0 for k in EDGE_KEYS}
-    for e in edges:
-        key = f"{e.edge_type}_lf"
-        if key in edge_totals:
-            edge_totals[key] += (e.length_ft or 0)
-    edge_totals = {k: round(v, 2) for k, v in edge_totals.items()}
-    # penetration counts
-    pen_counts: dict = {}
-    pen_total = 0
-    for p in pens:
-        pen_counts[p.pen_type] = pen_counts.get(p.pen_type, 0) + (p.quantity or 0)
-        pen_total += (p.quantity or 0)
+    structure_out = [{
+        "id": str(x.id), "name": x.name, "structure_type": x.structure_type,
+        "included_in_scope": bool(scope.get(str(x.id), True)),
+        "stories": x.stories, "approx_height_ft": x.approx_height_ft,
+        "attachment": x.attachment, "notes": x.notes, "sort": x.sort,
+    } for x in structs]
+    facet_out = [{
+        "id": str(f.id), "structure_id": str(f.structure_id) if f.structure_id else None,
+        "facet_label": f.facet_label, "pitch_rise": f.pitch_rise, "area_sqft": f.area_sqft,
+        "width_ft": f.width_ft, "length_ft": f.length_ft, "orientation_azimuth": f.orientation_azimuth,
+        "roof_material": f.roof_material, "notes": f.notes, "geometry": f.geometry, "sort": f.sort,
+    } for f in facets]
+    edge_out = [{
+        "id": str(e.id), "edge_type": e.edge_type, "length_ft": e.length_ft,
+        "facet_id": str(e.facet_id) if e.facet_id else None,
+        "facet_id_secondary": str(e.facet_id_secondary) if e.facet_id_secondary else None,
+        "label": e.label, "notes": e.notes, "sort": e.sort,
+    } for e in edges]
+    penetration_out = [{
+        "id": str(p.id), "pen_type": p.pen_type, "quantity": p.quantity,
+        "facet_id": str(p.facet_id) if p.facet_id else None, "diameter_in": p.diameter_in,
+        "width_in": p.width_in, "length_in": p.length_in, "notes": p.notes, "sort": p.sort,
+    } for p in pens]
 
+    totals = derive_measurement_totals(structure_out, facet_out, edge_out, penetration_out)
     reported = rev.reported_area_sqft
-    delta = round(total_area - reported, 2) if reported is not None else None
-
-    totals = {
-        "total_area_sqft": total_area,
-        "total_squares": round(total_area / 100, 2),
-        "facet_count": len(facets),
-        "structure_count": len(structs),
-        "predominant_pitch": predominant_pitch,
-        "area_by_pitch": area_by_pitch,
-        "area_by_structure": area_by_structure,
-        "edge_totals": edge_totals,
-        "penetration_counts": pen_counts,
-        "penetration_total": pen_total,
-        "reported_area_sqft": reported,
-        "reported_area_delta_sqft": delta,
-    }
+    totals["reported_area_sqft"] = reported
+    totals["reported_area_delta_sqft"] = round(totals["total_area_sqft"] - reported, 2) if reported is not None else None
 
     summary_out = None
     if summ:
         summary_out = {c.name: getattr(summ, c.name) for c in MeasurementSummary.__table__.columns if c.name not in ("id", "revision_id")}
+    elif ext and (ext.existing_condition is not None or ext.drip_edge_lf is not None):
+        summary_out = {}
+    if summary_out is not None:
+        summary_out["existing_condition"] = ext.existing_condition if ext else None
+        summary_out["drip_edge_lf"] = ext.drip_edge_lf if ext else None
 
     return {
         "id": str(rev.id), "set_id": str(rev.set_id), "revision_number": rev.revision_number,
@@ -327,27 +397,10 @@ async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
         "field_complete_by": rev.field_complete_by, "field_complete_at": rev.field_complete_at,
         "verified_by": rev.verified_by, "verified_at": rev.verified_at,
         "locked_by": rev.locked_by, "locked_at": rev.locked_at,
-        "structures": [{
-            "id": str(x.id), "name": x.name, "structure_type": x.structure_type, "stories": x.stories,
-            "approx_height_ft": x.approx_height_ft, "attachment": x.attachment, "notes": x.notes, "sort": x.sort,
-        } for x in structs],
-        "facets": [{
-            "id": str(f.id), "structure_id": str(f.structure_id) if f.structure_id else None,
-            "facet_label": f.facet_label, "pitch_rise": f.pitch_rise, "area_sqft": f.area_sqft,
-            "width_ft": f.width_ft, "length_ft": f.length_ft, "orientation_azimuth": f.orientation_azimuth,
-            "roof_material": f.roof_material, "notes": f.notes, "geometry": f.geometry, "sort": f.sort,
-        } for f in facets],
-        "edges": [{
-            "id": str(e.id), "edge_type": e.edge_type, "length_ft": e.length_ft,
-            "facet_id": str(e.facet_id) if e.facet_id else None,
-            "facet_id_secondary": str(e.facet_id_secondary) if e.facet_id_secondary else None,
-            "label": e.label, "notes": e.notes, "sort": e.sort,
-        } for e in edges],
-        "penetrations": [{
-            "id": str(p.id), "pen_type": p.pen_type, "quantity": p.quantity,
-            "facet_id": str(p.facet_id) if p.facet_id else None, "diameter_in": p.diameter_in,
-            "width_in": p.width_in, "length_in": p.length_in, "notes": p.notes, "sort": p.sort,
-        } for p in pens],
+        "structures": structure_out,
+        "facets": facet_out,
+        "edges": edge_out,
+        "penetrations": penetration_out,
         "summary": summary_out,
         "totals": totals,
     }
@@ -373,8 +426,7 @@ PHOTO_RECORD_TYPES = ("measurement_revision", "measurement_structure", "measurem
 
 
 async def resolve_revision_for_photo(db: AsyncSession, record_type: str, record_id: str):
-    """Given a measurement photo's parent record, return (revision, set) or (None, None) if not a
-    measurement record. Used for lock guards and sales scoping."""
+    """Return (revision, set) for a measurement photo parent, or (None, None)."""
     if record_type not in PHOTO_RECORD_TYPES:
         return None, None
     rev = None
@@ -395,20 +447,33 @@ async def resolve_revision_for_photo(db: AsyncSession, record_type: str, record_
     return rev, s
 
 
+async def _relink_replaced_photos(db: AsyncSession, revision_id: str, old_ids_by_type: dict, replacement_ids_by_ref: dict) -> None:
+    """Keep photo evidence attached when an editable whole-document save recreates child rows."""
+    plan = photo_relink_plan(revision_id, old_ids_by_type, replacement_ids_by_ref)
+    for (old_type, old_id), (new_type, new_id) in plan.items():
+        rows = (await db.execute(select(Photo).where(Photo.record_type == old_type, Photo.record_id == str(old_id)))).scalars().all()
+        for photo in rows:
+            photo.record_type = new_type
+            photo.record_id = str(new_id)
+    await db.flush()
+
+
 async def _copy_photos(db: AsyncSession, id_remap: dict) -> None:
-    """Duplicate Photo rows onto cloned measurement records (reusing the stored object_path)."""
+    """Duplicate Photo rows onto cloned measurement records while reusing stored object paths."""
     from datetime import datetime, timezone as _tz
     for (rtype, old_id), new_id in id_remap.items():
         rows = (await db.execute(select(Photo).where(Photo.record_type == rtype, Photo.record_id == str(old_id)))).scalars().all()
         for p in rows:
-            db.add(Photo(object_path=p.object_path, content_type=p.content_type, record_type=rtype,
-                         record_id=str(new_id), description=p.description, category=p.category,
-                         uploaded_by=p.uploaded_by, created_at=datetime.now(_tz.utc)))
+            db.add(Photo(
+                object_path=p.object_path, content_type=p.content_type, record_type=rtype,
+                record_id=str(new_id), description=p.description, category=p.category,
+                uploaded_by=p.uploaded_by, created_at=datetime.now(_tz.utc),
+            ))
     await db.flush()
 
 
 async def revision_photo_records(db: AsyncSession, rev: MeasurementRevision) -> list[str]:
-    """All stable record_ids that can carry a photo for this revision (revision + its children)."""
+    """All stable record_ids that can carry a photo for this revision."""
     ids = [str(rev.id)]
     for model in (MeasurementStructure, MeasurementFacet, MeasurementPenetration):
         rows = (await db.execute(select(model.id).where(model.revision_id == rev.id))).scalars().all()
