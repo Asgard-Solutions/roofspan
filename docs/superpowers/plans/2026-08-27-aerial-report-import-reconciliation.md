@@ -6,7 +6,7 @@
 
 **Architecture:** Build a provider-adapter pipeline behind one normalized proposal contract. Original files are stored locally and fingerprinted before parsing; structured provider formats are preferred over PDF inference. Import proposals are persisted separately from `MeasurementRevision`, so they cannot affect takeoff/estimates until reconciliation is resolved and `apply` creates a new revision. Import artifacts are included in a matched backup/restore set so database restores never strand report metadata from its source files.
 
-**Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL JSONB, `defusedxml`, `pypdf`, `ezdxf`, Python stdlib `json/csv/zipfile/hashlib`, React 19/CRA, shared `@roofspan/roof-sketch-core`, existing local backup/off-site copy services.
+**Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL JSONB, `defusedxml==0.7.1`, `pypdf==6.16.2`, `ezdxf==1.4.4`, Python stdlib `json/csv/zipfile/hashlib`, React 19/CRA, shared `@roofspan/roof-sketch-core`, existing local backup/off-site copy services.
 
 **Spec:** `docs/superpowers/specs/2026-08-27-roof-sketch-aerial-import-design.md`
 
@@ -27,6 +27,7 @@
 - No automatic takeoff/estimate recalculation.
 - Original file + SHA-256 + parser/provider metadata + reconciliation decisions + accepting user/timestamp are retained for audit.
 - Import artifact files must participate in backup/restore/off-site copy as a matched set with the PostgreSQL dump.
+- Parser dependencies are pinned exactly: `defusedxml==0.7.1`, `pypdf==6.16.2`, `ezdxf==1.4.4`.
 
 ---
 
@@ -178,14 +179,14 @@ git commit -m "feat: add measurement import persistence"
 - Every adapter implements `detect(files)`, `parse(files)`, `normalize(native)`, `validate(proposal)`, `score(proposal)`.
 - `NormalizedProposal` has `structures`, `facets`, `edges`, `penetrations`, `summary`, `sketches`, `reported_totals`, `field_confidence`, `validation`.
 
-- [ ] **Step 1: Add parser dependencies**
+- [ ] **Step 1: Add exact parser dependencies**
 
-Add pinned dependencies using versions selected by a fresh dependency resolution compatible with Python 3.12, then freeze exact versions in `backend/requirements.txt`:
+Add these exact lines to `backend/requirements.txt`:
 
 ```text
-defusedxml
-pypdf
-ezDXF
+defusedxml==0.7.1
+pypdf==6.16.2
+ezdxf==1.4.4
 ```
 
 Do not add OCR or AI parsing dependencies in this release.
@@ -548,7 +549,7 @@ git commit -m "feat: back up measurement import artifacts"
 
 Include `backend/integrations/measurements/**`, import models/services/router/schemas/tests/fixtures, backup artifact files, frontend measurement-import components, and migration `f1a2b3c4d5e6`.
 
-The backend contract job must install the exact pinned `defusedxml`, `pypdf`, and `ezdxf` versions from `backend/requirements.txt` needed by these tests.
+The backend contract job installs the exact pinned dependencies from `backend/requirements.txt` required by import tests: `defusedxml==0.7.1`, `pypdf==6.16.2`, and `ezdxf==1.4.4`.
 
 - [ ] **Step 2: Run the deterministic import suite in CI**
 
