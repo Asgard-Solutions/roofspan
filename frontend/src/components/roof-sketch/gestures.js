@@ -3,7 +3,7 @@
 // A gesture is resolved to a single candidate, then applied as ONE atomic document mutation so the
 // caller performs exactly one history/edit commit per pointer gesture.
 import { snapTarget } from "./snapping";
-import { edgeIsProtected, splitEdgeSafe, mergeVertices, moveVertex, addVertex, addEdge, insertExistingVertexIntoEdge, eById } from "./commands";
+import { edgeIsProtected, splitEdgeSafe, mergeVertices, moveVertex, moveVertexFinal, addVertex, addEdge, insertExistingVertexIntoEdge, eById } from "./commands";
 
 // Classify a raw snapTarget result. A protected edge in proximity becomes a BLOCKED candidate (it never
 // silently falls through to a free-point placement that would leave coincident, unconnected geometry).
@@ -59,5 +59,5 @@ export function applyVertexDrop(doc, draggedVertexId, candidate) {
   if (candidate.type === "vertex") return mergeVertices(doc, draggedVertexId, candidate.vertexId);
   if (candidate.type === "edge") return insertExistingVertexIntoEdge(doc, draggedVertexId, candidate.edgeId, candidate.point[0], candidate.point[1]);
   if (candidate.type === "blocked") return { ok: false, reason: "edge_protected", doc };
-  return { ok: true, doc: moveVertex(doc, draggedVertexId, candidate.point[0], candidate.point[1]) };
+  return { ok: true, doc: moveVertexFinal(doc, draggedVertexId, candidate.point[0], candidate.point[1]) };
 }

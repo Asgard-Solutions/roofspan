@@ -1,5 +1,16 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 3 FINAL Topology Integrity Closure (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops
+Closed the graph-integrity holes found in independent review of the published Phase 3. No editor redesign.
+- **mergeVertices:** removed self-loop edges are now dropped from `facet.edgeIds` (cyclic consecutive-dupe collapse) → valid triangle from a rectangle, never `broken_edge_reference`; protected self-loop collapse rejected (`protected_edge_collapse`, 4 states); affected connected facets get `vertexIds: []`; stale graph decisions dropped for removed AND rewired (endpoint-changed) incident edges (relational MeasurementEdge UUIDs preserved).
+- **insertExistingVertexIntoEdge:** pre-checks both child pairs against existing edges → rejects `duplicate_edge_creation` (original unchanged); invalidates decisions for the replaced target + every incident edge whose geometry moved.
+- **Free vertex move commit:** `moveVertexFinal` invalidates incident graph decisions on pointer-up only (preview still silent).
+- **Safety gate:** new pure `validateMutation(before, after)` (uses shared-core `validateSketch` only) gates merge/insert/split/join; a mutation that would introduce a NEW hard error is rejected and returns the original doc (`facet_would_be_invalid`). Degenerate triangle merge rejected via this gate.
+- **Shared core:** `validateSketch` now hard-fails `duplicate_edge` (unordered endpoint key) in connected_graph mode (manual unchanged).
+- **Canvas/Inspector:** double-click split disabled in manual_polygon; reject-reason toasts (protected / duplicate / invalid); Inspector protected wording now says "Mapped, confirmed, or locked edge — clear the confirmed length and/or unmap/unlock…". Live snap wiring + LF authority (edgeGeometryLengthFeet) + geometry−confirmed direction preserved.
+- **Tests (all green):** Office commands 18 / mapping 18 / saveLifecycle 19 / saveCloseLifecycle 29 / proposalLifecycle 24 / geometryOps 39 / gestureOps 36 / **topologyIntegrity 63 (NEW)**; shared core roofSketchCore 26 / **topology 31** / edge_authority 10. `CI=false yarn build` OK; `frontend/yarn.lock` unchanged. CI office-build step now also runs topologyIntegrity. Files: `commands.js`, `gestures.js`, `RoofSketchCanvas.jsx`, `SketchInspector.jsx`, `packages/roof-sketch-core/topology.js`, `__tests__/topologyIntegrity.node.test.js`, `packages/roof-sketch-core/test/topology.node.test.js`, `.github/workflows/roof-takeoff-contract.yml`. **Live licensed Office walkthrough: NOT runnable here** (needs licensed session + saved structure).
+
+
 ## Marketing Website — SEO Expansion (multi-page, structured data, sitemap, analytics) (2026-06) — COMPLETE & LOCALLY GREEN; no git ops
 Expanded `roofspan-website` (Next.js 14 static export) from a single page into a crawlable multi-page site.
 Canonical host standardized to `https://roofspan.io` (no www). Only verified RoofSpan capabilities described.
