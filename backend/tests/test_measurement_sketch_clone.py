@@ -10,8 +10,8 @@ sys.path.insert(0, "backend")
 
 from sqlalchemy import select
 from db import SessionLocal
-from models import MeasurementStructure, MeasurementFacet, MeasurementPenetration
-from schemas_measurements import MeasurementRevisionIn, StructureIn, FacetIn, PenetrationIn
+from models import MeasurementStructure, MeasurementFacet, MeasurementPenetration, MeasurementEdge
+from schemas_measurements import MeasurementRevisionIn, StructureIn, FacetIn, PenetrationIn, EdgeIn
 from services import measurements as msvc
 from services import measurement_sketches as ssvc
 
@@ -28,6 +28,7 @@ async def _scenario():
                 property_id=str(prop.id),
                 structures=[StructureIn(ref="s1", name="Main House", structure_type="main_house")],
                 facets=[FacetIn(ref="f1", structure_ref="s1", facet_label="F1", area_sqft=100, pitch_rise=6)],
+                edges=[EdgeIn(facet_ref="f1", edge_type="eave", length_ft=20)],
                 penetrations=[PenetrationIn(ref="p1", facet_ref="f1", pen_type="pipe_boot", quantity=2)],
             ), user)
             await db.flush()
@@ -36,7 +37,8 @@ async def _scenario():
             old_struct = (await db.execute(select(MeasurementStructure).where(MeasurementStructure.revision_id == rev.id))).scalars().first()
             old_facet = (await db.execute(select(MeasurementFacet).where(MeasurementFacet.revision_id == rev.id))).scalars().first()
             old_pen = (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == rev.id))).scalars().first()
-            os_id, of_id, op_id = str(old_struct.id), str(old_facet.id), str(old_pen.id)
+            old_edge = (await db.execute(select(MeasurementEdge).where(MeasurementEdge.revision_id == rev.id))).scalars().first()
+            os_id, of_id, op_id, oe_id = str(old_struct.id), str(old_facet.id), str(old_pen.id), str(old_edge.id)
 
             # A sketch that embeds relational references + stable drawing-graph ids.
             document = {
@@ -45,13 +47,15 @@ async def _scenario():
                     {"id": "v1", "x": 0, "y": 0}, {"id": "v2", "x": 10, "y": 0},
                     {"id": "v3", "x": 10, "y": 8}, {"id": "v4", "x": 0, "y": 8}],
                 "edges": [
-                    {"id": "e1", "v1": "v1", "v2": "v2"}, {"id": "e2", "v1": "v2", "v2": "v3"},
+                    {"id": "e1", "v1": "v1", "v2": "v2", "measurement_edge_id": oe_id, "relational_edge_id": oe_id},
+                    {"id": "e2", "v1": "v2", "v2": "v3"},
                     {"id": "e3", "v1": "v3", "v2": "v4"}, {"id": "e4", "v1": "v4", "v2": "v1"}],
                 "facets": [{"id": "f1", "edgeIds": ["e1", "e2", "e3", "e4"], "vertexIds": ["v1", "v2", "v3", "v4"],
                             "measurement_facet_id": of_id, "pitch_rise": 6}],
                 "penetrations": [{"id": "pen-graph-1", "facet": "f1", "measurement_penetration_id": op_id}],
                 "proposal_decisions": [
                     {"target_type": "facet", "target_id": of_id, "metric": "area_sqft", "decision": "accept"},
+                    {"target_type": "edge", "target_id": oe_id, "metric": "length_ft", "decision": "accept"},
                     {"target_type": "penetration", "target_id": op_id, "decision": "keep_current"},
                     {"target_type": "structure", "target_id": os_id, "decision": "note"},
                 ],
@@ -64,9 +68,10 @@ async def _scenario():
             new_struct = (await db.execute(select(MeasurementStructure).where(MeasurementStructure.revision_id == new.id))).scalars().first()
             new_facet = (await db.execute(select(MeasurementFacet).where(MeasurementFacet.revision_id == new.id))).scalars().first()
             new_pen = (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == new.id))).scalars().first()
-            ns_id, nf_id, np_id = str(new_struct.id), str(new_facet.id), str(new_pen.id)
-            # sanity: clone produced genuinely new relational ids
-            assert {ns_id, nf_id, np_id}.isdisjoint({os_id, of_id, op_id})
+            new_edge = (await db.execute(select(MeasurementEdge).where(MeasurementEdge.revision_id == new.id))).scalars().first()
+            ns_id, nf_id, np_id, ne_id = str(new_struct.id), str(new_facet.id), str(new_pen.id), str(new_edge.id)
+            # sanity: clone produced genuinely new relational ids (edge included)
+            assert {ns_id, nf_id, np_id, ne_id}.isdisjoint({os_id, of_id, op_id, oe_id})
 
             sketches = await ssvc.list_sketches(db, str(new.id))
             assert len(sketches) == 1
@@ -76,15 +81,18 @@ async def _scenario():
             assert doc["structure_id"] == ns_id
             assert doc["facets"][0]["measurement_facet_id"] == nf_id
             assert doc["penetrations"][0]["measurement_penetration_id"] == np_id
+            assert doc["edges"][0]["measurement_edge_id"] == ne_id
+            assert doc["edges"][0]["relational_edge_id"] == ne_id
             dec = {d["target_type"]: d["target_id"] for d in doc["proposal_decisions"]}
             assert dec["facet"] == nf_id
             assert dec["penetration"] == np_id
             assert dec["structure"] == ns_id
-            # no OLD relational id survives anywhere
-            for old in (os_id, of_id, op_id):
+            assert dec["edge"] == ne_id
+            # no OLD relational id survives anywhere (structure/facet/penetration/EDGE)
+            for old in (os_id, of_id, op_id, oe_id):
                 assert old not in str(doc)
 
-            # --- STABLE drawing-graph ids are untouched ---
+            # --- STABLE drawing-graph ids are untouched (graph edge ids != relational edge UUIDs) ---
             assert [v["id"] for v in doc["vertices"]] == ["v1", "v2", "v3", "v4"]
             assert [e["id"] for e in doc["edges"]] == ["e1", "e2", "e3", "e4"]
             assert doc["facets"][0]["id"] == "f1"

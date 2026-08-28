@@ -32,11 +32,41 @@ from schemas_measurements import (
 from services import measurements as msvc
 from services import measurement_sketches as ssvc
 
+import copy
+
 from _sketch_fixtures import FakeUser, seed_property, teardown, run_isolated
 
 PHOTO_TAG = "rs-survival-test"
+# Minimal placeholder sketch (used for the second structure).
 DOC = {"schema_version": 1, "edit_mode": "connected_graph",
        "vertices": [{"id": "v1", "x": 0, "y": 0}], "edges": [], "facets": []}
+
+
+def _rect_sketch(structure_id, facet_id, edge_id, pen_id):
+    """A REAL connected rectangle sketch (4 vertices, 4 graph edges, 1 facet) that embeds relational
+    references to the canonical measurement rows. Stable drawing-graph ids (v*/e*/f*) are distinct from
+    the relational DB UUIDs and must never change on a Worksheet save."""
+    return {
+        "schema_version": 1, "edit_mode": "connected_graph", "structure_id": str(structure_id),
+        "vertices": [
+            {"id": "v1", "x": 0, "y": 0}, {"id": "v2", "x": 10, "y": 0},
+            {"id": "v3", "x": 10, "y": 8}, {"id": "v4", "x": 0, "y": 8}],
+        "edges": [
+            {"id": "e1", "v1": "v1", "v2": "v2", "measurement_edge_id": str(edge_id)},
+            {"id": "e2", "v1": "v2", "v2": "v3"},
+            {"id": "e3", "v1": "v3", "v2": "v4"},
+            {"id": "e4", "v1": "v4", "v2": "v1"}],
+        "facets": [{"id": "f1", "edgeIds": ["e1", "e2", "e3", "e4"], "vertexIds": ["v1", "v2", "v3", "v4"],
+                    "measurement_facet_id": str(facet_id), "pitch_rise": 6}],
+        "penetrations": [{"id": "pen-graph-1", "facet": "f1", "measurement_penetration_id": str(pen_id)}],
+        "proposal_decisions": [
+            {"target_type": "facet", "target_id": str(facet_id), "metric": "area_sqft", "decision": "accept"},
+            {"target_type": "edge", "target_id": str(edge_id), "metric": "length_ft", "decision": "accept"},
+            {"target_type": "penetration", "target_id": str(pen_id), "decision": "keep_current"},
+            {"target_type": "structure", "target_id": str(structure_id), "decision": "note"},
+        ],
+    }
+
 
 
 async def _structs(db, rid):
@@ -100,9 +130,16 @@ async def _scenario():
             pens = await _pens(db, rev.id)
             p1_id = str(pens[0].id)
 
-            # sketches on both structures
-            await ssvc.save_sketch(db, str(rev.id), s1_id, edit_mode="connected_graph", document=dict(DOC), schema_version=1, expected_version=None, user=user)
+            # A REAL connected rectangle sketch on s1 embedding relational F1/E1/P1 refs; simple doc on s2.
+            await ssvc.save_sketch(db, str(rev.id), s1_id, edit_mode="connected_graph", document=_rect_sketch(s1_id, f1_id, e1_id, p1_id), schema_version=1, expected_version=None, user=user)
             await ssvc.save_sketch(db, str(rev.id), s2_id, edit_mode="connected_graph", document=dict(DOC), schema_version=1, expected_version=None, user=user)
+            # capture the canonical s1 sketch row EXACTLY as persisted, pre-Worksheet-save
+            s1_sketch_before = await ssvc.get_sketch(db, str(rev.id), s1_id)
+            sketch_id_before = s1_sketch_before["id"]
+            sketch_rev_before = s1_sketch_before["revision_id"]
+            sketch_struct_before = s1_sketch_before["structure_id"]
+            sketch_ver_before = s1_sketch_before["document_version"]
+            sketch_doc_before = copy.deepcopy(s1_sketch_before["document"])
             # photos on children
             _add_photo(db, "measurement_structure", s1_id)
             _add_photo(db, "measurement_structure", s2_id)
@@ -110,7 +147,7 @@ async def _scenario():
             _add_photo(db, "measurement_penetration", p1_id)
             await db.flush()
 
-            # ---------- 1) NORMAL SAVE: everything sent back by UUID ref ----------
+            # ---------- 1) NORMAL SAVE: everything sent back by UUID ref, relational VALUES changed ----------
             await msvc.replace_children(db, rev, MeasurementRevisionIn(
                 property_id=str(prop.id),
                 structures=[StructureIn(ref=s1_id, name="Main RENAMED", structure_type="main_house"),
@@ -131,6 +168,20 @@ async def _scenario():
             assert renamed[_uuid.UUID(s1_id)] == "Main RENAMED"
             # both sketches survive, still bound to the SAME structure UUIDs
             assert await _sketch_struct_ids(db, rev.id) == {s1_id, s2_id}, "sketches must survive a normal save"
+            # the canonical s1 sketch ROW is byte-for-byte untouched by the Worksheet PUT
+            s1_sketch_after = await ssvc.get_sketch(db, str(rev.id), s1_id)
+            assert s1_sketch_after["id"] == sketch_id_before, "sketch row id must not change"
+            assert s1_sketch_after["revision_id"] == sketch_rev_before
+            assert s1_sketch_after["structure_id"] == sketch_struct_before
+            assert s1_sketch_after["document_version"] == sketch_ver_before, "Worksheet save must NOT bump sketch version"
+            assert s1_sketch_after["document"] == sketch_doc_before, "Worksheet save must NOT modify the sketch document/geometry"
+            # relational mappings still point to the SURVIVING canonical rows
+            doc_after = s1_sketch_after["document"]
+            assert doc_after["facets"][0]["measurement_facet_id"] == f1_id, "facet mapping still points to surviving F1"
+            assert doc_after["edges"][0]["measurement_edge_id"] == e1_id, "edge mapping still points to surviving E1"
+            assert doc_after["penetrations"][0]["measurement_penetration_id"] == p1_id, "penetration mapping still points to surviving P1"
+            assert [v["id"] for v in doc_after["vertices"]] == ["v1", "v2", "v3", "v4"], "drawing graph geometry unchanged"
+            assert [e["id"] for e in doc_after["edges"]] == ["e1", "e2", "e3", "e4"]
             # photos untouched — still on the SAME entity UUIDs, nothing moved to the revision
             assert await _photo_count(db, "measurement_structure", s1_id) == 1
             assert await _photo_count(db, "measurement_facet", f1_id) == 1
@@ -182,53 +233,77 @@ async def _scenario():
             assert str(new_facet.structure_id) == new_struct_id
 
             # ---------- 4) cross-revision / stale ref rejection (409, no silent insert) ----------
+            # Revision B lives under a different property/set and has a full set of persisted children.
             rev_other = await msvc.create_revision(db, MeasurementRevisionIn(
                 property_id=str(prop2.id),
                 structures=[StructureIn(ref="o1", name="Other House", structure_type="main_house")],
+                facets=[FacetIn(ref="of1", structure_ref="o1", facet_label="OF", area_sqft=10, pitch_rise=5)],
+                edges=[EdgeIn(facet_ref="of1", edge_type="eave", length_ft=15)],
+                penetrations=[PenetrationIn(ref="op1", facet_ref="of1", pen_type="pipe_boot", quantity=1)],
             ), user)
             await db.flush()
             set_ids.append(rev_other.set_id)
-            other_struct_id = str((await _structs(db, rev_other.id))[0].id)
-            other_facet = MeasurementFacet(revision_id=rev_other.id, facet_label="OF", area_sqft=10)
-            db.add(other_facet)
-            await db.flush()
-            other_facet_id = str(other_facet.id)
+            b_struct_id = str((await _structs(db, rev_other.id))[0].id)
+            b_facet_id = str((await _facets(db, rev_other.id))[0].id)
+            b_edge_id = str((await _edges(db, rev_other.id))[0].id)
+            b_pen_id = str((await _pens(db, rev_other.id))[0].id)
 
-            # Each rejection runs inside a SAVEPOINT so its partial writes roll back on the 409 while the
-            # committed happy-path state (via the outer transaction) stays intact — no full rollback.
-            # (a) structure ref that belongs to ANOTHER revision -> 409
-            with pytest.raises(HTTPException) as ei:
-                async with db.begin_nested():
-                    await msvc.replace_children(db, rev, MeasurementRevisionIn(
-                        property_id=str(prop.id),
-                        structures=[StructureIn(ref=other_struct_id, name="hijack")],
-                    ))
-            assert ei.value.status_code == 409
+            def _assert_generic_409(ei):
+                assert ei.value.status_code == 409
+                detail = str(ei.value.detail).lower()
+                assert "stale" in detail and "does not belong" in detail, "must use generic stale/not-owned wording"
+                # never leak the foreign object's identity in the error
+                for leaked in (b_struct_id, b_facet_id, b_edge_id, b_pen_id):
+                    assert leaked not in str(ei.value.detail)
 
-            # (b) random stale UUID -> 409 (never inserted as new)
-            with pytest.raises(HTTPException) as ei:
-                async with db.begin_nested():
-                    await msvc.replace_children(db, rev, MeasurementRevisionIn(
-                        property_id=str(prop.id),
-                        structures=[StructureIn(ref=str(_uuid.uuid4()), name="ghost")],
-                    ))
-            assert ei.value.status_code == 409
+            async def _expect_409(**payload_kw):
+                # Each rejection runs in a SAVEPOINT so its partial writes roll back on the 409 while the
+                # outer-transaction happy-path state (Rev A AND Rev B) stays intact — proves atomicity.
+                with pytest.raises(HTTPException) as ei:
+                    async with db.begin_nested():
+                        await msvc.replace_children(db, rev, MeasurementRevisionIn(property_id=str(prop.id), **payload_kw))
+                _assert_generic_409(ei)
 
-            # (c) direct facet_id fallback pointing at a foreign facet -> 409 (no ownership bypass)
-            with pytest.raises(HTTPException) as ei:
-                async with db.begin_nested():
-                    await msvc.replace_children(db, rev, MeasurementRevisionIn(
-                        property_id=str(prop.id),
-                        structures=[StructureIn(ref=s1_id, name="Main FINAL", structure_type="main_house"),
-                                    StructureIn(ref=new_struct_id, name="Addition", structure_type="addition")],
-                        facets=[FacetIn(ref=f1_id, structure_ref=s1_id, facet_label="F1", area_sqft=120)],
-                        edges=[EdgeIn(facet_id=other_facet_id, edge_type="eave", length_ft=5)],
-                    ))
-            assert ei.value.status_code == 409
+            # (a) foreign Structure.ref (belongs to Rev B) -> 409
+            await _expect_409(structures=[StructureIn(ref=b_struct_id, name="hijack")])
+            # (b) foreign Facet.ref -> 409
+            await _expect_409(facets=[FacetIn(ref=b_facet_id, facet_label="hijack")])
+            # (c) foreign Edge.ref -> 409
+            await _expect_409(edges=[EdgeIn(ref=b_edge_id, edge_type="eave", length_ft=5)])
+            # (d) foreign Penetration.ref -> 409
+            await _expect_409(penetrations=[PenetrationIn(ref=b_pen_id, pen_type="pipe_boot", quantity=1)])
+            # (e) random stale UUID (no longer exists anywhere) -> 409, never inserted as new
+            await _expect_409(structures=[StructureIn(ref=str(_uuid.uuid4()), name="ghost")])
 
-            # after all rejections, revision rev is intact & unchanged (s1 + new struct still there)
+            # ---- direct relationship-ID ownership (must not bypass the ref ownership check) ----
+            # (f) facet.structure_id pointing at a foreign structure -> 409
+            await _expect_409(
+                structures=[StructureIn(ref=s1_id, name="Main FINAL", structure_type="main_house")],
+                facets=[FacetIn(ref=f1_id, structure_id=b_struct_id, facet_label="F1", area_sqft=120)],
+            )
+            # (g) edge.facet_id pointing at a foreign facet -> 409
+            await _expect_409(
+                structures=[StructureIn(ref=s1_id, name="Main FINAL", structure_type="main_house"),
+                            StructureIn(ref=new_struct_id, name="Addition", structure_type="addition")],
+                facets=[FacetIn(ref=f1_id, structure_ref=s1_id, facet_label="F1", area_sqft=120)],
+                edges=[EdgeIn(facet_id=b_facet_id, edge_type="eave", length_ft=5)],
+            )
+            # (h) edge.facet_id_secondary pointing at a foreign facet -> 409
+            await _expect_409(
+                structures=[StructureIn(ref=s1_id, name="Main FINAL", structure_type="main_house"),
+                            StructureIn(ref=new_struct_id, name="Addition", structure_type="addition")],
+                facets=[FacetIn(ref=f1_id, structure_ref=s1_id, facet_label="F1", area_sqft=120)],
+                edges=[EdgeIn(facet_ref=f1_id, facet_id_secondary=b_facet_id, edge_type="valley", length_ft=5)],
+            )
+
+            # after all rejections, Rev A is intact & unchanged (s1 + new struct still there, sketch alive)
             assert {str(x.id) for x in await _structs(db, rev.id)} == ids3
             assert s1_id in await _sketch_struct_ids(db, rev.id)
+            # and Rev B was never mutated by any rejected attempt
+            assert {str(x.id) for x in await _structs(db, rev_other.id)} == {b_struct_id}
+            assert {str(x.id) for x in await _facets(db, rev_other.id)} == {b_facet_id}
+            assert {str(x.id) for x in await _edges(db, rev_other.id)} == {b_edge_id}
+            assert {str(x.id) for x in await _pens(db, rev_other.id)} == {b_pen_id}
         finally:
             # Nothing was committed — the whole scenario ran in one transaction. Rolling back leaves the
             # database exactly as found (fully hermetic); teardown then verifies against a wrong DB.

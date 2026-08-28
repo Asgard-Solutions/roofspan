@@ -1,5 +1,41 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 1 FINAL Closure Corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
+Small correction pass on top of Phase 1 (baseline: GitHub main `884c414`, all 5 Roof Takeoff Contract
+jobs green). Fixed one real integration defect + hardened the contract tests. Phase 1 reconciliation code
+was preserved unchanged (no rewrite).
+
+**BLOCKER fix — Field/mobile edge identity (`mobile/src/screens/Measurements.js` + new `mobile/src/measurementEdges.js`):**
+Field was not sending `EdgeIn.ref`, so an ordinary Field PUT would let the backend treat an existing edge
+as new (INSERT E2 + DELETE E1), defeating identity preservation. Extracted pure `edgeForEdit`/`newEdge`/
+`edgeToBody` into a shared Node-testable module: existing edges now hydrate with `ref = MeasurementEdge.id`;
+new edges get one stable temp key; `buildBody().edges` sends `ref = e.ref || e.id || e._k`. The ref rides
+through hydrate → edit → buildBody → optimistic cache → offline queue (JSON) → PUT (verified). No Field UX,
+queue, or photo behavior changed.
+
+**Contract tests added/strengthened:**
+- `mobile/src/tests/edge_identity.node.test.js` (NEW, wired into `npm run test:measurements`): existing edge
+  ref survives to the queued PUT; new edge temp ref survives serialization; mixed edges keep distinct ids.
+- `backend/tests/test_measurement_sketch_survival.py`: now builds a REAL connected rectangle sketch (4 graph
+  edges + facet) embedding `measurement_facet_id`/`measurement_edge_id`/`measurement_penetration_id` + edge
+  proposal decision; after a normal Worksheet save asserts the canonical sketch ROW is byte-for-byte
+  unchanged (same id/revision_id/structure_id/document_version/document/geometry) and mappings still point to
+  the surviving F1/E1/P1. Full cross-revision security matrix: foreign Structure.ref / Facet.ref / Edge.ref /
+  Penetration.ref + stale UUID + foreign `structure_id`/`facet_id`/`facet_id_secondary` each → 409 (generic
+  wording, no id leak), Rev A AND Rev B unmutated (savepoint atomicity).
+- `backend/tests/test_measurement_sketch_clone.py`: now persists a real `MeasurementEdge`, embeds
+  `measurement_edge_id`/`relational_edge_id` + `target_type:"edge"`, and asserts clone assigns a NEW edge
+  UUID, remaps all edge refs to it, leaves ZERO old edge UUIDs in the cloned doc, and keeps drawing-graph
+  edge ids (e1..e4) unchanged.
+
+**Local verification (all PASS):** backend measurement/sketch/photo/takeoff regressions **38 passed** (incl.
+strengthened survival + clone); node core 26 / topology 28 / edge_authority 10; office `commands` 18; mobile
+`test:measurements` (incl. edge_identity 4) / `test:sketch` (sketch-cache 15 + core) / `test:sync` PASS
+against the live pod backend / Expo babel-parse of Field modules OK; ruff F/E9 clean on changed tests.
+**PENDING:** user Save-to-GitHub → confirm remote SHA contains all 6 files → all 5 Roof Takeoff Contract jobs
+green on that SHA → STOP for independent review. (Agent cannot push / cannot read private Actions.)
+
+
 ## Task 4 Closure Phase 1 — Identity-Preserving Measurement Persistence (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
 Refactored the editable-revision save path from delete+reinsert to **identity-preserving reconciliation**
 so a normal Measurement Worksheet save no longer churns child UUIDs and no longer CASCADE-wipes the
