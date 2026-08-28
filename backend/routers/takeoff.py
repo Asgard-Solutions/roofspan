@@ -120,7 +120,9 @@ async def preview_takeoff(estimate_id: str, payload: TakeoffApplyIn,
 async def apply_takeoff(estimate_id: str, payload: TakeoffApplyIn, request: Request,
                         user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     result = await svc.apply(db, estimate_id, payload, user)
-    await log_action(db, user=user, action="takeoff.apply", entity_type="estimate", entity_id=estimate_id,
+    is_recalc = bool(result.get("generated_line_ids_to_replace"))
+    await log_action(db, user=user, action="takeoff.recalculate" if is_recalc else "takeoff.apply",
+                     entity_type="estimate", entity_id=estimate_id,
                      detail={
                          "takeoff_id": result["takeoff_id"],
                          "measurement_revision_id": result["measurement_revision_id"],
@@ -131,6 +133,8 @@ async def apply_takeoff(estimate_id: str, payload: TakeoffApplyIn, request: Requ
                          "structure_waste_overrides": payload.structure_waste_overrides,
                          "drip_edge_override_lf": payload.drip_edge_override_lf,
                          "generated_lines": len(result["created_line_ids"]),
+                         "replaced_generated_lines": len(result.get("generated_line_ids_to_replace") or []),
+                         "manual_replacement_confirmed": bool(payload.replace_modified_generated),
                      }, request=request)
     await db.commit()
     return result
