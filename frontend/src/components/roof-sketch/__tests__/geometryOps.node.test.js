@@ -118,7 +118,14 @@ for (const patch of [{ measurement_edge_id: "ME1" }, { relational_edge_id: "RE1"
   let e2 = C.addEdge(d, a.vertexId, c.vertexId, "ridge"); d = e2.doc;
   d = { ...d, edges: d.edges.map((e) => (e.id === e2.edgeId ? { ...e, measurement_edge_id: "MEx" } : (e.id === e1.edgeId ? { ...e, measurement_edge_id: "MEy" } : e))) };
   const r = C.mergeVertices(d, c.vertexId, b.vertexId); // would make a-b duplicate with conflicting mapping
-  assert.ok(!r.ok && r.reason === "incompatible_duplicate_edges"); assert.strictEqual(r.doc, d); ok("merge with incompatible protected duplicates rejected, doc unchanged");
+  assert.ok(!r.ok && r.reason === "protected_duplicate_collapse"); assert.strictEqual(r.doc, d); ok("merge with one-sided/both protected duplicates rejected, doc unchanged");
+}
+{
+  // connected_graph-only guard: topology ops reject in manual_polygon
+  const man = { ...core.createSketchDocument({ structureId: "S" }), edit_mode: "manual_polygon" };
+  assert.strictEqual(C.splitEdgeSafe(man, "x", 0, 0).reason, "connected_graph_required");
+  assert.strictEqual(C.mergeVertices(man, "a", "b").reason, "connected_graph_required");
+  assert.strictEqual(C.joinEdges(man, "a", "b").reason, "connected_graph_required"); ok("split/merge/join rejected in manual_polygon (connected_graph_required)");
 }
 
 // ---- join edges ----
@@ -183,7 +190,7 @@ function chainABC(typeA, typeB) {
   const locked = { ...C.eById(d, e.edgeId), confirmed_length_ft: 18, locked: true };
   const dim = DIM.edgeDimension(d, locked);
   assert.strictEqual(dim.valueFeet, 18); ok("locked confirmed value wins over geometry (18 not 20)");
-  assert.ok(dim.discrepancy === -2 && dim.geometryFeet === 20 && dim.locked === true); ok("locked dimension exposes geometry + discrepancy metadata");
+  assert.ok(dim.discrepancy === 2 && dim.geometryFeet === 20 && dim.locked === true); ok("locked dimension exposes geometry + discrepancy metadata (geometry - confirmed = +2)");
 }
 
 console.log("\nROOF SKETCH GEOMETRY OPS (Phase 3): all " + n + " assertions passed");

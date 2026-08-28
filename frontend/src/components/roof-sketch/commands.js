@@ -253,6 +253,7 @@ function dropEdgeDecisions(list, edgeId) {
 // clicks (reuse the endpoint instead of making a zero-length child). Updates EVERY facet loop that used
 // the edge, preserving each loop's direction. endpointTol is in model units.
 export function splitEdgeSafe(doc, edgeId, x, y, { endpointTol = 1e-6 } = {}) {
+  if (doc.edit_mode !== "connected_graph") return { ok: false, reason: "connected_graph_required", doc };
   const e = eById(doc, edgeId);
   if (!e) return { ok: false, reason: "edge_not_found", doc };
   if (edgeIsProtected(e)) return { ok: false, reason: "edge_protected", doc };
@@ -285,6 +286,7 @@ export function splitEdgeSafe(doc, edgeId, x, y, { endpointTol = 1e-6 } = {}) {
 // Merge movingVertexId onto targetVertexId: rewire incident edges, drop self-loops, collapse duplicate
 // edges only when semantically compatible, keep facet loops valid. Rejects incompatible collapses.
 export function mergeVertices(doc, movingVertexId, targetVertexId) {
+  if (doc.edit_mode !== "connected_graph") return { ok: false, reason: "connected_graph_required", doc };
   if (movingVertexId === targetVertexId) return { ok: false, reason: "same_vertex", doc };
   if (!vById(doc, movingVertexId) || !vById(doc, targetVertexId)) return { ok: false, reason: "vertex_not_found", doc };
   const d = clone(doc);
@@ -298,11 +300,10 @@ export function mergeVertices(doc, movingVertexId, targetVertexId) {
     const k = pairKey(e.v1, e.v2);
     if (!byPair[k]) { byPair[k] = e; keptFor[k] = e.id; continue; }
     const a = byPair[k];
+    if (edgeIsProtected(a) || edgeIsProtected(e)) return { ok: false, reason: "protected_duplicate_collapse", doc };
     const typeCompat = a.type === e.type || a.type === "unclassified" || e.type === "unclassified";
-    const relConflict = (a.measurement_edge_id != null && e.measurement_edge_id != null && a.measurement_edge_id !== e.measurement_edge_id) ||
-      (a.confirmed_length_ft != null && e.confirmed_length_ft != null && a.confirmed_length_ft !== e.confirmed_length_ft) ||
-      (!!a.locked !== !!e.locked) || (a.relational_edge_id != null && e.relational_edge_id != null && a.relational_edge_id !== e.relational_edge_id);
-    if (!typeCompat || relConflict) return { ok: false, reason: "incompatible_duplicate_edges", doc };
+    if (!typeCompat) return { ok: false, reason: "incompatible_duplicate_edges", doc };
+    if (a.type === "unclassified" && e.type !== "unclassified") a.type = e.type; // keep the classification, order-independent
     removed.push(e.id); // drop the duplicate; keep byPair[k]
   }
   edges = edges.filter((e) => !removed.includes(e.id));
@@ -319,6 +320,7 @@ export function mergeVertices(doc, movingVertexId, targetVertexId) {
 
 // Join two edges that share exactly one middle vertex into a single edge A--C.
 export function joinEdges(doc, aId, bId, { resultType } = {}) {
+  if (doc.edit_mode !== "connected_graph") return { ok: false, reason: "connected_graph_required", doc };
   const ea = eById(doc, aId), eb = eById(doc, bId);
   if (!ea || !eb) return { ok: false, reason: "edge_not_found", doc };
   if (aId === bId) return { ok: false, reason: "same_edge", doc };
@@ -355,15 +357,12 @@ export function joinEdges(doc, aId, bId, { resultType } = {}) {
   d.facets = d.facets.map((f) => {
     const ids = f.edgeIds || [];
     if (!ids.includes(aId) && !ids.includes(bId)) return f;
-    const out = [];
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i], nx = ids[(i + 1) % ids.length];
-      if ((id === aId && nx === bId) || (id === bId && nx === aId)) { out.push(joined.id); i++; }
-      else if (id === aId || id === bId) out.push(joined.id);
-      else out.push(id);
-    }
-    return { ...f, edgeIds: out.filter((id, i, arr) => id !== arr[i - 1]), vertexIds: [] };
+    // map both source ids to the joined id, then collapse consecutive duplicates CYCLICALLY (a facet
+    // boundary is a cycle, so a last->first source pair must also collapse to a single joined edge).
+    const mapped = ids.map((id) => (id === aId || id === bId ? joined.id : id));
+    const seq = mapped.filter((id, i, arr) => id !== arr[(i - 1 + arr.length) % arr.length]);
+    return { ...f, edgeIds: seq, vertexIds: [] };
   });
-  d.proposal_decisions = dropEdgeDecisions(d.proposal_decisions, bId);
+  d.proposal_decisions = dropEdgeDecisions(dropEdgeDecisions(d.proposal_decisions, bId), aId);
   return { ok: true, doc: d, edgeId: joined.id };
 }

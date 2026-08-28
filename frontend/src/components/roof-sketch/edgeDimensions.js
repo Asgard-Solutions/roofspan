@@ -10,7 +10,8 @@ export function edgeDimension(doc, edge) {
   const locked = edge && edge.locked === true && edge.confirmed_length_ft != null;
   if (locked) {
     const valueFeet = round1(Number(edge.confirmed_length_ft));
-    const discrepancy = geometryFeet != null ? round1(valueFeet - geometryFeet) : null;
+    // Canonical difference convention (matches compareProposal): proposed geometry - confirmed.
+    const discrepancy = geometryFeet != null ? round1(geometryFeet - valueFeet) : null;
     return { valueFeet, source: "confirmed_locked", locked: true, geometryFeet, discrepancy };
   }
   if (geometryFeet != null) return { valueFeet: geometryFeet, source: "geometry_scaled", locked: false, geometryFeet, discrepancy: null };
