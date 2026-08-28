@@ -97,6 +97,8 @@ app.include_router(measurements_router.router)
 app.include_router(estimates.router)
 from routers import estimating as estimating_router
 app.include_router(estimating_router.router)
+from routers import takeoff as takeoff_router
+app.include_router(takeoff_router.router)
 app.include_router(quotes.router)
 from routers import inventory_ops as inventory_ops_router
 app.include_router(inventory_ops_router.router)
