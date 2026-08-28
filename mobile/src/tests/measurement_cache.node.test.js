@@ -30,8 +30,9 @@ ok(next.body.structures.length === 1 && next.body.facets.length === 1, "draft ed
 const mutation = queue.makeMutation({ kind: "measurement", method: "post", path: "/mobile/measurements", clientId: "client-123" });
 ok(mutation.client_id === "client-123" && mutation.idempotency_key === "client-123", "measurement draft can reuse one durable queue/idempotency identity");
 
-const firstUpdate = queue.makeMutation({ kind: "measurement_update", method: "put", path: "/mobile/measurements/r1", clientId: mc.updateMutationId("r1"), ifMatch: "server-v1", body: { notes: "first" } });
-const secondUpdate = queue.makeMutation({ kind: "measurement_update", method: "put", path: "/mobile/measurements/r1", clientId: mc.updateMutationId("r1"), ifMatch: "server-v1", body: { notes: "latest" } });
+const firstUpdate = queue.makeMutation({ kind: "measurement_update", method: "put", path: "/mobile/measurements/r1", ifMatch: "server-v1", body: { notes: "first" } });
+const secondUpdate = queue.makeMutation({ kind: "measurement_update", method: "put", path: "/mobile/measurements/r1", ifMatch: "server-v1", body: { notes: "latest" } });
+ok(firstUpdate.client_id === mc.updateMutationId("r1"), "measurement update queue derives the revision-stable identity automatically");
 ok(firstUpdate.client_id === secondUpdate.client_id, "repeated offline edits to one server revision replace the same queued PUT");
 ok(secondUpdate.body.notes === "latest", "the coalesced queued update keeps the latest whole-document payload");
 
