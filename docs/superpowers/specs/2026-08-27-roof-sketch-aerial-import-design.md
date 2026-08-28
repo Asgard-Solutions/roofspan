@@ -1,7 +1,7 @@
 # RoofSpan 2D Roof Sketch and Aerial/Report Import Design
 
 **Date:** 2026-08-27  
-**Status:** Approved in design review; pending written-spec review before implementation planning
+**Status:** Approved in design review; self-reviewed; pending written-spec review before implementation planning
 
 ## Goal
 
@@ -29,7 +29,7 @@ The following decisions were approved during design review and are requirements 
 - Importing is **Office only**. Field receives the resulting sketch/revision through the normal RoofSpan sync model.
 - Imports use **confidence-based review**. Nothing creates an estimate-driving revision until the user explicitly confirms the proposal.
 - Original import files are retained locally with **SHA-256 checksum, parser metadata, provider metadata, source filename, timestamps, confidence results, and audit history**.
-- Importing into a property that already has measurements creates a **new proposed revision**. The existing revision is never overwritten.
+- Importing into a property that already has measurements creates a **new proposed revision workflow**. The existing revision is never overwritten.
 - Reconciliation is **layered**: `Accept All High-Confidence`, section-level controls, and item-level drill-down.
 
 ## Architectural boundaries
@@ -72,9 +72,7 @@ There must not be provider-specific sketch objects or separate Office/Field geom
 
 ### Sketch document granularity
 
-Store one **revision-scoped sketch document per structure**.
-
-Recommended model:
+Add the required `MeasurementSketchDocument` model and store one **revision-scoped sketch document per structure**.
 
 `MeasurementSketchDocument`
 
@@ -97,6 +95,8 @@ A structure-level document is intentional:
 - it allows structure-level optimistic concurrency;
 - it avoids thousands of database rows for transient drawing vertices;
 - it provides a clean unit for import comparison and conflict resolution.
+
+The `document` JSON contains vertices, edges, facet loops, positioned penetrations, scale/calibration metadata, provenance, validation state, and unresolved/accepted/kept-current geometry proposal state.
 
 ### Canonical coordinate system
 
@@ -248,7 +248,7 @@ Actions:
 
 Accepting a value updates the draft measurement fact through the normal revision workflow and records provenance. Keeping the current value preserves the existing confirmed fact.
 
-Unresolved proposal state must survive screen navigation/reopen so the user is not forced to reconcile again after an app restart.
+Proposal decisions are persisted in the structure sketch document so unresolved/accepted/kept-current state survives navigation, Office restart, Field app restart, and offline recovery.
 
 ## Shared geometry engine
 
@@ -344,10 +344,10 @@ If Office and Field edit different structures, they can sync independently.
 
 If both modify the same structure from the same base version, RoofSpan must not use last-write-wins. It returns a conflict containing the latest server sketch and local pending sketch.
 
-Conflict handling should allow:
+Conflict handling allows:
 
 - choose latest Office/server version;
-- keep local version as the basis of a new draft revision where allowed;
+- preserve the local version as the basis of a new draft revision where existing revision rules allow it;
 - manually reconcile the structure.
 
 RoofSpan must not automatically merge two independently modified roof graphs for the same structure.
@@ -396,21 +396,21 @@ Each adapter implements the same contract:
 
 ### EagleView adapter
 
-First-class support should target provider-delivered measurement artifacts that contain enough structured information to map roof facts/sketch geometry, including PDF, XML, JSON, and DXF when available.
+First-class support targets provider-delivered measurement artifacts that contain enough structured information to map roof facts/sketch geometry, including PDF, XML, JSON, and DXF when available.
 
-EagleView documents measurement outputs in PDF, XML, JSON, and DXF formats; the adapter must prefer structured data when present and retain the PDF for audit/reference.
+The adapter prefers structured data when present and retains the PDF for audit/reference.
 
 ### HOVER adapter
 
-First-class support should target HOVER JSON measurements/roof-line data, XML exports, PDFs, DXF, and ESX when those files are supplied.
+First-class support targets HOVER JSON measurements/roof-line data, XML exports, PDFs, DXF, and ESX when those files are supplied.
 
 HOVER's structured JSON/XML artifacts are preferred for measurement facts and normalized geometry because they are intended for external-system integration.
 
 ### GAF QuickMeasure adapter
 
-First-class support should target GAF QuickMeasure PDF, XML, and DXF report files.
+First-class support targets GAF QuickMeasure PDF, XML, and DXF report files.
 
-The XML/DXF sources should be preferred for structured facts/geometry where reliable, with the PDF retained for visual cross-checking.
+The XML/DXF sources are preferred for structured facts/geometry where reliable, with the PDF retained for visual cross-checking.
 
 ### Generic fallback adapter
 
@@ -444,7 +444,7 @@ No inferred value becomes High confidence solely because a generic parser genera
 
 ### Measurement import record
 
-Recommended model:
+Add the required `MeasurementImport` model.
 
 `MeasurementImport`
 
@@ -471,7 +471,7 @@ Recommended model:
 
 ### Import source files
 
-Recommended model:
+Add the required `MeasurementImportFile` model.
 
 `MeasurementImportFile`
 
@@ -486,33 +486,72 @@ Recommended model:
 - `size_bytes`
 - `created_at`
 
-Original report bytes are stored on the local RoofSpan application-data storage path and included in the normal backup scope. PostgreSQL stores metadata/path/checksum, not the report blob itself.
+Original report bytes are stored on local durable application storage, not as PostgreSQL blobs.
+
+Self-hosted path resolution follows the existing `ROOFSPAN_DATA_ROOT` pattern:
+
+- when `ROOFSPAN_DATA_ROOT` is set: `<ROOFSPAN_DATA_ROOT>/measurement_imports`;
+- Windows default: `%ProgramData%\RoofSpan\measurement_imports`;
+- development/non-Windows fallback: a persistent backend data directory consistent with existing local object-storage behavior.
+
+Only relative artifact paths are stored in PostgreSQL. Path resolution must reject traversal outside the import storage root.
+
+### Backup/restore requirement for imported originals
+
+The current RoofSpan backup service produces PostgreSQL dumps only. Because imported originals live outside PostgreSQL, this feature must extend backup/restore so those files are not lost.
+
+Each completed backup becomes a **matched backup set** consisting of:
+
+1. the existing PostgreSQL custom-format dump; and
+2. a companion import-artifact archive containing `measurement_imports` plus a manifest of relative paths, sizes, and SHA-256 checksums.
+
+Requirements:
+
+- the database dump format remains unchanged for backward compatibility;
+- the companion artifact archive uses the same backup timestamp/base name as the dump;
+- backup listing/status identifies whether a matching artifact archive exists;
+- secondary/off-site copy copies the dump and companion archive as one logical set;
+- retention removes matched set members together;
+- restore validates the artifact archive/manifest/checksums before database cutover;
+- restore stages artifact extraction and uses atomic directory replacement where feasible;
+- a legacy backup with no artifact archive remains restorable when its database contains no required import artifacts;
+- if a restored database references import artifacts that are absent, restore must surface a clear incomplete-backup error rather than silently succeeding.
+
+This change is limited to preserving measurement-import originals required by this feature. It does not redesign unrelated photo-storage behavior.
 
 ### Duplicate handling
 
 SHA-256 is used to detect duplicate source files.
 
-Re-importing the same file must not silently generate duplicate revisions. Office should show that the artifact has already been imported and allow the user to view the previous import.
+Re-importing the same file must not silently generate duplicate revisions. Office shows that the artifact has already been imported and allows the user to view the previous import.
 
 If the user intentionally reprocesses the same file with a newer parser version, RoofSpan creates a new import proposal. Applying it creates a new measurement revision rather than rewriting the old revision.
 
 ### Provenance after application
 
-When accepted proposal values create a new draft revision, preserve provenance for every affected logical object/value.
+Add the required `MeasurementRevisionProvenance` record with one row per measurement revision that contains a JSONB provenance map keyed by stable structure/facet/edge/penetration identifiers and field names.
 
-A revision-scoped provenance map may be stored in a dedicated revision-provenance record/JSON document keyed by stable structure/facet/edge/penetration identifiers.
+`MeasurementRevisionProvenance`
 
-Provenance must identify, as applicable:
+- `id`
+- `revision_id` unique FK
+- `provenance` JSONB
+- `created_at`
+- `updated_at`
+
+For imported/accepted values, provenance records as applicable:
 
 - source import ID;
 - source file ID;
 - provider;
-- provider native item/reference;
+- provider-native item/reference;
 - original parsed value;
 - confidence level/reason;
 - reconciliation decision;
 - accepting user;
 - accepted timestamp.
+
+For sketch-derived accepted values, provenance records the sketch document/structure, calculation type, scale source, and acceptance metadata.
 
 ## Import confidence model
 
@@ -557,7 +596,7 @@ Medium and Low items remain unresolved until the user explicitly accepts, edits,
 
 If a measurement set already contains a revision, importing a report creates a new **proposed revision workflow**.
 
-The existing revision remains unchanged during review.
+The import proposal itself remains separate from `MeasurementRevision` during review. The existing revision remains unchanged.
 
 ### Reconciliation workspace
 
@@ -626,7 +665,7 @@ Applying the import:
 2. links it to the prior revision via existing supersedes/revision semantics;
 3. creates confirmed child records from accepted/current values;
 4. creates the canonical sketch documents;
-5. copies accepted provenance;
+5. creates the revision provenance record;
 6. records audit events and reconciliation decisions;
 7. leaves the prior revision untouched.
 
@@ -666,7 +705,7 @@ Audit events must identify who accepted imported facts.
 Before parsing:
 
 - validate file extension and magic/header where feasible;
-- impose bounded file-size and bundle-size limits;
+- impose bounded configurable file-size and bundle-size limits;
 - never execute imported content;
 - sanitize filenames;
 - prevent path traversal when extracting container formats;
@@ -719,25 +758,42 @@ Reopening an unsynced structure restores the existing stable local sketch identi
 
 ## API boundaries
 
-Recommended additive API shape:
+Required additive API responsibilities are separated as follows; exact route naming may follow existing router conventions.
 
 ### Sketch
 
+- list revision sketch documents;
+- get one structure sketch document;
+- create/update one structure sketch document with optimistic version token;
+- validate/derive proposals deterministically from a sketch document.
+
+A concrete route shape may be:
+
 - `GET /api/measurements/{revision_id}/sketches`
 - `GET /api/measurements/{revision_id}/sketches/{structure_id}`
-- `PUT /api/measurements/{revision_id}/sketches/{structure_id}` with optimistic version token
-- optional validation/preview endpoint when needed for large documents
+- `PUT /api/measurements/{revision_id}/sketches/{structure_id}`
 
 ### Import
 
-- `POST /api/measurement-imports` — create upload/import bundle
-- `POST /api/measurement-imports/{id}/files` — add source files
-- `POST /api/measurement-imports/{id}/parse` — detect/parse/normalize
-- `GET /api/measurement-imports/{id}` — proposal/confidence/status
-- `PUT /api/measurement-imports/{id}/reconciliation` — persist decisions
-- `POST /api/measurement-imports/{id}/apply` — create next draft revision after validation
+Required responsibilities:
 
-Exact route naming may follow existing router conventions, but the separation between sketch persistence, import proposal, reconciliation, and revision application is required.
+- create an upload/import bundle;
+- add source files;
+- detect/parse/normalize;
+- retrieve proposal/confidence/status;
+- persist reconciliation decisions;
+- apply an explicitly resolved import into the next draft revision.
+
+A concrete route shape may be:
+
+- `POST /api/measurement-imports`
+- `POST /api/measurement-imports/{id}/files`
+- `POST /api/measurement-imports/{id}/parse`
+- `GET /api/measurement-imports/{id}`
+- `PUT /api/measurement-imports/{id}/reconciliation`
+- `POST /api/measurement-imports/{id}/apply`
+
+The separation between sketch persistence, import proposal, reconciliation, and revision application is required even if route names differ.
 
 ## UI integration
 
@@ -763,7 +819,7 @@ Use a staged workflow:
 
 ### Field measurement screen
 
-Add a sketch entry point tied to the current measurement revision/structure. The user should be able to move between numeric worksheet fields and sketch without creating separate roof records.
+Add a sketch entry point tied to the current measurement revision/structure. The user can move between numeric worksheet fields and sketch without creating separate roof records.
 
 ## Testing strategy
 
@@ -835,9 +891,21 @@ Cover:
 - unresolved conflict blocks apply;
 - sketch overlay object mapping;
 - imported values create a new draft revision;
-- previous revision remains byte-for-byte/fact-for-fact unchanged;
+- previous revision remains fact-for-fact unchanged;
 - provenance is retained;
 - no automatic takeoff recalculation.
+
+### Backup/restore tests
+
+Cover:
+
+- DB dump + import-artifact archive created as one logical backup set;
+- import artifact manifest/checksums validate;
+- secondary/off-site copy contains both set members;
+- retention removes paired members together;
+- successful restore recovers database metadata and imported originals;
+- missing/corrupt companion archive is detected before completing a restore that requires it;
+- legacy DB-only backups remain restorable when no imported artifacts are referenced.
 
 ### Security tests
 
@@ -884,7 +952,8 @@ Deliver:
 Deliver:
 
 - local source-file storage;
-- import/import-file records;
+- import/import-file/provenance records;
+- backup-set extension for import artifacts;
 - checksums/security validation;
 - provider detection;
 - EagleView adapter;
@@ -917,7 +986,7 @@ The following are intentionally outside this design:
 - automatic cloud upload of customer report files;
 - AI-generated high-confidence measurements from unknown images;
 - automatic estimate/takeoff recalculation after sketch/import changes;
-- replacing the existing measurement, estimate, inventory, ABC Supply, Relay, or backup architectures;
+- replacing the existing measurement, estimate, inventory, ABC Supply, Relay, or general backup architectures beyond the required import-artifact backup extension;
 - importing reports from RoofSpan Field.
 
 Future work may add direct provider ordering/API retrieval, 3D visualization, satellite imagery workflows, or additional provider adapters without changing the canonical sketch/import contracts defined here.
@@ -930,7 +999,7 @@ Future work may add direct provider ordering/API retrieval, 3D visualization, sa
 - Existing measurement API consumers retain current semantics unless explicitly requesting sketch/import data.
 - Existing Field cache data can migrate without losing current measurement/photo queues.
 - Existing accepted quote/job provenance remains bound to the exact original measurement revision.
-- Existing Windows backup scope must include imported original files and import metadata paths.
+- Existing DB-only backups remain supported under the compatibility rule above; new imports participate in the matched backup-set extension.
 - Existing photo-sync contract must remain green throughout this work.
 
 ## Definition of done
@@ -944,11 +1013,12 @@ This feature is complete only when all of the following are true:
 5. Field sketch work survives offline use, restart, and reconnect.
 6. Office can import known EagleView, HOVER, and GAF QuickMeasure report artifacts supported by the adapter fixtures.
 7. Office can attempt safe generic fallback parsing for supported unknown files.
-8. Original source files/checksums/parser metadata are preserved locally and included in backup scope.
-9. Confidence is field/item specific and `Accept All High-Confidence` never accepts Medium/Low values.
-10. Existing measurements are never overwritten by an import.
-11. Reconciliation supports high-confidence bulk, section, and item-level decisions with a synchronized 2D overlay.
-12. Applying an import creates a new draft measurement revision with provenance and leaves prior revisions unchanged.
-13. Parser/geometry failures cannot create a measurement revision or corrupt the active one.
-14. Takeoff/estimate recalculation remains explicit.
-15. Geometry, offline-sync, import, reconciliation, migration, security, photo-sync, and existing measurement regression tests are green.
+8. Original source files/checksums/parser metadata are preserved locally.
+9. New backups preserve required import originals as a verified companion artifact set and restore them with the database.
+10. Confidence is field/item specific and `Accept All High-Confidence` never accepts Medium/Low values.
+11. Existing measurements are never overwritten by an import.
+12. Reconciliation supports high-confidence bulk, section, and item-level decisions with a synchronized 2D overlay.
+13. Applying an import creates a new draft measurement revision with provenance and leaves prior revisions unchanged.
+14. Parser/geometry failures cannot create a measurement revision or corrupt the active one.
+15. Takeoff/estimate recalculation remains explicit.
+16. Geometry, offline-sync, import, reconciliation, migration, backup/restore, security, photo-sync, and existing measurement regression tests are green.
