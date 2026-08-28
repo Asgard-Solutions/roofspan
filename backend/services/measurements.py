@@ -15,7 +15,7 @@ from models import (
     MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
 )
 from measurement_extension_models import MeasurementRevisionExtension
-from services.measurement_core import derive_measurement_totals
+from services.measurement_core import derive_measurement_totals, photo_relink_plan
 from core import MANAGE_ROLES, FIELD_ROLES
 
 VERIFY_ROLES = MANAGE_ROLES  # owner | administrator | office
@@ -79,8 +79,8 @@ async def _next_revision_number(db: AsyncSession, set_id) -> int:
     return int(n or 0) + 1
 
 
-async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
-    """Insert the whole measurement document and persist revision-scoped completion fields."""
+async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) -> dict[str, dict[str, str]]:
+    """Insert the whole measurement document and return client-ref -> server-id lineage maps."""
     struct_map: dict[str, str] = {}
     structure_scope: dict[str, bool] = {}
     for s in (payload.structures or []):
@@ -93,13 +93,13 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         await db.flush()
         structure_scope[str(row.id)] = bool(getattr(s, "included_in_scope", True))
         if s.ref:
-            struct_map[s.ref] = str(row.id)
+            struct_map[str(s.ref)] = str(row.id)
 
     facet_map: dict[str, str] = {}
     for f in (payload.facets or []):
         sid = None
-        if f.structure_ref and f.structure_ref in struct_map:
-            sid = struct_map[f.structure_ref]
+        if f.structure_ref and str(f.structure_ref) in struct_map:
+            sid = struct_map[str(f.structure_ref)]
         elif f.structure_id:
             sid = f.structure_id
         row = MeasurementFacet(
@@ -111,11 +111,11 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         db.add(row)
         await db.flush()
         if f.ref:
-            facet_map[f.ref] = str(row.id)
+            facet_map[str(f.ref)] = str(row.id)
 
     def _fid(ref, fid):
-        if ref and ref in facet_map:
-            return facet_map[ref]
+        if ref and str(ref) in facet_map:
+            return facet_map[str(ref)]
         return fid or None
 
     for e in (payload.edges or []):
@@ -124,12 +124,18 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
             facet_id=_fid(e.facet_ref, e.facet_id), facet_id_secondary=_fid(e.facet_ref_secondary, e.facet_id_secondary),
             label=e.label, notes=e.notes, sort=e.sort or 0,
         ))
+
+    penetration_map: dict[str, str] = {}
     for p in (payload.penetrations or []):
-        db.add(MeasurementPenetration(
+        row = MeasurementPenetration(
             revision_id=rev.id, pen_type=p.pen_type or "pipe_boot", quantity=p.quantity or 1,
             facet_id=_fid(p.facet_ref, p.facet_id), diameter_in=p.diameter_in, width_in=p.width_in,
             length_in=p.length_in, notes=p.notes, sort=p.sort or 0,
-        ))
+        )
+        db.add(row)
+        await db.flush()
+        if getattr(p, "ref", None):
+            penetration_map[str(p.ref)] = str(row.id)
 
     existing_condition = None
     drip_edge_lf = None
@@ -144,6 +150,11 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         db, rev.id, structure_scope=structure_scope,
         existing_condition=existing_condition, drip_edge_lf=drip_edge_lf,
     )
+    return {
+        "measurement_structure": struct_map,
+        "measurement_facet": facet_map,
+        "measurement_penetration": penetration_map,
+    }
 
 
 async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevision:
@@ -170,9 +181,16 @@ async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevisio
 
 
 async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) -> None:
-    """Replace an editable revision's complete contents (matches offline whole-document sync)."""
+    """Replace an editable revision while preserving photos for logical children that survive."""
     if not is_editable(rev):
         raise HTTPException(status_code=409, detail="This revision is verified/locked and cannot be edited. Create a new revision instead.")
+
+    old_ids_by_type = {
+        "measurement_structure": [str(x) for x in (await db.execute(select(MeasurementStructure.id).where(MeasurementStructure.revision_id == rev.id))).scalars().all()],
+        "measurement_facet": [str(x) for x in (await db.execute(select(MeasurementFacet.id).where(MeasurementFacet.revision_id == rev.id))).scalars().all()],
+        "measurement_penetration": [str(x) for x in (await db.execute(select(MeasurementPenetration.id).where(MeasurementPenetration.revision_id == rev.id))).scalars().all()],
+    }
+
     for model in (MeasurementEdge, MeasurementPenetration, MeasurementFacet, MeasurementStructure):
         await db.execute(delete(model).where(model.revision_id == rev.id))
     await db.execute(delete(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))
@@ -183,7 +201,8 @@ async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) 
     rev.report_id = payload.report_id
     rev.reported_area_sqft = payload.reported_area_sqft
     rev.notes = payload.notes
-    await _insert_children(db, rev, payload)
+    replacement_ids_by_ref = await _insert_children(db, rev, payload)
+    await _relink_replaced_photos(db, str(rev.id), old_ids_by_type, replacement_ids_by_ref)
     rev.updated_at = _now()
 
 
@@ -426,6 +445,17 @@ async def resolve_revision_for_photo(db: AsyncSession, record_type: str, record_
         return None, None
     s = await db.get(MeasurementSet, rev.set_id)
     return rev, s
+
+
+async def _relink_replaced_photos(db: AsyncSession, revision_id: str, old_ids_by_type: dict, replacement_ids_by_ref: dict) -> None:
+    """Keep photo evidence attached when an editable whole-document save recreates child rows."""
+    plan = photo_relink_plan(revision_id, old_ids_by_type, replacement_ids_by_ref)
+    for (old_type, old_id), (new_type, new_id) in plan.items():
+        rows = (await db.execute(select(Photo).where(Photo.record_type == old_type, Photo.record_id == str(old_id)))).scalars().all()
+        for photo in rows:
+            photo.record_type = new_type
+            photo.record_id = str(new_id)
+    await db.flush()
 
 
 async def _copy_photos(db: AsyncSession, id_remap: dict) -> None:
