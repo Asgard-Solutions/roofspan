@@ -315,7 +315,44 @@ export function mergeVertices(doc, movingVertexId, targetVertexId) {
     const mapped = f.edgeIds.map(remap).filter((id, i, arr) => id !== arr[i - 1]); // drop consecutive dupes
     return { ...f, edgeIds: mapped };
   });
+  // any edge id that no longer exists (self-loop / collapsed duplicate) can carry no proposal decision.
+  d.proposal_decisions = removed.reduce((list, id) => dropEdgeDecisions(list, id), d.proposal_decisions);
   return { ok: true, doc: d };
+}
+
+// Insert an EXISTING vertex into the interior of an eligible graph edge: the vertex is projected ONTO
+// the edge segment (reusing its id), the edge is split into two around that same vertex, every affected
+// facet loop is updated, shared topology is preserved, and it commits as one operation. Protected edges
+// and edges already incident to the vertex are refused, so no coincident-but-unconnected geometry results.
+export function insertExistingVertexIntoEdge(doc, vertexId, edgeId, x, y, { endpointTol = 1e-6 } = {}) {
+  if (doc.edit_mode !== "connected_graph") return { ok: false, reason: "connected_graph_required", doc };
+  const e = eById(doc, edgeId);
+  if (!e) return { ok: false, reason: "edge_not_found", doc };
+  if (e.v1 === vertexId || e.v2 === vertexId) return { ok: false, reason: "vertex_on_edge", doc };
+  if (edgeIsProtected(e)) return { ok: false, reason: "edge_protected", doc };
+  const v = vById(doc, vertexId);
+  if (!v) return { ok: false, reason: "vertex_not_found", doc };
+  const a = vById(doc, e.v1), b = vById(doc, e.v2);
+  if (!a || !b) return { ok: false, reason: "broken_edge_reference", doc };
+  const proj = projectPointToSegment([Number(x), Number(y)], [a.x, a.y], [b.x, b.y]);
+  if (distance(proj.point, [a.x, a.y]) <= endpointTol) return { ok: false, reason: "endpoint_reuse", vertexId: e.v1, doc };
+  if (distance(proj.point, [b.x, b.y]) <= endpointTol) return { ok: false, reason: "endpoint_reuse", vertexId: e.v2, doc };
+  const d = clone(doc);
+  d.vertices = d.vertices.map((vv) => (vv.id === vertexId ? { ...vv, x: proj.point[0], y: proj.point[1] } : vv));
+  const ea = { id: nid("e"), v1: e.v1, v2: vertexId, ...safeEdgeMeta(e) };
+  const eb = { id: nid("e"), v1: vertexId, v2: e.v2, ...safeEdgeMeta(e) };
+  d.edges = d.edges.filter((x2) => x2.id !== edgeId).concat([ea, eb]);
+  d.facets = d.facets.map((f) => {
+    const ids = f.edgeIds || [];
+    const i = ids.indexOf(edgeId);
+    if (i < 0) return f;
+    const prev = eById(doc, ids[(i - 1 + ids.length) % ids.length]);
+    const prevTouchesV1 = prev && (prev.v1 === e.v1 || prev.v2 === e.v1);
+    const inserted = prevTouchesV1 ? [ea.id, eb.id] : [eb.id, ea.id];
+    return { ...f, edgeIds: ids.slice(0, i).concat(inserted).concat(ids.slice(i + 1)), vertexIds: [] };
+  });
+  d.proposal_decisions = dropEdgeDecisions(d.proposal_decisions, edgeId);
+  return { ok: true, doc: d, vertexId, edgeIds: [ea.id, eb.id] };
 }
 
 // Join two edges that share exactly one middle vertex into a single edge A--C.

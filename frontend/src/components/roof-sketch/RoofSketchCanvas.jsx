@@ -2,22 +2,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveFacetBoundary, validateSketch } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
 import { addVertex, addEdge, moveVertex, splitEdgeSafe, createFacet, createManualFacet, placePenetration, movePenetration } from "./commands";
+import { modelTolerance } from "./snapping";
+import { drawSnap, dragSnap, applyDrawPoint, applyVertexDrop } from "./gestures";
 import { edgeDimension, formatFeet } from "./edgeDimensions";
 import { toast } from "sonner";
 
 const EDGE_COLOR = { eave: "#2563eb", rake: "#7c3aed", ridge: "#dc2626", hip: "#ea580c", valley: "#0891b2", sidewall: "#16a34a", headwall: "#ca8a04", transition: "#db2777", unclassified: "#94a3b8" };
+const PROTECTED_MSG = "This edge is mapped, confirmed, or locked. Clear the confirmed length and/or unmap/unlock it before changing its topology.";
 
 // Native SVG roof-sketch canvas: zoom/pan, select, connected-graph draw, facet creation, penetrations,
 // shared-vertex drag, snapping, and validation markers. All model mutations go through pure commands.
 export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSelect, readOnly, ctl }) {
   const svgRef = useRef(null);
   const [view, setView] = useState({ k: 6, tx: 60, ty: 60 });
-  const drag = useRef(null); // { vertexId, startDoc } | { pan:true, ... }
+  const drag = useRef(null); // { vertexId, startDoc, moved, snap } | { penId, ... } | { pan:true, ... }
   const lastVertex = useRef(null); // draw chaining
   const [pendingEdges, setPendingEdges] = useState([]); // facet-tool selection
   const [pendingVerts, setPendingVerts] = useState([]); // manual polygon ring
+  const [snapHint, setSnapHint] = useState(null); // non-interactive live snap feedback marker
 
-  useEffect(() => { lastVertex.current = null; setPendingEdges([]); setPendingVerts([]); }, [mode, editMode]);
+  useEffect(() => { lastVertex.current = null; setPendingEdges([]); setPendingVerts([]); setSnapHint(null); }, [mode, editMode]);
 
   const validation = useMemo(() => validateSketch(doc), [doc]);
   const errorFacetIds = new Set(validation.errors.filter((e) => e.facet_id).map((e) => e.facet_id));
@@ -27,14 +31,7 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     return { x: (clientX - r.left - view.tx) / view.k, y: (clientY - r.top - view.ty) / view.k };
   };
   const snapPx = 12;
-  const snapVertex = (mx, my) => {
-    let best = null, bd = (snapPx / view.k);
-    for (const v of doc.vertices || []) {
-      const d = Math.hypot(v.x - mx, v.y - my);
-      if (d <= bd) { bd = d; best = v; }
-    }
-    return best;
-  };
+  const modelTol = () => modelTolerance(snapPx, view.k);
 
   const onWheel = (e) => {
     e.preventDefault();
@@ -47,6 +44,25 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     });
   };
 
+  // Connected/manual Draw: resolve one snap candidate, apply it as ONE atomic mutation (edge-interior
+  // clicks split via the same flow; protected edges are blocked with a toast).
+  const drawAt = (clientX, clientY) => {
+    const m = toModel(clientX, clientY);
+    if (editMode === "manual_polygon") {
+      const snap = drawSnap(doc, [m.x, m.y], modelTol(), { manual: true });
+      const res = ctl.run((d) => (snap.type === "vertex" ? { doc: d, vertexId: snap.vertexId } : addVertex(d, snap.point[0], snap.point[1])));
+      setPendingVerts((p) => [...p, res.vertexId]);
+      return;
+    }
+    const snap = drawSnap(doc, [m.x, m.y], modelTol());
+    if (snap.type === "blocked") { toast.error(PROTECTED_MSG); return; }
+    const prev = lastVertex.current;
+    const res = ctl.run((d) => applyDrawPoint(d, snap, prev));
+    if (res.ok === false) { if (res.reason === "edge_protected") toast.error(PROTECTED_MSG); return; }
+    lastVertex.current = res.vertexId;
+    onSelect({ type: "vertex", id: res.vertexId });
+  };
+
   const backgroundDown = (e) => {
     if (e.target.dataset.role) return; // handled by element handlers
     const m = toModel(e.clientX, e.clientY);
@@ -55,26 +71,7 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
       onSelect(null);
       return;
     }
-    if (mode === "draw") {
-      const snapped = snapVertex(m.x, m.y);
-      if (editMode === "manual_polygon") {
-        const v = snapped || null;
-        const res = ctl.run((d) => (v ? { doc: d, vertexId: v.id } : addVertex(d, m.x, m.y)));
-        setPendingVerts((p) => [...p, res.vertexId]);
-        return;
-      }
-      // connected graph: add a vertex (or reuse snapped) and chain an edge from the previous point
-      const prev = lastVertex.current;
-      const res = ctl.run((d) => {
-        let nd = d, vid;
-        if (snapped) { vid = snapped.id; } else { const a = addVertex(d, m.x, m.y); nd = a.doc; vid = a.vertexId; }
-        if (prev && prev !== vid) { const b = addEdge(nd, prev, vid); if (b.doc) nd = b.doc; }
-        return { doc: nd, vertexId: vid };
-      });
-      lastVertex.current = res.vertexId;
-      onSelect({ type: "vertex", id: res.vertexId });
-      return;
-    }
+    if (mode === "draw") { drawAt(e.clientX, e.clientY); return; }
     if (mode === "penetration") {
       const res = ctl.run((d) => placePenetration(d, m.x, m.y));
       onSelect({ type: "penetration", id: res.penetrationId });
@@ -91,7 +88,7 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
       return;
     }
     if (mode === "draw" && editMode === "manual_polygon") { setPendingVerts((p) => [...p, v.id]); return; }
-    if (mode === "select" && !readOnly) drag.current = { vertexId: v.id, startDoc: ctl.getDoc() };
+    if (mode === "select" && !readOnly) drag.current = { vertexId: v.id, startDoc: ctl.getDoc(), moved: false, snap: null };
   };
 
   const edgeClick = (e, edge) => {
@@ -100,6 +97,8 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
       setPendingEdges((p) => (p.includes(edge.id) ? p.filter((x) => x !== edge.id) : [...p, edge.id]));
       return;
     }
+    // A direct click on an edge while drawing in connected mode uses the SAME snap/split flow.
+    if (mode === "draw" && editMode === "connected_graph" && !readOnly) { drawAt(e.clientX, e.clientY); return; }
     onSelect({ type: "edge", id: edge.id });
   };
 
@@ -110,31 +109,52 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     const cur = ctl.getDoc();
     const r = splitEdgeSafe(cur, edge.id, m.x, m.y, { endpointTol: 8 / view.k });
     if (r.ok) ctl.commitFrom(cur, r.doc);
-    else if (r.reason === "edge_protected") toast.error("This edge is mapped, confirmed, or locked. Clear the confirmed length and/or unmap/unlock it before changing its topology.");
+    else if (r.reason === "edge_protected") toast.error(PROTECTED_MSG);
   };
 
   const onMove = (e) => {
-    if (!drag.current) return;
+    if (!drag.current) {
+      // Live snap feedback while hovering with the Draw tool (no document change).
+      if (mode === "draw" && !readOnly) {
+        const m = toModel(e.clientX, e.clientY);
+        setSnapHint(drawSnap(doc, [m.x, m.y], modelTol(), { manual: editMode === "manual_polygon" }));
+      }
+      return;
+    }
     if (drag.current.pan) {
       setView((v) => ({ ...v, tx: drag.current.tx + (e.clientX - drag.current.sx), ty: drag.current.ty + (e.clientY - drag.current.sy) }));
       return;
     }
+    const m = toModel(e.clientX, e.clientY);
     if (drag.current.vertexId) {
-      const m = toModel(e.clientX, e.clientY);
-      const snapped = snapVertex(m.x, m.y);
-      const tx2 = snapped && snapped.id !== drag.current.vertexId ? snapped.x : m.x;
-      const ty2 = snapped && snapped.id !== drag.current.vertexId ? snapped.y : m.y;
-      ctl.preview(moveVertex(ctl.getDoc(), drag.current.vertexId, tx2, ty2));
+      const snap = dragSnap(ctl.getDoc(), drag.current.vertexId, [m.x, m.y], modelTol());
+      drag.current.snap = snap; drag.current.moved = true;
+      setSnapHint(snap);
+      // preview at the snapped point WITHOUT bumping the edit generation / adding history
+      const px = snap.type === "vertex" ? snap.point[0] : snap.type === "edge" ? snap.point[0] : m.x;
+      const py = snap.type === "vertex" ? snap.point[1] : snap.type === "edge" ? snap.point[1] : m.y;
+      ctl.previewSilent(moveVertex(ctl.getDoc(), drag.current.vertexId, px, py));
+      return;
     }
     if (drag.current.penId) {
-      const m = toModel(e.clientX, e.clientY);
-      ctl.preview(movePenetration(ctl.getDoc(), drag.current.penId, m.x, m.y));
+      drag.current.moved = true;
+      ctl.previewSilent(movePenetration(ctl.getDoc(), drag.current.penId, m.x, m.y));
     }
   };
 
   const onUp = () => {
-    if (drag.current && (drag.current.vertexId || drag.current.penId)) ctl.commitFrom(drag.current.startDoc, ctl.getDoc());
+    const d = drag.current;
     drag.current = null;
+    setSnapHint(null);
+    if (!d || d.pan) return;
+    if (d.vertexId) {
+      if (!d.moved || !d.snap) return; // pure click, no gesture
+      const res = applyVertexDrop(d.startDoc, d.vertexId, d.snap);
+      if (res.ok) { ctl.commitFrom(d.startDoc, res.doc); }
+      else { ctl.previewSilent(d.startDoc); if (res.reason === "edge_protected") toast.error(PROTECTED_MSG); } // restore original unchanged
+      return;
+    }
+    if (d.penId && d.moved) ctl.commitFrom(d.startDoc, ctl.getDoc());
   };
 
   const commitFacet = () => {
@@ -210,11 +230,22 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
         {(doc.penetrations || []).map((p) => {
           const selected = selection?.type === "penetration" && selection.id === p.id;
           return <g key={p.id} data-role="pen"
-            onPointerDown={(e) => { e.stopPropagation(); onSelect({ type: "penetration", id: p.id }); if (mode === "select" && !readOnly) drag.current = { penId: p.id, startDoc: ctl.getDoc() }; }}>
+            onPointerDown={(e) => { e.stopPropagation(); onSelect({ type: "penetration", id: p.id }); if (mode === "select" && !readOnly) drag.current = { penId: p.id, startDoc: ctl.getDoc(), moved: false }; }}>
             <rect data-role="pen" x={p.x - 5 / view.k} y={p.y - 5 / view.k} width={10 / view.k} height={10 / view.k}
               fill={selected ? "#2563eb" : "#0f766e"} stroke="#ffffff" strokeWidth="1.5" vectorEffect="non-scaling-stroke" style={{ cursor: "pointer" }} />
           </g>;
         })}
+        {snapHint && !readOnly && snapHint.type !== "free" && (() => {
+          const [sx, sy] = snapHint.point || [0, 0];
+          const r = 7 / view.k;
+          if (snapHint.type === "vertex") return <circle data-testid="snap-marker" data-snap-type="vertex" cx={sx} cy={sy} r={r} fill="none" stroke="#16a34a" strokeWidth="2" vectorEffect="non-scaling-stroke" style={{ pointerEvents: "none" }} />;
+          if (snapHint.type === "edge") return <circle data-testid="snap-marker" data-snap-type="edge" cx={sx} cy={sy} r={5 / view.k} fill="#0891b2" stroke="#ffffff" strokeWidth="1.5" vectorEffect="non-scaling-stroke" style={{ pointerEvents: "none" }} />;
+          if (snapHint.type === "blocked") return <g data-testid="snap-marker" data-snap-type="blocked" style={{ pointerEvents: "none" }}>
+            <circle cx={sx} cy={sy} r={r} fill="none" stroke="#dc2626" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <line x1={sx - r} y1={sy - r} x2={sx + r} y2={sy + r} stroke="#dc2626" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          </g>;
+          return null;
+        })()}
       </g>
     </svg>
 

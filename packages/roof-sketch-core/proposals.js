@@ -1,7 +1,7 @@
 "use strict";
 // Deterministic proposal generation. Geometry proposes; it never silently overwrites confirmed or
 // locked measurements. Unresolved scale => no dimensional proposals at all.
-const { distance, polygonArea, pitchAdjustedArea } = require("./geometry");
+const { distance, polygonArea, pitchAdjustedArea, edgeGeometryLengthFeet } = require("./geometry");
 const { normalizeSketchDocument } = require("./schema");
 const { resolveFacetBoundary, vertexMap, edgeMap } = require("./topology");
 
@@ -52,10 +52,14 @@ function deriveProposals(input) {
   });
 
   // Edge lengths. Locked edges never receive an overwrite proposal — only a discrepancy notice.
+  // Real-world LF comes from the SINGLE shared source (edgeGeometryLengthFeet) so the proposal value
+  // and the on-canvas dimension label can never disagree.
   (doc.edges || []).forEach((e) => {
     const a = vmap[e.v1], b = vmap[e.v2];
     if (!a || !b) return;
-    const proposed = round2(distance([a.x, a.y], [b.x, b.y]) * fpu);
+    const lf = edgeGeometryLengthFeet(doc, e);
+    if (lf == null) return;
+    const proposed = round2(lf);
     if (e.locked) {
       const confirmed = e.confirmed_length_ft != null ? Number(e.confirmed_length_ft) : null;
       if (confirmed != null && Math.abs(confirmed - proposed) > 0.01) {

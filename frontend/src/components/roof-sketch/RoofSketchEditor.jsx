@@ -77,6 +77,9 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     getDoc: () => docRef.current,
     run: (fn) => { const res = fn(docRef.current) || {}; const nd = res.doc || docRef.current; docRef.current = nd; hist.commit(nd); bumpEdit(); return res; },
     preview: (nd) => { docRef.current = nd; hist.setDocDirect(nd); bumpEdit(); },
+    // Live drag preview: update the visible document WITHOUT creating a history entry or bumping the
+    // edit generation. The single history/edit commit happens on pointer-up via commitFrom.
+    previewSilent: (nd) => { docRef.current = nd; hist.setDocDirect(nd); },
     commitFrom: (prev, next) => { docRef.current = next; hist.commitFrom(prev, next); bumpEdit(); },
   }), [hist, bumpEdit]);
 
