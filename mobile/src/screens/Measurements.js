@@ -8,6 +8,7 @@ import PhotoSection from "../components/PhotoSection";
 
 const measurementKeys = require("../measurementCache");
 const queueCore = require("../queue");
+const { edgeForEdit, newEdge, edgeToBody } = require("../measurementEdges");
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main"], ["attached_garage", "Att. Garage"], ["detached_garage", "Det. Garage"],
@@ -36,13 +37,6 @@ function initialPenetrations() {
 function penForEdit(row) {
   const ref = row.ref || row.id || row._k || uid();
   return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };
-}
-
-function edgeForEdit(e) {
-  const length = Number(e.length_ft || 0);
-  const ft = Math.floor(length);
-  const inches = Math.round((length - ft) * 12 * 10) / 10;
-  return { ...e, _k: e._k || e.id || uid(), facet_ref: e.facet_ref || e.facet_id || "", ft: String(ft || ""), in: String(inches || "") };
 }
 
 export default function Measurements({ route, navigation }) {
@@ -137,7 +131,7 @@ export default function Measurements({ route, navigation }) {
 
   const addStructure = () => setStructures((a) => [...a, { ref: uid(), name: "", structure_type: "main_house", included_in_scope: true }]);
   const addFacet = () => setFacets((a) => [...a, { ref: uid(), facet_label: `F${a.length + 1}`, pitch_rise: 6, area_sqft: "", structure_ref: "" }]);
-  const addEdge = () => setEdges((a) => [...a, { _k: uid(), edge_type: "eave", ft: "", in: "", length_ft: 0, facet_ref: "" }]);
+  const addEdge = () => setEdges((a) => [...a, newEdge()]);
   const setS = (i, k, v) => setStructures((a) => a.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
   const setF = (i, k, v) => setFacets((a) => a.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
   const setE = (i, k, v) => setEdges((a) => a.map((x, idx) => {
@@ -165,10 +159,7 @@ export default function Measurements({ route, navigation }) {
       width_ft: numberOrNull(f.width_ft), length_ft: numberOrNull(f.length_ft),
       roof_material: f.roof_material || null, notes: f.notes || null, sort: i,
     })),
-    edges: edges.map((e, i) => ({
-      edge_type: e.edge_type || "eave", length_ft: parseFloat(e.length_ft) || 0,
-      facet_ref: e.facet_ref || null, label: e.label || null, notes: e.notes || null, sort: i,
-    })),
+    edges: edges.map(edgeToBody),
     penetrations: pens.filter((p) => (parseInt(p.quantity) || 0) > 0).map((p, i) => ({
       ref: p.ref || p.id || p._k, pen_type: p.pen_type, quantity: parseInt(p.quantity) || 1, facet_ref: p.facet_ref || null,
       diameter_in: numberOrNull(p.diameter_in), width_in: numberOrNull(p.width_in), length_in: numberOrNull(p.length_in),
