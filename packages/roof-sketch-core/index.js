@@ -19,6 +19,8 @@ module.exports = {
   pitchAdjustedArea: geometry.pitchAdjustedArea,
   calibrateScale: geometry.calibrateScale,
   segmentsCross: geometry.segmentsCross,
+  projectPointToSegment: geometry.projectPointToSegment,
+  edgeGeometryLengthFeet: geometry.edgeGeometryLengthFeet,
   // topology / validation
   findSharedEdges: topology.findSharedEdges,
   validateSketch: topology.validateSketch,

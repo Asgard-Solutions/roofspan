@@ -4,9 +4,38 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { vById, eById, fById } from "./commands";
+import { vById, eById, fById, joinEdges, edgeIsProtected } from "./commands";
 
 const EDGE_LABEL = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", valley: "Valley", sidewall: "Sidewall", headwall: "Headwall", transition: "Transition", unclassified: "Unclassified" };
+
+function JoinControl({ doc, edge, onJoin }) {
+  const [neighbor, setNeighbor] = useState("");
+  const [resultType, setResultType] = useState("");
+  if (edgeIsProtected(edge)) return <div className="text-[11px] text-slate-400" data-testid="join-protected">Mapped/locked edge — unmap or unlock to change topology.</div>;
+  const cands = (doc.edges || []).filter((e) => e.id !== edge.id).map((e) => {
+    const shared = [e.v1, e.v2].filter((v) => v === edge.v1 || v === edge.v2);
+    if (shared.length !== 1) return null;
+    const dry = joinEdges(doc, edge.id, e.id);
+    if (!(dry.ok || dry.reason === "type_conflict")) return null;
+    return { id: e.id, type: e.type, conflict: dry.reason === "type_conflict" };
+  }).filter(Boolean);
+  if (!cands.length) return <div className="text-[11px] text-slate-400" data-testid="join-none">No joinable neighboring edges.</div>;
+  const sel = cands.find((c) => c.id === neighbor);
+  const needType = !!sel && sel.conflict;
+  const canJoin = !!sel && (!needType || !!resultType);
+  return <div data-testid="join-control" className="space-y-1 border-t border-slate-100 pt-2">
+    <div className="text-[11px] text-slate-400">Join Edge</div>
+    <Select value={neighbor} onValueChange={(v) => { setNeighbor(v); setResultType(""); }}>
+      <SelectTrigger className="w-full" data-testid="join-neighbor-select"><SelectValue placeholder="Neighboring edge" /></SelectTrigger>
+      <SelectContent>{cands.map((c) => <SelectItem key={c.id} value={c.id}>{EDGE_LABEL[c.type] || c.type}{c.conflict ? " (type differs)" : ""}</SelectItem>)}</SelectContent>
+    </Select>
+    {needType && <Select value={resultType} onValueChange={setResultType}>
+      <SelectTrigger className="w-full" data-testid="join-type-select"><SelectValue placeholder="Resulting edge type" /></SelectTrigger>
+      <SelectContent>{EDGE_TYPES.map((t) => <SelectItem key={t} value={t}>{EDGE_LABEL[t] || t}</SelectItem>)}</SelectContent>
+    </Select>}
+    <Button size="sm" disabled={!canJoin} onClick={() => onJoin(edge.id, neighbor, needType ? { resultType } : {})} data-testid="join-edge-btn">Join</Button>
+  </div>;
+}
 const PEN_TYPES = [["pipe_boot", "Pipe boot"], ["vent", "Vent"], ["chimney", "Chimney"], ["skylight", "Skylight"], ["hvac", "HVAC"], ["other", "Other"]];
 
 function Section({ title, children, testid }) {
@@ -71,6 +100,7 @@ export default function SketchInspector({ doc, selection, cmd, readOnly, relFace
         {edge.measurement_edge_id && !edgeValid && <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="edge-map-invalid">Linked measurement edge no longer exists in this structure — treated as Unmapped. Pick a valid edge.</div>}
       </div>
       <div className="text-xs text-slate-500">Geometry: {edgeLenFt == null ? `${edgeLenUnits.toFixed(1)} units (unscaled)` : `${edgeLenFt.toFixed(1)} ft`}</div>
+      {!readOnly && <JoinControl doc={doc} edge={edge} onJoin={cmd.join} />}
       <div className="flex items-end gap-2">
         <div className="flex-1"><div className="text-[11px] text-slate-400">Confirmed length (ft)</div>
           <Input type="number" step="0.1" value={edge.confirmed_length_ft ?? ""} disabled={readOnly} onChange={(e) => cmd.setConfirmedEdgeLength(edge.id, e.target.value)} data-testid="edge-confirmed-input" /></div>

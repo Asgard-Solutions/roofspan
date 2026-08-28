@@ -49,4 +49,28 @@ function segmentsCross(p1, p2, p3, p4) {
   return o1 !== o2 && o3 !== o4;
 }
 
-module.exports = { distance, polygonArea, pitchAdjustedArea, calibrateScale, segmentsCross };
+// Project point p onto segment a-b. Returns the clamped point, parametric t in [0,1] and the distance.
+// t=0 => endpoint a, t=1 => endpoint b, 0<t<1 => interior. Zero-length segments are handled safely.
+function projectPointToSegment(p, a, b) {
+  const ax = a[0], ay = a[1], bx = b[0], by = b[1];
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((p[0] - ax) * dx + (p[1] - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = ax + t * dx, py = ay + t * dy;
+  const ddx = p[0] - px, ddy = p[1] - py;
+  return { point: [px, py], t, distance: Math.sqrt(ddx * ddx + ddy * ddy) };
+}
+
+// Single source of truth for a graph edge's real-world length. null when scale is unresolved. Both
+// dimension labels and deriveProposals must derive edge LF from THIS so the two can never disagree.
+function edgeGeometryLengthFeet(doc, edge) {
+  if (!doc || !edge || !doc.scale || doc.scale.resolved !== true || doc.scale.feetPerUnit == null) return null;
+  const vs = doc.vertices || [];
+  const a = vs.find((v) => v.id === edge.v1);
+  const b = vs.find((v) => v.id === edge.v2);
+  if (!a || !b) return null;
+  return distance([a.x, a.y], [b.x, b.y]) * Number(doc.scale.feetPerUnit);
+}
+
+module.exports = { distance, polygonArea, pitchAdjustedArea, calibrateScale, segmentsCross, projectPointToSegment, edgeGeometryLengthFeet };

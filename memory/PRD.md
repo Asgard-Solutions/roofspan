@@ -1,5 +1,40 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 3 — Canvas Geometry Closure (2026-06) — CODE COMPLETE (engine+contracts+partial UI) & LOCALLY GREEN; no git ops
+Final Office canvas geometry engine + deterministic contracts. Geometry stays authoritative in
+`@roofspan/roof-sketch-core`; editor commands stay pure.
+
+**Shared core:** `projectPointToSegment(point,a,b)` (clamped t, distance, zero-length safe) and
+`edgeGeometryLengthFeet(doc,edge)` (single source for edge LF; null when unscaled) — exported from the
+package.
+**Pure topology commands (commands.js, all return `{ok,doc,reason?}`):** `edgeIsProtected`;
+`splitEdgeSafe` (projects onto the segment, refuses protected edges + near-endpoint reuse, updates EVERY
+facet loop preserving direction, strips stale edge decisions); `mergeVertices` (rewire, drop self-loops,
+compatible-only duplicate collapse, reject incompatible); `joinEdges` (single shared vertex, branch/facet/
+duplicate-outer/protected guards, type inheritance + explicit `resultType` on conflict).
+**Pure modules:** `snapping.js` (screen-space `modelTolerance`, deterministic priority vertex>edge>free,
+projection-on-segment only) and `edgeDimensions.js` (locked confirmed value wins; exposes geometry +
+discrepancy; uses shared-core length).
+**UI wired:** RoofSketchCanvas renders LF dimension labels (midpoint + perpendicular offset, non-scaling,
+🔒 + discrepancy tooltip for locked, unscaled cue instead of fake LF) and double-click split now uses
+`splitEdgeSafe` (projected + protected-block toast, atomic one-step history). SketchInspector has a Join Edge
+control (adjacent-only candidates, conflict→required result-type, protected/none states). Editor `cmd.join`
+commits atomically + selects the result.
+**Contracts (CI office-build, 6 files):** commands 18 / mapping 18 / saveLifecycle 19 / saveCloseLifecycle
+29 / proposalLifecycle 24 / **geometryOps 38** (projection matrix, shared length==proposal source, basic+
+projected split, endpoint reuse, all-4 protected-split blocks, shared-facet split, merge + incompatible
+reject, join simple/type-resolution/branch-reject/protected, snap priority/nearest/free, dimensions locked-
+wins). Shared core 26/28/10.
+
+**Local verification (green):** all above + office `CI=false yarn build` OK. `frontend/yarn.lock` unchanged.
+Backend/mobile/photo systems untouched this pass.
+**NOT wired this pass (engine-only, honest scope):** live canvas POINTER gestures for interior draw-to-edge
+snap markers and vertex-drag→edge/vertex merge-on-pointer-up (the pure `snapping.js`/`mergeVertices` engine +
+contracts are complete; only the RoofSketchCanvas pointer-move/up wiring is deferred). LIVE OFFICE
+WALKTHROUGH: NOT RUNNABLE IN THIS ENVIRONMENT (no licensed session/browser).
+**STOP** after local green (no git ops; user publishes). No Field editor / Plan 2.
+
+
 ## Task 4 Phase 2 FINAL Save/Close Race Closure (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops (user publishes)
 Closed the save/close concurrency defect on the approved Phase 2 editor. Architecture NOT rewritten.
 

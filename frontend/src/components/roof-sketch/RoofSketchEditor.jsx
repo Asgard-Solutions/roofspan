@@ -99,6 +99,14 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     setPenetrationType: (id, t) => ctl.run((d) => ({ doc: C.setPenetrationType(d, id, t) })),
     deletePenetration: (id) => { ctl.run((d) => ({ doc: C.deletePenetration(d, id) })); setSelection(null); },
     calibrate: (edgeId, feet) => ctl.run((d) => ({ doc: C.setScale(d, { edgeId, realFeet: feet }) })),
+    join: (edgeId, neighborId, opts) => {
+      const cur = docRef.current;
+      const r = C.joinEdges(cur, edgeId, neighborId, opts);
+      const REASON = { edge_protected: "One of these edges is linked to a confirmed measurement and cannot be joined. Unmap/unlock it first.", type_conflict: "Choose the resulting edge type before joining.", middle_vertex_has_additional_connections: "The shared vertex has another edge; joining would break that branch.", facet_boundary_mismatch: "These edges are not a consecutive pair on a facet boundary.", duplicate_outer_edge: "An edge already connects those outer endpoints." };
+      if (!r.ok) { toast.error(REASON[r.reason] || `Cannot join (${r.reason}).`); return; }
+      ctl.commitFrom(cur, r.doc); setSelection({ type: "edge", id: r.edgeId });
+      toast.success("Edges joined.");
+    },
   }), [ctl]);
 
   const deleteSelected = useCallback(() => {

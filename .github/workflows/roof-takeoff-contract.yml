@@ -264,7 +264,8 @@ jobs:
           node src/components/roof-sketch/__tests__/mapping.node.test.js &&
           node src/components/roof-sketch/__tests__/saveLifecycle.node.test.js &&
           node src/components/roof-sketch/__tests__/saveCloseLifecycle.node.test.js &&
-          node src/components/roof-sketch/__tests__/proposalLifecycle.node.test.js
+          node src/components/roof-sketch/__tests__/proposalLifecycle.node.test.js &&
+          node src/components/roof-sketch/__tests__/geometryOps.node.test.js
       - name: Build Office UI
         env:
           CI: "false"
