@@ -1,5 +1,30 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Closure Pass — PARTIAL (2026-06): CI blocker fixed; large items handed off
+Branch `main`, HEAD `827f889` (== the reviewed remote main). Working tree contains verified fixes below;
+Field editor / Plan 2 NOT started.
+
+**DONE & verified this pass:**
+- **Item 1 (Office CI red — root cause):** the pushed `frontend/yarn.lock` at `827f889` had NO
+  `@roofspan/roof-sketch-core` entry while `package.json` requires it → `yarn install --frozen-lockfile`
+  failed in `office-build`. Working-tree `yarn.lock` now includes the `file:` entry; `yarn install
+  --frozen-lockfile` = PASS and `CI=false yarn build` = success locally. Needs Save-to-GitHub to land.
+- **Item 18 (CI enforcement):** `office-build` job now runs `node src/components/roof-sketch/__tests__/
+  commands.node.test.js` (18 assertions) before build.
+
+**NOT YET DONE — require a dedicated session (large/interdependent, high-risk to half-ship):**
+- Items 2–4: identity-preserving reconciliation for the editable MeasurementRevision whole-document
+  replace (currently deletes+reinserts children → CASCADE can orphan sketches / churn mapping IDs);
+  add `ref` to `EdgeIn`; sketch-survival regression tests.
+- Items 5–6: async save/edit generation race + dirty-from-generation + tests.
+- Items 7–9: explicit structure-safe facet mapping UI + edge mapping + edge clone remap
+  (`measurement_edge_id`).
+- Items 10–14: pending_accept → accepted lifecycle (only promote after authoritative measurement PUT
+  succeeds+matches); discard rollback of editor-initiated worksheet changes; pending recovery on reopen.
+- Items 15–17: SVG dimension labels (locked wins), real edge snapping w/ interior split, join-edge command.
+- Item 19: the full new test matrix for the above.
+
+
 ## Plan 1 Task 4 — Office SVG Roof Sketch Editor (2026-06) — COMPLETE & locally verified
 First user-visible Roof Sketch feature. Field editor (Task 6) and Plan 2 imports NOT started. Changes
 staged locally on branch `main` (ahead of remote `770037d`); pending **Save to GitHub** + CI run.
