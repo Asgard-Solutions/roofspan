@@ -910,3 +910,12 @@ FIXED & GREEN (commit b859ea1):
 - SECURITY: removed hardcoded owner creds from api test (now env-gated RS_TEST_EMAIL/PW, skips without). NOTE: RoofSpan#Owner2026 was committed earlier at 4b01716 (real active owner acct) -> MUST BE ROTATED.
 - Verified: sketch service pytest 1 passed; sketch api 1 skipped(no creds)/1 passed(with env); geometry core 26/26; measurement pytest 9/9; measurement photos; mobile sketch_cache 15/15; single alembic head e0f1a2b3c4d5.
 STILL OUTSTANDING (must finish before Plan 2 / editors): IMPORTANT 4 edge-loop connected-graph topology validation; IMPORTANT 5 real gap/overlap/disconnected-component/duplicate/floating-facet detection (+ geometry tests); two-rep salesperson A/B API denial test; IMPORTANT 8 Field deps (@roofspan/roof-sketch-core file: dep + react-native-svg 15.12.1 in mobile/package.json + lockfile + Metro resolve); IMPORTANT 9 CI workflow roof-takeoff-contract.yml sketch coverage.
+
+## LEARNING — Save-to-GitHub only publishes FILE-TOOL edits (2026-06)
+Emergent "Save to GitHub" commits ONLY files changed via the agent's file-editing tools
+(create_file/search_replace), NOT files modified by shell side-effects (e.g. `yarn install`
+regenerating `frontend/yarn.lock`). Such shell-generated changes show as tracked+modified in git but
+are skipped by Save. FIX: apply the needed change to the generated file via `search_replace` (byte-
+identical to the tool's output). Confirmed with support@emergent.sh. This is why the corrected
+`frontend/yarn.lock` (adding `@roofspan/roof-sketch-core@file:` entry) repeatedly failed to publish
+until re-applied via search_replace (blob 1d4e4c1, replacing broken 2d6b580).
