@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 # ---------------- children (input) ----------------
 class StructureIn(BaseModel):
-    ref: Optional[str] = None                 # client temp key for facet linkage
+    ref: Optional[str] = None                 # client temp key for facet linkage / editable-save lineage
     name: str = ""
     structure_type: str = "main_house"
     included_in_scope: bool = True
@@ -23,7 +23,7 @@ class StructureIn(BaseModel):
 
 
 class FacetIn(BaseModel):
-    ref: Optional[str] = None                 # client temp key for edge/penetration linkage
+    ref: Optional[str] = None                 # client temp key for edge/penetration linkage / lineage
     structure_ref: Optional[str] = None       # link to a StructureIn.ref
     structure_id: Optional[str] = None        # or an existing structure id (rare)
     facet_label: str = ""
@@ -51,6 +51,7 @@ class EdgeIn(BaseModel):
 
 
 class PenetrationIn(BaseModel):
+    ref: Optional[str] = None                 # stable client key; existing rows use their server UUID
     pen_type: str = "pipe_boot"
     quantity: int = 1
     facet_ref: Optional[str] = None
