@@ -170,4 +170,28 @@ assert.ok(has(v.errors, "self_intersection")); ok("bowtie facet => self_intersec
   assert.ok(has(v.errors, "duplicate_facet")); ok("identical manual polygons via different vertex ids/same coords => duplicate_facet");
 }
 
+// --- polygon-cycle normalization for duplicate detection (rotation/reversal, incl. concave) ---
+{
+  const key = require("..").polygonCycleKey;
+  const L = [[0, 0], [4, 0], [4, 4], [2, 1], [0, 4]]; // concave (arrow/notch) polygon
+  const rotated = [[4, 4], [2, 1], [0, 4], [0, 0], [4, 0]]; // same cycle, different start
+  const reversed = L.slice().reverse();                      // same cycle, opposite winding
+  assert.strictEqual(key(L), key(rotated)); ok("concave polygon: rotation is duplicate-equivalent");
+  assert.strictEqual(key(L), key(reversed)); ok("concave polygon: reversal is duplicate-equivalent");
+  // same coordinate SET, genuinely different boundary order (swap two vertices) => different shape
+  const reordered = [[0, 0], [4, 4], [4, 0], [2, 1], [0, 4]];
+  assert.notStrictEqual(key(L), key(reordered)); ok("same coords, different boundary order => NOT duplicate");
+}
+// two concave manual facets that are rotation/reversal equivalent => duplicate_facet
+{
+  const d = createSketchDocument({ structureId: "s1", editMode: "manual_polygon" });
+  d.vertices = [
+    { id: "a1", x: 0, y: 0 }, { id: "a2", x: 4, y: 0 }, { id: "a3", x: 4, y: 4 }, { id: "a4", x: 2, y: 1 }, { id: "a5", x: 0, y: 4 },
+    { id: "b1", x: 4, y: 4 }, { id: "b2", x: 2, y: 1 }, { id: "b3", x: 0, y: 4 }, { id: "b4", x: 0, y: 0 }, { id: "b5", x: 4, y: 0 }];
+  d.facets = [
+    { id: "fa", vertexIds: ["a1", "a2", "a3", "a4", "a5"] },
+    { id: "fb", vertexIds: ["b1", "b2", "b3", "b4", "b5"] }]; // rotation of fa, different ids
+  assert.ok(has(validateSketch(d).errors, "duplicate_facet")); ok("rotation-equivalent concave manual facets => duplicate_facet");
+}
+
 console.log("\nTOPOLOGY HARDENING: all " + n + " assertions passed");

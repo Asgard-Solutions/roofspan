@@ -8,7 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PhotoGallery from "@/components/PhotoGallery";
-import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch } from "lucide-react";
+import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch, PencilRuler } from "lucide-react";
+import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
+import { listSketches } from "@/components/roof-sketch/sketchApi";
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main House"], ["attached_garage", "Attached Garage"], ["detached_garage", "Detached Garage"],
@@ -60,6 +62,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [sketchFor, setSketchFor] = useState(null); // structure row being sketched
+  const [sketchStructIds, setSketchStructIds] = useState(new Set());
 
   const scopeParam = leadId ? `lead_id=${leadId}` : propertyId ? `property_id=${propertyId}` : `inspection_id=${inspectionId}`;
 
@@ -85,6 +89,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       setLoading(false);
     })();
   }, [loadList, loadRevision]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!rev?.id) { setSketchStructIds(new Set()); return; }
+    (async () => {
+      try { const rows = await listSketches(rev.id); if (alive) setSketchStructIds(new Set(rows.map((r) => r.structure_id))); }
+      catch { if (alive) setSketchStructIds(new Set()); }
+    })();
+    return () => { alive = false; };
+  }, [rev?.id]);
 
   const editable = rev ? rev.editable : true;
   const totals = rev?.totals;
@@ -172,6 +186,12 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
 
   if (loading) return <div className="p-3 text-sm text-slate-500" data-testid="measurement-loading"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Loading measurements…</div>;
 
+  const applySketchProposal = ({ type, measurementFacetId, field, value }) => {
+    if (type !== "facet" || !measurementFacetId) return;
+    setEd((doc) => ({ ...doc, facets: doc.facets.map((f) => (f.id === measurementFacetId ? { ...f, [field]: value } : f)) }));
+    setDirty(true);
+  };
+
   const structOptions = (ed?.structures || []).filter((row) => row.ref).map((row) => [row.ref, row.name || STRUCTURE_TYPES.find((t) => t[0] === row.structure_type)?.[1] || "Structure"]);
   const facetOptions = (ed?.facets || []).filter((row) => row.ref).map((row) => [row.ref, row.facet_label || "Facet"]);
   const t = liveTotals;
@@ -220,6 +240,11 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             <Input className="w-28" type="number" placeholder="Height ft" value={row.approx_height_ft ?? ""} disabled={!editable} onChange={(e) => setRow("structures", i, "approx_height_ft", e.target.value)} />
             <Select value={row.attachment || "none"} disabled={!editable} onValueChange={(v) => setRow("structures", i, "attachment", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Attachment" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem><SelectItem value="attached">Attached</SelectItem><SelectItem value="detached">Detached</SelectItem></SelectContent></Select>
             {editable && <Button size="icon" variant="ghost" onClick={() => delRow("structures", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            {row.id
+              ? <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+              : <span className="text-xs text-slate-400">Save the worksheet to sketch this structure's roof.</span>}
           </div>
           <Input className="mt-2" placeholder="Structure notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "notes", e.target.value)} />
         </div>)}
@@ -293,6 +318,13 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       {rev.status === "locked" && <div className="text-xs text-slate-500"><Lock className="mr-1 inline h-3 w-3" />This revision is locked. Use “New revision” to make changes — history is preserved.</div>}
       <div className="rounded-lg border border-border p-3" data-testid="measurement-allphotos-card"><div className="mb-2 text-sm font-semibold text-slate-700">All measurement photos</div><PhotoGallery sourceUrl={`/mobile/photos/measurement/${rev.id}`} testid="measurement-allphotos" hideWhenEmpty={false} recordType="measurement_all" recordId={rev.id} /></div>
     </>}
+    {sketchFor && rev && <RoofSketchEditor
+      revision={{ id: rev.id, editable, status: rev.status }}
+      structure={{ id: sketchFor.id, name: sketchFor.name || "Structure" }}
+      facets={(ed?.facets || []).filter((f) => f.id)}
+      onMeasurementChanged={applySketchProposal}
+      onClose={() => { setSketchFor(null); if (rev?.id) listSketches(rev.id).then((rows) => setSketchStructIds(new Set(rows.map((r) => r.structure_id)))).catch(() => {}); }}
+    />}
   </div>;
 }
 

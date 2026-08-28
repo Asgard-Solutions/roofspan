@@ -242,6 +242,24 @@ function resolveFacetBoundary(doc, facet, vmap, emap) {
   return { points: loopPoints(ids, vmap), vertexIds: ids, error: null };
 }
 
+// Canonical key for a polygon BOUNDARY CYCLE. Invariant under starting-vertex rotation and under
+// reversal (CW vs CCW), but NOT under arbitrary reordering — the same coordinate set arranged into a
+// different boundary order yields a different key (so two genuinely different shapes are not duplicates).
+function polygonCycleKey(points) {
+  const r6 = (x) => Math.round(Number(x) * 1e6) / 1e6;
+  const seq = points.map((p) => `${r6(p[0])}:${r6(p[1])}`);
+  const n = seq.length;
+  if (n === 0) return "";
+  const rotations = (arr) => {
+    const out = [];
+    for (let s = 0; s < n; s++) out.push(arr.slice(s).concat(arr.slice(0, s)).join("|"));
+    return out;
+  };
+  const all = rotations(seq).concat(rotations(seq.slice().reverse()));
+  all.sort();
+  return all[0];
+}
+
 function validateSketch(input) {
   const doc = normalizeSketchDocument(input);
   const vmap = vertexMap(doc);
@@ -290,14 +308,13 @@ function validateSketch(input) {
   // --- cross-facet structural checks (only structurally valid facets) ---
   const validFacets = (doc.facets || []).filter((f) => facetPolys[f.id]);
 
-  // Duplicate facet: two facets whose CANONICAL resolved polygon geometry is identical (same set of
-  // coordinates). Works regardless of how the boundary was expressed — connected edge loops with no
-  // vertexIds, or manual polygons built from different vertex ids at the same coordinates.
-  const r6 = (x) => Math.round(x * 1e6) / 1e6;
-  const polyKey = (pts) => pts.map((p) => `${r6(p[0])},${r6(p[1])}`).sort().join("|");
+  // Duplicate facet: two facets whose CANONICAL boundary cycle is identical (rotation/reversal
+  // equivalent). Uses resolved geometry, so it catches connected edge-loops with no vertexIds and
+  // manual polygons built from different vertex ids at the same coordinates — while NOT flagging two
+  // different shapes that merely reuse the same coordinate set.
   const seenPoly = {};
   for (const f of validFacets) {
-    const key = polyKey(facetPolys[f.id]);
+    const key = polygonCycleKey(facetPolys[f.id]);
     if (seenPoly[key] !== undefined) {
       push(errors, { code: "duplicate_facet", facet_ids: [seenPoly[key], f.id],
         message: "Two facets describe the same polygon" });
@@ -339,5 +356,5 @@ function validateSketch(input) {
 module.exports = {
   findSharedEdges, validateSketch, polygonSelfIntersects, facetPoints, vertexMap, edgeMap,
   edgeLoopVertices, sameCycle, polygonsOverlap, segmentsCollinearOverlap, pointStrictlyInside,
-  facetComponents, loopPoints, resolveFacetBoundary,
+  facetComponents, loopPoints, resolveFacetBoundary, polygonCycleKey,
 };

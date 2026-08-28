@@ -1,5 +1,52 @@
 # RoofSpan — Product Requirements & Status
 
+## Plan 1 Task 4 — Office SVG Roof Sketch Editor (2026-06) — COMPLETE & locally verified
+First user-visible Roof Sketch feature. Field editor (Task 6) and Plan 2 imports NOT started. Changes
+staged locally on branch `main` (ahead of remote `770037d`); pending **Save to GitHub** + CI run.
+
+**Entry point:** Property → Lead/Inspection detail → Measurements (Measurement Worksheet) → Structures →
+each saved structure shows **Sketch Roof** (or **Edit Roof Sketch** if a sketch exists). Gated on a real
+structure id (must Save the worksheet first). Read-only for verified/locked revisions (New Revision path
+remains).
+
+**New files (frontend/src/components/roof-sketch/):**
+- `commands.js` — pure editor commands (add/move/deleteVertex, add/split/delete/setTypeEdge, create/
+  delete/pitch/orientation/labelFacet, setScale, setConfirmedEdgeLength, lock/unlockEdge, place/move/
+  delete/typePenetration, setProposalDecision, setEditMode). Each returns the next canonical document.
+- `historyCore.js` (pure) + `history.js` (React hook) — undo/redo capped at 100, redo cleared after a new
+  edit, drag commits via `pushFrom`.
+- `sketchApi.js` — GET/list/PUT adapter; parses 409 (conflict+server payload), 422 (validation), locked.
+- `RoofSketchCanvas.jsx` — native SVG: zoom/pan, select, connected-graph draw + closing loops, facet-from-
+  edges, manual polygon, shared-vertex drag with snapping, penetration place/drag, edge-type colors,
+  facet labels, validation shading. `non-scaling-stroke` keeps widths constant across zoom.
+- `SketchInspector.jsx` — scale/calibrate, edge (type/confirmed/lock + discrepancy), facet (label/pitch/
+  orientation), penetration controls.
+- `ProposalPanel.jsx` — shared `deriveProposals`/`compareProposal`; explicit Accept Proposed / Keep Current;
+  Unmapped facets cannot write to measurements (Accept disabled).
+- `RoofSketchEditor.jsx` — orchestrator (full-screen modal, toolbar, history, load/init, save + dirty/
+  conflict/validation states, keyboard Ctrl+Z/Y/Del/Esc, close-confirm).
+- `__tests__/commands.node.test.js` — 18 pure command/state assertions.
+
+**Modified:** `MeasurementWorksheet.jsx` (Sketch Roof button per structure; mounts editor; `applySketchProposal`
+updates the in-memory worksheet draft `area_sqft`, no auto-save/verify, no takeoff recalc). `frontend/
+package.json` + `yarn.lock` (`@roofspan/roof-sketch-core` file: dep). `packages/roof-sketch-core/topology.js`
++ `index.js` + `test/topology.node.test.js` (polygon-CYCLE duplicate normalization: rotation/reversal
+equivalent = duplicate; same coords in a different boundary order = NOT duplicate; concave regression tests).
+CI workflow path filters extended for the Office sketch files.
+
+**Proposal safety (confirmed):** geometry only proposes; Accept Proposed is explicit and updates only the
+mapped Worksheet draft fact + records `proposal_decisions`; Keep Current records rejection; locked measured
+edges keep their confirmed LF (discrepancy shown, never overwritten); unscaled sketches emit NO dimensional
+proposals; takeoff/estimate are never auto-recalculated.
+
+**Verification (local, all green):** node core 26 / topology 28 / edge_authority 10; frontend editor
+commands+history 18; backend sketch suite 6 passed / 0 required skips; regressions takeoff+measurement+
+photos 22 passed; mobile measurements/sketch/sync green; Office `yarn build` (CI=false, as the office-build
+job runs) succeeds. Testing agent: **15/15 Office UI scenarios PASSED (100%)**, no functional bugs (one
+cosmetic note on initial canvas centering). Undo/redo now also flags dirty state (review nit fixed).
+PENDING: Save-to-GitHub push + `Roof Takeoff Contract` Actions run (agent cannot push/read private Actions).
+
+
 ## Roof Sketch Foundation — Follow-up: licensing-aware API test + geometry duplicate detection (2026-06)
 Two targeted fixes on top of the closure pass. Editors/Plan 2 still NOT started. Changes staged locally,
 awaiting **Save to GitHub** (agent cannot push / cannot read private Actions).

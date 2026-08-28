@@ -28,6 +28,8 @@ module.exports = {
   polygonsOverlap: topology.polygonsOverlap,
   facetComponents: topology.facetComponents,
   edgeMap: topology.edgeMap,
+  resolveFacetBoundary: topology.resolveFacetBoundary,
+  polygonCycleKey: topology.polygonCycleKey,
   // proposals
   deriveProposals: proposals.deriveProposals,
   compareProposal: proposals.compareProposal,
