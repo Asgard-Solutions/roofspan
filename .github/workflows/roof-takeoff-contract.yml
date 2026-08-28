@@ -70,8 +70,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install test runner
-        run: python -m pip install --disable-pip-version-check pytest pytest-xdist
+      - name: Install test runner and migration verifier
+        run: python -m pip install --disable-pip-version-check pytest pytest-xdist alembic
       - name: Run deterministic roof measurement contracts
         env:
           PYTHONPATH: backend
@@ -80,6 +80,13 @@ jobs:
           backend/tests/test_takeoff_core.py
           backend/tests/test_measurement_validation.py
           backend/tests/test_measurement_completion_core.py
+      - name: Verify Alembic migration graph
+        working-directory: backend
+        run: |
+          heads="$(alembic -c alembic.ini heads)"
+          printf '%s\n' "$heads"
+          test "$(printf '%s\n' "$heads" | grep -c '(head)')" -eq 1
+          printf '%s\n' "$heads" | grep -q '^d9e0f1a2b3c4 '
       - name: Compile roof measurement backend modules
         run: >-
           python -m compileall -q
