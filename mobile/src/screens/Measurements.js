@@ -27,7 +27,15 @@ const uid = () => "r" + Math.random().toString(36).slice(2, 10);
 const numberOrNull = (v) => (v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 
 function initialPenetrations() {
-  return PEN_TYPES.map(([t]) => ({ _k: uid(), pen_type: t, quantity: 0, facet_ref: "" }));
+  return PEN_TYPES.map(([t]) => {
+    const ref = uid();
+    return { _k: ref, ref, pen_type: t, quantity: 0, facet_ref: "" };
+  });
+}
+
+function penForEdit(row) {
+  const ref = row.ref || row.id || row._k || uid();
+  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };
 }
 
 function edgeForEdit(e) {
@@ -61,7 +69,7 @@ export default function Measurements({ route, navigation }) {
       setStructures((body.structures || []).map((row) => ({ ...row, ref: row.ref || row.id || uid(), included_in_scope: row.included_in_scope !== false })));
       setFacets((body.facets || []).map((row) => ({ ...row, ref: row.ref || row.id || uid(), structure_ref: row.structure_ref || row.structure_id || "" })));
       setEdges((body.edges || []).map(edgeForEdit));
-      const loadedPens = (body.penetrations || []).map((row) => ({ ...row, _k: row._k || row.id || uid(), facet_ref: row.facet_ref || row.facet_id || "" }));
+      const loadedPens = (body.penetrations || []).map(penForEdit);
       const present = new Set(loadedPens.map((p) => p.pen_type));
       setPens([...loadedPens, ...initialPenetrations().filter((p) => !present.has(p.pen_type))]);
       setSummary(body.summary || {});
@@ -75,7 +83,7 @@ export default function Measurements({ route, navigation }) {
       setStructures((full.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })));
       setFacets((full.facets || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), structure_ref: row.structure_id || row.structure_ref || "" })));
       setEdges((full.edges || []).map(edgeForEdit));
-      const loadedPens = (full.penetrations || []).map((row) => ({ ...row, _k: row.id || uid(), facet_ref: row.facet_id || "" }));
+      const loadedPens = (full.penetrations || []).map(penForEdit);
       const present = new Set(loadedPens.map((p) => p.pen_type));
       setPens([...loadedPens, ...initialPenetrations().filter((p) => !present.has(p.pen_type))]);
       setSummary(full.summary || {});
@@ -162,7 +170,7 @@ export default function Measurements({ route, navigation }) {
       facet_ref: e.facet_ref || null, label: e.label || null, notes: e.notes || null, sort: i,
     })),
     penetrations: pens.filter((p) => (parseInt(p.quantity) || 0) > 0).map((p, i) => ({
-      pen_type: p.pen_type, quantity: parseInt(p.quantity) || 1, facet_ref: p.facet_ref || null,
+      ref: p.ref || p.id || p._k, pen_type: p.pen_type, quantity: parseInt(p.quantity) || 1, facet_ref: p.facet_ref || null,
       diameter_in: numberOrNull(p.diameter_in), width_in: numberOrNull(p.width_in), length_in: numberOrNull(p.length_in),
       notes: p.notes || null, sort: i,
     })),
