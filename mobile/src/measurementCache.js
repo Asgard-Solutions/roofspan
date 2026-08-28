@@ -25,6 +25,11 @@ function draftKey(scope) {
   return `measurement_draft:${s.kind}:${s.id}`;
 }
 
+function updateMutationId(revisionId) {
+  if (!revisionId) throw new Error("measurement_revision_required");
+  return `measurement-update:${String(revisionId)}`;
+}
+
 function pickCurrent(list) {
   const rows = Array.isArray(list) ? list.filter(Boolean) : [];
   if (!rows.length) return null;
@@ -54,4 +59,4 @@ function isLocalDraft(value) {
   return !!(value && value.local_draft === true && value.client_id);
 }
 
-module.exports = { scopeKey, detailKey, draftKey, pickCurrent, makeDraft, mergeDraft, isLocalDraft };
+module.exports = { scopeKey, detailKey, draftKey, updateMutationId, pickCurrent, makeDraft, mergeDraft, isLocalDraft };
