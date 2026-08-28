@@ -1,5 +1,51 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Closure Phase 1 — Identity-Preserving Measurement Persistence (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
+Refactored the editable-revision save path from delete+reinsert to **identity-preserving reconciliation**
+so a normal Measurement Worksheet save no longer churns child UUIDs and no longer CASCADE-wipes the
+associated MeasurementSketchDocuments. Backend-only + minimal frontend edge plumbing (per user 1a-adjusted /
+2a / 3a / 4b-minimal).
+
+**Backend (`services/measurements.py`):**
+- `replace_children` → new `_reconcile_children`: for structures/facets/edges/penetrations, a server-UUID
+  `ref` claims an existing row owned by THIS revision → UPDATE in place (UUID kept → sketch + photos
+  survive); temp/absent ref → INSERT; existing row omitted from the full PUT → DELETE (intentional; sketch
+  CASCADE fires by design). Cross-links resolve against BOTH preserved and newly inserted rows.
+- Ownership guard: a UUID `ref`/`structure_id`/`facet_id`/`facet_id_secondary` that belongs to another
+  revision or no longer exists → **409** with a generic message (never discloses foreign data, never
+  silently inserted). Non-UUID temp keys always mean NEW.
+- **Summary** handled as a singleton (no ref): present+existing → UPDATE, present+none → INSERT, null →
+  DELETE. `MeasurementRevisionExtension.structure_scope` rebuilt from the FINAL structure ids (deleted
+  ids drop out).
+- Photos: surviving children keep their UUIDs so photos are NEVER moved; only an intentionally-deleted
+  child's photos are retained on the measurement revision (`_retain_deleted_child_photos`). Removed the old
+  `_relink_replaced_photos` delete/reinsert relink.
+- `clone_revision` now builds an old→new **edge map** and passes it to `clone_sketches`; sketch relational
+  edge refs (`measurement_edge_id`/`relational_edge_id`, `target_type:"edge"`) are remapped.
+
+**Schema:** `EdgeIn.ref` added (existing MeasurementEdge.id or temp key). No DB migration (UUID PK suffices).
+
+**Frontend (`MeasurementWorksheet.jsx`, minimal plumbing only — NOT Phase 2 UI):** existing edges load with
+`ref = MeasurementEdge.id`; new edges get a temp ref; PUT payload sends `edges[].ref = row.ref || row.id ||
+row._k`. (Structures/facets/penetrations already sent refs.)
+
+**Tests:** new `backend/tests/test_measurement_sketch_survival.py` (Postgres-backed, hermetic, flush+savepoint
+isolation) proves: (1) normal save preserves every child UUID + both sketches survive + photos stay on the
+same entity UUIDs (0 moved to revision); (2) omitting a structure cascade-deletes its sketch and retains its
+photos on the revision; (3) mixed add/update/delete keeps survivors + sketches; (4) cross-revision ref,
+stale UUID, and foreign `facet_id` fallback each → 409, and the revision is unchanged afterward.
+
+**CI (`roof-takeoff-contract.yml`):** survival test + `services/measurements.py` / `schemas_measurements.py`
+/ `routers/measurements.py` / `MeasurementWorksheet.jsx` added to BOTH path-filter blocks; the survival test
+wired into the `sketch-backend-contract` pytest run.
+
+**Local verification (all green):** sketch backend contract 38 passed (service/concurrency/clone/authz/api +
+survival) incl. full measurement/takeoff/photo regressions; node core 26 / topology 28 / edge_authority 10;
+frontend editor commands+history 18; Office `CI=false yarn build` succeeds; ruff F/E9 clean on changed
+source. **PENDING:** user Save-to-GitHub → confirm remote commit → all 5 Roof Takeoff Contract jobs green
+(agent cannot push / cannot read private Actions). STOP for independent review after that.
+
+
 ## Task 4 Closure Pass — PARTIAL (2026-06): CI blocker fixed; large items handed off
 Branch `main`, HEAD `827f889` (== the reviewed remote main). Working tree contains verified fixes below;
 Field editor / Plan 2 NOT started.

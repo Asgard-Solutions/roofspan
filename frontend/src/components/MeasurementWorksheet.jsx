@@ -47,7 +47,7 @@ function toEditable(rev) {
     reported_area_sqft: rev?.reported_area_sqft ?? null,
     structures: (rev?.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })),
     facets: (rev?.facets || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), structure_ref: row.structure_id || row.structure_ref || "" })),
-    edges: (rev?.edges || []).map((row) => ({ ...row, _k: row.id || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "" })),
+    edges: (rev?.edges || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), _k: row.id || row._k || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "" })),
     penetrations: (rev?.penetrations || []).map(penetrationForEdit),
     summary: rev?.summary || {},
   };
@@ -139,7 +139,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       roof_material: row.roof_material || null, notes: row.notes || null, geometry: row.geometry || null, sort: i,
     })),
     edges: ed.edges.map((row, i) => ({
-      edge_type: row.edge_type, length_ft: parseFloat(row.length_ft) || 0, facet_ref: row.facet_ref || null,
+      ref: row.ref || row.id || row._k, edge_type: row.edge_type, length_ft: parseFloat(row.length_ft) || 0, facet_ref: row.facet_ref || null,
       facet_ref_secondary: row.facet_ref_secondary || null, label: row.label || null, notes: row.notes || null, sort: i,
     })),
     penetrations: ed.penetrations.map((row, i) => ({
@@ -267,7 +267,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         </div>)}
       </TableCard>
 
-      <TableCard title="Edges (linear feet)" onAdd={editable ? () => addRow("edges", { _k: uid(), edge_type: "eave", length_ft: "" }) : null} testid="edges">
+      <TableCard title="Edges (linear feet)" onAdd={editable ? () => addRow("edges", { _k: uid(), ref: uid(), edge_type: "eave", length_ft: "" }) : null} testid="edges">
         {ed.edges.map((row, i) => <div key={row._k || i} className="flex flex-wrap items-center gap-2">
           <Select value={row.edge_type} disabled={!editable} onValueChange={(v) => setRow("edges", i, "edge_type", v)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent>{EDGE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
           <Input className="w-28" type="number" placeholder="LF" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("edges", i, "length_ft", e.target.value)} />

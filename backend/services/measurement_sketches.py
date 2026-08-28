@@ -160,16 +160,17 @@ async def save_sketch(db: AsyncSession, revision_id: str, structure_id: str, *, 
     return _out(fresh)
 
 
-def _remap_sketch_document(doc: dict, structure_map: dict, facet_map: dict, penetration_map: dict) -> dict:
+def _remap_sketch_document(doc: dict, structure_map: dict, facet_map: dict, penetration_map: dict, edge_map: dict = None) -> dict:
     """Remap revision-scoped RELATIONAL ids embedded in a sketch when cloning to a new revision.
     Sketch graph ids (vertices/edges/facets *within* the drawing) are stable client ids and are left
     untouched; only references that point at relational DB records are remapped."""
+    edge_map = edge_map or {}
     if not isinstance(doc, dict):
         return {}
     d = dict(doc)
     if d.get("structure_id") is not None:
         d["structure_id"] = structure_map.get(str(d["structure_id"]), d["structure_id"])
-    rel = {"facet": facet_map, "penetration": penetration_map, "structure": structure_map}
+    rel = {"facet": facet_map, "penetration": penetration_map, "structure": structure_map, "edge": edge_map}
 
     def remap_ref(obj):
         if isinstance(obj, dict):
@@ -184,6 +185,9 @@ def _remap_sketch_document(doc: dict, structure_map: dict, facet_map: dict, pene
             for k in ("measurement_penetration_id", "relational_penetration_id"):
                 if o.get(k) is not None:
                     o[k] = penetration_map.get(str(o[k]), o[k])
+            for k in ("measurement_edge_id", "relational_edge_id"):
+                if o.get(k) is not None:
+                    o[k] = edge_map.get(str(o[k]), o[k])
             return {k: remap_ref(v) for k, v in o.items()}
         if isinstance(obj, list):
             return [remap_ref(x) for x in obj]
@@ -193,11 +197,12 @@ def _remap_sketch_document(doc: dict, structure_map: dict, facet_map: dict, pene
 
 
 async def clone_sketches(db: AsyncSession, from_revision_id, to_revision_id, structure_id_map: dict,
-                         facet_id_map: dict = None, penetration_id_map: dict = None) -> int:
+                         facet_id_map: dict = None, penetration_id_map: dict = None, edge_id_map: dict = None) -> int:
     """Copy sketch docs onto a cloned revision, remapping to new structure ids and remapping any
-    embedded relational references. Fresh version=1."""
+    embedded relational references (facet/penetration/edge). Fresh version=1."""
     facet_id_map = facet_id_map or {}
     penetration_id_map = penetration_id_map or {}
+    edge_id_map = edge_id_map or {}
     rows = (await db.execute(select(MeasurementSketchDocument).where(
         MeasurementSketchDocument.revision_id == from_revision_id))).scalars().all()
     copied = 0
@@ -205,7 +210,7 @@ async def clone_sketches(db: AsyncSession, from_revision_id, to_revision_id, str
         new_struct = structure_id_map.get(str(r.structure_id))
         if not new_struct:
             continue
-        new_doc = _remap_sketch_document(r.document or {}, structure_id_map, facet_id_map, penetration_id_map)
+        new_doc = _remap_sketch_document(r.document or {}, structure_id_map, facet_id_map, penetration_id_map, edge_id_map)
         new_doc["structure_id"] = str(new_struct)  # authoritative
         # Canonical normalization AFTER remap: reconcile the cloned document with its new authoritative
         # row fields (structure/edit_mode/schema_version). Fails loudly (422) if a legacy source sketch

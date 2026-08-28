@@ -39,6 +39,7 @@ class FacetIn(BaseModel):
 
 
 class EdgeIn(BaseModel):
+    ref: Optional[str] = None                 # existing MeasurementEdge.id (identity-preserving save) or temp client key
     edge_type: str = "eave"
     length_ft: float = 0
     facet_ref: Optional[str] = None
