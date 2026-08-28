@@ -12,6 +12,7 @@ import { getSketch, saveSketch } from "./sketchApi";
 import * as C from "./commands";
 import * as SL from "./saveLifecycle";
 import * as PL from "./proposalLifecycle";
+import { resolveKey } from "./keyboardGate";
 
 const SAVE_BADGE = {
   saved: ["Saved", "bg-emerald-100 text-emerald-800"], unsaved: ["Unsaved changes", "bg-amber-100 text-amber-800"],
@@ -28,12 +29,26 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const [loading, setLoading] = useState(true);
   const [save, setSave] = useState(() => SL.initSaveState(null));
   const saveRef = useRef(save);
-  useEffect(() => { saveRef.current = save; }, [save]);
+  // Authoritative, synchronous save-state controller: every transition updates the ref AND React state
+  // from the same code path so request-control decisions never race the async React state queue.
+  const commitSaveState = useCallback((nextOrUpdater) => {
+    const current = saveRef.current;
+    const next = typeof nextOrUpdater === "function" ? nextOrUpdater(current) : nextOrUpdater;
+    saveRef.current = next;
+    setSave(next);
+    return next;
+  }, []);
+  useEffect(() => { saveRef.current = save; }, [save]); // defensive only; not relied on for correctness
   const [mode, setMode] = useState("select");
   const [selection, setSelection] = useState(null);
   const [conflict, setConflict] = useState(null);
   const [validationMsg, setValidationMsg] = useState(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
+  const [closing, setClosing] = useState(false);       // Save & Close request in progress
+  const closeConfirmRef = useRef(false);
+  const closingRef = useRef(false);
+  useEffect(() => { closeConfirmRef.current = closeConfirm; }, [closeConfirm]);
+  useEffect(() => { closingRef.current = closing; }, [closing]);
   const sessionRef = useRef(PL.makeSession());     // editor-session worksheet changes (for safe Discard)
 
   const relFacets = useMemo(() => facets.filter((f) => f.id), [facets]);
@@ -47,15 +62,15 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
       try {
         const rec = await getSketch(revision.id, structure.id);
         if (!alive) return;
-        if (rec) { hist.reset(rec.document); docRef.current = rec.document; setSave(SL.initSaveState(rec.document_version)); }
-        else { const fresh = createSketchDocument({ structureId: structure.id }); hist.reset(fresh); docRef.current = fresh; setSave(SL.initSaveState(null)); }
+        if (rec) { hist.reset(rec.document); docRef.current = rec.document; commitSaveState(SL.initSaveState(rec.document_version)); }
+        else { const fresh = createSketchDocument({ structureId: structure.id }); hist.reset(fresh); docRef.current = fresh; commitSaveState(SL.initSaveState(null)); }
       } catch (e) { toast.error("Could not load roof sketch."); }
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
   }, [revision.id, structure.id]); // eslint-disable-line
 
-  const bumpEdit = useCallback(() => setSave((s) => SL.markEdited(s)), []);
+  const bumpEdit = useCallback(() => commitSaveState((s) => SL.markEdited(s)), [commitSaveState]);
   const doUndo = useCallback(() => { hist.undo(); bumpEdit(); }, [hist, bumpEdit]);
   const doRedo = useCallback(() => { hist.redo(); bumpEdit(); }, [hist, bumpEdit]);
   const ctl = useMemo(() => ({
@@ -97,35 +112,46 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     const onKey = (e) => {
       const tag = (e.target.tagName || "").toLowerCase();
       if (["input", "textarea", "select"].includes(tag) || e.target.isContentEditable) return;
-      const meta = e.ctrlKey || e.metaKey;
-      if (meta && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); }
-      else if (meta && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { e.preventDefault(); doRedo(); }
-      else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
-      else if (e.key === "Escape") { setSelection(null); setMode("select"); }
+      const action = resolveKey({ closeConfirm: closeConfirmRef.current, closing: closingRef.current, ctrlOrMeta: e.ctrlKey || e.metaKey, key: e.key, shift: e.shiftKey });
+      if (action === "none") return;
+      e.preventDefault();
+      if (action === "undo") doUndo();
+      else if (action === "redo") doRedo();
+      else if (action === "delete") deleteSelected();
+      else if (action === "deselect") { setSelection(null); setMode("select"); }
+      else if (action === "dismiss-modal") setCloseConfirm(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [doUndo, doRedo, deleteSelected]);
 
   const doSave = async () => {
-    // Prepare the request SYNCHRONOUSLY from the current state (via saveRef), never from side effects
-    // inside a state updater. Freeze a detached document snapshot so later local edits can't change it.
+    // HARD in-flight guard: exactly one active sketch-save per editor. Enforced on the authoritative ref
+    // so a re-enabled button (or a Save & Close after a normal Save) can never launch a second PUT that
+    // reuses the same CAS version. No second request preparation happens.
+    if (!SL.canBeginSave(saveRef.current)) return { ok: false, reason: "already_saving" };
+    // Prepare the request SYNCHRONOUSLY from the current state, freezing a detached document snapshot.
     const prep = SL.prepareSketchSave(saveRef.current, docRef.current);
-    saveRef.current = prep.nextSaveState;
-    setSave(prep.nextSaveState);
+    commitSaveState(prep.nextSaveState);   // saveRef.current.saving === true synchronously, before any await
     setConflict(null); setValidationMsg(null);
     const res = await saveSketch(revision.id, structure.id, { document: prep.snapshotDocument, editMode: prep.snapshotDocument.edit_mode, expectedVersion: prep.expectedVersion });
-    if (res.ok) { const g = prep.snapshotGeneration; setSave((s) => SL.resolveSaveSuccess(s, g, res.record.document_version)); toast.success("Roof sketch saved."); return true; }
-    if (res.kind === "conflict") { setSave((s) => SL.resolveSaveFailure(s, "conflict")); setConflict(res.server); toast.error("Sketch was changed by someone else."); }
-    else if (res.kind === "validation") { setSave((s) => SL.resolveSaveFailure(s, "validation")); setValidationMsg(res.message); toast.error("Server rejected the sketch."); }
-    else if (res.kind === "locked") { setSave((s) => SL.resolveSaveFailure(s, "error")); toast.error(res.message); }
-    else { setSave((s) => SL.resolveSaveFailure(s, "error")); toast.error(res.message || "Save failed."); }
-    return false;
+    if (res.ok) {
+      const next = commitSaveState((s) => SL.resolveSaveSuccess(s, prep.snapshotGeneration, res.record.document_version));
+      const clean = SL.isCleanState(next);
+      if (clean) toast.success("Roof sketch saved.");
+      else toast.message("The saved version completed, but newer sketch changes are still unsaved. Save again before closing.");
+      return { ok: true, clean };
+    }
+    if (res.kind === "conflict") { commitSaveState((s) => SL.resolveSaveFailure(s, "conflict")); setConflict(res.server); toast.error("Sketch was changed by someone else."); }
+    else if (res.kind === "validation") { commitSaveState((s) => SL.resolveSaveFailure(s, "validation")); setValidationMsg(res.message); toast.error("Server rejected the sketch."); }
+    else if (res.kind === "locked") { commitSaveState((s) => SL.resolveSaveFailure(s, "error")); toast.error(res.message); }
+    else { commitSaveState((s) => SL.resolveSaveFailure(s, "error")); toast.error(res.message || "Save failed."); }
+    return { ok: false, clean: false };
   };
 
   const reloadServer = async () => {
     const rec = await getSketch(revision.id, structure.id);
-    if (rec) { hist.reset(rec.document); docRef.current = rec.document; setSave(SL.adoptServerVersion(save, rec.document_version)); }
+    if (rec) { hist.reset(rec.document); docRef.current = rec.document; commitSaveState(SL.adoptServerVersion(saveRef.current, rec.document_version)); }
     setConflict(null); setSelection(null);
     toast.message("Loaded the latest server version. Your local edits were discarded.");
   };
@@ -177,8 +203,16 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const keepPending = (dec) => { const out = PL.keepCurrent({ decisions: doc.proposal_decisions || [] }, { target_type: dec.target_type, targetId: dec.target_id, metric: dec.metric }); ctl.run((d) => ({ doc: C.setDecisions(d, out.decisions) })); };
 
   const dirty = SL.isDirty(save) || ["conflict", "validation", "error"].includes(save.phase);
-  const requestClose = () => (dirty ? setCloseConfirm(true) : onClose());
-  const discardAndClose = () => { setCloseConfirm(false); if (onDiscardSession) onDiscardSession(sessionRef.current); onClose(); };
+  const requestClose = () => { if (save.saving) return; return dirty ? setCloseConfirm(true) : onClose(); };
+  const discardAndClose = () => { if (closing || save.saving) return; setCloseConfirm(false); if (onDiscardSession) onDiscardSession(sessionRef.current); onClose(); };
+  const saveAndClose = async () => {
+    if (closing || save.saving) return;                 // never launch a second save
+    setClosing(true);
+    const res = await doSave();
+    setClosing(false);
+    // Close ONLY when the save resolved clean. A newer edit made while Save(A) ran keeps the editor open.
+    if (res.ok && res.clean) { setCloseConfirm(false); onClose(); }
+  };
   const [badgeText, badgeCls] = SAVE_BADGE[save.phase] || SAVE_BADGE.saved;
 
   const ToolBtn = ({ id, icon: Icon, label }) => (
@@ -204,7 +238,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
         {!readOnly && <Button size="sm" variant="outline" disabled={!hist.canRedo} onClick={doRedo} data-testid="redo-btn"><Redo2 className="h-4 w-4" /></Button>}
         <Badge className={badgeCls} data-testid="save-state-badge">{badgeText}</Badge>
         {!readOnly && <Button size="sm" onClick={doSave} disabled={save.saving} data-testid="save-sketch-btn">{save.saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Save Sketch</Button>}
-        <Button size="sm" variant="ghost" onClick={requestClose} data-testid="close-sketch-btn"><X className="mr-1 h-4 w-4" />Close</Button>
+        <Button size="sm" variant="ghost" onClick={requestClose} disabled={save.saving} data-testid="close-sketch-btn"><X className="mr-1 h-4 w-4" />Close</Button>
       </div>
     </div>
 
@@ -256,9 +290,9 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
         <div className="text-sm font-semibold text-slate-800">You have unsaved roof sketch changes.</div>
         <div className="mt-1 text-sm text-slate-500">Save before closing, discard your changes, or keep editing. Discarding also rolls back any proposal values this editor applied to the Worksheet draft (your other edits are preserved).</div>
         <div className="mt-4 flex justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={() => setCloseConfirm(false)} data-testid="close-continue">Continue Editing</Button>
-          <Button size="sm" variant="outline" className="text-rose-600" onClick={discardAndClose} data-testid="close-discard">Discard Changes</Button>
-          <Button size="sm" onClick={async () => { const ok = await doSave(); if (ok) { setCloseConfirm(false); onClose(); } }} data-testid="close-save">Save &amp; Close</Button>
+          <Button size="sm" variant="ghost" onClick={() => setCloseConfirm(false)} disabled={closing} data-testid="close-continue">Continue Editing</Button>
+          <Button size="sm" variant="outline" className="text-rose-600" onClick={discardAndClose} disabled={closing} data-testid="close-discard">Discard Changes</Button>
+          <Button size="sm" onClick={saveAndClose} disabled={closing || save.saving} data-testid="close-save">{closing ? <><Loader2 className="mr-1 h-4 w-4 animate-spin" />Saving…</> : "Save & Close"}</Button>
         </div>
       </div>
     </div>}

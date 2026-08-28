@@ -24,6 +24,16 @@ export function isDirty(state) {
   return state.editGeneration !== state.lastPersistedGeneration;
 }
 
+// Exactly one active sketch-save per editor: a save may only begin when none is in flight.
+export function canBeginSave(state) {
+  return !state.saving;
+}
+
+// Is the editor safe to close after a save resolved? Only when nothing newer is unsaved.
+export function isCleanState(state) {
+  return !isDirty(state) && !["conflict", "validation", "error"].includes(state.phase);
+}
+
 // Freeze the generation + CAS version the request will carry. The caller freezes the DOCUMENT snapshot
 // alongside this so the request can never send a mutable ref that changes mid-flight.
 export function beginSave(state) {
