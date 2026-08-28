@@ -155,7 +155,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   const finalizePending = async (saved) => {
     if (!saved?.id) return;
     let rows;
-    try { rows = await listSketches(saved.id); } catch { return; }
+    try { rows = await listSketches(saved.id); }
+    catch { toast.message("Measurement saved successfully, but Roof Sketch proposal status could not be finalized. The measurement is safe; proposals remain pending and can be finalized later."); return; }
     const savedFacet = {}; (saved.facets || []).forEach((f) => { savedFacet[String(f.id)] = f; });
     const savedEdge = {}; (saved.edges || []).forEach((e) => { savedEdge[String(e.id)] = e; });
     const savedValueOf = (type, id, metric) => (type === "facet" ? savedFacet[String(id)]?.[metric] : type === "edge" ? savedEdge[String(id)]?.[metric] : undefined);

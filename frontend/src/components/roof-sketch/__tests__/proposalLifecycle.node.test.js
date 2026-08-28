@@ -110,11 +110,27 @@ const ok = (name) => { n++; console.log("  \u2713 " + name); };
   assert.ok(!plan.some((p) => p.target_id === "MF2")); ok("unrelated Worksheet edit (MF2) is never in the rollback plan");
 }
 
-// ---- stale mapping detection ----
+// ---- stale mapping detection + invalid pending cannot Apply ----
 {
   const valid = new Set(["MF1", "MF2"]);
   assert.strictEqual(P.isMappingValid("MF1", valid), true);
   assert.strictEqual(P.isMappingValid("MFX", valid), false); ok("stale/removed relational mapping is reported invalid");
+
+  const validPending = { target_type: "facet", target_id: "MF1", metric: "area_sqft", decision: P.PENDING, proposed_value: 428 };
+  const stalePending = { target_type: "facet", target_id: "MFX", metric: "area_sqft", decision: P.PENDING, proposed_value: 428 };
+  const staleEdge = { target_type: "edge", target_id: "MEX", metric: "length_ft", decision: P.PENDING, proposed_value: 24.5 };
+  assert.strictEqual(P.canApplyPending(validPending, valid), true); ok("valid pending facet target CAN be applied");
+  assert.strictEqual(P.canApplyPending(stalePending, valid), false); ok("invalid pending facet target CANNOT be applied");
+  assert.strictEqual(P.canApplyPending(staleEdge, new Set(["ME1"])), false); ok("invalid pending edge target CANNOT be applied");
+
+  // guard proof: when canApply is false the UI must not invoke the worksheet callback / produce success
+  let worksheetCalls = 0;
+  const maybeApply = (dec, set) => { if (!P.canApplyPending(dec, set)) return { applied: false }; worksheetCalls++; return { applied: true }; };
+  const r = maybeApply(stalePending, valid);
+  assert.strictEqual(r.applied, false); ok("invalid pending produces no Apply (no worksheet callback)");
+  assert.strictEqual(worksheetCalls, 0); ok("worksheet callback never invoked for an invalid pending target");
+  // pending stays pending unless the user explicitly resolves it
+  assert.strictEqual(stalePending.decision, P.PENDING); ok("invalid pending remains pending (never silently redirected)");
 }
 
 console.log("\nROOF SKETCH PROPOSAL LIFECYCLE: all " + n + " assertions passed");
