@@ -149,4 +149,25 @@ d.facets = [{ id: "f1", vertexIds: ["a", "b", "c", "d"] }];
 v = validateSketch(d);
 assert.ok(has(v.errors, "self_intersection")); ok("bowtie facet => self_intersection error");
 
+// --- duplicate detection via CANONICAL resolved geometry (not vertex-id sets) ---
+// (a) identical CONNECTED edge-loop facets with NO vertexIds
+{
+  const d = createSketchDocument({ structureId: "s1" }); // connected_graph
+  d.vertices = [{ id: "v1", x: 0, y: 0 }, { id: "v2", x: 8, y: 0 }, { id: "v3", x: 8, y: 8 }, { id: "v4", x: 0, y: 8 }];
+  d.edges = [{ id: "e1", v1: "v1", v2: "v2" }, { id: "e2", v1: "v2", v2: "v3" }, { id: "e3", v1: "v3", v2: "v4" }, { id: "e4", v1: "v4", v2: "v1" }];
+  d.facets = [{ id: "fa", edgeIds: ["e1", "e2", "e3", "e4"] }, { id: "fb", edgeIds: ["e1", "e2", "e3", "e4"] }];
+  const v = validateSketch(d);
+  assert.ok(has(v.errors, "duplicate_facet")); ok("identical connected edge-loop facets (no vertexIds) => duplicate_facet");
+}
+// (b) identical MANUAL polygons from DIFFERENT vertex ids but the SAME coordinates
+{
+  const d = createSketchDocument({ structureId: "s1", editMode: "manual_polygon" });
+  d.vertices = [
+    { id: "a1", x: 0, y: 0 }, { id: "a2", x: 6, y: 0 }, { id: "a3", x: 6, y: 6 }, { id: "a4", x: 0, y: 6 },
+    { id: "b1", x: 0, y: 0 }, { id: "b2", x: 6, y: 0 }, { id: "b3", x: 6, y: 6 }, { id: "b4", x: 0, y: 6 }];
+  d.facets = [{ id: "fa", vertexIds: ["a1", "a2", "a3", "a4"] }, { id: "fb", vertexIds: ["b1", "b2", "b3", "b4"] }];
+  const v = validateSketch(d);
+  assert.ok(has(v.errors, "duplicate_facet")); ok("identical manual polygons via different vertex ids/same coords => duplicate_facet");
+}
+
 console.log("\nTOPOLOGY HARDENING: all " + n + " assertions passed");

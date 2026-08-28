@@ -19,6 +19,7 @@ from core import get_current_user
 from models import MeasurementStructure
 from schemas_measurements import MeasurementRevisionIn, StructureIn
 from services import measurements as msvc
+from licensing import service as licensing_service
 from _sketch_fixtures import seed_property, seed_user, seed_lead, teardown, run_isolated
 
 DOC = {"schema_version": 1, "edit_mode": "connected_graph", "vertices": [{"id": "v1", "x": 0, "y": 0}], "edges": [], "facets": []}
@@ -43,6 +44,13 @@ async def _scenario():
     set_a = set_b = None
     aids = []
     try:
+        async with SessionLocal() as db:
+            # Establish an ACTIVE licensing state (dev-signed entitlement) so the SubscriptionGuard
+            # middleware permits the guarded sketch endpoints. Idempotent: a valid cache row is left
+            # as-is; a fresh CI database gets one created. Dev signing keys auto-generate if absent.
+            await licensing_service.bootstrap(db)
+        licensing_service.invalidate_snapshot()
+
         async with SessionLocal() as db:
             propA = await seed_property(db); propB = await seed_property(db)
             userA = await seed_user(db, role="sales", label="Rep A")

@@ -1,5 +1,25 @@
 # RoofSpan — Product Requirements & Status
 
+## Roof Sketch Foundation — Follow-up: licensing-aware API test + geometry duplicate detection (2026-06)
+Two targeted fixes on top of the closure pass. Editors/Plan 2 still NOT started. Changes staged locally,
+awaiting **Save to GitHub** (agent cannot push / cannot read private Actions).
+
+- **Hermetic API test now establishes ACTIVE licensing**: `test_measurement_sketch_api.py` calls
+  `licensing.service.bootstrap(db)` + `invalidate_snapshot()` before issuing requests. The app's
+  `SubscriptionGuardMiddleware` (runs under httpx ASGITransport) blocks guarded `/api/measurements/...`
+  routes with 403 `subscription_inactive` when the install is SUSPENDED. A fresh CI DB has no entitlement
+  → previously the sketch endpoint was never reached. Dev-mode signing keys auto-generate; bootstrap
+  force-refreshes an ACTIVE (`LICENSING_DEV_STATE=ACTIVE`) dev entitlement. Verified locally:
+  `effective_state_cached() -> ACTIVE` (business_allowed). Idempotent (no-op when a valid row exists).
+- **Duplicate-facet detection now uses CANONICAL resolved polygon geometry** (`topology.js`): keys each
+  valid facet by the sorted set of its resolved boundary coordinates (edge-loop-derived for
+  connected_graph, vertexIds for manual) instead of comparing raw vertex-id sets. Now catches:
+  (a) identical connected edge-loop facets that have NO vertexIds, and (b) identical manual polygons built
+  from DIFFERENT vertex ids at the SAME coordinates. New assertions in `topology.node.test.js`
+  (now 24 assertions).
+- **Local matrix**: node core 26 / topology 24 / edge_authority 10; backend sketch suite 6 passed, 0 skips.
+
+
 ## Roof Sketch Foundation — CLOSURE PASS (2026-06) — code complete & locally green; CI push pending
 Follows the earlier hardening pass. Addresses the final GitHub-review blockers. Editors (Plan 1 Task 4/6)
 and Plan 2 imports remain NOT started. Base commit `770037d` (== remote main). Changes staged locally,

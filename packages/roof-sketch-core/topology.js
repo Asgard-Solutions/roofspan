@@ -290,16 +290,19 @@ function validateSketch(input) {
   // --- cross-facet structural checks (only structurally valid facets) ---
   const validFacets = (doc.facets || []).filter((f) => facetPolys[f.id]);
 
-  // Duplicate facet (same vertex-id set describing the same polygon) is a hard error.
-  for (let i = 0; i < validFacets.length; i++) {
-    for (let j = i + 1; j < validFacets.length; j++) {
-      const a = validFacets[i], b = validFacets[j];
-      const sa = new Set((a.vertexIds || []).map(String));
-      const sb = new Set((b.vertexIds || []).map(String));
-      if (sa.size >= 3 && sa.size === sb.size && [...sa].every((x) => sb.has(x))) {
-        push(errors, { code: "duplicate_facet", facet_ids: [a.id, b.id],
-          message: "Two facets describe the same polygon" });
-      }
+  // Duplicate facet: two facets whose CANONICAL resolved polygon geometry is identical (same set of
+  // coordinates). Works regardless of how the boundary was expressed — connected edge loops with no
+  // vertexIds, or manual polygons built from different vertex ids at the same coordinates.
+  const r6 = (x) => Math.round(x * 1e6) / 1e6;
+  const polyKey = (pts) => pts.map((p) => `${r6(p[0])},${r6(p[1])}`).sort().join("|");
+  const seenPoly = {};
+  for (const f of validFacets) {
+    const key = polyKey(facetPolys[f.id]);
+    if (seenPoly[key] !== undefined) {
+      push(errors, { code: "duplicate_facet", facet_ids: [seenPoly[key], f.id],
+        message: "Two facets describe the same polygon" });
+    } else {
+      seenPoly[key] = f.id;
     }
   }
 
