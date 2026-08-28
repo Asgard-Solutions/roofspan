@@ -66,12 +66,34 @@ export function productStatus() {
     : { available: false, label: "Early access — launching soon", primaryCtaLabel: "Join Early Access", primaryCtaHref: "#early-access", primaryIsDownload: false };
 }
 
-export const SITE_NAV = [
-  { href: "#product", label: "Product", testid: "site-nav-product" },
-  { href: "#sales", label: "Sales & Canvassing", testid: "site-nav-sales" },
-  { href: "#abc", label: "ABC Supply", testid: "site-nav-abc" },
-  { href: "#tour", label: "Product Tour", testid: "site-nav-tour" },
-  { href: "#pricing", label: "Pricing", testid: "site-nav-pricing" },
-  { href: "#data", label: "Data & Security", testid: "site-nav-data" },
-  { href: "#faq", label: "FAQ", testid: "site-nav-faq" },
+// Primary header navigation — real, crawlable page links (no reliance on #anchors for SEO topics).
+export const PRIMARY_NAV = [
+  { href: "/roofing-crm-software/", label: "CRM", testid: "site-nav-crm" },
+  { href: "/roofing-canvassing-software/", label: "Canvassing", testid: "site-nav-canvassing" },
+  { href: "/roofing-territory-management/", label: "Territory", testid: "site-nav-territory" },
+  { href: "/abc-supply-integration/", label: "ABC Supply", testid: "site-nav-abc" },
+  { href: "/roofing-software-pricing/", label: "Pricing", testid: "site-nav-pricing" },
+  { href: "/resources/", label: "Resources", testid: "site-nav-resources" },
 ];
+
+// Grouped footer navigation covering every public page.
+export const FOOTER_NAV = {
+  Product: [
+    { href: "/roofing-crm-software/", label: "Roofing CRM" },
+    { href: "/roofing-canvassing-software/", label: "Canvassing" },
+    { href: "/roofing-territory-management/", label: "Territory Management" },
+    { href: "/roofing-field-sales-software/", label: "Field Sales" },
+    { href: "/roofing-property-intelligence/", label: "Property Intelligence" },
+    { href: "/roofing-job-management-software/", label: "Job Management" },
+    { href: "/abc-supply-integration/", label: "ABC Supply Integration" },
+  ],
+  Company: [
+    { href: "/roofing-software-pricing/", label: "Pricing" },
+    { href: "/about/", label: "About" },
+    { href: "/contact/", label: "Contact" },
+    { href: "/resources/", label: "Resources" },
+  ],
+};
+
+// Retained for backwards compatibility (homepage still exposes on-page section anchors).
+export const SITE_NAV = PRIMARY_NAV;

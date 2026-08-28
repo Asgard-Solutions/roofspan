@@ -1,9 +1,11 @@
 import { ArrowRight, Circle } from "lucide-react";
 import { productStatus, STARTING_PRICE } from "../src/config";
 import { AppMock, PhoneMock } from "./ui";
+import CtaButton from "./CtaButton";
 
 export default function Hero() {
   const status = productStatus();
+  const primaryHref = status.primaryCtaHref && status.primaryCtaHref.startsWith("#") ? `/${status.primaryCtaHref}` : status.primaryCtaHref;
   return (
     <section className="noise relative overflow-hidden bg-navy" aria-labelledby="hero-title">
       <div className="pointer-events-none absolute -right-40 -top-40 h-[520px] w-[520px] rounded-full bg-brand/20 blur-3xl" aria-hidden="true" />
@@ -26,16 +28,15 @@ export default function Hero() {
             ))}
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <a href={status.primaryCtaHref} className="btn-primary" data-testid="hero-primary-cta"
-               {...(status.primaryIsDownload ? {} : {})}>{status.primaryCtaLabel} <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
+            <CtaButton href={primaryHref} event={status.available ? "download_click" : "early_access_cta_click"} className="btn-primary" testid="hero-primary-cta">{status.primaryCtaLabel} <ArrowRight className="h-4 w-4" aria-hidden="true" /></CtaButton>
             <a href="#how-it-works" className="btn-ghost" data-testid="hero-secondary-cta">Explore the Workflow</a>
-            {!status.available ? <a href="#early-access" className="text-sm font-semibold text-slate-200 underline underline-offset-4 hover:text-white" data-testid="hero-book-walkthrough">or book a walkthrough</a> : null}
+            {!status.available ? <CtaButton href="/#early-access" event="walkthrough_request" className="text-sm font-semibold text-slate-200 underline underline-offset-4 hover:text-white" testid="hero-book-walkthrough">or book a walkthrough</CtaButton> : null}
           </div>
           <p className="mt-5 text-sm text-slate-300/70">Transparent pricing from <span className="font-semibold text-white">${STARTING_PRICE}/month</span> · Office + free Mobile companion</p>
         </div>
         <div className="relative flex items-center justify-center gap-4">
           <div className="relative w-full max-w-md">
-            <AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map showing thousands of properties clustered for canvass planning" />
+            <AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map showing thousands of properties clustered for canvass planning" priority />
             <span className="callout absolute left-3 top-14 z-10 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold text-slate-ink shadow-lift ring-1 ring-black/5" style={{ animationDelay: ".35s" }} data-testid="hero-callout-properties">
               <span className="h-2 w-2 rounded-full bg-brand" aria-hidden="true" /> 8,029 properties
             </span>

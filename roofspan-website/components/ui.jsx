@@ -9,7 +9,7 @@ export function SectionHeading({ eyebrow, title, sub, dark = false, id }) {
 }
 
 // Real RoofSpan Office screenshot inside a browser-chrome frame.
-export function AppMock({ src = "/screenshots/office-dashboard.png", label = "RoofSpan Office · Dashboard", alt = "RoofSpan Office dashboard showing live users, recent activity, and inventory metrics" }) {
+export function AppMock({ src = "/screenshots/office-dashboard.png", label = "RoofSpan Office · Dashboard", alt = "RoofSpan Office dashboard showing live users, recent activity, and inventory metrics", priority = false }) {
   return (
     <div className="card overflow-hidden ring-1 ring-slate-line/60" data-testid="app-screenshot">
       <div className="flex items-center gap-2 border-b border-slate-line bg-slate-soft px-4 py-3">
@@ -18,7 +18,7 @@ export function AppMock({ src = "/screenshots/office-dashboard.png", label = "Ro
         <span className="h-3 w-3 rounded-full bg-emerald-400" />
         <span className="ml-3 truncate text-xs font-semibold text-slate-muted">{label}</span>
       </div>
-      <img src={src} alt={alt} loading="lazy" className="block w-full" width={1440} height={900} />
+      <img src={src} alt={alt} loading={priority ? "eager" : "lazy"} fetchPriority={priority ? "high" : undefined} decoding="async" className="block w-full" width={1440} height={900} />
     </div>
   );
 }

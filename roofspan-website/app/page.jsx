@@ -5,8 +5,11 @@ import Gallery from "../components/Gallery";
 import TerritoryBanner from "../components/TerritoryBanner";
 import Pricing from "../components/Pricing";
 import { FinalCta, Footer } from "../components/Footer";
+import { FAQ } from "../src/content";
+import { webPageLd, JsonLd } from "../src/seo";
 
 export default function Home() {
+  const faqLd = { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: FAQ.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
   return (
     <>
       <Header />
@@ -27,6 +30,8 @@ export default function Home() {
         <FinalCta />
       </main>
       <Footer />
+      <JsonLd data={webPageLd({ title: "Roofing CRM & Canvassing Software | RoofSpan", description: "RoofSpan is roofing operations software for contractors that connects property intelligence, territory canvassing, field sales, jobs, and ABC Supply material workflows in one system.", path: "/" })} />
+      <JsonLd data={faqLd} />
     </>
   );
 }
