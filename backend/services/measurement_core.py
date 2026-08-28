@@ -55,6 +55,27 @@ def _penetration_totals(penetrations):
     return counts, total
 
 
+def photo_relink_plan(revision_id, old_ids_by_type: dict, replacement_ids_by_ref: dict) -> dict:
+    """Plan photo lineage when editable child rows are replaced.
+
+    Existing Field/Office rows send their old UUID as the client `ref`. When that logical child is
+    recreated, its photos follow the ref to the new UUID. If the child was intentionally removed,
+    the photo is retained on the measurement revision so evidence is never silently orphaned.
+    """
+    revision_id = str(revision_id)
+    plan = {}
+    for record_type, old_ids in (old_ids_by_type or {}).items():
+        replacements = (replacement_ids_by_ref or {}).get(record_type) or {}
+        for old_id in old_ids or []:
+            old_id = str(old_id)
+            replacement = replacements.get(old_id)
+            if replacement:
+                plan[(record_type, old_id)] = (record_type, str(replacement))
+            else:
+                plan[(record_type, old_id)] = ("measurement_revision", revision_id)
+    return plan
+
+
 def derive_measurement_totals(structures, facets, edges, penetrations):
     structures = list(structures or [])
     facets = list(facets or [])
@@ -66,7 +87,6 @@ def derive_measurement_totals(structures, facets, edges, penetrations):
         sid for sid, row in structure_by_id.items()
         if _get(row, "included_in_scope", True) is not False
     }
-    facet_by_id = {_sid(_get(row, "id")): row for row in facets}
 
     def facet_in_scope(facet):
         structure_id = _sid(_get(facet, "structure_id"))
