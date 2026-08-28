@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from models import (
     MeasurementSet, MeasurementRevision, MeasurementStructure, MeasurementFacet,
-    MeasurementEdge, MeasurementPenetration, MeasurementSummary,
+    MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
 )
 from core import MANAGE_ROLES, FIELD_ROLES
 
@@ -165,11 +165,12 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
     pens = (await db.execute(select(MeasurementPenetration).where(MeasurementPenetration.revision_id == rev.id))).scalars().all()
     summ = (await db.execute(select(MeasurementSummary).where(MeasurementSummary.revision_id == rev.id))).scalars().first()
     smap: dict[str, str] = {}
+    fmap: dict[str, str] = {}
+    pmap: dict[str, str] = {}
     for s in structs:
         r = MeasurementStructure(revision_id=new.id, name=s.name, structure_type=s.structure_type, stories=s.stories,
                                  approx_height_ft=s.approx_height_ft, attachment=s.attachment, notes=s.notes, sort=s.sort)
         db.add(r); await db.flush(); smap[str(s.id)] = r.id
-    fmap: dict[str, str] = {}
     for f in facets:
         r = MeasurementFacet(revision_id=new.id, structure_id=smap.get(str(f.structure_id)) if f.structure_id else None,
                              facet_label=f.facet_label, pitch_rise=f.pitch_rise, area_sqft=f.area_sqft, width_ft=f.width_ft,
@@ -182,14 +183,24 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
                                facet_id_secondary=fmap.get(str(e.facet_id_secondary)) if e.facet_id_secondary else None,
                                label=e.label, notes=e.notes, sort=e.sort))
     for p in pens:
-        db.add(MeasurementPenetration(revision_id=new.id, pen_type=p.pen_type, quantity=p.quantity,
-                                      facet_id=fmap.get(str(p.facet_id)) if p.facet_id else None,
-                                      diameter_in=p.diameter_in, width_in=p.width_in, length_in=p.length_in,
-                                      notes=p.notes, sort=p.sort))
+        r = MeasurementPenetration(revision_id=new.id, pen_type=p.pen_type, quantity=p.quantity,
+                                   facet_id=fmap.get(str(p.facet_id)) if p.facet_id else None,
+                                   diameter_in=p.diameter_in, width_in=p.width_in, length_in=p.length_in,
+                                   notes=p.notes, sort=p.sort)
+        db.add(r); await db.flush(); pmap[str(p.id)] = r.id
     if summ:
         cols = {c.name: getattr(summ, c.name) for c in MeasurementSummary.__table__.columns if c.name not in ("id", "revision_id")}
         db.add(MeasurementSummary(revision_id=new.id, **cols))
     await db.flush()
+    # Preserve photo attachments across the clone (new DB rows reuse the same stored object_path).
+    id_remap = {("measurement_revision", str(rev.id)): str(new.id)}
+    for old, nw in smap.items():
+        id_remap[("measurement_structure", old)] = str(nw)
+    for old, nw in fmap.items():
+        id_remap[("measurement_facet", old)] = str(nw)
+    for old, nw in pmap.items():
+        id_remap[("measurement_penetration", old)] = str(nw)
+    await _copy_photos(db, id_remap)
     return new
 
 
@@ -355,3 +366,51 @@ async def list_revisions_for_set(db: AsyncSession, set_id) -> list[dict]:
             "supersedes_revision_id": str(rev.supersedes_revision_id) if rev.supersedes_revision_id else None,
         })
     return out
+
+
+# ---------------- measurement photos ----------------
+PHOTO_RECORD_TYPES = ("measurement_revision", "measurement_structure", "measurement_facet", "measurement_penetration")
+
+
+async def resolve_revision_for_photo(db: AsyncSession, record_type: str, record_id: str):
+    """Given a measurement photo's parent record, return (revision, set) or (None, None) if not a
+    measurement record. Used for lock guards and sales scoping."""
+    if record_type not in PHOTO_RECORD_TYPES:
+        return None, None
+    rev = None
+    if record_type == "measurement_revision":
+        rev = await db.get(MeasurementRevision, record_id)
+    elif record_type == "measurement_structure":
+        row = await db.get(MeasurementStructure, record_id)
+        rev = await db.get(MeasurementRevision, row.revision_id) if row else None
+    elif record_type == "measurement_facet":
+        row = await db.get(MeasurementFacet, record_id)
+        rev = await db.get(MeasurementRevision, row.revision_id) if row else None
+    elif record_type == "measurement_penetration":
+        row = await db.get(MeasurementPenetration, record_id)
+        rev = await db.get(MeasurementRevision, row.revision_id) if row else None
+    if not rev:
+        return None, None
+    s = await db.get(MeasurementSet, rev.set_id)
+    return rev, s
+
+
+async def _copy_photos(db: AsyncSession, id_remap: dict) -> None:
+    """Duplicate Photo rows onto cloned measurement records (reusing the stored object_path)."""
+    from datetime import datetime, timezone as _tz
+    for (rtype, old_id), new_id in id_remap.items():
+        rows = (await db.execute(select(Photo).where(Photo.record_type == rtype, Photo.record_id == str(old_id)))).scalars().all()
+        for p in rows:
+            db.add(Photo(object_path=p.object_path, content_type=p.content_type, record_type=rtype,
+                         record_id=str(new_id), description=p.description, category=p.category,
+                         uploaded_by=p.uploaded_by, created_at=datetime.now(_tz.utc)))
+    await db.flush()
+
+
+async def revision_photo_records(db: AsyncSession, rev: MeasurementRevision) -> list[str]:
+    """All stable record_ids that can carry a photo for this revision (revision + its children)."""
+    ids = [str(rev.id)]
+    for model in (MeasurementStructure, MeasurementFacet, MeasurementPenetration):
+        rows = (await db.execute(select(model.id).where(model.revision_id == rev.id))).scalars().all()
+        ids.extend(str(x) for x in rows)
+    return ids

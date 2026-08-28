@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { queueMutation } from "../sync";
 import { C } from "../theme";
+import PhotoSection from "../components/PhotoSection";
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main"], ["attached_garage", "Att. Garage"], ["detached_garage", "Det. Garage"],
@@ -143,6 +144,12 @@ export default function Measurements({ route, navigation }) {
                 </View>
               </>
             )}
+            {f.id ? (
+              <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 8 }}>
+                <Text style={s.small}>Facet photos</Text>
+                <PhotoSection recordType="measurement_facet" recordId={f.id} />
+              </View>
+            ) : null}
           </View>
         ))}
       </Section>
@@ -193,6 +200,14 @@ export default function Measurements({ route, navigation }) {
           <TextInput style={[s.input, { minHeight: 60 }]} placeholder="Condition / access notes" value={summary.conditions_notes || ""} multiline editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, conditions_notes: v }))} testID="meas-notes" />
         </View>
       </Section>
+
+      {existing?.id ? (
+        <Section title="General measurement photos">
+          <PhotoSection recordType="measurement_revision" recordId={existing.id} />
+        </Section>
+      ) : (
+        <Text style={[s.small, { marginBottom: 12 }]}>Save the measurement first to attach photos to facets or the roof overall.</Text>
+      )}
 
       {!readonly && (
         <>

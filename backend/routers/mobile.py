@@ -337,13 +337,18 @@ async def upload_photo(request: Request, file: UploadFile = File(...), record_ty
                        description: str | None = Form(None), category: str | None = Form(None),
                        idempotency_key: str | None = Header(None),
                        user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    if record_type not in ("lead", "property", "visit", "inspection", "job", "purchase_order"):
+    if record_type not in ("lead", "property", "visit", "inspection", "job", "purchase_order",
+                           "measurement_revision", "measurement_structure", "measurement_facet", "measurement_penetration"):
         raise HTTPException(status_code=422, detail="Invalid record_type")
     if category and category not in _CATS:
         raise HTTPException(status_code=422, detail="Invalid category")
     if (file.content_type or "") not in _EXT:  # server-side file-type validation
         raise HTTPException(status_code=422, detail="Unsupported image type")
     await mauthz.assert_record_access(db, record_type, record_id, user)  # sales must own the parent record
+    if record_type.startswith("measurement_"):  # never attach to a locked/immutable revision
+        rev, _ = await meas_svc.resolve_revision_for_photo(db, record_type, record_id)
+        if rev and rev.is_immutable:
+            raise HTTPException(status_code=409, detail="This measurement revision is locked. Create a new revision to add photos.")
     prior, replay = await _reserve_idem(db, idempotency_key, "mobile_photo")
     if replay and prior and prior != "pending":
         ph = await db.get(Photo, prior)
@@ -392,6 +397,35 @@ async def photo_content(photo_id: str, user: User = Depends(require_roles(*FIELD
     except Exception:
         raise HTTPException(status_code=502, detail="Could not retrieve photo")
     return Response(content=data, media_type=ph.content_type)
+
+
+@router.delete("/photos/{photo_id}")
+async def delete_photo(photo_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    ph = await db.get(Photo, photo_id)
+    if not ph:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    await mauthz.assert_record_access(db, ph.record_type, ph.record_id, user)
+    if ph.record_type.startswith("measurement_"):  # locked revisions keep their photos immutable
+        rev, _ = await meas_svc.resolve_revision_for_photo(db, ph.record_type, ph.record_id)
+        if rev and rev.is_immutable:
+            raise HTTPException(status_code=409, detail="This measurement revision is locked; its photos cannot be deleted.")
+    await db.delete(ph)
+    await db.commit()
+    await log_action(db, user=user, action="photo.delete", entity_type=ph.record_type, entity_id=ph.record_id, request=request)
+    return {"ok": True}
+
+
+@router.get("/photos/measurement/{revision_id}")
+async def list_measurement_photos(revision_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """All photos across a measurement revision and its structures/facets/penetrations (the
+    'All measurement photos' view). Each row keeps its record_type/record_id for grouping."""
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    await mauthz.assert_record_access(db, "measurement_revision", revision_id, user)
+    ids = await meas_svc.revision_photo_records(db, rev)
+    rows = (await db.execute(select(Photo).where(Photo.record_id.in_(ids), Photo.record_type.in_(meas_svc.PHOTO_RECORD_TYPES)).order_by(Photo.created_at.desc()))).scalars().all()
+    return [_photo_out(p) for p in rows]
 
 
 def _photo_out(p: Photo, replayed: bool = False) -> dict:

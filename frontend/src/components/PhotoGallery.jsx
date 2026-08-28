@@ -15,7 +15,7 @@ import { Image as ImageIcon, Loader2, User, Clock, Download } from "lucide-react
  *   compact:    boolean (smaller thumbnails, for nested use inside a card)
  *   testid:     optional data-testid prefix
  */
-export default function PhotoGallery({ recordType, recordId, compact = false, hideWhenEmpty = false, testid }) {
+export default function PhotoGallery({ recordType, recordId, compact = false, hideWhenEmpty = false, testid, sourceUrl = null, sourceParams = null }) {
   const [photos, setPhotos] = useState([]);
   const [urls, setUrls] = useState({}); // photoId -> objectURL
   const [loading, setLoading] = useState(true);
@@ -39,9 +39,11 @@ export default function PhotoGallery({ recordType, recordId, compact = false, hi
     setPhotos([]);
 
     (async () => {
-      if (!recordType || !recordId) { setLoading(false); return; }
+      if (!sourceUrl && (!recordType || !recordId)) { setLoading(false); return; }
       try {
-        const { data } = await api.get("/mobile/photos", { params: { record_type: recordType, record_id: recordId } });
+        const { data } = sourceUrl
+          ? await api.get(sourceUrl, { params: sourceParams || {} })
+          : await api.get("/mobile/photos", { params: { record_type: recordType, record_id: recordId } });
         if (cancelled) return;
         setPhotos(data);
         // Fetch each image with auth -> blob object URL
@@ -65,7 +67,7 @@ export default function PhotoGallery({ recordType, recordId, compact = false, hi
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordType, recordId]);
+  }, [recordType, recordId, sourceUrl, JSON.stringify(sourceParams)]);
 
   // Revoke object URLs on unmount
   useEffect(() => () => revokeAll(), [revokeAll]);

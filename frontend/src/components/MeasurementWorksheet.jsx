@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import PhotoGallery from "@/components/PhotoGallery";
 import { Ruler, Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch } from "lucide-react";
 
 const STRUCTURE_TYPES = [
@@ -229,7 +230,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           <TableCard title="Roof facets" onAdd={editable ? () => addRow("facets", { ref: uid(), facet_label: `F${ed.facets.length + 1}`, pitch_rise: "", area_sqft: "" }) : null} testid="facets">
             <div className="hidden grid-cols-[90px_130px_110px_120px_1fr_40px] gap-2 text-[11px] font-semibold uppercase text-slate-400 sm:grid"><span>Facet</span><span>Structure</span><span>Pitch /12</span><span>Area sq ft</span><span>Notes</span><span /></div>
             {ed.facets.map((f, i) => (
-              <div key={f.ref || i} className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[90px_130px_110px_120px_1fr_40px]" data-testid={`facet-row-${i}`}>
+              <div key={f.ref || i} data-testid={`facet-block-${i}`}>
+              <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[90px_130px_110px_120px_1fr_40px]" data-testid={`facet-row-${i}`}>
                 <Input className="" placeholder="F1" value={f.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} data-testid={`facet-label-${i}`} />
                 <Select value={f.structure_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("facets", i, "structure_ref", v === "none" ? "" : v)}>
                   <SelectTrigger data-testid={`facet-structure-${i}`}><SelectValue placeholder="—" /></SelectTrigger>
@@ -239,6 +241,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
                 <Input type="number" placeholder="0" value={f.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} data-testid={`facet-area-${i}`} />
                 <Input placeholder="Notes" value={f.notes || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "notes", e.target.value)} data-testid={`facet-notes-${i}`} />
                 {editable && <Button size="icon" variant="ghost" onClick={() => delRow("facets", i)} data-testid={`facet-del-${i}`}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+              </div>
+              {f.id && <div className="mt-1 pl-1"><PhotoGallery compact hideWhenEmpty recordType="measurement_facet" recordId={f.id} testid={`facet-photos-${i}`} /></div>}
               </div>
             ))}
           </TableCard>
@@ -264,13 +268,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           {/* Penetrations */}
           <TableCard title="Penetrations" onAdd={editable ? () => addRow("penetrations", { _k: uid(), pen_type: "pipe_boot", quantity: 1 }) : null} testid="penetrations">
             {ed.penetrations.map((p, i) => (
-              <div key={p._k || i} className="flex flex-wrap items-center gap-2" data-testid={`pen-row-${i}`}>
+              <div key={p._k || i} data-testid={`pen-block-${i}`}>
+              <div className="flex flex-wrap items-center gap-2" data-testid={`pen-row-${i}`}>
                 <Select value={p.pen_type} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "pen_type", v)}>
                   <SelectTrigger className="w-40" data-testid={`pen-type-${i}`}><SelectValue /></SelectTrigger>
                   <SelectContent>{PEN_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
                 </Select>
                 <Input className="w-24" type="number" placeholder="Qty" value={p.quantity ?? 1} disabled={!editable} onChange={(e) => setRow("penetrations", i, "quantity", e.target.value)} data-testid={`pen-qty-${i}`} />
                 {editable && <Button size="icon" variant="ghost" onClick={() => delRow("penetrations", i)} data-testid={`pen-del-${i}`}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+              </div>
+              {p.id && <div className="mt-1 pl-1"><PhotoGallery compact hideWhenEmpty recordType="measurement_penetration" recordId={p.id} testid={`pen-photos-${i}`} /></div>}
               </div>
             ))}
           </TableCard>
@@ -295,6 +302,12 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           </div>
 
           {rev.status === "locked" && <div className="text-xs text-slate-500" data-testid="measurement-locked-note"><Lock className="mr-1 inline h-3 w-3" />This revision is locked. Use "New revision" to make changes — history is preserved.</div>}
+
+          {/* All measurement photos (revision + structures + facets + penetrations) */}
+          <div className="rounded-lg border border-border p-3" data-testid="measurement-allphotos-card">
+            <div className="mb-2 text-sm font-semibold text-slate-700">All measurement photos</div>
+            <PhotoGallery sourceUrl={`/mobile/photos/measurement/${rev.id}`} testid="measurement-allphotos" hideWhenEmpty={false} recordType="measurement_all" recordId={rev.id} />
+          </div>
         </>
       )}
     </div>

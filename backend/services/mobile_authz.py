@@ -100,5 +100,19 @@ async def assert_record_access(db: AsyncSession, record_type: str, record_id: st
         if not rec:
             raise HTTPException(status_code=404, detail="Visit not found")
         await assert_property_access(db, str(rec.property_id), user)
+    elif record_type.startswith("measurement_"):
+        from services import measurements as _meas
+        rev, mset = await _meas.resolve_revision_for_photo(db, record_type, record_id)
+        if not rev or not mset:
+            raise HTTPException(status_code=404, detail="Measurement record not found")
+        if mset.lead_id:
+            lead = await db.get(Lead, mset.lead_id)
+            if lead:
+                await assert_lead_access(db, lead, user)
+                return
+        if mset.property_id:
+            await assert_property_access(db, str(mset.property_id), user)
+            return
+        raise HTTPException(status_code=403, detail="You are not authorized for this measurement.")
     else:
         raise HTTPException(status_code=403, detail="You are not authorized for this record.")
