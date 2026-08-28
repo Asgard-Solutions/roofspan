@@ -1,4 +1,4 @@
-"""Roof Measurement schemas (Increment A).
+"""Roof Measurement schemas.
 
 A revision is treated as a whole document: create/replace send the full nested payload. Children
 cross-reference each other by a client-supplied `ref` (temporary key) so offline clients can build
@@ -14,6 +14,7 @@ class StructureIn(BaseModel):
     ref: Optional[str] = None                 # client temp key for facet linkage
     name: str = ""
     structure_type: str = "main_house"
+    included_in_scope: bool = True
     stories: Optional[float] = None
     approx_height_ft: Optional[float] = None
     attachment: Optional[str] = None
@@ -63,6 +64,7 @@ class PenetrationIn(BaseModel):
 
 class SummaryIn(BaseModel):
     existing_covering_type: Optional[str] = None
+    existing_condition: Optional[str] = None
     existing_layers: Optional[int] = None
     existing_underlayment: Optional[str] = None
     tearoff_notes: Optional[str] = None
@@ -72,6 +74,7 @@ class SummaryIn(BaseModel):
     replacement_sheets: Optional[int] = None
     full_redeck: bool = False
     decking_notes: Optional[str] = None
+    drip_edge_lf: Optional[float] = None
     ridge_vent_lf: Optional[float] = None
     intake_soffit_vent_lf: Optional[float] = None
     ventilation_notes: Optional[str] = None
@@ -82,7 +85,7 @@ class SummaryIn(BaseModel):
     downspout_lf: Optional[float] = None
     gutter_guard_lf: Optional[float] = None
     gutter_notes: Optional[str] = None
-    stories: Optional[float] = None
+    stories: Optional[float] = None            # legacy fallback; structures are authoritative when present
     steep_access: bool = False
     high_access: bool = False
     long_carry: bool = False
@@ -101,7 +104,7 @@ class MeasurementRevisionIn(BaseModel):
     report_id: Optional[str] = None
     reported_area_sqft: Optional[float] = None
     notes: Optional[str] = None
-    mark_field_complete: bool = False         # convenience: create + immediately mark field complete
+    mark_field_complete: bool = False
     structures: List[StructureIn] = []
     facets: List[FacetIn] = []
     edges: List[EdgeIn] = []
@@ -118,6 +121,7 @@ class StructureOut(BaseModel):
     id: str
     name: str
     structure_type: str
+    included_in_scope: bool = True
     stories: Optional[float] = None
     approx_height_ft: Optional[float] = None
     attachment: Optional[str] = None
@@ -164,18 +168,33 @@ class PenetrationOut(BaseModel):
 
 
 class MeasurementTotals(BaseModel):
+    # Physical measured totals (backward-compatible semantics).
     total_area_sqft: float = 0
     total_squares: float = 0
     facet_count: int = 0
     structure_count: int = 0
     predominant_pitch: Optional[float] = None
-    area_by_pitch: List[Dict[str, Any]] = []       # [{pitch, area_sqft, squares}]
-    area_by_structure: List[Dict[str, Any]] = []   # [{structure_id, name, area_sqft, squares}]
-    edge_totals: Dict[str, float] = {}             # {eave_lf, rake_lf, ridge_lf, hip_lf, valley_lf, sidewall_lf, headwall_lf, transition_lf}
+    area_by_pitch: List[Dict[str, Any]] = []
+    area_by_structure: List[Dict[str, Any]] = []
+    edge_totals: Dict[str, float] = {}
     penetration_counts: Dict[str, int] = {}
     penetration_total: int = 0
+
+    # Estimate/takeoff scope. Excluded structures remain in the physical totals above.
+    takeoff_area_sqft: float = 0
+    takeoff_squares: float = 0
+    takeoff_facet_count: int = 0
+    takeoff_structure_count: int = 0
+    takeoff_predominant_pitch: Optional[float] = None
+    takeoff_area_by_pitch: List[Dict[str, Any]] = []
+    takeoff_edge_totals: Dict[str, float] = {}
+    takeoff_penetration_counts: Dict[str, int] = {}
+    takeoff_penetration_total: int = 0
+    max_stories: Optional[float] = None
+    max_height_ft: Optional[float] = None
+
     reported_area_sqft: Optional[float] = None
-    reported_area_delta_sqft: Optional[float] = None   # total - reported (for Increment C warnings)
+    reported_area_delta_sqft: Optional[float] = None
 
 
 class MeasurementRevisionOut(BaseModel):
