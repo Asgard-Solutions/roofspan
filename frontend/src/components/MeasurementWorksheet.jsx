@@ -30,13 +30,23 @@ const STATUS_STYLE = {
 const uid = () => "r" + Math.random().toString(36).slice(2, 10);
 const num = (value) => value === "" || value == null ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
 
+function penetrationForEdit(row) {
+  const ref = row.ref || row.id || row._k || uid();
+  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_id || row.facet_ref || "" };
+}
+
+function newPenetration() {
+  const ref = uid();
+  return { _k: ref, ref, pen_type: "pipe_boot", quantity: 1 };
+}
+
 function toEditable(rev) {
   return {
     reported_area_sqft: rev?.reported_area_sqft ?? null,
     structures: (rev?.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })),
     facets: (rev?.facets || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), structure_ref: row.structure_id || row.structure_ref || "" })),
     edges: (rev?.edges || []).map((row) => ({ ...row, _k: row.id || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "" })),
-    penetrations: (rev?.penetrations || []).map((row) => ({ ...row, _k: row.id || uid(), facet_ref: row.facet_id || "" })),
+    penetrations: (rev?.penetrations || []).map(penetrationForEdit),
     summary: rev?.summary || {},
   };
 }
@@ -119,7 +129,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       facet_ref_secondary: row.facet_ref_secondary || null, label: row.label || null, notes: row.notes || null, sort: i,
     })),
     penetrations: ed.penetrations.map((row, i) => ({
-      pen_type: row.pen_type, quantity: parseInt(row.quantity) || 1, facet_ref: row.facet_ref || null,
+      ref: row.ref || row.id || row._k, pen_type: row.pen_type, quantity: parseInt(row.quantity) || 1, facet_ref: row.facet_ref || null,
       width_in: num(row.width_in), length_in: num(row.length_in), diameter_in: num(row.diameter_in), notes: row.notes || null, sort: i,
     })),
     summary: ed.summary || {},
@@ -242,7 +252,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         </div>)}
       </TableCard>
 
-      <TableCard title="Penetrations" onAdd={editable ? () => addRow("penetrations", { _k: uid(), pen_type: "pipe_boot", quantity: 1 }) : null} testid="penetrations">
+      <TableCard title="Penetrations" onAdd={editable ? () => addRow("penetrations", newPenetration()) : null} testid="penetrations">
         {ed.penetrations.map((row, i) => <div key={row._k || i} className="rounded border border-slate-100 p-2">
           <div className="flex flex-wrap items-center gap-2">
             <Select value={row.pen_type} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "pen_type", v)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent>{PEN_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
