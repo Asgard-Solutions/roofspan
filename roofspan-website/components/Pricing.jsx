@@ -4,11 +4,14 @@ import { Check } from "lucide-react";
 import { PRICE_PER_SEAT, MIN_SEATS, STARTING_PRICE, seatCost, productStatus } from "../src/config";
 import { INCLUSIONS } from "../src/content";
 import { SectionHeading } from "./ui";
+import { trackEvent } from "../src/analytics";
 
 export default function Pricing() {
   const [seats, setSeats] = useState(MIN_SEATS);
   const { seats: n, monthly, atMinimum } = seatCost(seats);
   const status = productStatus();
+  const primaryHref = status.primaryCtaHref && status.primaryCtaHref.startsWith("#") ? `/${status.primaryCtaHref}` : status.primaryCtaHref;
+  const onSeats = (v) => { setSeats(v); trackEvent("pricing_calculator_change", { seats: Number(v) || 0 }); };
   return (
     <section id="pricing" className="bg-white py-20" aria-labelledby="pricing-h">
       <div className="container-x">
@@ -22,17 +25,17 @@ export default function Pricing() {
                 <li key={i} className="flex items-start gap-2 text-slate-body"><Check className="mt-0.5 h-5 w-5 shrink-0 text-brand" aria-hidden="true" />{i}</li>
               ))}
             </ul>
-            <a href={status.primaryCtaHref} className="btn-primary mt-8 w-full sm:w-auto" data-testid="pricing-cta">{status.primaryCtaLabel}</a>
+            <a href={primaryHref} className="btn-primary mt-8 w-full sm:w-auto" data-testid="pricing-cta" onClick={() => trackEvent("pricing_cta_click", { link_url: primaryHref })}>{status.primaryCtaLabel}</a>
           </div>
           <div className="card bg-slate-soft p-8">
             <h3 className="font-display text-xl font-bold text-slate-ink">Estimate your monthly cost</h3>
             <label htmlFor="seat-input" className="mt-6 block text-sm font-semibold text-slate-body">Number of users</label>
             <div className="mt-2 flex items-center gap-4">
-              <input id="seat-input" type="range" min={MIN_SEATS} max={100} value={n} onChange={(e) => setSeats(e.target.value)}
+              <input id="seat-input" type="range" min={MIN_SEATS} max={100} value={n} onChange={(e) => onSeats(e.target.value)}
                 className="h-2 w-full accent-brand" aria-describedby="seat-help" data-testid="seat-range" />
             </div>
             <div className="mt-4 flex items-center gap-3">
-              <input type="number" min={MIN_SEATS} value={n} onChange={(e) => setSeats(e.target.value)}
+              <input type="number" min={MIN_SEATS} value={n} onChange={(e) => onSeats(e.target.value)}
                 className="w-24 rounded-lg border border-slate-line px-3 py-2 text-lg font-semibold" aria-label="Number of users" data-testid="seat-number" />
               <span className="text-slate-muted">users</span>
             </div>

@@ -1,4 +1,4 @@
-import { CONTACT_EMAIL, STARTING_PRICE } from "../src/config";
+import { CONTACT_EMAIL, STARTING_PRICE, FOOTER_NAV } from "../src/config";
 import EarlyAccessForm from "./EarlyAccessForm";
 
 export function FinalCta() {
@@ -23,25 +23,27 @@ export function Footer() {
     <footer className="border-t border-white/10 bg-navy-900 py-12 text-slate-300" aria-label="Footer">
       <div className="container-x grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <div className="flex items-center gap-2">
+          <a href="/" className="flex items-center gap-2" aria-label="RoofSpan home">
             <img src="/brand/favicon.png" alt="" width={28} height={28} className="h-7 w-7 rounded-md" aria-hidden="true" />
             <span className="font-display text-lg font-extrabold text-white">RoofSpan</span>
-          </div>
+          </a>
           <p className="mt-3 max-w-xs text-sm text-slate-400">Roofing operations software that connects your office and field crews on your own Windows system.</p>
         </div>
         <nav aria-label="Product">
           <p className="text-sm font-bold uppercase tracking-wide text-slate-500">Product</p>
           <ul className="mt-3 space-y-2 text-sm">
-            <li><a href="#product" className="hover:text-white">Product</a></li>
-            <li><a href="#how-it-works" className="hover:text-white">How it works</a></li>
-            <li><a href="#pricing" className="hover:text-white">Pricing</a></li>
-            <li><a href="#data" className="hover:text-white">Security & data</a></li>
+            {FOOTER_NAV.Product.map((l) => (
+              <li key={l.href}><a href={l.href} className="hover:text-white">{l.label}</a></li>
+            ))}
           </ul>
         </nav>
         <nav aria-label="Company">
-          <p className="text-sm font-bold uppercase tracking-wide text-slate-500">Get started</p>
+          <p className="text-sm font-bold uppercase tracking-wide text-slate-500">Company</p>
           <ul className="mt-3 space-y-2 text-sm">
-            <li><a href="#early-access" className="hover:text-white">Join early access</a></li>
+            {FOOTER_NAV.Company.map((l) => (
+              <li key={l.href}><a href={l.href} className="hover:text-white">{l.label}</a></li>
+            ))}
+            <li><a href="/#early-access" className="hover:text-white">Join early access</a></li>
             <li><a href={`mailto:${CONTACT_EMAIL}`} className="hover:text-white" data-testid="footer-contact">{CONTACT_EMAIL}</a></li>
           </ul>
         </nav>

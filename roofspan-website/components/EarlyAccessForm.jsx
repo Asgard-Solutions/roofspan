@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { LEAD_ENDPOINT, CONTACT_EMAIL } from "../src/config";
+import { trackEvent } from "../src/analytics";
 
 const TEAM_SIZES = ["1–5", "6–15", "16–40", "41–100", "100+"];
 
@@ -34,6 +35,7 @@ export default function EarlyAccessForm() {
     if (!validate()) return;
     // No approved endpoint configured -> transparent mailto fallback (never a fake success).
     if (!LEAD_ENDPOINT) {
+      trackEvent("early_access_submit", { method: "mailto", team_size: values.teamSize });
       window.location.href = buildMailto(values);
       setState("mailto");
       return;
@@ -45,6 +47,7 @@ export default function EarlyAccessForm() {
         body: JSON.stringify({ name: values.name, email: values.email, company: values.company, teamSize: values.teamSize, message: values.message }),
       });
       if (!res.ok) throw new Error(String(res.status));
+      trackEvent("early_access_submit", { method: "endpoint", team_size: values.teamSize });
       setState("success");
     } catch (err) {
       setState("error");

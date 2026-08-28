@@ -1,5 +1,17 @@
 # RoofSpan — Product Requirements & Status
 
+## Marketing Website — SEO Expansion (multi-page, structured data, sitemap, analytics) (2026-06) — COMPLETE & LOCALLY GREEN; no git ops
+Expanded `roofspan-website` (Next.js 14 static export) from a single page into a crawlable multi-page site.
+Canonical host standardized to `https://roofspan.io` (no www). Only verified RoofSpan capabilities described.
+- **New pages (App Router, each: unique title/description, canonical, OG, one H1, breadcrumbs, WebPage+BreadcrumbList JSON-LD, CTA, internal links):** /roofing-crm-software/, /roofing-canvassing-software/, /roofing-territory-management/, /roofing-field-sales-software/, /roofing-property-intelligence/, /abc-supply-integration/ (FAQPage + honest "not an official/certified ABC partner" note), /roofing-job-management-software/, /roofing-software-pricing/ (reuses seat calculator), /about/, /contact/, /resources/ + 6 articles under /resources/[slug]/.
+- **Homepage:** title "Roofing CRM & Canvassing Software | RoofSpan"; required meta description; internal links from BigThree/Product/MobileArea/ABC sections to the dedicated pages (no longer anchor-only). FAQPage + WebPage JSON-LD moved to homepage; Organization/SoftwareApplication/WebSite global in layout.
+- **Technical SEO:** `app/sitemap.js` + `app/robots.js` (replaced static public files; canonical host), `app/not-found.jsx` (branded 404, noindex → out/404.html served with HTTP 404), real `public/favicon.ico` (PNG-in-ICO) + icon metadata, env-driven Google/Bing verification.
+- **Analytics:** env-only GA4/GTM (`NEXT_PUBLIC_GA_MEASUREMENT_ID`/`NEXT_PUBLIC_GTM_ID`, no hard-coded IDs) via `components/Analytics.jsx` + `src/analytics.trackEvent`; events wired for header/hero/pricing/product CTAs, walkthrough, resource clicks, early-access submit.
+- **Perf:** hero image eager+fetchPriority, below-the-fold images lazy with width/height (no CLS), fonts already self-hosted via next/font.
+- **Tests:** new `__tests__/seo.test.jsx` (metadata/canonical/uniqueness/JSON-LD/sitemap/robots/favicon/404/no-fake-review); `jest.setup.js` IntersectionObserver polyfill; e2e rewritten (nav→pages, commercial page JSON-LD, resources, sitemap/robots/favicon 200, 404). Results: lint clean, Jest **53/53**, Playwright **6/6**, build 23 pages, 601 internal links OK, 0 console errors (desktop+mobile).
+- **Owner-only (not code):** Search Console/Bing account verification, directory/backlink/review/testimonial building, pasting GA4/GTM + verification env values. **Git:** user publishes via Save to GitHub (agent does not push).
+
+
 ## Task 4 Phase 3 Part A — Live Snap Gestures WIRED + closure corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops
 Completed the previously DEFERRED live canvas pointer-gesture wiring. Topology math stays pure; the React
 canvas is a thin coordinator. New pure `gestures.js` + `insertExistingVertexIntoEdge` command.

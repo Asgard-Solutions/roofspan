@@ -4,6 +4,8 @@ import { MapPin, Camera, FileText, Smartphone, ShoppingCart, ShieldCheck, Map, U
 
 const WF_ICONS = { leads: MapPin, inspections: Camera, estimates: FileText, coordination: Smartphone, materials: ShoppingCart, reporting: ShieldCheck };
 const BIG3_ICONS = { property: MapPin, territory: Map, abc: ShoppingCart };
+const BIG3_LINK = { property: "/roofing-property-intelligence/", territory: "/roofing-territory-management/", abc: "/abc-supply-integration/" };
+const BIG3_LINK_LABEL = { property: "Property intelligence", territory: "Territory management", abc: "ABC Supply integration" };
 
 export function BigThree() {
   return (
@@ -18,8 +20,9 @@ export function BigThree() {
               <div key={c.k} className="card flex flex-col p-7" data-testid={`big3-${c.k}`}>
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-brand/10"><Icon className="h-6 w-6 text-brand" aria-hidden="true" /></span>
                 <h3 className="mt-5 font-display text-xl font-extrabold text-slate-ink">{c.title}</h3>
-                <p className="mt-3 text-slate-body">{c.body}</p>
+                <p className="mt-3 flex-1 text-slate-body">{c.body}</p>
                 {c.note ? <p className="mt-4 text-xs text-slate-muted">{c.note}</p> : null}
+                <a href={BIG3_LINK[c.k]} className="mt-5 inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid={`big3-link-${c.k}`}>{BIG3_LINK_LABEL[c.k]} <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
               </div>
             );
           })}
@@ -66,6 +69,10 @@ export function Product() {
             );
           })}
         </div>
+        <div className="mt-8 flex flex-wrap gap-4">
+          <a href="/roofing-crm-software/" className="inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid="product-link-crm">Explore roofing CRM <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
+          <a href="/roofing-job-management-software/" className="inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid="product-link-jobs">Job management <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
+        </div>
       </div>
     </section>
   );
@@ -83,6 +90,10 @@ export function MobileArea() {
               <li key={t} className="flex items-start gap-3 text-slate-body"><Check className="mt-0.5 h-5 w-5 shrink-0 text-brand" aria-hidden="true" />{t}</li>
             ))}
           </ul>
+          <div className="mt-6 flex flex-wrap gap-4">
+            <a href="/roofing-field-sales-software/" className="inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid="sales-link-field">Field sales software <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
+            <a href="/roofing-canvassing-software/" className="inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid="sales-link-canvassing">Canvassing software <ArrowRight className="h-4 w-4" aria-hidden="true" /></a>
+          </div>
         </div>
         <div className="flex items-center justify-center gap-4">
           <div className="w-full max-w-sm"><AppMock src="/screenshots/office-map-satellite.jpg" label="RoofSpan Office · Territory Map" alt="RoofSpan Office satellite territory map with property pins and canvass sections" /></div>
@@ -108,6 +119,7 @@ export function AbcSupply() {
           ))}
         </div>
         <p className="mt-6 max-w-2xl text-sm text-slate-muted">Account-specific pricing reflects your ABC Supply pricing; it does not by itself confirm product availability.</p>
+        <div className="mt-6"><a href="/abc-supply-integration/" className="inline-flex items-center gap-2 font-semibold text-brand hover:underline" data-testid="abc-link">See the ABC Supply integration <ArrowRight className="h-4 w-4" aria-hidden="true" /></a></div>
       </div>
     </section>
   );

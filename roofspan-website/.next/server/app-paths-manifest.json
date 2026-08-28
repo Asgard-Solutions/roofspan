@@ -1,3 +1,18 @@
 {
-  "/page": "app/page.js"
+  "/page": "app/page.js",
+  "/robots.txt/route": "app/robots.txt/route.js",
+  "/sitemap.xml/route": "app/sitemap.xml/route.js",
+  "/abc-supply-integration/page": "app/abc-supply-integration/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/contact/page": "app/contact/page.js",
+  "/about/page": "app/about/page.js",
+  "/roofing-canvassing-software/page": "app/roofing-canvassing-software/page.js",
+  "/resources/[slug]/page": "app/resources/[slug]/page.js",
+  "/roofing-crm-software/page": "app/roofing-crm-software/page.js",
+  "/roofing-field-sales-software/page": "app/roofing-field-sales-software/page.js",
+  "/roofing-property-intelligence/page": "app/roofing-property-intelligence/page.js",
+  "/roofing-job-management-software/page": "app/roofing-job-management-software/page.js",
+  "/roofing-territory-management/page": "app/roofing-territory-management/page.js",
+  "/resources/page": "app/resources/page.js",
+  "/roofing-software-pricing/page": "app/roofing-software-pricing/page.js"
 }
