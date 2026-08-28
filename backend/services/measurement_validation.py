@@ -1,4 +1,4 @@
-"""Soft validation warnings for Roof Measurement Increment C.
+"""Soft validation warnings for Roof Measurement.
 
 Warnings never block field completion, verification, takeoff, or estimating.
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 def build_warnings(measurement: dict) -> list[dict]:
     totals = measurement.get("totals") or {}
+    structures = measurement.get("structures") or []
     facets = measurement.get("facets") or []
     edges = measurement.get("edges") or []
     warnings = []
@@ -51,6 +52,35 @@ def build_warnings(measurement: dict) -> list[dict]:
         warnings.append({
             "code": "UNIFORM_PITCH_SANITY", "severity": "info",
             "message": f"All {len(pitches)} measured facets use {pitches[0]:g}/12 pitch. Verify this is intentional.",
+        })
+
+    # Scope warnings are intentionally soft. They help Office catch an accidental exclusion without
+    # preventing a field rep from saving an incomplete roof while work is still in progress.
+    takeoff_area = totals.get("takeoff_area_sqft")
+    if takeoff_area is not None and float(entered or 0) > 0 and float(takeoff_area or 0) <= 0:
+        warnings.append({
+            "code": "NO_TAKEOFF_SCOPE", "severity": "warning",
+            "message": "Roof area is measured, but every measured structure is excluded from estimate/takeoff scope.",
+        })
+
+    facet_area_by_structure: dict[str, float] = {}
+    for facet in active_facets:
+        sid = facet.get("structure_id")
+        if sid:
+            key = str(sid)
+            facet_area_by_structure[key] = facet_area_by_structure.get(key, 0.0) + float(facet.get("area_sqft") or 0)
+    empty_included = []
+    for structure in structures:
+        if structure.get("included_in_scope", True) is False:
+            continue
+        sid = structure.get("id")
+        if sid and facet_area_by_structure.get(str(sid), 0.0) <= 0:
+            empty_included.append(structure.get("name") or structure.get("structure_type") or str(sid))
+    if empty_included:
+        warnings.append({
+            "code": "INCLUDED_STRUCTURE_EMPTY", "severity": "warning",
+            "message": "Included structure(s) have no measured roof area: " + ", ".join(empty_included) + ".",
+            "details": {"structures": empty_included},
         })
 
     return warnings
