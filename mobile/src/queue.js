@@ -20,11 +20,19 @@ function uuidv4() {
   });
 }
 
+function _measurementUpdateId(kind, path) {
+  if (kind !== "measurement_update" || !path) return null;
+  const parts = String(path).split("/").filter(Boolean);
+  const revisionId = parts[parts.length - 1];
+  return revisionId ? `measurement-update:${revisionId}` : null;
+}
+
 // Build a durable mutation. The client_id IS the Idempotency-Key and never changes on retry.
-// A caller may provide clientId when one logical offline draft must replace its own queued mutation
-// instead of creating duplicates (Roof Measurements uses this for brand-new unsynced drafts).
+// A caller may provide clientId when one logical offline draft must replace its own queued mutation.
+// Existing roof-measurement PUTs automatically get a revision-stable id so repeated offline edits
+// replace the same SQLite row instead of later conflicting with one another on a stale If-Match.
 function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null }) {
-  const id = clientId || uuidv4();
+  const id = clientId || _measurementUpdateId(kind, path) || uuidv4();
   return {
     client_id: id,
     idempotency_key: id,
