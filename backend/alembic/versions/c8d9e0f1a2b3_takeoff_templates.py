@@ -4,7 +4,9 @@ Revision ID: c8d9e0f1a2b3
 Revises: b7c8d9e0f1a2
 Create Date: 2026-08-27
 
-Additive-only Increment B schema. Physical measurement tables remain unchanged.
+Additive-only Increment B/C schema. Physical measurement tables remain unchanged. A database trigger
+locks the latest takeoff's measurement snapshot when its quote is accepted, so every acceptance path
+preserves the exact physical measurement revision used for the estimate.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -99,8 +101,40 @@ def upgrade() -> None:
     op.create_index("ix_estimate_takeoff_lines_takeoff_id", "estimate_takeoff_lines", ["takeoff_id"])
     op.create_index("ix_estimate_takeoff_lines_estimate_line_item_id", "estimate_takeoff_lines", ["estimate_line_item_id"])
 
+    op.execute("""
+        CREATE OR REPLACE FUNCTION roofspan_lock_takeoff_measurement_on_quote_accept()
+        RETURNS trigger AS $$
+        DECLARE selected_revision uuid;
+        BEGIN
+            IF NEW.status = 'accepted' AND (OLD.status IS DISTINCT FROM NEW.status) AND NEW.estimate_id IS NOT NULL THEN
+                SELECT et.measurement_revision_id INTO selected_revision
+                FROM estimate_takeoffs et
+                WHERE et.estimate_id = NEW.estimate_id
+                ORDER BY et.generated_at DESC, et.id DESC
+                LIMIT 1;
+
+                IF selected_revision IS NOT NULL THEN
+                    UPDATE measurement_revisions
+                    SET status = 'locked', is_immutable = TRUE,
+                        locked_by = COALESCE(NEW.accepted_by, 'quote-acceptance'),
+                        locked_at = COALESCE(NEW.accepted_at, now()), updated_at = now()
+                    WHERE id = selected_revision AND is_immutable = FALSE;
+                END IF;
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    op.execute("""
+        CREATE TRIGGER trg_lock_takeoff_measurement_on_quote_accept
+        AFTER UPDATE OF status ON quotes
+        FOR EACH ROW EXECUTE FUNCTION roofspan_lock_takeoff_measurement_on_quote_accept();
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS trg_lock_takeoff_measurement_on_quote_accept ON quotes")
+    op.execute("DROP FUNCTION IF EXISTS roofspan_lock_takeoff_measurement_on_quote_accept()")
     op.drop_table("estimate_takeoff_lines")
     op.drop_table("estimate_takeoffs")
     op.drop_table("takeoff_rules")
