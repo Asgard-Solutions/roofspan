@@ -1,5 +1,5 @@
-"""Pure contracts for completed roof-measurement derived totals."""
-from services.measurement_core import derive_measurement_totals
+"""Pure contracts for completed roof-measurement behavior."""
+from services.measurement_core import derive_measurement_totals, photo_relink_plan
 
 
 def _sample():
@@ -72,3 +72,32 @@ def test_all_structures_included_by_default_for_backward_compatibility():
         row.pop("included_in_scope", None)
     totals = derive_measurement_totals(structures, facets, edges, penetrations)
     assert totals["takeoff_area_sqft"] == totals["total_area_sqft"] == 3600
+
+
+def test_editable_save_relinks_photos_for_children_that_survive_by_client_ref():
+    plan = photo_relink_plan(
+        "revision-1",
+        {
+            "measurement_structure": ["structure-old"],
+            "measurement_facet": ["facet-old"],
+            "measurement_penetration": ["pen-old"],
+        },
+        {
+            "measurement_structure": {"structure-old": "structure-new"},
+            "measurement_facet": {"facet-old": "facet-new"},
+            "measurement_penetration": {"pen-old": "pen-new"},
+        },
+    )
+    assert plan[("measurement_structure", "structure-old")] == ("measurement_structure", "structure-new")
+    assert plan[("measurement_facet", "facet-old")] == ("measurement_facet", "facet-new")
+    assert plan[("measurement_penetration", "pen-old")] == ("measurement_penetration", "pen-new")
+
+
+def test_editable_save_preserves_photos_from_deleted_children_on_revision():
+    plan = photo_relink_plan(
+        "revision-1",
+        {"measurement_facet": ["facet-deleted"], "measurement_penetration": ["pen-deleted"]},
+        {"measurement_facet": {}, "measurement_penetration": {}},
+    )
+    assert plan[("measurement_facet", "facet-deleted")] == ("measurement_revision", "revision-1")
+    assert plan[("measurement_penetration", "pen-deleted")] == ("measurement_revision", "revision-1")
