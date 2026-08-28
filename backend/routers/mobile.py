@@ -18,7 +18,9 @@ from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log
 from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
+from services import measurement_sketches as sketch_svc
 from schemas_measurements import MeasurementRevisionIn
+from schemas_sketch import SketchWriteIn
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -322,6 +324,50 @@ async def get_measurement(revision_id: str, user: User = Depends(require_roles(*
     s = await db.get(MeasurementSet, rev.set_id)
     await _assert_measurement_scope(db, s, user)
     return await meas_svc.build_out(db, rev)
+
+
+# ---- Field roof sketches (Plan 1 Task 3): mirror Office, same service, salesperson-scoped ----
+@router.get("/measurements/{revision_id}/sketches")
+async def mobile_list_sketches(revision_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    await _assert_measurement_scope(db, await db.get(MeasurementSet, rev.set_id), user)
+    return await sketch_svc.list_sketches(db, revision_id)
+
+
+@router.get("/measurements/{revision_id}/sketches/{structure_id}")
+async def mobile_get_sketch(revision_id: str, structure_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    await _assert_measurement_scope(db, await db.get(MeasurementSet, rev.set_id), user)
+    out = await sketch_svc.get_sketch(db, revision_id, structure_id)
+    if not out:
+        raise HTTPException(status_code=404, detail="No sketch for this structure yet")
+    return out
+
+
+@router.put("/measurements/{revision_id}/sketches/{structure_id}")
+async def mobile_put_sketch(revision_id: str, structure_id: str, payload: SketchWriteIn, request: Request,
+                            user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    await _assert_measurement_scope(db, await db.get(MeasurementSet, rev.set_id), user)
+    try:
+        out = await sketch_svc.save_sketch(db, revision_id, structure_id, edit_mode=payload.edit_mode,
+                                           document=payload.document, schema_version=payload.schema_version,
+                                           expected_version=payload.expected_version, user=user)
+    except sketch_svc.SketchConflict as c:
+        server = dict(c.server)
+        for k in ("created_at", "updated_at"):
+            if server.get(k) is not None and not isinstance(server[k], str):
+                server[k] = server[k].isoformat()
+        raise HTTPException(status_code=409, detail={"message": "This roof sketch changed on the server since your copy.", "server": server})
+    await log_action(db, user=user, action="measurement.sketch.update", entity_type="measurement_sketch", entity_id=structure_id, detail={"via": "mobile", "revision_id": revision_id}, request=request)
+    await db.commit()
+    return out
 
 
 

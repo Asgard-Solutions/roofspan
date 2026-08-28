@@ -94,6 +94,8 @@ app.include_router(customers.router)
 app.include_router(inspections.router)
 from routers import measurements as measurements_router
 app.include_router(measurements_router.router)
+from routers import measurement_sketches as measurement_sketches_router
+app.include_router(measurement_sketches_router.router)
 app.include_router(estimates.router)
 from routers import estimating as estimating_router
 app.include_router(estimating_router.router)
