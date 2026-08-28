@@ -1,5 +1,36 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 2 FINAL Save/Close Race Closure (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops (user publishes)
+Closed the save/close concurrency defect on the approved Phase 2 editor. Architecture NOT rewritten.
+
+- **One active sketch-save per editor:** `RoofSketchEditor` now drives all save-state transitions through a
+  synchronous, ref-backed `commitSaveState` (updates `saveRef.current` AND React state in one path).
+  `doSave()` opens with a HARD `SL.canBeginSave(saveRef.current)` guard → returns `{ok:false,
+  reason:"already_saving"}` without preparing a second request or reusing the CAS version. `prepareSketchSave`
+  (synchronous, detached `structuredClone` snapshot, real existing-sketch `expected_version`) preserved.
+- **doSave returns `{ok, clean}`:** `clean = SL.isCleanState(next)` computed against the resolved ref-backed
+  state — a newer edit made while Save(A) ran ⇒ `clean:false` (server version still retained,
+  `lastPersistedGeneration`=A, `editGeneration`=A+B, dirty).
+- **Save & Close never closes dirty:** `saveAndClose()` closes ONLY when `res.ok && res.clean`; otherwise
+  keeps the editor open, preserves the newer edit, and warns "Save again before closing." Close button
+  disabled while `save.saving`; modal buttons (Save & Close / Discard / Continue) disabled while `closing`.
+- **True modal:** extracted pure `keyboardGate.resolveKey()` — while the unsaved-close confirmation is open,
+  Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z/Delete/Backspace are all swallowed (no geometry/history/selection mutation);
+  Escape only dismisses the confirmation (ignored while a Save & Close is running).
+
+**New pure helpers:** `SL.canBeginSave`, `SL.isCleanState`, `keyboardGate.js`.
+**Contracts (CI office-build, now 5 files):** commands 18 / mapping 18 / saveLifecycle 19 / **saveCloseLifecycle
+29** / proposalLifecycle 24. New file proves: second save rejected (no 2nd prepare, CAS used once), saveRef
+saving-flag synchronous on begin/success/failure, Save(A)+Edit(B)→clean=false+open, clean Save&Close→close,
+409/422/generic stay dirty, close blocked while saving, and the full modal keyboard-gate matrix.
+
+**Local verification (all green):** office contracts 18/18/19/29/24; office `CI=false yarn build` OK.
+`frontend/yarn.lock` unchanged. Files changed (5): `RoofSketchEditor.jsx`, `saveLifecycle.js`,
+`keyboardGate.js` (new), `__tests__/saveCloseLifecycle.node.test.js` (new), `roof-takeoff-contract.yml`.
+Backend/shared-core/mobile untouched this pass. **STOP** after local green per instruction (no git ops; user
+publishes). Do NOT start Phase 3 / Field editor / Plan 2.
+
+
 ## Task 4 Phase 2 FINAL Closure Corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
 Three integration defects fixed on top of the approved Phase 2 architecture (baseline main `02206393`, CI run
 33204137410 green). Architecture NOT rewritten.

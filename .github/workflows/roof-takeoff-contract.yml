@@ -258,11 +258,12 @@ jobs:
         run: npm install --global yarn@1.22.22
       - name: Install Office dependencies
         run: yarn install --frozen-lockfile
-      - name: Roof Sketch editor contracts (commands/history/mapping/save-race/proposal-lifecycle)
+      - name: Roof Sketch editor contracts (commands/history/mapping/save-race/close-race/proposal-lifecycle)
         run: >-
           node src/components/roof-sketch/__tests__/commands.node.test.js &&
           node src/components/roof-sketch/__tests__/mapping.node.test.js &&
           node src/components/roof-sketch/__tests__/saveLifecycle.node.test.js &&
+          node src/components/roof-sketch/__tests__/saveCloseLifecycle.node.test.js &&
           node src/components/roof-sketch/__tests__/proposalLifecycle.node.test.js
       - name: Build Office UI
         env:
