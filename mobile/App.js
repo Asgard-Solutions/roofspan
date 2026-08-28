@@ -24,6 +24,7 @@ import Property from "./src/screens/Property";
 import Jobs from "./src/screens/Jobs";
 import JobDetail from "./src/screens/JobDetail";
 import Inspection from "./src/screens/Inspection";
+import Measurements from "./src/screens/Measurements";
 import More from "./src/screens/More";
 
 const Tab = createBottomTabNavigator();
@@ -39,6 +40,7 @@ function MapNav() {
       <MapStack.Screen name="Property" component={Property} options={{ title: "Property" }} />
       <MapStack.Screen name="NewLead" component={NewLead} options={{ title: "New Lead" }} />
       <MapStack.Screen name="Inspection" component={Inspection} />
+      <MapStack.Screen name="Measurements" component={Measurements} options={{ title: "Roof measurements" }} />
     </MapStack.Navigator>
   );
 }
@@ -58,6 +60,7 @@ function LeadsNav() {
       <LeadStack.Screen name="LeadDetail" component={LeadDetail} options={{ title: "Lead" }} />
       <LeadStack.Screen name="NewLead" component={NewLead} options={{ title: "New Lead" }} />
       <LeadStack.Screen name="Inspection" component={Inspection} />
+      <LeadStack.Screen name="Measurements" component={Measurements} options={{ title: "Roof measurements" }} />
     </LeadStack.Navigator>
   );
 }

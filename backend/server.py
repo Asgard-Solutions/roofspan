@@ -92,6 +92,8 @@ app.include_router(building_tiles.router)
 app.include_router(leads.router)
 app.include_router(customers.router)
 app.include_router(inspections.router)
+from routers import measurements as measurements_router
+app.include_router(measurements_router.router)
 app.include_router(estimates.router)
 from routers import estimating as estimating_router
 app.include_router(estimating_router.router)

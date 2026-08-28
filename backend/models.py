@@ -1046,3 +1046,146 @@ class CanvassSectionProperty(Base):
     property_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+
+# ==========================================================================================
+# Roof Measurement (Increment A) — snapshot-revision model.
+# Chain: Property -> Inspection -> MeasurementSet -> MeasurementRevision(1/2/3) ->
+#        Structures / Facets / Edges / Penetrations / Summary.
+# Each revision is its own immutable snapshot once verified/locked. Draft revisions are editable;
+# editing a verified/locked revision creates a NEW revision that supersedes it. Totals (roof area,
+# squares, area-by-pitch, edge LF) are DERIVED from children, never independently entered.
+# Waste is intentionally NOT stored here — it is an estimating assumption (Increment B).
+# ==========================================================================================
+
+class MeasurementSet(Base):
+    """Container ("measurement group") tying all revisions to an inspection/property/lead."""
+    __tablename__ = "measurement_sets"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    inspection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("inspections.id", ondelete="SET NULL"), nullable=True, index=True)
+    property_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class MeasurementRevision(Base):
+    __tablename__ = "measurement_revisions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    set_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_sets.id", ondelete="CASCADE"), nullable=False, index=True)
+    revision_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="draft", nullable=False, index=True)  # draft | field_complete | office_verified | locked
+    supersedes_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    is_immutable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # True once locked or referenced by accepted quote/job (B)
+    source: Mapped[str] = mapped_column(String(24), default="field", nullable=False)  # field | office | imported | blueprint | aerial | other
+    provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    report_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reported_area_sqft: Mapped[float | None] = mapped_column(Float, nullable=True)  # provider report total, for reconciliation
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    field_complete_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    field_complete_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MeasurementStructure(Base):
+    __tablename__ = "measurement_structures"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    structure_type: Mapped[str] = mapped_column(String(32), default="main_house", nullable=False)  # main_house|attached_garage|detached_garage|porch|addition|shed|other
+    stories: Mapped[float | None] = mapped_column(Float, nullable=True)
+    approx_height_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    attachment: Mapped[str | None] = mapped_column(String(16), nullable=True)  # attached|detached
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class MeasurementFacet(Base):
+    __tablename__ = "measurement_facets"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    structure_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_structures.id", ondelete="SET NULL"), nullable=True, index=True)
+    facet_label: Mapped[str] = mapped_column(String(24), default="", nullable=False)  # stable F1, F2...
+    pitch_rise: Mapped[float | None] = mapped_column(Float, nullable=True)  # rise over fixed run of 12 (supports 0.5, 2.5, ...)
+    area_sqft: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    width_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    length_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    orientation_azimuth: Mapped[float | None] = mapped_column(Float, nullable=True)
+    roof_material: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    geometry: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # future sketch/aerial geometry
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class MeasurementEdge(Base):
+    """Individual edge segments (not just totals) for future sketch/aerial compatibility."""
+    __tablename__ = "measurement_edges"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    edge_type: Mapped[str] = mapped_column(String(24), default="eave", nullable=False)  # eave|rake|ridge|hip|valley|sidewall|headwall|transition
+    length_ft: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    facet_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_facets.id", ondelete="SET NULL"), nullable=True)
+    facet_id_secondary: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_facets.id", ondelete="SET NULL"), nullable=True)  # valley/hip shared edge
+    label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class MeasurementPenetration(Base):
+    __tablename__ = "measurement_penetrations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    facet_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_facets.id", ondelete="SET NULL"), nullable=True)
+    pen_type: Mapped[str] = mapped_column(String(24), default="pipe_boot", nullable=False)  # pipe_boot|skylight|chimney|static_vent|turbine|powered_vent|exhaust_vent|satellite|other
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    diameter_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    width_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    length_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class MeasurementSummary(Base):
+    """Single-per-revision factual conditions: existing roof, decking, ventilation LF, gutters, access."""
+    __tablename__ = "measurement_summaries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("measurement_revisions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    # existing roof
+    existing_covering_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    existing_layers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    existing_underlayment: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tearoff_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # decking
+    deck_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deck_thickness_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    damaged_deck_sf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replacement_sheets: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_redeck: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    decking_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ventilation (LF-based; count vents live as penetrations)
+    ridge_vent_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intake_soffit_vent_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ventilation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # gutters
+    gutter_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gutter_size: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gutter_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    downspout_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    downspout_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gutter_guard_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gutter_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # access / labor-impacting conditions (factual; surcharge belongs in B)
+    stories: Mapped[float | None] = mapped_column(Float, nullable=True)
+    steep_access: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    high_access: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    long_carry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    restricted_access: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    landscaping_protection: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    conditions_notes: Mapped[str | None] = mapped_column(Text, nullable=True)

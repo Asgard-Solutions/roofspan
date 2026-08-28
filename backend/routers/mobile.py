@@ -13,9 +13,12 @@ from fastapi.responses import Response
 
 from db import get_db
 from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty
+from models import MeasurementSet, MeasurementRevision
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
+from services import measurements as meas_svc
+from schemas_measurements import MeasurementRevisionIn
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -208,6 +211,119 @@ async def get_inspection(inspection_id: str, user: User = Depends(require_roles(
         raise HTTPException(status_code=404, detail="Inspection not found")
     await mauthz.assert_inspection_access(db, i, user)
     return _insp_out(i)
+
+# ==========================================================================================
+# Mobile Roof Measurements (Increment A) — offline-first, whole-document sync.
+# The field app builds a full revision (structures/facets/edges/penetrations/summary) with client
+# refs and POSTs it as one idempotent mutation. Draft/field-complete revisions can be replaced.
+# ==========================================================================================
+async def _assert_measurement_scope(db: AsyncSession, payload_or_set, user):
+    """Sales may only touch measurements tied to their own lead/property."""
+    if not mauthz.is_sales(user):
+        return
+    lead_id = getattr(payload_or_set, "lead_id", None)
+    property_id = getattr(payload_or_set, "property_id", None)
+    if lead_id:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        await mauthz.assert_lead_access(db, lead, user)
+    if property_id:
+        await mauthz.assert_property_access(db, property_id, user)
+    if not lead_id and not property_id:
+        raise HTTPException(status_code=403, detail="A measurement must be tied to your lead or property.")
+
+
+@router.post("/measurements", status_code=201)
+async def create_measurement(payload: MeasurementRevisionIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_measurement")
+    if replay and prior and prior != "pending":
+        rev = await db.get(MeasurementRevision, prior)
+        if rev:
+            out = await meas_svc.build_out(db, rev)
+            out["replayed"] = True
+            return out
+    await _assert_measurement_scope(db, payload, user)
+    rev = await meas_svc.create_revision(db, payload, user)
+    if idempotency_key:
+        k = await db.get(IdempotencyKey, idempotency_key)
+        if k:
+            k.entity_id = str(rev.id)
+    out = await meas_svc.build_out(db, rev)
+    await log_action(db, user=user, action="measurement.create", entity_type="measurement_revision", entity_id=rev.id, detail={"via": "mobile", "revision": rev.revision_number}, request=request)
+    await db.commit()
+    return out
+
+
+@router.put("/measurements/{revision_id}")
+async def update_measurement(revision_id: str, payload: MeasurementRevisionIn, request: Request, if_match: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    s = await db.get(MeasurementSet, rev.set_id)
+    await _assert_measurement_scope(db, s, user)
+    token = rev.updated_at.isoformat() if rev.updated_at else None
+    if if_match and token and if_match != token:
+        out = await meas_svc.build_out(db, rev)
+        raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": out})
+    await meas_svc.replace_children(db, rev, payload)
+    if payload.mark_field_complete and rev.status == "draft":
+        await meas_svc.transition_status(db, rev, "field_complete", user)
+    out = await meas_svc.build_out(db, rev)
+    await log_action(db, user=user, action="measurement.update", entity_type="measurement_revision", entity_id=rev.id, detail={"via": "mobile"}, request=request)
+    await db.commit()
+    return out
+
+
+@router.post("/measurements/{revision_id}/field-complete")
+async def field_complete_measurement(revision_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    s = await db.get(MeasurementSet, rev.set_id)
+    await _assert_measurement_scope(db, s, user)
+    await meas_svc.transition_status(db, rev, "field_complete", user)
+    out = await meas_svc.build_out(db, rev)
+    await log_action(db, user=user, action="measurement.field_complete", entity_type="measurement_revision", entity_id=rev.id, detail={"via": "mobile"}, request=request)
+    await db.commit()
+    return out
+
+
+@router.get("/measurements")
+async def list_measurements(lead_id: str | None = Query(None), property_id: str | None = Query(None), inspection_id: str | None = Query(None),
+                            user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    if mauthz.is_sales(user) and not lead_id and not property_id:
+        raise HTTPException(status_code=422, detail="lead_id or property_id is required")
+    if lead_id:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        await mauthz.assert_lead_access(db, lead, user)
+    if property_id:
+        await mauthz.assert_property_access(db, property_id, user)
+    stmt = select(MeasurementSet)
+    if inspection_id:
+        stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
+    elif lead_id:
+        stmt = stmt.where(MeasurementSet.lead_id == lead_id)
+    elif property_id:
+        stmt = stmt.where(MeasurementSet.property_id == property_id)
+    s = (await db.execute(stmt)).scalars().first()
+    if not s:
+        return []
+    return await meas_svc.list_revisions_for_set(db, s.id)
+
+
+@router.get("/measurements/{revision_id}")
+async def get_measurement(revision_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    s = await db.get(MeasurementSet, rev.set_id)
+    await _assert_measurement_scope(db, s, user)
+    return await meas_svc.build_out(db, rev)
+
+
 
 
 # ---- Photos (backend-authorized upload; object-storage creds never leave the server) ----

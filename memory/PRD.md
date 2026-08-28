@@ -693,3 +693,23 @@ Additive extension (does NOT change Territory/RentCast). Territory → Imported 
 - Office (`frontend/src/pages/LeadDetail.jsx`): added Measurements + Notes inputs to the Record-inspection dialog (`insp` state now includes measurements); display card now shows Findings, Measurements, Notes (were hidden) + inspector (falls back to created_by) + date.
 - Backend (`backend/routers/mobile.py`): mobile create_inspection auto-sets inspection_date when absent; `_insp_out` now returns inspection_date for parity.
 - Test: updated `mobile/src/tests/inspection_focus_contract.node.test.js` (5→6 fields). Verified: mobile-endpoint inspection with all fields reads back identically via Office `/api/inspections`; Office lead page renders all fields (screenshot); mobile node tests pass; frontend compiles.
+
+## Roof Measurement System — INCREMENT A: DONE & VERIFIED (2026-06)
+Locked product decisions (user): snapshot-revision model; each revision an immutable snapshot once verified/locked; edits clone a NEW revision that supersedes; totals DERIVED not entered; waste is NOT stored (estimating = Increment B); status draft->field_complete->office_verified->locked + return-to-field; Field/Sales create/edit+Field Complete, Office/Owner/Admin verify/lock/return; pitch stored as decimal rise over fixed run 12; linear=decimal feet, area=sq ft (feet/inches is UI-only); edges stored as individual segments; stable facet labels.
+
+Chain: Property -> Inspection -> MeasurementSet -> MeasurementRevision(n) -> Structures / Facets / Edges / Penetrations / Summary.
+
+Backend (all tested, 9/9 pytest + main-agent curl):
+- models.py: 7 tables (measurement_sets, measurement_revisions, measurement_structures, measurement_facets, measurement_edges, measurement_penetrations, measurement_summaries). Migration b7c8d9e0f1a2 (head).
+- schemas_measurements.py: whole-document nested in/out with client 'ref' linkage; derived MeasurementTotals.
+- services/measurements.py: create_revision, replace_children (draft only), clone_revision (deep copy -> new draft, supersedes), transition_status (state machine + roles), build_out (derives total area/squares/area-by-pitch/area-by-structure/edge LF totals/penetration counts/reported-delta), list_revisions_for_set.
+- routers/measurements.py (Office /api/measurements): GET list, GET {id}, POST, PUT, POST {id}/status, POST {id}/new-revision, DELETE (draft only). Locked PUT/DELETE -> 409.
+- routers/mobile.py (/api/mobile/measurements): POST (idempotent), PUT (If-Match), POST {id}/field-complete, GET list, GET {id}; sales scoped to own lead/property.
+
+Frontend:
+- Office: components/MeasurementWorksheet.jsx embedded in LeadDetail 'Roof measurements' section (section-measurements). Revision selector + history, status badge + workflow buttons, live totals, editable Structures/Facets/Edges/Penetrations tables + Summary/conditions; read-only when locked; New revision to edit a locked one.
+- Mobile: src/screens/Measurements.js (touch-first: structure/facet add, pitch chips, ft/in edge entry, penetration +/- counters, live totals, offline save via durable queue, Save & Mark Field Complete). Registered in App.js (Leads + Map stacks); opened from Inspection screen button. Code-verified (RN not browser-testable); mobile API tested.
+
+Regression suite: backend/tests/test_measurements_pytest.py, backend/tests/test_measurements_lifecycle.py.
+
+NEXT: Increment B (Takeoff -> Estimate): estimates select a measurement revision; company Takeoff Templates map metrics to existing Assemblies/line items; waste as estimating assumption (company default 10%, per-template/assembly default, estimate + per-structure override); drip edge computed in takeoff (eave+rake, override). Increment C: soft validation warnings + 'measurements changed since Estimate #X' recalculation prompts + auto-immutability when a revision is referenced by an accepted quote/job.

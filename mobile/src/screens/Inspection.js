@@ -74,6 +74,8 @@ export default function Inspection({ route, navigation }) {
       <InspectionField label="Notes" value={form.notes} onChange={set("notes")} placeholder="Anything else" testID="insp-notes" />
       <TouchableOpacity style={s.btn} onPress={save} testID="insp-save"><Text style={s.btnText}>Save inspection</Text></TouchableOpacity>
 
+      <TouchableOpacity style={[s.btn, { backgroundColor: "#fff", borderWidth: 2, borderColor: C.brand, marginTop: 10 }]} onPress={() => navigation.navigate("Measurements", { lead_id, property_id })} testID="insp-open-measurements"><Text style={[s.btnText, { color: C.brand }]}>Roof measurements</Text></TouchableOpacity>
+
       <PhotoSection recordType={lead_id ? "lead" : "property"} recordId={lead_id || property_id} />
     </ScrollView>
   );

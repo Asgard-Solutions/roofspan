@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LineItemsEditor, { computeTotals } from "@/components/LineItemsEditor";
 import PhotoGallery from "@/components/PhotoGallery";
+import MeasurementWorksheet from "@/components/MeasurementWorksheet";
 import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
@@ -229,6 +230,12 @@ export default function LeadDetail() {
             </div>
           )}
         </Section>
+
+        {/* Roof Measurement worksheet */}
+        <Section icon={ClipboardCheck} title="Roof measurements" testid="section-measurements">
+          <MeasurementWorksheet leadId={id} propertyId={lead.property_id || null} inspectionId={inspections[0]?.id || null} />
+        </Section>
+
 
         {/* Field Photos (lead-level) */}
         <Section icon={Camera} title="Field photos" testid="section-lead-photos">
