@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveFacetBoundary, validateSketch } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { addVertex, addEdge, moveVertex, splitEdge, createFacet, createManualFacet, placePenetration, movePenetration } from "./commands";
+import { addVertex, addEdge, moveVertex, splitEdgeSafe, createFacet, createManualFacet, placePenetration, movePenetration } from "./commands";
+import { edgeDimension, formatFeet } from "./edgeDimensions";
+import { toast } from "sonner";
 
 const EDGE_COLOR = { eave: "#2563eb", rake: "#7c3aed", ridge: "#dc2626", hip: "#ea580c", valley: "#0891b2", sidewall: "#16a34a", headwall: "#ca8a04", transition: "#db2777", unclassified: "#94a3b8" };
 
@@ -105,7 +107,10 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     e.stopPropagation();
     if (readOnly || mode !== "select") return;
     const m = toModel(e.clientX, e.clientY);
-    ctl.run((d) => ({ doc: splitEdge(d, edge.id, m.x, m.y) }));
+    const cur = ctl.getDoc();
+    const r = splitEdgeSafe(cur, edge.id, m.x, m.y, { endpointTol: 8 / view.k });
+    if (r.ok) ctl.commitFrom(cur, r.doc);
+    else if (r.reason === "edge_protected") toast.error("This edge is linked to a confirmed measurement and cannot be split automatically. Unmap/unlock the edge first if you intend to change its topology.");
   };
 
   const onMove = (e) => {
@@ -179,6 +184,21 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
             stroke={pending ? "#f59e0b" : selected ? "#111827" : (EDGE_COLOR[e.type] || EDGE_COLOR.unclassified)}
             strokeWidth={selected || pending ? 4 : 2.5} strokeLinecap="round" vectorEffect="non-scaling-stroke"
             onPointerDown={(ev) => edgeClick(ev, e)} onDoubleClick={(ev) => edgeDouble(ev, e)} style={{ cursor: "pointer" }} />;
+        })}
+        {doc.scale?.resolved !== true && (doc.edges || []).length > 0 && (
+          <text data-testid="scale-cue" x={4} y={-6} fill="#94a3b8" style={{ fontSize: 11 / view.k, pointerEvents: "none" }}>Calibrate scale to display edge dimensions.</text>
+        )}
+        {(doc.edges || []).map((e) => {
+          const a = vmap[e.v1], b = vmap[e.v2]; if (!a || !b) return null;
+          const dim = edgeDimension(doc, e); if (dim.source === "unavailable") return null;
+          const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+          const off = 12 / view.k, ox = (-dy / len) * off, oy = (dx / len) * off;
+          const diff = dim.locked && dim.discrepancy != null && dim.discrepancy !== 0;
+          return <text key={`dim-${e.id}`} data-role="edge-dim" data-testid={`edge-dim-${e.id}`} x={mx + ox} y={my + oy} textAnchor="middle"
+            fill={diff ? "#b45309" : "#0f172a"} style={{ fontSize: 11 / view.k, pointerEvents: "none", fontWeight: 600 }}>
+            {formatFeet(dim.valueFeet)}{dim.locked ? " 🔒" : ""}
+            {diff && <title>{`Confirmed: ${dim.valueFeet} LF\nDrawn geometry: ${dim.geometryFeet} LF\nDifference: ${dim.discrepancy > 0 ? "+" : ""}${dim.discrepancy} LF`}</title>}
+          </text>;
         })}
         {(doc.vertices || []).map((v) => {
           const selected = selection?.type === "vertex" && selection.id === v.id;
