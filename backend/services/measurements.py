@@ -284,7 +284,12 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
     await _copy_photos(db, id_remap)
     # Copy roof sketch documents onto the clone, remapping to the new structure ids.
     from services import measurement_sketches as _sketch_svc
-    await _sketch_svc.clone_sketches(db, rev.id, new.id, {str(o): str(nw) for o, nw in smap.items()})
+    await _sketch_svc.clone_sketches(
+        db, rev.id, new.id,
+        {str(o): str(nw) for o, nw in smap.items()},
+        {str(o): str(nw) for o, nw in fmap.items()},
+        {str(o): str(nw) for o, nw in pmap.items()},
+    )
     return new
 
 
