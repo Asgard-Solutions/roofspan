@@ -105,8 +105,9 @@ def upgrade() -> None:
         CREATE OR REPLACE FUNCTION roofspan_lock_takeoff_measurement_on_quote_accept()
         RETURNS trigger AS $$
         DECLARE selected_revision uuid;
+        DECLARE was_locked boolean;
         BEGIN
-            IF NEW.status = 'accepted' AND (OLD.status IS DISTINCT FROM NEW.status) AND NEW.estimate_id IS NOT NULL THEN
+            IF NEW.status = 'accepted' AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status) AND NEW.estimate_id IS NOT NULL THEN
                 SELECT et.measurement_revision_id INTO selected_revision
                 FROM estimate_takeoffs et
                 WHERE et.estimate_id = NEW.estimate_id
@@ -114,11 +115,23 @@ def upgrade() -> None:
                 LIMIT 1;
 
                 IF selected_revision IS NOT NULL THEN
+                    SELECT is_immutable INTO was_locked FROM measurement_revisions WHERE id = selected_revision;
                     UPDATE measurement_revisions
                     SET status = 'locked', is_immutable = TRUE,
                         locked_by = COALESCE(NEW.accepted_by, 'quote-acceptance'),
                         locked_at = COALESCE(NEW.accepted_at, now()), updated_at = now()
                     WHERE id = selected_revision AND is_immutable = FALSE;
+
+                    IF COALESCE(was_locked, FALSE) = FALSE THEN
+                        INSERT INTO audit_logs(id, timestamp, user_id, user_email, action, entity_type, entity_id, detail, ip_address)
+                        VALUES (
+                            md5(random()::text || clock_timestamp()::text)::uuid,
+                            now(), NULL, COALESCE(NEW.accepted_by, ''), 'measurement.auto_lock',
+                            'measurement_revision', selected_revision::text,
+                            jsonb_build_object('reason', 'accepted_quote', 'quote_id', NEW.id::text, 'estimate_id', NEW.estimate_id::text),
+                            NULL
+                        );
+                    END IF;
                 END IF;
             END IF;
             RETURN NEW;
@@ -127,7 +140,7 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE TRIGGER trg_lock_takeoff_measurement_on_quote_accept
-        AFTER UPDATE OF status ON quotes
+        AFTER INSERT OR UPDATE ON quotes
         FOR EACH ROW EXECUTE FUNCTION roofspan_lock_takeoff_measurement_on_quote_accept();
     """)
 
