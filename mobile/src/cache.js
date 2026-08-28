@@ -4,6 +4,7 @@
 import { api } from "./api";
 import { putCache, getCache, getCacheMeta } from "./storage";
 const measurementKeys = require("./measurementCache");
+const sketchKeys = require("./sketchCache");
 
 async function readThrough(name, fetcher) {
   try {
@@ -35,7 +36,26 @@ export const cache = {
     measurementKeys.detailKey(id),
     () => api.get(`/mobile/measurements/${id}`),
   ),
+  // Read-through the current server sketch for a structure; falls back to the last cached copy offline.
+  sketch: (revisionId, structureId) => readThrough(
+    sketchKeys.sketchDetailKey(revisionId, structureId),
+    () => api.get(`/mobile/measurements/${revisionId}/sketches/${structureId}`),
+  ),
 };
+
+// Persist the latest sketch draft locally BEFORE queueing, so a crash after an edit cannot lose it.
+export async function saveSketchDraft(revisionId, structureId, draft) {
+  try { await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), draft); } catch (e) { /* best effort */ }
+}
+export async function loadSketchDraft(revisionId, structureId) {
+  try { return await getCache(sketchKeys.sketchDraftKey(revisionId, structureId)); } catch (e) { return null; }
+}
+export async function clearSketchDraft(revisionId, structureId) {
+  try { await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), null); } catch (e) { /* best effort */ }
+}
+export async function cacheSketchDetail(revisionId, structureId, sketch) {
+  try { await putCache(sketchKeys.sketchDetailKey(revisionId, structureId), sketch); } catch (e) { /* best effort */ }
+}
 
 export async function cacheMeasurementDetail(revision) {
   if (!revision || !revision.id) return;

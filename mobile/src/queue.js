@@ -21,8 +21,19 @@ function uuidv4() {
 }
 
 function _measurementUpdateId(kind, path) {
-  if (kind !== "measurement_update" || !path) return null;
+  if (!path) return null;
   const parts = String(path).split("/").filter(Boolean);
+  // Roof sketch update: /mobile/measurements/{revision}/sketches/{structure}
+  if (kind === "measurement_sketch_update") {
+    const si = parts.indexOf("sketches");
+    if (si > 0 && parts[si + 1] && parts[si - 2] === "measurements") {
+      const revisionId = parts[si - 1];
+      const structureId = parts[si + 1];
+      return `measurement-sketch-update:${revisionId}:${structureId}`;
+    }
+    return null;
+  }
+  if (kind !== "measurement_update") return null;
   const revisionId = parts[parts.length - 1];
   return revisionId ? `measurement-update:${revisionId}` : null;
 }
