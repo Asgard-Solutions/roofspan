@@ -21,6 +21,7 @@ import InventoryTransactions from "@/pages/InventoryTransactions";
 import EstimateEditor from "@/pages/EstimateEditor";
 import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
+import Takeoff from "@/pages/Takeoff";
 import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
 import Reports from "@/pages/Reports";
@@ -59,12 +60,14 @@ function App() {
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/inventory/catalog" element={<ProductCatalog />} />
             <Route path="/inventory/locations" element={<InventoryLocations />} />
-            <Route path="/inventory/transactions" element={<InventoryTransactions />} />            <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
+            <Route path="/inventory/transactions" element={<InventoryTransactions />} />
+            <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
             <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
             <Route path="/quotes/:id/proposal" element={<ProposalPreview />} />
+            <Route path="/estimating/takeoff" element={<Takeoff />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
             <Route path="/finance" element={<Finance />} />

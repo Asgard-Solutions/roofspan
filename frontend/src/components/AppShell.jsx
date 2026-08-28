@@ -10,7 +10,7 @@ import LocationResolutionProgress from "@/components/LocationResolutionProgress"
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
   LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck, Layers, BookOpen,
+  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck, Layers, BookOpen, Calculator,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
@@ -29,6 +29,7 @@ const MAIN_NAV = [
 ];
 
 const ESTIMATING_NAV = [
+  { to: "/estimating/takeoff", label: "Roof Takeoff", icon: Calculator, testid: "nav-takeoff" },
   { to: "/estimating/assemblies", label: "Assemblies", icon: Layers, testid: "nav-assemblies" },
   { to: "/estimating/price-books", label: "Price Books", icon: BookOpen, testid: "nav-price-books" },
 ];
