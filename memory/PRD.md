@@ -1,5 +1,36 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Phase 3 Part A — Live Snap Gestures WIRED + closure corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops
+Completed the previously DEFERRED live canvas pointer-gesture wiring. Topology math stays pure; the React
+canvas is a thin coordinator. New pure `gestures.js` + `insertExistingVertexIntoEdge` command.
+
+- **Live draw snap markers:** `RoofSketchCanvas` hover uses the canonical `snapTarget` (via `gestures.drawSnap`)
+  with true screen-space tolerance (`modelTolerance(snapPx, view.k)`). Non-interactive markers: green ring
+  = vertex candidate, cyan dot = edge candidate, red ✕ ring = protected/blocked. `data-testid="snap-marker"`.
+- **Draw-to-edge split + chain:** connected-mode Draw drops onto an edge interior → `splitEdgeSafe` + chain in
+  ONE `ctl.run` history entry. Direct SVG edge clicks in connected Draw route through the SAME flow (`drawAt`).
+  Manual polygon draw unchanged (vertex/free only, never splits).
+- **Vertex-drag gestures (pointer-up = ONE mutation):** `gestures.applyVertexDrop` → vertex→vertex `mergeVertices`,
+  vertex→edge-interior `insertExistingVertexIntoEdge` (projects onto segment, REUSES the dragged vertex id,
+  splits the edge, updates every facet loop, preserves shared topology), free→plain `moveVertex`. Protected
+  edge proximity = blocked candidate (never a free placement); a failed op restores the original doc unchanged.
+  Dragged vertex's own incident edges are ineligible targets.
+- **One-history-per-gesture:** new `ctl.previewSilent` updates the visible doc during pointer-move WITHOUT
+  bumping the edit generation / adding history; the single commit happens on pointer-up via `commitFrom`.
+- **Closure corrections verified/fixed:** `deriveProposals` edge LF now via shared `edgeGeometryLengthFeet`
+  (single source); SketchInspector already used it; locked discrepancy = geometry − confirmed (+2 for 20 vs 18);
+  one-sided protected duplicate-edge collapse rejected in `mergeVertices`; cyclic last→first join collapse;
+  stale edge proposal decisions dropped after split/join/merge/insert; all graph ops blocked in manual_polygon.
+
+**Contracts (all green):** office commands 18 / mapping 18 / saveLifecycle 19 / saveCloseLifecycle 29 /
+proposalLifecycle 24 / geometryOps 39 / **gestureOps 36 (NEW)**. Shared core 26 / topology 28 / edge_authority 10.
+Office `CI=false yarn build` OK. `frontend/yarn.lock` unchanged. CI `office-build` now also runs gestureOps.
+Files changed: `RoofSketchCanvas.jsx`, `RoofSketchEditor.jsx`, `commands.js`, `packages/roof-sketch-core/proposals.js`,
+`.github/workflows/roof-takeoff-contract.yml`; NEW `gestures.js`, `__tests__/gestureOps.node.test.js`.
+**NOT runnable here:** live licensed Office E2E (app root needs a licensed session; canvas needs a saved
+structure) — covered by the deterministic gesture/geometry contracts. **STOP** after local green (user publishes).
+
+
 ## Task 4 Phase 3 FINAL Closure — Geometry Integrity Fixes (2026-06) — PARTIAL: data-integrity defects fixed & green; live-gesture wiring DEFERRED
 Fixed the pure data-integrity defects flagged in review. Live canvas pointer-gesture wiring is NOT done
 this pass (documented below).
