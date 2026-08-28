@@ -2,5 +2,8 @@
   "name": "@roofspan/roof-sketch-core",
   "version": "1.0.0",
   "private": true,
-  "main": "index.js"
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/roofSketchCore.node.test.js && node test/topology.node.test.js"
+  }
 }

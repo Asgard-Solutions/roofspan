@@ -12,7 +12,8 @@
     "test:map": "node src/tests/mapconfig.node.test.js",
     "test:canvass": "node src/tests/canvass.node.test.js",
     "test:pairing": "node src/tests/pairing.node.test.js",
-    "test:transport": "node src/tests/transport.node.test.js"
+    "test:transport": "node src/tests/transport.node.test.js",
+    "test:sketch": "node ../packages/roof-sketch-core/test/roofSketchCore.node.test.js && node ../packages/roof-sketch-core/test/topology.node.test.js && node src/tests/sketch_cache.node.test.js"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -21,6 +22,7 @@
     "@react-navigation/bottom-tabs": "^6.5.0",
     "@react-navigation/native": "^6.1.0",
     "@react-navigation/native-stack": "^6.9.0",
+    "@roofspan/roof-sketch-core": "file:../packages/roof-sketch-core",
     "axios": "^1.6.0",
     "babel-preset-expo": "~54.0.10",
     "expo": "^54.0.0",
@@ -37,6 +39,7 @@
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {

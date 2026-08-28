@@ -17,22 +17,29 @@ DOC = {"schema_version": 1, "edit_mode": "connected_graph", "vertices": [{"id": 
 
 
 def _delete_set(headers, set_id):
-    # best-effort safe teardown via a short-lived DB session (only the created set)
-    try:
-        import asyncio, sys
-        sys.path.insert(0, "backend")
-        from dotenv import load_dotenv; load_dotenv("backend/.env")
-        from sqlalchemy import delete
-        from db import SessionLocal
-        from models import MeasurementSet
+    """Safe teardown of ONLY the created set — via the SAME DATABASE_URL the app uses.
+    Guards against a wrong-DB cleanup no-op and never silently swallows a failure."""
+    import asyncio, sys
+    sys.path.insert(0, "backend")
+    from dotenv import load_dotenv; load_dotenv("backend/.env")
+    from sqlalchemy import delete, select
+    from db import SessionLocal, engine
+    from models import MeasurementSet
 
-        async def go():
+    async def go():
+        try:
             async with SessionLocal() as db:
+                exists = (await db.execute(select(MeasurementSet.id).where(MeasurementSet.id == set_id))).first()
+                assert exists is not None, (
+                    "Created MeasurementSet not visible via DATABASE_URL — the API under RS_TEST_API and this "
+                    "cleanup session point at DIFFERENT databases; refusing to run a blind delete.")
                 await db.execute(delete(MeasurementSet).where(MeasurementSet.id == set_id))
                 await db.commit()
-        asyncio.run(go())
-    except Exception:
-        pass
+                gone = (await db.execute(select(MeasurementSet.id).where(MeasurementSet.id == set_id))).first()
+                assert gone is None, "cleanup did not delete the MeasurementSet"
+        finally:
+            await engine.dispose()
+    asyncio.run(go())
 
 
 @pytest.mark.skipif(not (EMAIL and PW), reason="Set RS_TEST_EMAIL/RS_TEST_PW to run the sketch API integration test")

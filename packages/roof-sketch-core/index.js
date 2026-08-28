@@ -23,6 +23,11 @@ module.exports = {
   findSharedEdges: topology.findSharedEdges,
   validateSketch: topology.validateSketch,
   polygonSelfIntersects: topology.polygonSelfIntersects,
+  edgeLoopVertices: topology.edgeLoopVertices,
+  sameCycle: topology.sameCycle,
+  polygonsOverlap: topology.polygonsOverlap,
+  facetComponents: topology.facetComponents,
+  edgeMap: topology.edgeMap,
   // proposals
   deriveProposals: proposals.deriveProposals,
   compareProposal: proposals.compareProposal,

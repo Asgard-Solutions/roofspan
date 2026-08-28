@@ -9,6 +9,7 @@ Rules:
 """
 from datetime import datetime, timezone
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
@@ -20,27 +21,35 @@ SUPPORTED_SCHEMA_VERSIONS = (1,)
 SUPPORTED_EDIT_MODES = ("connected_graph", "manual_polygon")
 
 
-def _normalize_document(document: dict, *, structure_id: str, edit_mode: str, schema_version: int) -> dict:
-    """Reconcile the embedded JSON with the authoritative route/DB fields so the canonical sketch is
-    never ambiguous. The route/DB structure id always wins; unsupported modes/versions are rejected."""
-    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise HTTPException(status_code=422, detail=f"Unsupported sketch schema_version {schema_version}")
-    if edit_mode not in SUPPORTED_EDIT_MODES:
-        raise HTTPException(status_code=422, detail=f"Unsupported sketch edit_mode '{edit_mode}'")
+def _coerce_int(val, field):
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Malformed sketch {field}")
+
+
+def _normalize_document(document: dict, *, structure_id: str, edit_mode, schema_version) -> dict:
+    """Reconcile embedded JSON with authoritative route/DB fields. Defaults apply ONLY when a field is
+    genuinely absent (None); explicit invalid values are rejected, never silently repaired."""
+    sv = 1 if schema_version is None else _coerce_int(schema_version, "schema_version")
+    if sv not in SUPPORTED_SCHEMA_VERSIONS:
+        raise HTTPException(status_code=422, detail=f"Unsupported sketch schema_version {sv}")
+    em = "connected_graph" if edit_mode is None else edit_mode
+    if em not in SUPPORTED_EDIT_MODES:
+        raise HTTPException(status_code=422, detail=f"Unsupported sketch edit_mode '{em}'")
     doc = dict(document or {})
     embedded_struct = doc.get("structure_id")
     if embedded_struct is not None and str(embedded_struct) != str(structure_id):
         raise HTTPException(status_code=422, detail="Sketch document structure_id does not match the route structure")
     embedded_mode = doc.get("edit_mode")
-    if embedded_mode is not None and embedded_mode != edit_mode:
+    if embedded_mode is not None and embedded_mode != em:
         raise HTTPException(status_code=422, detail="Sketch document edit_mode contradicts the requested edit_mode")
     embedded_schema = doc.get("schema_version")
-    if embedded_schema is not None and int(embedded_schema) != int(schema_version):
+    if embedded_schema is not None and _coerce_int(embedded_schema, "schema_version") != sv:
         raise HTTPException(status_code=422, detail="Sketch document schema_version contradicts the request")
-    # authoritative fields win
     doc["structure_id"] = str(structure_id)
-    doc["edit_mode"] = edit_mode
-    doc["schema_version"] = int(schema_version)
+    doc["edit_mode"] = em
+    doc["schema_version"] = sv
     return doc
 
 try:
@@ -99,7 +108,7 @@ async def save_sketch(db: AsyncSession, revision_id: str, structure_id: str, *, 
         raise HTTPException(status_code=404, detail="Structure does not belong to this revision")
 
     email = getattr(user, "email", None)
-    doc = _normalize_document(document, structure_id=str(structure_id), edit_mode=edit_mode or "connected_graph", schema_version=schema_version or 1)
+    doc = _normalize_document(document, structure_id=str(structure_id), edit_mode=edit_mode, schema_version=schema_version)
     existing = (await db.execute(select(MeasurementSketchDocument).where(
         MeasurementSketchDocument.revision_id == revision_id,
         MeasurementSketchDocument.structure_id == structure_id))).scalars().first()
@@ -112,8 +121,17 @@ async def save_sketch(db: AsyncSession, revision_id: str, structure_id: str, *, 
             document_version=1, edit_mode=doc["edit_mode"], document=doc,
             created_by=email, updated_by=email,
         )
-        db.add(row)
-        await db.flush()
+        # First-create race: the unique (revision_id, structure_id) constraint is authoritative. A
+        # concurrent creator triggers IntegrityError -> recover in a savepoint and return the conflict.
+        try:
+            async with db.begin_nested():
+                db.add(row)
+                await db.flush()
+        except IntegrityError:
+            current = (await db.execute(select(MeasurementSketchDocument).where(
+                MeasurementSketchDocument.revision_id == revision_id,
+                MeasurementSketchDocument.structure_id == structure_id))).scalars().first()
+            raise SketchConflict(_out(current) if current else {"document_version": 1, "document": {}, "exists": True})
         return _out(row)
 
     if expected_version is None:

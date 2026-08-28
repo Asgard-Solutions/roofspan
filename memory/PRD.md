@@ -1,5 +1,44 @@
 # RoofSpan — Product Requirements & Status
 
+## Roof Sketch Foundation — FINAL Hardening Pass COMPLETE & GREEN (2026-06)
+Branch `agent/roof-sketch-foundation-hardening` (from remote main `7b4ddf9`). STOP condition met — the
+Office/Field sketch editors (Plan 1 Task 4/6) and Plan 2 (aerial imports) are NOT started yet, per user.
+
+- **Edge-loop topology authority (`packages/roof-sketch-core/topology.js`)**: connected_graph facets are
+  validated from their ordered `edgeIds` (authoritative). Derives the vertex loop from the edge chain;
+  if `vertexIds` are also present they must match the same cyclic loop (rotation/reflection) or the facet
+  is rejected — two independent boundaries are never allowed. Hard errors: `broken_edge_reference`,
+  `open_facet_loop`, `facet_boundary_mismatch`, `self_intersection`, `non_positive_area`, `duplicate_facet`,
+  `disconnected_component` (connected mode only), `zero_length_edge`, `dangling_edge`. Warnings (recoverable):
+  `possible_overlap` (interiors intersect), `possible_gap` (collinear seam without a shared edge). Manual-polygon
+  mode allows independent polygons (disconnected is NOT an error there). New pure helpers exported:
+  `edgeLoopVertices`, `sameCycle`, `polygonsOverlap`, `facetComponents`, `edgeMap`.
+- **Overlap severity (per user)**: ordinary geometric overlap = warning; duplicate polygon / broken
+  connected topology / phantom shared edge / non-positive area / self-intersection = hard error. A
+  `possible_overlap` warning never hides a real topology failure (errors are computed independently).
+- **Field deps**: `mobile/package.json` now pins `react-native-svg@15.12.1` and the local
+  `@roofspan/roof-sketch-core` (`file:../packages/roof-sketch-core`); both resolve; `package-lock.json`
+  regenerated for `npm ci` in CI.
+- **Backend contracts (Postgres-backed, hermetic)** in `backend/tests/`:
+  `_sketch_fixtures.py` (creates its OWN Property/User/Lead, loud teardown, wrong-DB guard, per-loop
+  `engine.dispose()`); `test_measurement_sketch_service.py` (sequential CAS + normalization edge cases:
+  schema_version 0/-1/"abc", empty/invalid edit_mode, malformed embedded → 422 not 500; clone + lock);
+  `test_measurement_sketch_concurrency.py` (TWO real DB sessions: existing-row row-lock CAS race AND
+  first-create unique-index race — the loser gets SketchConflict); `test_measurement_sketch_clone.py`
+  (structure/facet/penetration/proposal target ids remapped, stable drawing-graph ids untouched);
+  `test_measurement_sketch_authz.py` (two-salesperson A/B on list/GET/PUT: A→A/B→B allowed, cross-rep 403,
+  owner/admin/office broad — uses fabricated principals, no real password); API test hardened with a
+  same-DATABASE_URL guard + verified delete (no silent swallow).
+- **CI enforcement** (`.github/workflows/roof-takeoff-contract.yml`): added branch + sketch path filters;
+  fixed the stale Alembic single-head guard to `e0f1a2b3c4d5` (+ DATABASE_URL for the offline `heads` step);
+  new `sketch-core` job (node `npm test`) and `sketch-backend-contract` job (postgres:16 service →
+  `alembic upgrade head` → the 5 sketch pytests); mobile-contract now runs `npm run test:sketch` and
+  babel-parses `sketchCache.js`.
+- **Verified locally**: core 26 + topology 22 node assertions; field sketch-cache 15; backend 5 passed /
+  1 skipped (API integration passes end-to-end when RS_TEST creds are supplied); full combined suite
+  (sketch + takeoff + measurement) 26 passed, 1 skipped — multi-event-loop stable. NOT pushed (use Save to GitHub).
+
+
 ## Mobile — heartbeat + tap-to-sync chip + per-photo error detail (2026-06)
 - **Keepalive heartbeat (`transport.js`):** `startTunnelHeartbeat()` (singleton, 20s) pings public `GET /api/version` through the tunnel to keep it warm and detect drops within seconds; `stopTunnelHeartbeat()` to stop. `forceReconnect()` tears down the relay socket for an immediate fresh reconnect.
 - **Tap-to-sync chip (`SyncStatusChip.jsx`):** now a TouchableOpacity — tapping forces `forceReconnect()` + `runSync()` and refreshes health; shows "Syncing…" while busy; starts the heartbeat on mount. Subtext "· tap to sync".

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/roof-measurement-full-completion
+      - agent/roof-sketch-foundation-hardening
     paths:
       - "backend/services/takeoff*.py"
       - "backend/services/measurement*.py"
@@ -31,6 +32,22 @@ on:
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "frontend/src/App.js"
       - "frontend/src/components/AppShell.jsx"
+      - "packages/roof-sketch-core/**"
+      - "backend/services/measurement_sketches.py"
+      - "backend/measurement_sketch_models.py"
+      - "backend/schemas_sketch.py"
+      - "backend/routers/measurement_sketches.py"
+      - "backend/routers/mobile.py"
+      - "backend/services/mobile_authz.py"
+      - "backend/alembic/versions/e0f1a2b3c4d5_measurement_sketches.py"
+      - "backend/tests/_sketch_fixtures.py"
+      - "backend/tests/test_measurement_sketch_service.py"
+      - "backend/tests/test_measurement_sketch_concurrency.py"
+      - "backend/tests/test_measurement_sketch_clone.py"
+      - "backend/tests/test_measurement_sketch_authz.py"
+      - "backend/tests/test_measurement_sketch_api.py"
+      - "mobile/src/sketchCache.js"
+      - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
   pull_request:
     paths:
@@ -60,6 +77,22 @@ on:
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "frontend/src/App.js"
       - "frontend/src/components/AppShell.jsx"
+      - "packages/roof-sketch-core/**"
+      - "backend/services/measurement_sketches.py"
+      - "backend/measurement_sketch_models.py"
+      - "backend/schemas_sketch.py"
+      - "backend/routers/measurement_sketches.py"
+      - "backend/routers/mobile.py"
+      - "backend/services/mobile_authz.py"
+      - "backend/alembic/versions/e0f1a2b3c4d5_measurement_sketches.py"
+      - "backend/tests/_sketch_fixtures.py"
+      - "backend/tests/test_measurement_sketch_service.py"
+      - "backend/tests/test_measurement_sketch_concurrency.py"
+      - "backend/tests/test_measurement_sketch_clone.py"
+      - "backend/tests/test_measurement_sketch_authz.py"
+      - "backend/tests/test_measurement_sketch_api.py"
+      - "mobile/src/sketchCache.js"
+      - "mobile/src/tests/sketch_cache.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
@@ -82,11 +115,13 @@ jobs:
           backend/tests/test_measurement_completion_core.py
       - name: Verify Alembic migration graph
         working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://placeholder:placeholder@localhost:5432/placeholder
         run: |
           heads="$(alembic -c alembic.ini heads)"
           printf '%s\n' "$heads"
           test "$(printf '%s\n' "$heads" | grep -c '(head)')" -eq 1
-          printf '%s\n' "$heads" | grep -q '^d9e0f1a2b3c4 '
+          printf '%s\n' "$heads" | grep -q '^e0f1a2b3c4d5 '
       - name: Compile roof measurement backend modules
         run: >-
           python -m compileall -q
@@ -95,15 +130,70 @@ jobs:
           backend/services/measurement_core.py
           backend/services/measurements.py
           backend/services/measurement_validation.py
+          backend/services/measurement_sketches.py
+          backend/services/mobile_authz.py
           backend/measurement_extension_models.py
+          backend/measurement_sketch_models.py
+          backend/schemas_sketch.py
           backend/routers/takeoff.py
+          backend/routers/measurement_sketches.py
           backend/schemas_takeoff.py
           backend/schemas_measurements.py
           backend/takeoff_models.py
           backend/models.py
           backend/alembic/versions/c8d9e0f1a2b3_takeoff_templates.py
           backend/alembic/versions/d9e0f1a2b3c4_measurement_completion.py
+          backend/alembic/versions/e0f1a2b3c4d5_measurement_sketches.py
           backend/server.py
+
+  sketch-core:
+    name: Roof sketch shared geometry core (deterministic, no DB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run roof-sketch-core deterministic tests
+        working-directory: packages/roof-sketch-core
+        run: npm test
+
+  sketch-backend-contract:
+    name: Roof sketch backend contracts (Postgres-backed)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: roofspan
+          POSTGRES_PASSWORD: roofspan
+          POSTGRES_DB: roofspan_sketch_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U roofspan"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://roofspan:roofspan@localhost:5432/roofspan_sketch_ci
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+      - name: Apply database migrations
+        working-directory: backend
+        run: alembic -c alembic.ini upgrade head
+      - name: Run roof sketch backend contracts (service, concurrency, clone, A/B authz)
+        run: >-
+          pytest -q
+          backend/tests/test_measurement_sketch_service.py
+          backend/tests/test_measurement_sketch_concurrency.py
+          backend/tests/test_measurement_sketch_clone.py
+          backend/tests/test_measurement_sketch_authz.py
+          backend/tests/test_measurement_sketch_api.py
 
   mobile-contract:
     runs-on: ubuntu-latest
@@ -121,12 +211,14 @@ jobs:
         run: npm ci
       - name: Run deterministic Field measurement/offline contracts
         run: npm run test:measurements
+      - name: Run roof sketch core + Field sketch-cache contracts
+        run: npm run test:sketch
       - name: Parse Field measurement modules with Expo Babel
         run: >-
           node -e "const b=require('@babel/core');
-          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js']
+          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js']
           .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
-          console.log('Field measurement modules parsed');"
+          console.log('Field measurement + sketch modules parsed');"
 
   office-build:
     runs-on: ubuntu-latest
