@@ -182,16 +182,51 @@ export function deletePenetration(doc, penId) {
   return d;
 }
 
-// Explicit proposal decision. decision: "accepted" | "keep_current".
+// Explicit proposal decision. decision: "pending_accept" | "accepted" | "keep_current".
 export function setProposalDecision(doc, { targetType, targetId, metric, decision, value } = {}) {
   const d = clone(doc);
   const others = d.proposal_decisions.filter((x) => !(x.target_type === targetType && x.target_id === targetId && x.metric === metric));
-  d.proposal_decisions = [...others, { target_type: targetType, target_id: targetId, metric, decision, value: value ?? null, at: new Date().toISOString() }];
+  d.proposal_decisions = [...others, { target_type: targetType, target_id: targetId, metric, decision, value: value ?? null, proposed_value: value ?? null, at: new Date().toISOString() }];
+  return d;
+}
+
+// Replace the whole decisions array (used when the proposal lifecycle computes the next set).
+export function setDecisions(doc, decisions) {
+  const d = clone(doc);
+  d.proposal_decisions = [...(decisions || [])];
   return d;
 }
 
 export function decisionFor(doc, targetType, targetId, metric) {
   return (doc.proposal_decisions || []).find((x) => x.target_type === targetType && x.target_id === targetId && x.metric === metric) || null;
+}
+
+// ---- explicit relational mapping (one-to-one within the sketch) ----
+// A sketch facet is linked to at most one MeasurementFacet and vice-versa. Mapping is ALWAYS explicit;
+// identity is NEVER inferred from length/type/position. We never silently steal an existing mapping.
+export function isMeasurementFacetTaken(doc, measurementFacetId, exceptFacetId) {
+  return (doc.facets || []).some((f) => f.id !== exceptFacetId && f.measurement_facet_id != null && String(f.measurement_facet_id) === String(measurementFacetId));
+}
+
+export function setFacetMeasurementLink(doc, facetId, measurementFacetId) {
+  // Unlinking (null) is always allowed. Linking to an already-used MeasurementFacet is refused (no-op).
+  if (measurementFacetId != null && isMeasurementFacetTaken(doc, measurementFacetId, facetId)) return doc;
+  const d = clone(doc);
+  d.facets = d.facets.map((f) => (f.id === facetId ? { ...f, measurement_facet_id: measurementFacetId ?? null } : f));
+  return d;
+}
+
+export function isMeasurementEdgeTaken(doc, measurementEdgeId, exceptEdgeId) {
+  return (doc.edges || []).some((e) => e.id !== exceptEdgeId && e.measurement_edge_id != null && String(e.measurement_edge_id) === String(measurementEdgeId));
+}
+
+export function setEdgeMeasurementLink(doc, edgeId, measurementEdgeId) {
+  if (measurementEdgeId != null && isMeasurementEdgeTaken(doc, measurementEdgeId, edgeId)) return doc;
+  const d = clone(doc);
+  const v = measurementEdgeId ?? null;
+  // keep both canonical aliases coherent (clone-remap handles measurement_edge_id + relational_edge_id)
+  d.edges = d.edges.map((e) => (e.id === edgeId ? { ...e, measurement_edge_id: v, relational_edge_id: v } : e));
+  return d;
 }
 
 export function setEditMode(doc, mode) {

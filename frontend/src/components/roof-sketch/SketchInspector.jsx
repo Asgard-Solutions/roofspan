@@ -16,7 +16,7 @@ function Section({ title, children, testid }) {
   </div>;
 }
 
-export default function SketchInspector({ doc, selection, cmd, readOnly }) {
+export default function SketchInspector({ doc, selection, cmd, readOnly, relFacets = [], relEdges = [] }) {
   const [calFeet, setCalFeet] = useState("");
   const fpu = doc.scale?.resolved ? Number(doc.scale.feetPerUnit) : null;
   const sel = selection || {};
@@ -26,6 +26,12 @@ export default function SketchInspector({ doc, selection, cmd, readOnly }) {
 
   const edgeLenUnits = edge ? distance([vById(doc, edge.v1)?.x, vById(doc, edge.v1)?.y], [vById(doc, edge.v2)?.x, vById(doc, edge.v2)?.y]) : 0;
   const edgeLenFt = fpu ? edgeLenUnits * fpu : null;
+
+  // one-to-one: MeasurementFacet/Edge ids already used by OTHER sketch entities are disabled.
+  const usedFacetIds = new Set((doc.facets || []).filter((f) => f.measurement_facet_id).map((f) => String(f.measurement_facet_id)));
+  const usedEdgeIds = new Set((doc.edges || []).filter((e) => e.measurement_edge_id).map((e) => String(e.measurement_edge_id)));
+  const facetValid = facet?.measurement_facet_id && relFacets.some((rf) => String(rf.id) === String(facet.measurement_facet_id));
+  const edgeValid = edge?.measurement_edge_id && relEdges.some((re) => String(re.id) === String(edge.measurement_edge_id));
 
   return <div className="space-y-3" data-testid="sketch-inspector">
     <Section title="Scale" testid="inspector-scale">
@@ -50,6 +56,20 @@ export default function SketchInspector({ doc, selection, cmd, readOnly }) {
           <SelectContent>{EDGE_TYPES.map((t) => <SelectItem key={t} value={t}>{EDGE_LABEL[t] || t}</SelectItem>)}</SelectContent>
         </Select>
       </div>
+      <div data-testid="edge-mapping">
+        <div className="text-[11px] text-slate-400">Measurement Edge</div>
+        <Select value={edge.measurement_edge_id || "none"} disabled={readOnly} onValueChange={(v) => cmd.setEdgeLink(edge.id, v === "none" ? null : v)}>
+          <SelectTrigger className="w-full" data-testid="edge-map-select"><SelectValue placeholder="Unmapped" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Unmapped</SelectItem>
+            {relEdges.map((re) => {
+              const taken = usedEdgeIds.has(String(re.id)) && String(re.id) !== String(edge.measurement_edge_id);
+              return <SelectItem key={re.id} value={re.id} disabled={taken}>{(EDGE_LABEL[re.edge_type] || re.edge_type || "Edge")} — {Number(re.length_ft || 0).toFixed(1)} LF{taken ? " (mapped)" : ""}</SelectItem>;
+            })}
+          </SelectContent>
+        </Select>
+        {edge.measurement_edge_id && !edgeValid && <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="edge-map-invalid">Linked measurement edge no longer exists in this structure — treated as Unmapped. Pick a valid edge.</div>}
+      </div>
       <div className="text-xs text-slate-500">Geometry: {edgeLenFt == null ? `${edgeLenUnits.toFixed(1)} units (unscaled)` : `${edgeLenFt.toFixed(1)} ft`}</div>
       <div className="flex items-end gap-2">
         <div className="flex-1"><div className="text-[11px] text-slate-400">Confirmed length (ft)</div>
@@ -63,6 +83,20 @@ export default function SketchInspector({ doc, selection, cmd, readOnly }) {
 
     {facet && <Section title="Facet" testid="inspector-facet">
       <Input value={facet.label || ""} disabled={readOnly} onChange={(e) => cmd.setFacetLabel(facet.id, e.target.value)} placeholder="F1 — Main Front" data-testid="facet-label-input" />
+      <div data-testid="facet-mapping">
+        <div className="text-[11px] text-slate-400">Measurement Facet</div>
+        <Select value={facet.measurement_facet_id || "none"} disabled={readOnly} onValueChange={(v) => cmd.setFacetLink(facet.id, v === "none" ? null : v)}>
+          <SelectTrigger className="w-full" data-testid="facet-map-select"><SelectValue placeholder="Unmapped" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Unmapped</SelectItem>
+            {relFacets.map((rf) => {
+              const taken = usedFacetIds.has(String(rf.id)) && String(rf.id) !== String(facet.measurement_facet_id);
+              return <SelectItem key={rf.id} value={rf.id} disabled={taken}>{rf.facet_label || "Facet"} — {Number(rf.area_sqft || 0).toFixed(0)} sf{rf.pitch_rise != null ? ` — ${rf.pitch_rise}/12` : ""}{taken ? " (mapped)" : ""}</SelectItem>;
+            })}
+          </SelectContent>
+        </Select>
+        {facet.measurement_facet_id && !facetValid && <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="facet-map-invalid">Linked measurement facet no longer exists in this structure — treated as Unmapped. Pick a valid facet.</div>}
+      </div>
       <div className="flex items-center gap-2">
         <div className="flex-1"><div className="text-[11px] text-slate-400">Pitch (rise / 12)</div>
           <Input type="number" step="0.5" value={facet.pitch_rise ?? 0} disabled={readOnly} onChange={(e) => cmd.setFacetPitch(facet.id, e.target.value)} data-testid="facet-pitch-input" /></div>
