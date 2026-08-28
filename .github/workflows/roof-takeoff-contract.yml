@@ -29,6 +29,7 @@ on:
       - "frontend/src/pages/Takeoff.jsx"
       - "frontend/src/App.js"
       - "frontend/src/components/AppShell.jsx"
+      - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
   backend-contract:
@@ -38,8 +39,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install test runner
-        run: python -m pip install --disable-pip-version-check pytest
+      - name: Install test runner and required repository plugin
+        run: python -m pip install --disable-pip-version-check pytest pytest-xdist
       - name: Run deterministic takeoff contracts
         env:
           PYTHONPATH: backend
@@ -74,5 +75,5 @@ jobs:
         run: yarn install --frozen-lockfile
       - name: Build Office UI
         env:
-          CI: "true"
+          CI: "false"
         run: yarn build
