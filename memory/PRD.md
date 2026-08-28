@@ -1,5 +1,45 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 4 Closure Phase 2 — Mapping, Save Safety & Proposal Lifecycle (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
+Office Roof Sketch Editor state-integrity + proposal-workflow architecture. Frontend/state only (no backend
+measurement-persistence redesign; Phase 1 reconciliation preserved). New deterministic pure modules are the
+backbone and are wired into CI (office-build) before the build.
+
+**New pure modules (Node-testable):**
+- `scopeMeasurements.js` — structure-safe scoping: editor receives ONLY the facets/edges/penetrations owned
+  by the current structure (edges via facet_id OR facet_id_secondary; never by type/length).
+- `saveLifecycle.js` — generation-based dirty tracking (`editGeneration` vs `lastPersistedGeneration`), frozen
+  snapshot save, 409/422/error preserve-local. Dirty is NEVER a "saved" string flag.
+- `proposalLifecycle.js` — `acceptProposed` → worksheet draft change + `pending_accept` (never `accepted`);
+  `finalizeAfterSave` promotes pending→accepted ONLY when the persisted authoritative value matches (tolerant
+  compare); `keepCurrent`; `applyPendingToDraft`; editor-session `rollbackPlan` (restores original only when
+  the field still equals the editor-applied value — later manual edits win); stale-mapping detection.
+- `commands.js` — `setFacetMeasurementLink`/`setEdgeMeasurementLink` (one-to-one, no silent steal; edge keeps
+  `measurement_edge_id`+`relational_edge_id` coherent), `setDecisions`.
+
+**UI wiring:** SketchInspector gains scoped one-to-one facet & edge mapping dropdowns (Unmapped default,
+used-ids disabled, invalid/stale mapping warning). ProposalPanel enforces the accept precondition (must be
+mapped) and shows Pending/Accepted/Kept status. RoofSketchEditor uses the generation reducer + frozen
+snapshot save, accept→pending_accept + session tracking, reopened-pending section (Apply to Worksheet Draft /
+Keep Current, never auto-edits), and Discard rolls back only the editor's worksheet changes via the session.
+MeasurementWorksheet scopes data into the editor, applies draft changes by relational id+metric, rolls back
+on discard, and after a successful authoritative PUT finalizes pending→accepted via a second CAS sketch save
+(measurement stays correct even if finalization fails).
+
+**Contracts (CI-gated in office-build):** `mapping.node.test.js` (18), `saveLifecycle.node.test.js` (10),
+`proposalLifecycle.node.test.js` (18), existing `commands.node.test.js` (18). Cover scoping, one-to-one
+mapping + undo/redo, cross-structure exclusion, save-race (edit during in-flight save stays dirty), 409/422/
+generic preserve-local, accept→pending, matching→accepted, mismatch/failure→pending, keep_current, reopen no
+auto-edit, apply explicit, and session rollback (incl. later-manual-edit-wins + unrelated-edits-untouched).
+
+**Local verification (all green):** shared core 26/28/10; office editor contracts 18/18/10/18; office
+`CI=false yarn build` OK; backend 33 (incl. Phase 1 survival/clone/authz + measurement/takeoff/photo); mobile
+edge-identity 4 + sketch-cache 15. NOT executed here: live licensed Office E2E (item 46) — covered by the
+deterministic lifecycle contracts. **PENDING:** user Save-to-GitHub → all 5 Roof Takeoff Contract jobs green
+on that SHA → STOP for independent review. Do NOT start Phase 3 (dimension labels/snapping/split/Join Edge)
+or Field editor / Plan 2.
+
+
 ## Task 4 Phase 1 FINAL Closure Corrections (2026-06) — CODE COMPLETE & LOCALLY GREEN; CI push pending
 Small correction pass on top of Phase 1 (baseline: GitHub main `884c414`, all 5 Roof Takeoff Contract
 jobs green). Fixed one real integration defect + hardened the contract tests. Phase 1 reconciliation code

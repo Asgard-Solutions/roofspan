@@ -10,7 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import PhotoGallery from "@/components/PhotoGallery";
 import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch, PencilRuler } from "lucide-react";
 import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
-import { listSketches } from "@/components/roof-sketch/sketchApi";
+import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
+import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
+import { finalizeAfterSave, rollbackPlan } from "@/components/roof-sketch/proposalLifecycle";
+import { setDecisions } from "@/components/roof-sketch/commands";
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main House"], ["attached_garage", "Attached Garage"], ["detached_garage", "Detached Garage"],
@@ -149,6 +152,25 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     summary: ed.summary || {},
   });
 
+  const finalizePending = async (saved) => {
+    if (!saved?.id) return;
+    let rows;
+    try { rows = await listSketches(saved.id); } catch { return; }
+    const savedFacet = {}; (saved.facets || []).forEach((f) => { savedFacet[String(f.id)] = f; });
+    const savedEdge = {}; (saved.edges || []).forEach((e) => { savedEdge[String(e.id)] = e; });
+    const savedValueOf = (type, id, metric) => (type === "facet" ? savedFacet[String(id)]?.[metric] : type === "edge" ? savedEdge[String(id)]?.[metric] : undefined);
+    let promoted = 0, failed = 0;
+    for (const rec of rows) {
+      const fin = finalizeAfterSave(rec.document?.proposal_decisions || [], savedValueOf);
+      if (!fin.changed) continue;
+      // second sketch save via CAS: changes ONLY proposal provenance, never relational measurement data.
+      const res = await saveSketch(saved.id, rec.structure_id, { document: setDecisions(rec.document, fin.decisions), editMode: rec.edit_mode, expectedVersion: rec.document_version });
+      if (res.ok) promoted += fin.promoted.length; else failed += 1;
+    }
+    if (promoted) toast.success(`${promoted} roof-sketch proposal${promoted > 1 ? "s" : ""} finalized as accepted.`);
+    if (failed) toast.message("Measurement saved successfully, but a roof-sketch proposal status could not be finalized. The measurement is safe; the proposal stays pending until the sketch is saved again.");
+  };
+
   const save = async () => {
     setBusy(true);
     try {
@@ -156,6 +178,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       const saved = rev ? (await api.put(`/measurements/${rev.id}`, body)).data : (await api.post(`/measurements`, body)).data;
       toast.success("Measurement saved");
       await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
+      await finalizePending(saved);
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
@@ -186,10 +209,33 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
 
   if (loading) return <div className="p-3 text-sm text-slate-500" data-testid="measurement-loading"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Loading measurements…</div>;
 
-  const applySketchProposal = ({ type, measurementFacetId, field, value }) => {
-    if (type !== "facet" || !measurementFacetId) return;
-    setEd((doc) => ({ ...doc, facets: doc.facets.map((f) => (f.id === measurementFacetId ? { ...f, [field]: value } : f)) }));
+  const applySketchProposal = ({ target_type, target_id, metric, value }) => {
+    if (!target_id || !metric) return;
+    if (target_type === "facet") setEd((doc) => ({ ...doc, facets: doc.facets.map((f) => (String(f.id) === String(target_id) ? { ...f, [metric]: value } : f)) }));
+    else if (target_type === "edge") setEd((doc) => ({ ...doc, edges: doc.edges.map((e) => (String(e.id) === String(target_id) ? { ...e, [metric]: value } : e)) }));
+    else return;
     setDirty(true);
+  };
+
+  // Discard from the sketch editor: roll back ONLY the worksheet fields this editor session applied,
+  // and only when the current draft value still equals what the editor set (a later manual edit wins).
+  const discardEditorSession = (session) => {
+    if (!session) return;
+    setEd((doc) => {
+      const valueOf = (type, id, metric) => {
+        const coll = type === "facet" ? doc.facets : doc.edges;
+        const row = (coll || []).find((r) => String(r.id) === String(id));
+        return row ? Number(row[metric]) : undefined;
+      };
+      const plan = rollbackPlan(session, valueOf);
+      if (!plan.length) return doc;
+      let facets = doc.facets, edges = doc.edges;
+      for (const p of plan) {
+        if (p.target_type === "facet") facets = facets.map((f) => (String(f.id) === String(p.target_id) ? { ...f, [p.metric]: p.restore_value } : f));
+        else if (p.target_type === "edge") edges = edges.map((e) => (String(e.id) === String(p.target_id) ? { ...e, [p.metric]: p.restore_value } : e));
+      }
+      return { ...doc, facets, edges };
+    });
   };
 
   const structOptions = (ed?.structures || []).filter((row) => row.ref).map((row) => [row.ref, row.name || STRUCTURE_TYPES.find((t) => t[0] === row.structure_type)?.[1] || "Structure"]);
@@ -318,13 +364,18 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       {rev.status === "locked" && <div className="text-xs text-slate-500"><Lock className="mr-1 inline h-3 w-3" />This revision is locked. Use “New revision” to make changes — history is preserved.</div>}
       <div className="rounded-lg border border-border p-3" data-testid="measurement-allphotos-card"><div className="mb-2 text-sm font-semibold text-slate-700">All measurement photos</div><PhotoGallery sourceUrl={`/mobile/photos/measurement/${rev.id}`} testid="measurement-allphotos" hideWhenEmpty={false} recordType="measurement_all" recordId={rev.id} /></div>
     </>}
-    {sketchFor && rev && <RoofSketchEditor
-      revision={{ id: rev.id, editable, status: rev.status }}
-      structure={{ id: sketchFor.id, name: sketchFor.name || "Structure" }}
-      facets={(ed?.facets || []).filter((f) => f.id)}
-      onMeasurementChanged={applySketchProposal}
-      onClose={() => { setSketchFor(null); if (rev?.id) listSketches(rev.id).then((rows) => setSketchStructIds(new Set(rows.map((r) => r.structure_id)))).catch(() => {}); }}
-    />}
+    {sketchFor && rev && (() => {
+      const scoped = scopeForStructure({ structure: { id: sketchFor.id }, facets: ed?.facets || [], edges: ed?.edges || [], penetrations: ed?.penetrations || [] });
+      return <RoofSketchEditor
+        revision={{ id: rev.id, editable, status: rev.status }}
+        structure={{ id: sketchFor.id, name: sketchFor.name || "Structure" }}
+        facets={scoped.facets}
+        edges={scoped.edges}
+        onMeasurementChanged={applySketchProposal}
+        onDiscardSession={discardEditorSession}
+        onClose={() => { setSketchFor(null); if (rev?.id) listSketches(rev.id).then((rows) => setSketchStructIds(new Set(rows.map((r) => r.structure_id)))).catch(() => {}); }}
+      />;
+    })()}
   </div>;
 }
 
