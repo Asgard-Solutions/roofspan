@@ -26,6 +26,7 @@ on:
       - "mobile/src/tests/measurement_cache.node.test.js"
       - "mobile/src/tests/scope.node.test.js"
       - "mobile/package.json"
+      - "mobile/package-lock.json"
       - "frontend/src/pages/Takeoff.jsx"
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "frontend/src/App.js"
@@ -54,6 +55,7 @@ on:
       - "mobile/src/tests/measurement_cache.node.test.js"
       - "mobile/src/tests/scope.node.test.js"
       - "mobile/package.json"
+      - "mobile/package-lock.json"
       - "frontend/src/pages/Takeoff.jsx"
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "frontend/src/App.js"
@@ -106,14 +108,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: yarn
-          cache-dependency-path: mobile/yarn.lock
-      - name: Install Yarn
-        run: npm install --global yarn@1.22.22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
       - name: Install Field dependencies
-        run: yarn install --frozen-lockfile
+        run: npm ci
       - name: Run deterministic Field measurement/offline contracts
-        run: yarn test:measurements
+        run: npm run test:measurements
       - name: Parse Field measurement modules with Expo Babel
         run: >-
           node -e "const b=require('@babel/core');
