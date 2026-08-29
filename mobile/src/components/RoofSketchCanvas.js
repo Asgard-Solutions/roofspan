@@ -1,11 +1,12 @@
 // Field Roof Sketch touch canvas (React Native + react-native-svg). ALL geometry/topology/snap/history
-// math is delegated to @roofspan/roof-sketch-core via the parent screen's editor + the shared engine —
-// this component only turns touches into shared-engine calls and renders. No local algorithms.
-import React, { useRef, useState, useCallback } from "react";
+// math is delegated to @roofspan/roof-sketch-core; pointer→topology decisions use the pure adapters in
+// roofSketchFieldWiring so the same logic is contract-tested. No local algorithms.
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import { View, PanResponder } from "react-native";
 import Svg, { G, Line, Polygon, Circle, Rect, Text as SvgText } from "react-native-svg";
 import * as RS from "@roofspan/roof-sketch-core";
 import * as VIEW from "../roofSketchView";
+import * as WIRE from "../roofSketchFieldWiring";
 import { C } from "../theme";
 
 const EDGE_COLORS = {
@@ -15,19 +16,20 @@ const EDGE_COLORS = {
 const SNAP_PX = 14;
 
 export default function RoofSketchCanvas({
-  editor, tool, editMode, readOnly, selection, onSelect, onChanged, onError, canvasSize,
+  editor, tool, editMode, readOnly, selection, onSelect, onChanged, onError, canvasSize, resetToken,
 }) {
   const { width, height } = canvasSize;
   const [view, setView] = useState(() => VIEW.fitToViewport(VIEW.documentPoints(editor.document), { width, height }));
   const [snap, setSnap] = useState(null);
   const [, force] = useState(0);
   const rerender = useCallback(() => force((x) => x + 1), []);
+  const gesture = useRef({ mode: null });
 
-  const gesture = useRef({ mode: null, startDoc: null, dragVertexId: null, lastVertexId: null, pinchDist: 0, panLast: null });
+  // Explicit reset of transient build/draw state on tool/mode change or after create/cancel (§5).
+  useEffect(() => { gesture.current.facetEdges = []; gesture.current.manualVertexIds = []; gesture.current.lastVertexId = null; setSnap(null); }, [resetToken, tool, editMode]);
 
   const toModel = (sx, sy) => VIEW.screenToModel([sx, sy], view);
   const tol = () => RS.modelTolerance(SNAP_PX, view.scale);
-
   const commit = (doc) => { editor.commit(doc); onChanged && onChanged(); rerender(); };
   const preview = (doc) => { editor.preview(doc); rerender(); };
   const restore = () => { editor.restore(); setSnap(null); rerender(); };
@@ -35,9 +37,9 @@ export default function RoofSketchCanvas({
   const handleTap = (sx, sy) => {
     const m = toModel(sx, sy);
     if (tool === "select") return selectAt(m);
-    if (readOnly) return;
+    if (readOnly) return; // read-only allows select (above) but no mutating tools
     if (tool === "penetration") { const r = RS.placePenetration(editor.document, m[0], m[1]); commit(r.doc); onSelect && onSelect({ type: "penetration", id: r.penetrationId }); return; }
-    if (tool === "facet") { pickFacetEdge(m); return; }
+    if (tool === "facet") return pickFacetEdge(m);
     if (tool === "draw") return drawAt(m);
   };
 
@@ -49,10 +51,11 @@ export default function RoofSketchCanvas({
       else { const a = RS.addVertex(doc, cand.point[0], cand.point[1]); doc = a.doc; vid = a.vertexId; }
       gesture.current.manualVertexIds = [...(gesture.current.manualVertexIds || []), vid];
       commit(doc);
+      onSelect && onSelect({ type: "manual_build", vertexIds: [...gesture.current.manualVertexIds] });
       return;
     }
     const cand = RS.drawSnap(editor.document, m, tol());
-    if (cand.type === "blocked") { onError && onError("This edge is mapped, confirmed, or locked and cannot be changed."); return; }
+    if (cand.type === "blocked") { onError && onError("edge_protected"); return; }
     const r = RS.applyDrawPoint(editor.document, cand, gesture.current.lastVertexId);
     if (!r.ok) { onError && onError(r.reason); return; }
     gesture.current.lastVertexId = r.vertexId;
@@ -65,7 +68,7 @@ export default function RoofSketchCanvas({
     const set = new Set(gesture.current.facetEdges || []);
     set.has(cand.edgeId) ? set.delete(cand.edgeId) : set.add(cand.edgeId);
     gesture.current.facetEdges = [...set];
-    onSelect && onSelect({ type: "facet_build", edgeIds: gesture.current.facetEdges });
+    onSelect && onSelect({ type: "facet_build", edgeIds: [...gesture.current.facetEdges] });
     rerender();
   };
 
@@ -82,70 +85,70 @@ export default function RoofSketchCanvas({
     onSelect && onSelect(null);
   };
 
-  const startVertexDrag = (m) => {
+  const overSelectable = (m) => {
     const t = tol();
-    for (const v of editor.document.vertices || []) {
-      if (Math.hypot(m[0] - v.x, m[1] - v.y) <= t) { gesture.current.dragVertexId = v.id; gesture.current.startDoc = editor.document; return true; }
-    }
-    for (const p of editor.document.penetrations || []) {
-      if (Math.hypot(m[0] - p.x, m[1] - p.y) <= t) { gesture.current.dragPenId = p.id; gesture.current.startDoc = editor.document; return true; }
-    }
-    return false;
+    for (const v of editor.document.vertices || []) if (Math.hypot(m[0] - v.x, m[1] - v.y) <= t) return { kind: "vertex", id: v.id };
+    for (const p of editor.document.penetrations || []) if (Math.hypot(m[0] - p.x, m[1] - p.y) <= t) return { kind: "penetration", id: p.id };
+    return null;
   };
 
-  const pan = createResponder();
+  const two = (touches) => ({ p1: [touches[0].locationX, touches[0].locationY], p2: [touches[1].locationX, touches[1].locationY] });
+  const twoState = (touches) => { const { p1, p2 } = two(touches); return { mid: VIEW.touchMidpoint(p1, p2), dist: VIEW.touchDistance(p1, p2) }; };
 
-  function createResponder() {
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
-        const t = e.nativeEvent.touches;
-        if (t.length >= 2) { gesture.current.mode = "pinch"; gesture.current.pinchDist = VIEW.touchDistance([t[0].locationX, t[0].locationY], [t[1].locationX, t[1].locationY]); return; }
-        const { locationX: sx, locationY: sy } = e.nativeEvent;
-        gesture.current.panLast = [sx, sy];
-        if (tool === "pan" || readOnly) { gesture.current.mode = "pan"; return; }
-        if (tool === "select" && startVertexDrag(toModel(sx, sy))) { gesture.current.mode = "drag"; return; }
-        gesture.current.mode = "tap"; gesture.current.tapAt = [sx, sy];
-      },
-      onPanResponderMove: (e, gs) => {
-        const t = e.nativeEvent.touches;
-        if (t.length >= 2) {
-          const p1 = [t[0].locationX, t[0].locationY], p2 = [t[1].locationX, t[1].locationY];
-          const d = VIEW.touchDistance(p1, p2), mid = VIEW.touchMidpoint(p1, p2);
-          if (gesture.current.pinchDist > 0) setView((v) => VIEW.zoomAround(v, mid, d / gesture.current.pinchDist));
-          gesture.current.pinchDist = d; gesture.current.mode = "pinch"; return;
+  const pan = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (e) => {
+      const g = gesture.current;
+      const t = e.nativeEvent.touches;
+      if (t.length >= 2) { g.mode = "twofinger"; g.two = twoState(t); return; }
+      const { locationX: sx, locationY: sy } = e.nativeEvent;
+      g.startScreen = [sx, sy]; g.panLast = [sx, sy]; g.snapCandidate = null; g.dragVertexId = null; g.dragPenId = null;
+      if (tool === "pan") { g.mode = "pan"; return; }
+      if (tool === "select" && !readOnly) {
+        const hit = overSelectable(toModel(sx, sy));
+        if (hit) { g.mode = "possible_drag"; g.startDoc = editor.document; if (hit.kind === "vertex") g.dragVertexId = hit.id; else g.dragPenId = hit.id; return; }
+      }
+      g.mode = "tap"; g.tapAt = [sx, sy];
+    },
+    onPanResponderMove: (e) => {
+      const g = gesture.current;
+      const t = e.nativeEvent.touches;
+      if (t.length >= 2) {
+        const now = twoState(t);
+        if (g.two) setView((v) => WIRE.applyTwoTouchView(v, g.two, now, { min: 0.05, max: 40 }));
+        g.two = now; g.mode = "twofinger"; return;
+      }
+      const { locationX: sx, locationY: sy } = e.nativeEvent;
+      if (g.mode === "pan") { const last = g.panLast || [sx, sy]; setView((v) => VIEW.pan(v, sx - last[0], sy - last[1])); g.panLast = [sx, sy]; return; }
+      if (g.mode === "possible_drag") { if (WIRE.movedBeyondThreshold(g.startScreen, [sx, sy])) g.mode = "drag"; else return; }
+      if (g.mode === "drag") {
+        const m = toModel(sx, sy);
+        if (g.dragVertexId) {
+          const cand = RS.dragSnap(editor.document, g.dragVertexId, m, tol());
+          g.snapCandidate = cand; setSnap(cand); // synchronous ref is the transaction source (§7)
+          const pt = cand.type === "free" ? m : cand.point;
+          preview(RS.moveVertex(g.startDoc, g.dragVertexId, pt[0], pt[1]));
+        } else if (g.dragPenId) {
+          g.snapCandidate = { type: "free", point: m };
+          preview(RS.movePenetration(g.startDoc, g.dragPenId, m[0], m[1]));
         }
-        const { locationX: sx, locationY: sy } = e.nativeEvent;
-        if (gesture.current.mode === "pan") {
-          const last = gesture.current.panLast || [sx, sy];
-          setView((v) => VIEW.pan(v, sx - last[0], sy - last[1])); gesture.current.panLast = [sx, sy]; return;
-        }
-        if (gesture.current.mode === "drag") {
-          const m = toModel(sx, sy);
-          if (gesture.current.dragVertexId) {
-            const cand = RS.dragSnap(editor.document, gesture.current.dragVertexId, m, tol());
-            setSnap(cand);
-            preview(RS.moveVertex(gesture.current.startDoc, gesture.current.dragVertexId, cand.type === "free" ? m[0] : cand.point[0], cand.type === "free" ? m[1] : cand.point[1]));
-          } else if (gesture.current.dragPenId) {
-            preview(RS.movePenetration(gesture.current.startDoc, gesture.current.dragPenId, m[0], m[1]));
-          }
-        }
-      },
-      onPanResponderRelease: (e) => {
-        const g = gesture.current;
-        if (g.mode === "tap" && g.tapAt) { handleTap(g.tapAt[0], g.tapAt[1]); }
-        else if (g.mode === "drag" && g.dragVertexId) {
-          const r = RS.applyVertexDrop(g.startDoc, g.dragVertexId, g.snapCandidate || snap || { type: "free", point: toModel(e.nativeEvent.locationX, e.nativeEvent.locationY) });
-          if (r.ok) { editor.commitFrom(g.startDoc, r.doc); onChanged && onChanged(); } else { restore(); onError && onError(r.reason); }
-        }
-        else if (g.mode === "drag" && g.dragPenId) { editor.commitFrom(g.startDoc, editor.document); onChanged && onChanged(); }
-        setSnap(null);
-        gesture.current = { mode: null, startDoc: null, dragVertexId: null, dragPenId: null, lastVertexId: g.lastVertexId, manualVertexIds: g.manualVertexIds, facetEdges: g.facetEdges };
-        rerender();
-      },
-    });
-  }
+      }
+    },
+    onPanResponderRelease: (e) => {
+      const g = gesture.current;
+      if (g.mode === "tap" && g.tapAt) handleTap(g.tapAt[0], g.tapAt[1]);
+      else if (g.mode === "possible_drag") { selectAt(toModel(g.startScreen[0], g.startScreen[1])); } // tap-select, NO mutation (§8)
+      else if (g.mode === "drag" && g.dragVertexId) {
+        const cand = WIRE.pickReleaseCandidate(g, { type: "free", point: toModel(e.nativeEvent.locationX, e.nativeEvent.locationY) });
+        const r = RS.applyVertexDrop(g.startDoc, g.dragVertexId, cand);
+        if (r.ok) { editor.commitFrom(g.startDoc, r.doc); onChanged && onChanged(); } else { restore(); onError && onError(r.reason); }
+      } else if (g.mode === "drag" && g.dragPenId) { editor.commitFrom(g.startDoc, editor.document); onChanged && onChanged(); }
+      setSnap(null);
+      gesture.current = { mode: null, lastVertexId: g.lastVertexId, manualVertexIds: g.manualVertexIds, facetEdges: g.facetEdges };
+      rerender();
+    },
+  });
 
   // ---- render ----
   const doc = editor.document;
@@ -157,7 +160,6 @@ export default function RoofSketchCanvas({
   return (
     <View testID="roof-sketch-canvas" style={{ width, height, backgroundColor: "#0B1220" }} {...pan.panHandlers}>
       <Svg width={width} height={height}>
-        {/* facets */}
         <G>
           {(doc.facets || []).map((f) => {
             const res = RS.resolveFacetBoundary(doc, f);
@@ -173,7 +175,6 @@ export default function RoofSketchCanvas({
             );
           })}
         </G>
-        {/* edges + dimensions */}
         <G>
           {(doc.edges || []).map((e) => {
             const a = RS.vById(doc, e.v1), b = RS.vById(doc, e.v2);
@@ -196,7 +197,6 @@ export default function RoofSketchCanvas({
             );
           })}
         </G>
-        {/* vertices */}
         <G>
           {(doc.vertices || []).map((v) => {
             const p = sp([v.x, v.y]);
@@ -204,7 +204,6 @@ export default function RoofSketchCanvas({
             return <Circle key={v.id} cx={p[0]} cy={p[1]} r={sel ? 7 : 5} fill={sel ? C.brand : "#E2E8F0"} stroke="#0B1220" strokeWidth={1.5} />;
           })}
         </G>
-        {/* penetrations */}
         <G>
           {(doc.penetrations || []).map((pn) => {
             const p = sp([pn.x, pn.y]);
@@ -212,7 +211,6 @@ export default function RoofSketchCanvas({
             return <Rect key={pn.id} x={p[0] - 6} y={p[1] - 6} width={12} height={12} fill={sel ? C.brand : "#F59E0B"} stroke="#0B1220" strokeWidth={1.5} />;
           })}
         </G>
-        {/* live snap marker (non-interactive) */}
         {snap ? (() => {
           const p = sp(snap.point);
           const color = snap.type === "vertex" ? "#22C55E" : snap.type === "edge" ? "#22D3EE" : snap.type === "blocked" ? "#EF4444" : "#94A3B8";

@@ -47,6 +47,11 @@ export const cache = {
 export async function saveSketchDraft(revisionId, structureId, draft) {
   try { await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), draft); } catch (e) { /* best effort */ }
 }
+// Strict variant for the Roof Sketch editor: local durability IS the B2A persistence contract, so a
+// storage failure must PROPAGATE (the controller records it and the screen shows an honest status).
+export async function saveSketchDraftStrict(revisionId, structureId, draft) {
+  await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), draft);
+}
 export async function loadSketchDraft(revisionId, structureId) {
   try { return await getCache(sketchKeys.sketchDraftKey(revisionId, structureId)); } catch (e) { return null; }
 }
