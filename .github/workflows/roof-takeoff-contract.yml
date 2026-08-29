@@ -277,7 +277,8 @@ jobs:
           node src/components/roof-sketch/__tests__/proposalLifecycle.node.test.js &&
           node src/components/roof-sketch/__tests__/geometryOps.node.test.js &&
           node src/components/roof-sketch/__tests__/gestureOps.node.test.js &&
-          node src/components/roof-sketch/__tests__/topologyIntegrity.node.test.js
+          node src/components/roof-sketch/__tests__/topologyIntegrity.node.test.js &&
+          node src/components/roof-sketch/__tests__/sharedDelegation.node.test.js
       - name: Build Office UI
         env:
           CI: "false"
