@@ -245,10 +245,10 @@ jobs:
         run: npm run test:measurements
       - name: Run roof sketch core + Field sketch-cache contracts
         run: npm run test:sketch
-      - name: Parse Field measurement modules with Expo Babel
+      - name: Parse Field measurement + roof sketch modules with Expo Babel
         run: >-
           node -e "const b=require('@babel/core');
-          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js']
+          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/roofSketchFieldController.js','src/roofSketchView.js','App.js']
           .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
           console.log('Field measurement + sketch modules parsed');"
 

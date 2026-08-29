@@ -229,6 +229,13 @@ export default function Measurements({ route, navigation }) {
               <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Height ft" value={st.approx_height_ft != null ? String(st.approx_height_ft) : ""} editable={!readonly} onChangeText={(v) => setS(i, "approx_height_ft", v)} />
             </View>
             <TextInput style={s.input} placeholder="Structure notes" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} />
+            {existing?.id && st.id ? (
+              <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
+                <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={s.sketchHint} testID={`sketch-roof-disabled-${i}`}>Save the measurement first to create this structure before sketching the roof.</Text>
+            )}
           </View>
         ))}
       </Section>
@@ -352,6 +359,9 @@ const s = StyleSheet.create({
   secTitle: { fontSize: 16, fontWeight: "800", color: C.ink },
   add: { color: C.brand, fontWeight: "800", fontSize: 15 },
   card: { backgroundColor: "#fff", borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: C.line },
+  sketchBtn: { marginTop: 10, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  sketchBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
+  sketchHint: { marginTop: 10, color: C.sub, fontSize: 12, fontStyle: "italic" },
   input: { backgroundColor: "#fff", borderRadius: 10, padding: 11, fontSize: 15, borderWidth: 1, borderColor: C.line, marginBottom: 8 },
   rowline: { flexDirection: "row", alignItems: "center" },
   half: { flex: 1 },
