@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_db
 from models import Property, PropertyContact, Visit, Lead, Territory, User
 from core import get_current_user, require_roles, MANAGE_ROLES, FIELD_ROLES, log_action
+from services import mobile_authz as mauthz
+from services.property_detail import build_property_detail, conflict_if_stale
 from schemas_phase2 import (
-    PropertyOut, PropertyDetail, ContactOut, VisitOut, VisitIn,
+    PropertyOut, PropertyDetail, VisitOut, VisitIn,
     PropertyCreate, PropertyPatch, ConvertLeadIn, LeadOut,
 )
 
@@ -113,20 +115,11 @@ async def create_property(payload: PropertyCreate, request: Request, user: User 
 
 @router.get("/{property_id}", response_model=PropertyDetail)
 async def get_property(property_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    p = await db.get(Property, property_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Property not found")
-    contacts = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id))).scalars().all()
-    visits = (await db.execute(select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()))).scalars().all()
-    lead = (await db.execute(select(Lead).where(Lead.property_id == p.id).order_by(Lead.created_at.desc()))).scalars().first()
-    base = _prop_out(p).model_dump()
-    return PropertyDetail(
-        **base,
-        contacts=[ContactOut(id=str(c.id), kind=c.kind, name=c.name, contact_type=c.contact_type, mailing_address=c.mailing_address, phone=c.phone, email=c.email) for c in contacts],
-        visits=[VisitOut(id=str(v.id), visited_at=v.visited_at, user_email=v.user_email, outcome=v.outcome, notes=v.notes, created_at=v.created_at) for v in visits],
-        lead_id=str(lead.id) if lead else None,
-        location_diagnostics=_location_diagnostics(p),
-    )
+    # Authorization is enforced here (not in the client): a sales user may only reach a property in
+    # their canvass/lead/job scope; management roles retain broad access. Blocks direct-UUID (IDOR).
+    p = await mauthz.assert_property_access(db, property_id, user)
+    detail = await build_property_detail(db, p)
+    return PropertyDetail(**detail)
 
 
 async def _locate_property(property_id: str, request: Request, user: User, db: AsyncSession):
@@ -233,9 +226,8 @@ async def verify_property_address_legacy(
 
 @router.patch("/{property_id}", response_model=PropertyOut)
 async def patch_property(property_id: str, payload: PropertyPatch, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    p = await db.get(Property, property_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Property not found")
+    p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     fields = payload.model_dump(exclude_unset=True)
     if "do_not_knock" in fields:
         p.do_not_knock = fields["do_not_knock"]
@@ -254,9 +246,8 @@ async def patch_property(property_id: str, payload: PropertyPatch, request: Requ
 
 @router.post("/{property_id}/visits", response_model=VisitOut, status_code=201)
 async def create_visit(property_id: str, payload: VisitIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    p = await db.get(Property, property_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Property not found")
+    p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     v = Visit(
         property_id=p.id, user_id=user.id, user_email=user.email,
         visited_at=payload.visited_at or datetime.now(timezone.utc),
@@ -274,9 +265,7 @@ async def create_visit(property_id: str, payload: VisitIn, request: Request, use
 
 @router.post("/{property_id}/convert-to-lead", response_model=LeadOut, status_code=201)
 async def convert_to_lead(property_id: str, payload: ConvertLeadIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    p = await db.get(Property, property_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Property not found")
+    p = await mauthz.assert_property_access(db, property_id, user)
     name = payload.name.strip()
     if not name:
         owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()

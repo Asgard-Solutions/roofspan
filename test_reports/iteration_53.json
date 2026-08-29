@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only verification of Field/Office Property parity iteration. Ran the two existing hermetic pytests (test_property_parity.py, test_mobile_property_patch.py) — both PASS. Added a new live HTTP test suite (test_field_property_live.py) against REACT_APP_BACKEND_URL exercising real auth + endpoints: 15/16 tests pass. All core guarantees confirmed live: (a) PATCH /api/mobile/properties/{id} toggles DNK on/off and updates notes for authorized caller; (b) Sales IDOR — unauthorized sales user is 403 on both GET and PATCH of /api/mobile/properties/{id}; (c) all six canonical outcomes (no_answer, not_interested, interested, callback, appointment, do_not_knock) accepted on POST /api/mobile/visits; (d) invalid outcomes (sold, maybe) rejected with 422 on BOTH mobile and office visit endpoints; (e) office accepts callback+appointment; (f) visit notes persist and appear in property visits[]; (g) GET /api/mobile/properties/{id} exposes all canonical keys PLUS compat aliases owner_name/owner_phone/existing_lead_id and they equal canonical owner contact / lead_id. One minor wire-level parity mismatch found (see below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/properties/{id} vs GET /api/mobile/properties/{id}",
+        "issue": "Wire-format datetime parity: Office response serializes visit timestamps via Pydantic ('2026-08-29T21:08:26.802164Z') while Mobile response serializes via raw dict isoformat ('2026-08-29T21:08:26.802164+00:00'). Semantic values are identical (same instant), but the strings differ, so a JSON-level byte comparison of visits[]/created_at/updated_at is NOT byte-parity. Consumers doing string equality (or naive parsing) may treat them as different. Suggest routing the mobile response through the same Pydantic model / a single datetime serializer so office and field emit byte-identical timestamp strings. Hermetic in-process test doesn't catch this because both paths yield equal Python datetime objects — only serialized JSON diverges."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_property_parity.py",
+    "/app/backend/tests/test_mobile_property_patch.py",
+    "/app/backend/tests/test_field_property_live.py",
+    "/app/test_reports/pytest/field_property_live.xml"
+  ],
+  "action_items": [
+    "Unify datetime serialization between office and mobile Property detail responses so visit timestamps are byte-identical strings (route mobile through Pydantic model or apply the same isoformat/Z formatter used by Office)."
+  ],
+  "critical_code_review_comments": [
+    "services/property_detail.build_property_detail returns Python datetime objects and Office wraps them in a Pydantic model (yielding 'Z'-suffixed ISO strings), while routers.mobile.get_property returns the dict directly — FastAPI's json encoder falls back to datetime.isoformat() (yielding '+00:00'). This breaks pure wire-parity on created_at/updated_at/visits[].visited_at/visits[].created_at. Consider defining a single PropertyDetail pydantic model shared by both routers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_field_property_live.py (NEW live HTTP suite for future regression)"
+  ],
+  "success_rate": {"backend": "15/16 live (94%) + 2/2 hermetic (100%)", "frontend": "skipped (backend-only iteration)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 verified. Both sales users (sales1_38f545f9, sales2_7ad4f5cd) logged in successfully and are correctly UNauthorized for the owner-created test property (both hit 403 on mobile GET & PATCH, confirming IDOR hardening).",
+  "seed_data_creation": "Owner-created a TEST_ prefixed property (reused an existing one first if available). Test-only visits appended to that property with 'TEST' notes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live suite at backend/tests/test_field_property_live.py covers auth, canonical parity, DNK PATCH toggle+notes, sales IDOR (403 on GET+PATCH), all six visit outcomes (parametrized), invalid-outcome 422 on mobile+office, and visit-notes persistence. Run: PYTHONPATH=backend pytest -q backend/tests/test_field_property_live.py -o addopts=''. Note: pytest.ini forces xdist which conflicts with -o addopts default; use '-o addopts=' to disable. Hermetic tests still green (test_property_parity.py, test_mobile_property_patch.py).",
+  "rca of the issue": "Datetime-parity minor issue: mobile router returns a raw dict; FastAPI's default jsonable_encoder serializes datetime via .isoformat() -> '+00:00'. Office router returns a Pydantic model that produces '...Z' via its json_encoder config. Fix: share a PropertyDetail Pydantic model between routers, or apply a common datetime json_encoder in mobile as well."
+}

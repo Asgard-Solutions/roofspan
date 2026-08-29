@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, U
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from fastapi.responses import Response
 
 from db import get_db
@@ -19,8 +19,11 @@ from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
+from services.property_detail import build_property_detail, conflict_if_stale
+from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
 from schemas_sketch import SketchWriteIn
+from schemas_phase2 import PropertyDetail
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -74,6 +77,12 @@ class MobileVisitIn(BaseModel):
     outcome: str = "no_answer"
     notes: str | None = None
     visited_at: datetime | None = None
+    expected_updated_at: datetime | None = None    # optimistic-concurrency token
+
+    @field_validator("outcome")
+    @classmethod
+    def _valid_outcome(cls, v: str) -> str:
+        return validate_outcome(v)
 
 
 @router.post("/visits", status_code=201)
@@ -84,6 +93,7 @@ async def create_visit(payload: MobileVisitIn, request: Request, idempotency_key
         if v:
             return _visit_out(v, replayed=True)
     p = await mauthz.assert_property_access(db, payload.property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     v = Visit(property_id=p.id, user_id=user.id, user_email=user.email,
               visited_at=payload.visited_at or datetime.now(timezone.utc), outcome=payload.outcome, notes=payload.notes)
     db.add(v)
@@ -830,19 +840,73 @@ async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_
 # ============================================================================
 # Mobile Property detail (salesperson-authorized; canvass/field context only)
 # ============================================================================
-@router.get("/properties/{property_id}")
+@router.get("/properties/{property_id}", response_model=PropertyDetail)
 async def get_property(property_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
-    from models import PropertyContact
-    owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()
-    vrows = (await db.execute(select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()))).scalars().all()
-    lead = (await db.execute(select(Lead).where(Lead.property_id == p.id, Lead.status != "archived").order_by(Lead.created_at.desc()))).scalars().first()
-    return {
-        "id": str(p.id), "formatted_address": p.formatted_address, "latitude": p.latitude, "longitude": p.longitude,
-        "property_type": p.property_type, "owner_occupied": p.owner_occupied,
-        "do_not_knock": p.do_not_knock, "do_not_knock_reason": p.do_not_knock_reason, "notes": p.notes,
-        "owner_name": owner.name if owner else None, "owner_phone": owner.phone if owner else None,
-        "existing_lead_id": str(lead.id) if lead else None,
-        "visits": [{"id": str(v.id), "outcome": v.outcome, "notes": v.notes,
-                    "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows],
-    }
+    # SAME canonical builder + SAME Pydantic serialization as Office GET /api/properties/{id}.
+    return PropertyDetail(**await build_property_detail(db, p))
+
+
+class ConflictResolution(BaseModel):
+    kept_mine: list[str] = []
+    took_office: list[str] = []
+
+
+# Human-readable labels for the merge audit note (matches the Field conflict-diff labels).
+_RESOLUTION_FIELD_LABELS = {
+    "do_not_knock": "Do Not Knock",
+    "do_not_knock_reason": "DNK reason",
+    "notes": "Notes",
+    "outcome": "Visit outcome",
+}
+
+
+def _resolution_note(res: ConflictResolution) -> str:
+    def _labels(fields):
+        return ", ".join(_RESOLUTION_FIELD_LABELS.get(f, f) for f in fields)
+    parts = []
+    if res.kept_mine:
+        parts.append(f"kept {_labels(res.kept_mine)} (yours)")
+    if res.took_office:
+        parts.append(f"took {_labels(res.took_office)} (Office)")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"— Sync conflict resolved {ts}: " + "; ".join(parts)
+
+
+class MobilePropertyPatch(BaseModel):
+    do_not_knock: bool | None = None
+    do_not_knock_reason: str | None = None
+    notes: str | None = None
+    resolution: ConflictResolution | None = None   # merge audit note (kept-mine vs took-Office)
+    expected_updated_at: datetime | None = None    # optimistic-concurrency token
+
+
+@router.patch("/properties/{property_id}")
+async def patch_property(property_id: str, payload: MobilePropertyPatch, request: Request,
+                         user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Authorized Field Property mutation (Do Not Knock on/off + notes). Property-level authorization is
+    enforced server-side (canvass/lead/job scope for sales). DNK behavior mirrors Office exactly — it
+    simply sets the same do_not_knock/reason columns (no divergent mobile rule)."""
+    p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
+    fields = payload.model_dump(exclude_unset=True)
+    if "do_not_knock" in fields:
+        p.do_not_knock = fields["do_not_knock"]
+    if "do_not_knock_reason" in fields:
+        p.do_not_knock_reason = fields["do_not_knock_reason"]
+    if "notes" in fields:
+        p.notes = fields["notes"]
+    # Merge audit note: how the rep settled a sync conflict (which fields were kept-mine vs took-Office).
+    # Appended to the property notes AND recorded in the audit log so Office can see how it was resolved.
+    has_resolution = payload.resolution is not None and (payload.resolution.kept_mine or payload.resolution.took_office)
+    if has_resolution:
+        note = _resolution_note(payload.resolution)
+        p.notes = f"{p.notes}\n{note}" if p.notes else note
+    await db.commit()
+    await db.refresh(p)
+    if "do_not_knock" in fields:
+        await log_action(db, user=user, action="property.do_not_knock", entity_type="property", entity_id=p.id, detail={"do_not_knock": p.do_not_knock, "via": "mobile"}, request=request)
+    if has_resolution:
+        await log_action(db, user=user, action="property.conflict_resolved", entity_type="property", entity_id=p.id,
+                         detail={"kept_mine": payload.resolution.kept_mine, "took_office": payload.resolution.took_office, "via": "mobile"}, request=request)
+    return PropertyDetail(**await build_property_detail(db, p))

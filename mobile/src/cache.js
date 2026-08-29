@@ -2,9 +2,10 @@
 // the fresh copy; on any failure fall back to the last scoped cache so the app stays usable offline.
 // Returns { data, stale } — `stale:true` means the value came from cache, not Office.
 import { api } from "./api";
-import { putCache, getCache, getCacheMeta, putCacheSerialized, saveSketchDraftIfCurrent } from "./storage";
+import { putCache, getCache, getCacheMeta, putCacheSerialized, saveSketchDraftIfCurrent, listCacheNames } from "./storage";
 const measurementKeys = require("./measurementCache");
 const sketchKeys = require("./sketchCache");
+const { optimisticCanvassPatch } = require("./fieldReconcile");
 
 async function readThrough(name, fetcher) {
   try {
@@ -27,6 +28,7 @@ export const cache = {
   sections: () => readThrough("sections", () => api.get("/mobile/canvass-sections")),
   sectionProperties: (id) => readThrough(`section:${id}:props`, () => api.get(`/mobile/canvass-sections/${id}/properties`)),
   property: (id) => readThrough(`property:${id}`, () => api.get(`/mobile/properties/${id}`)),
+  visitOutcomes: () => readThrough("visit_outcomes", () => api.get("/visit-outcomes")),
   mapConfig: () => readThrough("mapcfg", () => api.get("/map-config")),
   measurements: (scope) => readThrough(
     measurementKeys.scopeKey(scope),
@@ -101,4 +103,18 @@ export async function patchCachedDetail(name, patch) {
     const cur = (await getCache(name)) || {};
     await putCache(name, { ...cur, ...patch });
   } catch (e) { /* best-effort */ }
+}
+
+// Optimistic Map/canvass write-through: patch the matching Property feature in EVERY cached
+// canvass-section list for the active scope, so the Map reflects a queued offline change immediately.
+// The authoritative acknowledgement reconciliation (sync._reconcileFieldAcks) later overwrites it.
+export async function patchCanvassFeature(propertyId, patch) {
+  try {
+    const names = await listCacheNames("section:");
+    for (const name of names) {
+      if (!name.endsWith(":props")) continue;
+      const cur = await getCache(name);
+      await putCache(name, optimisticCanvassPatch(propertyId, patch, cur));
+    }
+  } catch (e) { /* cache is best-effort */ }
 }

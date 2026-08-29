@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Optional, Any, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from visit_outcomes import validate_outcome
 
 
 # ---- Territories ----
@@ -57,6 +59,12 @@ class VisitIn(BaseModel):
     outcome: str = "no_answer"
     notes: Optional[str] = None
     visited_at: Optional[datetime] = None
+    expected_updated_at: Optional[datetime] = None   # optimistic-concurrency token (Property.updated_at)
+
+    @field_validator("outcome")
+    @classmethod
+    def _valid_outcome(cls, v: str) -> str:
+        return validate_outcome(v)
 
 
 class PropertyOut(BaseModel):
@@ -88,6 +96,7 @@ class PropertyDetail(PropertyOut):
     visits: List[VisitOut] = []
     lead_id: Optional[str] = None
     location_diagnostics: Optional[dict] = None
+    updated_at: Optional[datetime] = None
 
 
 class PropertyCreate(BaseModel):
@@ -107,6 +116,7 @@ class PropertyPatch(BaseModel):
     do_not_knock_reason: Optional[str] = None
     notes: Optional[str] = None
     territory_id: Optional[str] = None
+    expected_updated_at: Optional[datetime] = None   # optimistic-concurrency token (Property.updated_at)
 
 
 # ---- Imports ----
