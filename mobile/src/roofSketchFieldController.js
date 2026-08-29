@@ -88,6 +88,12 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     get source() { return initial.source; },
     get lastPersistedGeneration() { return lastPersistedGeneration; },
     get persistError() { return persistError; },
+    get documentVersion() { return documentVersion; },
+    // Authoritative save snapshot for queue staging: the COMMITTED document (history.present, never a
+    // live drag/gesture preview), the CAS documentVersion, editMode, and the committed editGeneration.
+    authoritativeSnapshot() { return { document: history.present, documentVersion, editMode, editGeneration }; },
+    // A specific committed generation is durable when there is no persist error AND it has drained.
+    isGenerationDurable(gen) { return persistError === null && lastPersistedGeneration >= (Number(gen) || 0); },
     canUndo: () => RS.historyCanUndo(history),
     canRedo: () => RS.historyCanRedo(history),
 

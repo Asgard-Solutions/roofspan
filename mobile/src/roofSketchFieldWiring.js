@@ -90,4 +90,21 @@ module.exports = {
   commitFacetCreate,
   commitManualCreate,
   localSaveStatus,
+  stageFromController,
 };
+
+// Production staging path (used by BOTH RoofSketch.js and contracts): capture the controller's
+// AUTHORITATIVE committed snapshot, drain persistence, and stage ONLY if that exact captured
+// generation is durable. Never reads mutable UI/visual document state.
+async function stageFromController(editor, coordinator, { revisionId, structureId } = {}) {
+  if (!editor || !coordinator) return { staged: false, reason: "not_ready" };
+  const snap = editor.authoritativeSnapshot();
+  await editor.flush();
+  const durable = editor.isGenerationDurable(snap.editGeneration);
+  if (!durable) return { staged: false, reason: "not_durable", generation: snap.editGeneration };
+  return coordinator.stage({
+    revisionId, structureId,
+    document: snap.document, documentVersion: snap.documentVersion,
+    editMode: snap.editMode, editGeneration: snap.editGeneration, durable: true,
+  });
+}

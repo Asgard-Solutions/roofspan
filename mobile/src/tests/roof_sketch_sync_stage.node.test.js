@@ -4,6 +4,9 @@
 // processMutation to prove metadata + serverValue behavior.
 const assert = require("assert");
 const { createSketchSyncCoordinator } = require("../roofSketchSyncCoordinator");
+const { createFieldEditor } = require("../roofSketchFieldController");
+const WIRE = require("../roofSketchFieldWiring");
+const RS = require("@roofspan/roof-sketch-core");
 const queue = require("../queue");
 const { sketchUpdateMutationId } = require("../sketchCache");
 
@@ -86,6 +89,58 @@ const doc = (v) => ({ vertices: [{ id: "v1", x: v, y: 0 }], edges: [], facets: [
     assert.deepStrictEqual(processed.serverValue, serverBody); ok("HTTP 200 sketch success retains the complete serverValue (document_version + document)");
     // B3A boundary: transport success carries the server value but the coordinator/test perform NO draft clearing
     assert.ok(processed.serverValue.document_version === 8); ok("server acknowledgement is available but the local draft is NOT cleared in B3A (deferred to B3B)");
+  }
+
+  // ================= B3A CORRECTION: stage the EXACT committed/durable CAS state =================
+  function rectDoc() { const d = RS.createSketchDocument({ structureId: "S1" }); d.vertices = [{ id: "v1", x: 0, y: 0 }, { id: "v2", x: 10, y: 0 }, { id: "v3", x: 10, y: 8 }, { id: "v4", x: 0, y: 8 }]; d.edges = [{ id: "e1", v1: "v1", v2: "v2", type: "eave" }, { id: "e2", v1: "v2", v2: "v3", type: "rake" }, { id: "e3", v1: "v3", v2: "v4", type: "eave" }, { id: "e4", v1: "v4", v2: "v1", type: "rake" }]; d.facets = [{ id: "f1", edgeIds: ["e1", "e2", "e3", "e4"], vertexIds: [], pitch_rise: 6 }]; return d; }
+  function mkEditor(persist, documentVersion) {
+    return createFieldEditor({ revisionId: "R1", structureId: "S1", initial: { document: rectDoc(), editMode: "connected_graph", editGeneration: 1, documentVersion, source: documentVersion ? "server" : "new" }, persist });
+  }
+
+  // CAS: an existing server sketch version (7) is used for expected_version, NOT the sketch JSON.
+  {
+    const q = fakeQueue(); const co = createSketchSyncCoordinator({ queueMutation: q.queueMutation });
+    const ed = mkEditor(async () => {}, 7);
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 8));
+    const r = await WIRE.stageFromController(ed, co, { revisionId: "R1", structureId: "S1" });
+    assert.ok(r.staged);
+    assert.strictEqual(q.calls[0].spec.body.expected_version, 7); ok("server sketch version 7 stages expected_version: 7 (from controller documentVersion, not the sketch JSON)");
+  }
+  {
+    const q = fakeQueue(); const co = createSketchSyncCoordinator({ queueMutation: q.queueMutation });
+    const ed = mkEditor(async () => {}, 0);
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 8));
+    await WIRE.stageFromController(ed, co, { revisionId: "R1", structureId: "S1" });
+    assert.strictEqual(q.calls[0].spec.body.expected_version, 0); ok("a fresh sketch still stages expected_version: 0");
+  }
+
+  // Autosave during a drag preview must stage the LAST COMMITTED document, never the preview.
+  {
+    const q = fakeQueue(); const co = createSketchSyncCoordinator({ queueMutation: q.queueMutation });
+    const ed = mkEditor(async () => {}, 3);
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 9)); // committed state (pitch 9)
+    ed.preview(RS.moveVertex(ed.document, "v1", 999, 999)); // live drag preview (not committed)
+    const r = await WIRE.stageFromController(ed, co, { revisionId: "R1", structureId: "S1" });
+    assert.ok(r.staged);
+    const stagedDoc = q.calls[0].spec.body.document;
+    assert.strictEqual(stagedDoc.vertices.find((v) => v.id === "v1").x, 0, "committed v1 x, not the 999 preview");
+    assert.strictEqual(stagedDoc.facets[0].pitch_rise, 9); ok("autosave firing during a drag preview stages the last COMMITTED document, never the preview");
+  }
+
+  // Save(A) + Edit(B) while A flushing: B cannot stage until B itself is durable; then it can.
+  {
+    const q = fakeQueue(); const co = createSketchSyncCoordinator({ queueMutation: q.queueMutation });
+    let failFrom = 3; // generation 3 (B) will fail to persist initially
+    const ed = mkEditor(async (draft, gen) => { if (gen >= failFrom) throw new Error("disk busy"); }, 5);
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 7)); // gen 2 (A) persists ok
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 8)); // gen 3 (B) fails to persist
+    const rB = await WIRE.stageFromController(ed, co, { revisionId: "R1", structureId: "S1" });
+    assert.ok(!rB.staged && rB.reason === "not_durable" && rB.generation === 3); ok("B (non-durable) is NOT staged while its own generation has not persisted");
+    assert.strictEqual(q.calls.length, 0, "nothing queued yet");
+    failFrom = 999; // storage recovers
+    await ed.retry();
+    const rB2 = await WIRE.stageFromController(ed, co, { revisionId: "R1", structureId: "S1" });
+    assert.ok(rB2.staged && rB2.generation === 3); ok("once B becomes durable, B stages normally with its exact generation");
   }
 
   console.log("\nFIELD SKETCH SYNC STAGING (B3A): all " + n + " assertions passed");

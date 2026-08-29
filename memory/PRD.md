@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 6 Phase B3A correction — stage the EXACT committed/durable CAS state (2026-06) — DONE LOCALLY; no git ops
+Fixed authoritative staging that read the visual document instead of the controller's committed CAS state.
+- **Controller getters:** `documentVersion` (CAS token, from initial — not the sketch JSON), `authoritativeSnapshot()` = `{document: history.present (COMMITTED, never a preview), documentVersion, editMode, editGeneration}`, `isGenerationDurable(gen)` = `persistError===null && lastPersistedGeneration>=gen`.
+- **Shared adapter `WIRE.stageFromController(editor, coordinator, {revisionId, structureId})`** (used by BOTH `RoofSketch.js` and contracts): captures the authoritative snapshot, drains persistence, and stages ONLY if that exact captured generation is durable — so Save(A)+Edit(B) can't stage B until B itself is durable; body `expected_version` comes from the controller's `documentVersion` (7→7, fresh→0), not `editor.document.document_version`.
+- **`RoofSketch.js`:** `stageNow()` now calls `WIRE.stageFromController` (no reads of mutable visual state).
+- **Verification:** B3A sync-staging grew 11→**16** (adds: version-7→expected_version:7, fresh→0, autosave-during-drag stages committed doc not preview, non-durable B not staged, B stages once durable — all via the real controller snapshot logic). Full mobile test:sketch (editor44/live-wiring36/sync**16**/…) + measurements + transport PASS; photo 6/2/2 + queue race + sketch_cache PASS; Expo parse OK. Only `roofSketchFieldController.js`, `roofSketchFieldWiring.js`, `screens/RoofSketch.js`, `tests/roof_sketch_sync_stage.node.test.js` changed; shared/Office untouched; no new dependency; `mobile/package-lock.json` unchanged; no `mobile/yarn.lock`.
+- **Boundary:** B3B+ NOT started (no ack/draft-retirement, no CAS rebase after success, no 409 UI, no live lock, no Phase C).
+
+
 ## Task 6 Phase B3A — connect Field Roof Sketch to the existing sync queue (2026-06) — DONE LOCALLY; no git ops
 Staged committed Field sketch edits into the EXISTING durable mutation queue (no new sync/retry engine). Reuses the deterministic identity `measurement-sketch-update:<rev>:<struct>`, `PUT /api/mobile/measurements/{rev}/sketches/{struct}`, and `queueMutation()`.
 - **New `mobile/src/roofSketchSyncCoordinator.js`** (`createSketchSyncCoordinator`): requires local durability first, deep-clones + **freezes** the committed document snapshot, dedupes the same `edit_generation`, builds the shared `sketchUpdateMutation`, and calls the existing `queueMutation` (coalesces by shared clientId → newest generation wins). `local_edit_generation` is queue-only metadata, never in the request body.
