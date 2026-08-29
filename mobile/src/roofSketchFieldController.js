@@ -42,8 +42,8 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
   let working = initial.document;
   let editGeneration = Number(initial.editGeneration) || 1;
   let editMode = initial.editMode || "connected_graph";
-  const documentVersion = initial.documentVersion || 0;
-  const baseServerDocument = initial.baseServerDocument || null;
+  let documentVersion = initial.documentVersion || 0;
+  let baseServerDocument = initial.baseServerDocument || null;
 
   // Serialized write chain: every committed state persists in strict edit-generation order; a later
   // commit can never resolve before an earlier one (no A-overwrites-B). A failed durable write is
@@ -89,6 +89,16 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     get lastPersistedGeneration() { return lastPersistedGeneration; },
     get persistError() { return persistError; },
     get documentVersion() { return documentVersion; },
+    get baseServerDocument() { return baseServerDocument; },
+    // B3B2: adopt newly acknowledged authoritative CAS metadata into the OPEN editor. Advances the CAS
+    // token (monotonic — never regresses) and the base server document ONLY. It must NEVER change the
+    // rep's working geometry, edit generation, undo/redo history or selection. Returns the new metadata.
+    adoptServerVersion({ documentVersion: v, baseServerDocument: b } = {}) {
+      const nv = Number(v);
+      if (v != null && !Number.isNaN(nv) && nv >= documentVersion) documentVersion = nv;
+      if (b !== undefined && b !== null) baseServerDocument = b;
+      return { documentVersion, baseServerDocument };
+    },
     // Authoritative save snapshot for queue staging: the COMMITTED document (history.present, never a
     // live drag/gesture preview), the CAS documentVersion, editMode, and the committed editGeneration.
     authoritativeSnapshot() { return { document: history.present, documentVersion, editMode, editGeneration }; },

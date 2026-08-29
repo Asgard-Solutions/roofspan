@@ -8,7 +8,7 @@ import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
 import { loadSketchDraft, saveSketchDraftStrict, cache } from "../cache";
-import { queueMutation } from "../sync";
+import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, syncNow } from "../sync";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
 import { C } from "../theme";
@@ -29,6 +29,10 @@ export default function RoofSketch({ route }) {
   const editorRef = useRef(null);
   const coordRef = useRef(null);
   const stageTimer = useRef(null);
+  const localSaveRef = useRef(null);   // last honest on-device save status string
+  const ackedRef = useRef(0);          // highest local generation Office has acknowledged for this structure
+  const editedRef = useRef(false);     // has the rep committed a local edit this session?
+  const runningRef = useRef(false);    // sync engine actively processing (from sync_start/sync_end)
   const [size, setSize] = useState({ width: 360, height: 480 });
 
   useEffect(() => {
@@ -44,12 +48,52 @@ export default function RoofSketch({ route }) {
         persist: (d) => saveSketchDraftStrict(revision_id, structure_id, d),
       }));
       coordRef.current = createSketchSyncCoordinator({ queueMutation });
+      editedRef.current = initial.source === "local_draft";   // reopened local work is already "edited"
       setEditMode(initial.editMode);
       setStatus(readOnly ? "Locked" : initialStatus(initial, statusMeta));
       setReady(true);
     })();
     return () => { alive = false; if (editorRef.current) editorRef.current.flush(); };
   }, [revision_id, structure_id]);
+
+  // B3B2: structure-specific live sync status + CAS-metadata adoption for the OPEN editor. Reads ONLY
+  // this structure's deterministic mutation (never the global queue), adopts newly acknowledged CAS
+  // metadata without touching geometry/history/generation, and derives the honest status label.
+  const refreshSync = useCallback(async () => {
+    const ed = editorRef.current;
+    if (!ed || readOnly) return;
+    const m = await currentSketchMutation(revision_id, structure_id);
+    // Untouched sketch (server/cache/new) with no mutation: keep its initial label — an unrelated
+    // onSyncChange() event (another structure / a photo) must NOT relabel it.
+    if (!editedRef.current && !m) return;
+    const draft = await loadSketchDraft(revision_id, structure_id);
+    if (draft && draft.document_version != null) {
+      ed.adoptServerVersion({ documentVersion: draft.document_version, baseServerDocument: draft.base_server_document });
+    } else if (m && m.state === "synced" && m.serverValue) {
+      ed.adoptServerVersion({ documentVersion: m.serverValue.document_version, baseServerDocument: m.serverValue.document });
+    }
+    if (m && m.state === "synced") ackedRef.current = Number(m.local_edit_generation) || ackedRef.current;
+    setStatus(WIRE.fieldSketchSyncStatus({
+      localSave: localSaveRef.current,
+      mutation: m,
+      running: runningRef.current || isSyncing(),
+      currentGeneration: ed.editGeneration,
+      acknowledgedGeneration: ackedRef.current,
+    }));
+  }, [readOnly, revision_id, structure_id]);
+
+  // Subscribe to the EXISTING sync events only (no polling/timer). Refresh this structure's status when
+  // the queue changes or a sync pass starts/ends.
+  useEffect(() => {
+    if (!ready || readOnly) return;
+    const unsub = onSyncChange((evt) => {
+      if (evt.type === "sync_start") runningRef.current = true;
+      else if (evt.type === "sync_end") runningRef.current = false;
+      refreshSync();
+    });
+    refreshSync();
+    return unsub;
+  }, [ready, readOnly, refreshSync]);
 
   const editor = editorRef.current;
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
@@ -65,11 +109,13 @@ export default function RoofSketch({ route }) {
   // After any committed edit, drain the serialized chain, report the HONEST result, and debounce-stage.
   const settle = useCallback(() => {
     if (!editor || readOnly) return;
+    editedRef.current = true;
+    localSaveRef.current = "Saving on device…";
     setStatus("Saving on device…"); rerender();
-    editor.flush().then((res) => setStatus(WIRE.localSaveStatus(res)));
+    editor.flush().then((res) => { localSaveRef.current = WIRE.localSaveStatus(res); refreshSync(); });
     if (stageTimer.current) clearTimeout(stageTimer.current);
-    stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow(); }, 800);
-  }, [editor, readOnly, rerender, stageNow]);
+    stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow().then(() => refreshSync()); }, 800);
+  }, [editor, readOnly, rerender, stageNow, refreshSync]);
 
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
@@ -97,7 +143,16 @@ export default function RoofSketch({ route }) {
     editor.commit(r.doc); setSelection({ type: "facet", id: r.facetId }); clearBuild(); settle();
   };
   const cancelBuild = () => { setSelection(null); clearBuild(); };
-  const retrySave = () => { if (editor) { setStatus("Saving on device…"); editor.retry().then((res) => setStatus(WIRE.localSaveStatus(res))); } };
+  const retrySave = () => {
+    if (!editor) return;
+    localSaveRef.current = "Saving on device…";
+    setStatus("Saving on device…");
+    editor.retry().then((res) => {
+      localSaveRef.current = WIRE.localSaveStatus(res);
+      syncNow().catch(() => {});   // also re-attempt server sync (for "Sync issue — retry needed")
+      refreshSync();
+    });
+  };
 
   if (!ready || !editor) return <View style={sx.centered}><Text style={sx.dim}>{status}…</Text></View>;
 
@@ -109,7 +164,7 @@ export default function RoofSketch({ route }) {
         <Text style={sx.structure} testID="roof-sketch-title">{structure_name}</Text>
         <View style={sx.statusRight}>
           <Text style={sx.status} testID="roof-sketch-status">{status}</Text>
-          {status === "Could not save on device" ? <TouchableOpacity testID="retry-save" onPress={retrySave} style={sx.retry}><Text style={sx.retryText}>Retry</Text></TouchableOpacity> : null}
+          {(status === "Could not save on device" || status === "Sync issue — retry needed") ? <TouchableOpacity testID="retry-save" onPress={retrySave} style={sx.retry}><Text style={sx.retryText}>Retry</Text></TouchableOpacity> : null}
         </View>
       </View>
 
@@ -121,7 +176,7 @@ export default function RoofSketch({ route }) {
         <View style={sx.modeToggle}>
           <TouchableOpacity testID="undo-btn" disabled={readOnly || !editor.canUndo()} onPress={() => { editor.undo(); settle(); }} style={[sx.modeBtn, (!editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
           <TouchableOpacity testID="redo-btn" disabled={readOnly || !editor.canRedo()} onPress={() => { editor.redo(); settle(); }} style={[sx.modeBtn, (!editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
-          <TouchableOpacity testID="save-sketch-btn" disabled={readOnly} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow(); }} style={[sx.modeBtn, sx.modeOn, readOnly && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
+          <TouchableOpacity testID="save-sketch-btn" disabled={readOnly} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow().then(() => refreshSync()); }} style={[sx.modeBtn, sx.modeOn, readOnly && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
         </View>
       </View>
 
@@ -176,7 +231,7 @@ export default function RoofSketch({ route }) {
 
 function initialStatus(initial, meta) {
   if (initial.source === "local_draft") return "Saved on device";
-  if (initial.source === "server") return meta && meta.stale ? "Offline/cached sketch" : "Loaded from Office";
+  if (initial.source === "server") return meta && meta.stale ? "Offline/cached sketch" : "Synced to Office";
   return "New sketch";
 }
 function humanReason(reason) {

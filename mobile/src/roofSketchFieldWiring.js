@@ -79,6 +79,31 @@ function localSaveStatus(result) {
   return "Saved on device";
 }
 
+// B3B2: STRUCTURE-SPECIFIC live sync status for the open Field Roof Sketch. Combines the honest on-device
+// save phase with THIS structure's deterministic durable mutation — never the global queue count, so a
+// photo or another structure's work can't make this sketch look (un)synced. Inputs:
+//   localSave: the current localSaveStatus() string (or null before any local save)
+//   mutation:  THIS structure's durable row (measurement-sketch-update:<rev>:<struct>) or null
+//   running:   whether the sync engine is actively processing right now
+//   currentGeneration:      the editor's current COMMITTED edit generation
+//   acknowledgedGeneration: the highest local generation Office has acknowledged for this structure
+// "Synced to Office" requires the CURRENT committed generation to be the acknowledged one — an ack for an
+// older generation while newer local work remains is NOT synced.
+function fieldSketchSyncStatus({ localSave, mutation, running, currentGeneration, acknowledgedGeneration } = {}) {
+  // Device durability comes first: a failed or still-draining local write is reported honestly.
+  if (localSave === "Could not save on device") return localSave;
+  if (localSave === "Saving on device…") return localSave;
+  const state = mutation && mutation.state;
+  if (state === "conflict") return "Conflict — review required";
+  if (state === "failed") return "Sync issue — retry needed";     // durable, will NOT auto-retry
+  if (state === "pending") return running ? "Synchronizing…" : "Waiting to sync";
+  // No active (non-synced) mutation for this structure.
+  const acked = Number(acknowledgedGeneration) || 0;
+  const cur = Number(currentGeneration) || 0;
+  if (cur > 0 && acked >= cur) return "Synced to Office";
+  return "Saved on device";   // durable locally, newer than the acknowledged generation, not yet acked
+}
+
 module.exports = {
   DRAG_THRESHOLD_PX,
   resolveFieldSketchLoad,
@@ -90,6 +115,7 @@ module.exports = {
   commitFacetCreate,
   commitManualCreate,
   localSaveStatus,
+  fieldSketchSyncStatus,
   stageFromController,
 };
 
