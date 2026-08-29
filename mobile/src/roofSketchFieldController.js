@@ -111,7 +111,9 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     // durably persisted with no outstanding error.
     async flush() {
       await chain;
-      return { ok: persistError === null && lastPersistedGeneration >= lastScheduledGeneration, lastPersistedGeneration, lastScheduledGeneration, error: persistError };
+      // ok reflects DURABILITY ONLY: a newer generation still pending (no error) is not a failure.
+      const pending = lastPersistedGeneration < lastScheduledGeneration;
+      return { ok: persistError === null, pending, lastPersistedGeneration, lastScheduledGeneration, error: persistError };
     },
     // Re-attempt persisting the CURRENT working document at the current generation (no history/gen bump).
     retry() { schedulePersist(); return this.flush(); },

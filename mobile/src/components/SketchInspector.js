@@ -35,10 +35,10 @@ export default function SketchInspector({ doc, selection, readOnly, onCommit, on
         <TouchableOpacity testID="inspector-close" onPress={onClose}><Text style={st.close}>Done</Text></TouchableOpacity>
       </View>
       <ScrollView style={{ maxHeight: 300 }}>
-        {edge && <EdgeBody edge={edge} doc={doc} disabled={disabled} onCommit={onCommit} onError={onError} />}
-        {facet && <FacetBody facet={facet} doc={doc} disabled={disabled} onCommit={onCommit} />}
-        {vertex && <VertexBody vertex={vertex} disabled={disabled} onCommit={onCommit} />}
-        {pen && <PenBody pen={pen} disabled={disabled} onCommit={onCommit} />}
+        {edge && <EdgeBody key={`edge-${edge.id}`} edge={edge} doc={doc} disabled={disabled} onCommit={onCommit} onError={onError} />}
+        {facet && <FacetBody key={`facet-${facet.id}`} facet={facet} doc={doc} disabled={disabled} onCommit={onCommit} />}
+        {vertex && <VertexBody key={`vertex-${vertex.id}`} vertex={vertex} disabled={disabled} onCommit={onCommit} />}
+        {pen && <PenBody key={`pen-${pen.id}`} pen={pen} disabled={disabled} onCommit={onCommit} />}
       </ScrollView>
     </View>
   );

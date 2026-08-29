@@ -37,12 +37,14 @@ function pickReleaseCandidate(gesture, fallback) {
   return gesture && gesture.snapCandidate ? gesture.snapCandidate : fallback;
 }
 
-// Two-finger transform: zoom around the CURRENT midpoint by the distance ratio, then translate by the
-// midpoint delta. Constant separation (ratio 1) => pure pan; changing separation => pan + zoom.
+// Two-finger transform with focal continuity: the model point under the ORIGINAL midpoint stays under
+// the NEW midpoint at the new scale (constant separation => pure pan; changing separation => pan+zoom).
 function applyTwoTouchView(view, prev, now, opts = {}) {
   const ratio = prev.dist > 0 ? now.dist / prev.dist : 1;
-  const zoomed = VIEW.zoomAround(view, now.mid, ratio, opts);
-  return VIEW.pan(zoomed, now.mid[0] - prev.mid[0], now.mid[1] - prev.mid[1]);
+  const ns = VIEW.clampScale(view.scale * ratio, opts.min, opts.max);
+  const mx = (prev.mid[0] - view.tx) / view.scale;
+  const my = (prev.mid[1] - view.ty) / view.scale;
+  return { scale: ns, tx: now.mid[0] - mx * ns, ty: now.mid[1] - my * ns };
 }
 
 // Join two edges; report when the caller must supply an explicit result type. Returns

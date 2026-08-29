@@ -4,6 +4,7 @@
 const assert = require("assert");
 const RS = require("@roofspan/roof-sketch-core");
 const WIRE = require("../roofSketchFieldWiring");
+const VIEW = require("../roofSketchView");
 const { createFieldEditor } = require("../roofSketchFieldController");
 
 let n = 0; const ok = (m) => { n++; console.log("  \u2713 " + m); };
@@ -108,8 +109,25 @@ function rect() {
     const panned = WIRE.applyTwoTouchView(view, { mid: [100, 100], dist: 50 }, { mid: [120, 100], dist: 50 });
     assert.ok(Math.abs(panned.tx - 20) < 1e-6 && panned.scale === 1); ok("constant-separation two-finger move pans (+20px) with unchanged scale");
     const both = WIRE.applyTwoTouchView(view, { mid: [100, 100], dist: 50 }, { mid: [110, 100], dist: 100 });
-    assert.ok(both.scale === 2 && both.tx !== 0); ok("changing separation + moving midpoint applies BOTH zoom and pan");
+    assert.strictEqual(both.scale, 2, "distance change zooms 2x");
+    // focal continuity: the model point under the ORIGINAL midpoint must land under the NEW midpoint.
+    const modelUnderPrev = VIEW.screenToModel([100, 100], view);
+    const landed = VIEW.modelToScreen(modelUnderPrev, both);
+    assert.ok(Math.abs(landed[0] - 110) < 1e-6 && Math.abs(landed[1] - 100) < 1e-6); ok("combined pinch+pan keeps the original focal model point under the moved midpoint (focal continuity)");
     assert.strictEqual(JSON.stringify(doc), snap); ok("two-touch view math leaves the sketch document unchanged");
+  }
+
+  // ---- drag preview can be cancelled with NO commit/generation/persist (two-finger / terminate) ----
+  {
+    let writes = 0;
+    const ed = createFieldEditor({ revisionId: "r", structureId: "s", initial: { document: rect(), editMode: "connected_graph", editGeneration: 1, source: "new" }, persist: async () => { writes++; } });
+    const committed = ed.document; const genBefore = ed.editGeneration;
+    ed.preview(RS.moveVertex(ed.document, "v1", 99, 99)); // simulate a live drag preview
+    assert.strictEqual(ed.editGeneration, genBefore, "preview did not bump generation");
+    ed.restore(); // second finger / terminate cancels the drag
+    assert.strictEqual(ed.document, committed, "restore returns to the exact committed document");
+    await ed.flush();
+    assert.strictEqual(writes, 0); ok("cancelled drag preview leaves no commit, no generation bump, and no durable write");
   }
 
   // ---- §12 join type-conflict UI contract ----
@@ -153,6 +171,19 @@ function rect() {
     ed.commit(RS.setFacetPitch(ed.document, "f1", 9));
     res = await ed.flush();
     assert.strictEqual(res.ok, true); ok("serialized later generations continue to persist after recovery");
+  }
+
+  // ---- Save(A) + Edit(B): A's flush while B is still pending must NOT report failure ----
+  {
+    const ed = createFieldEditor({ revisionId: "r", structureId: "s", initial: { document: rect(), editMode: "connected_graph", editGeneration: 1, source: "new" }, persist: async () => {} });
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 7)); // generation A
+    const flushA = ed.flush();                          // captures the chain up to A
+    ed.commit(RS.setFacetPitch(ed.document, "f1", 8));  // generation B scheduled after A's flush
+    const resA = await flushA;
+    assert.strictEqual(resA.error, null, "no storage error");
+    assert.strictEqual(resA.ok, true); ok("A's flush with B still pending reports ok (no false 'Could not save')");
+    const resB = await ed.flush();
+    assert.strictEqual(resB.ok, true); ok("B settles ok once drained");
   }
 
   console.log("\nFIELD LIVE WIRING: all " + n + " assertions passed");
