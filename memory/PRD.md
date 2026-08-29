@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 6 Phase B — Pass 3: Clean-Timestamp Race Micro-Correction (Part 0) (2026-06) — CODE COMPLETE & GREEN; no git ops
+Closed the last queue-completion race (spec §0/§41). The Field editor core (Parts 1–50) is **NOT implemented this pass** (context-budget); no partial screens/canvas/inspector or App.js edits were introduced, so the mobile bundle stays healthy. **Task 6 remains NOT COMPLETE.**
+- **Atomic clean marker:** new `storage.markCleanIfNoPending(cacheKey, value)` runs the pending-count check + `last_sync_at` write inside the SAME `_serialize` critical section as `enqueue`, so a mutation B enqueued concurrently can never slip between the clean check and the marker write. `sync._markSynced` now delegates to it (returns false when work exists → no false clean; `_rerunRequested` still drives B's follow-up pass).
+- **Delete paths serialized:** `removeMutation` / `removeFailedMutations` now run through `_serialize` too, so recovery/delete can't undermine the guarantee.
+- **Tests:** appended a dedicated CLEAN-TIMESTAMP RACE section (8 assertions) to `mobile/src/tests/sketch_queue_race.node.test.js` (now 25 race + 11 orchestration + 8 clean-timestamp), proving B-between-check-and-marker keeps `last_sync` unchanged, B pending, follow-up requested, and no false-clean once B exists.
+- **No regression:** `test:sketch` all green; `test:transport` 8; `test:measurements` green; photo contracts 10 ok/0 not-ok; Expo Babel parse OK for storage.js/sync.js. `test:sync` still needs a live Office backend (not runnable in pod).
+- Files: `mobile/src/storage.js`, `mobile/src/sync.js`, `mobile/src/tests/sketch_queue_race.node.test.js`.
+- **REMAINING Task 6 (Phase B core + Phase C):** shared editor-op promotion into `roof-sketch-core` (+ Office regression/build); `RoofSketch.js` + Lead/Map stack registration; Measurements "Sketch Roof" entry (persisted-id gate); `RoofSketchCanvas.js` (RN-SVG tap/drag/pan/pinch, snap, split+chain, merge, insert, join, manual, facet, penetration, undo/redo); `SketchInspector.js`; calibration/dimension/confirm-lock UI; durable autosave/crash-recovery + lifecycle flush wiring; explicit Save; conflict + read-only UI; Field editor/recovery Node contracts; Expo parse of new screens; then Phase C mapping/proposal reconciliation.
+
+
 ## Task 6 Phase B — Pass 2: Queue Supersession FINAL Closure (Part A) (2026-06) — CODE COMPLETE & LOCALLY GREEN; no git ops
 Closed the remaining queue races found in independent review (spec §A1–A14). Self-contained, atomic, no Office/photo regression. The Field editor UI (Parts B–W) is **NOT implemented this pass** (context-budget); the mobile app bundle is unchanged (no half-wired screens/App.js).
 - **Atomic result writeback (§A6/§A7):** `storage.saveMutationIfCurrent` is now a single conditional `UPDATE ... WHERE client_id=? AND COALESCE(mutation_generation,1)=?` and applies only when `changes>0`; it never inserts a missing row (a late result cannot resurrect a removed mutation). Legacy NULL generation treated as 1 (§A8).

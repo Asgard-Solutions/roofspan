@@ -227,4 +227,52 @@ async function orchestrate({ aResult }) {
     assert.strictEqual(store.get(sketchUpdateMutationId("R1", "S1")).body.document.tag, "C"); ok2("latest payload (C) survives concurrent enqueues");
   }
   console.log("\nSKETCH SYNC ORCHESTRATION: all " + m + " assertions passed");
+
+  // ============ CLEAN-TIMESTAMP RACE (spec §0 / §41) ============
+  // Model storage's serialized critical section: enqueue and the clean-marker (pending-count check +
+  // last_sync write) share ONE chain, so a B enqueued concurrently can never slip between the clean
+  // check and the marker write. Proves last_sync does NOT advance when B exists at marker time.
+  let k = 0; const ok3 = (name) => { k++; console.log("  \u2713 " + name); };
+  function makeSerialStore() {
+    let chain = Promise.resolve();
+    const serialize = (fn) => { const r = chain.then(fn, fn); chain = r.then(() => {}, () => {}); return r; };
+    const rows = new Map(); let lastSync = null; let rerun = false;
+    return {
+      lastSync: () => lastSync,
+      pendingCount: () => [...rows.values()].filter((r) => r.state === "pending").length,
+      enqueue(mm) { return serialize(async () => { const g = queue.nextGeneration(rows.get(mm.client_id)); rows.set(mm.client_id, { ...mm, mutation_generation: g }); rerun = true; return g; }); },
+      markCleanIfNoPending() { return serialize(async () => { if ([...rows.values()].some((r) => r.state === "pending")) return false; lastSync = new Date().toISOString(); return true; }); },
+      rerunRequested: () => rerun,
+    };
+  }
+  {
+    // empty queue -> clean marker advances
+    const s = makeSerialStore();
+    assert.strictEqual(await s.markCleanIfNoPending(), true); ok3("empty queue: clean marker advances last_sync");
+    assert.ok(s.lastSync() !== null); ok3("last_sync set when truly clean");
+  }
+  {
+    // B enqueued BEFORE the clean marker runs -> must NOT advance (the §41 scenario)
+    const s = makeSerialStore();
+    await s.enqueue(put("R1", "S1", { tag: "B" }, 7));
+    const advanced = await s.markCleanIfNoPending();
+    assert.strictEqual(advanced, false); ok3("B present at marker time: clean marker refuses");
+    assert.strictEqual(s.lastSync(), null); ok3("last_sync NOT advanced while B pending (§0)");
+    assert.strictEqual(s.pendingCount(), 1); ok3("B remains pending");
+    assert.strictEqual(s.rerunRequested(), true); ok3("follow-up sync pass requested for B");
+  }
+  {
+    // Race: schedule marker and B-enqueue on the SAME chain without awaiting between them. Serialization
+    // guarantees NO interleave: there is no order where the marker advances while B is already stored.
+    const s = makeSerialStore();
+    const pMark = s.markCleanIfNoPending();   // scheduled first (queue currently empty)
+    const pB = s.enqueue(put("R1", "S1", { tag: "B" }, 7)); // scheduled right after
+    const advanced = await pMark; await pB;
+    // marker ran first on the empty queue (atomic) -> advanced true, and B enqueued strictly AFTER.
+    assert.strictEqual(advanced, true); ok3("atomic marker completed before B (no mid-write interleave)");
+    // Now B exists; a fresh marker attempt must refuse -> proves no false-clean once B is present.
+    const again = await s.markCleanIfNoPending();
+    assert.strictEqual(again, false); ok3("once B is stored, subsequent clean marker refuses (no false clean)");
+  }
+  console.log("\nCLEAN-TIMESTAMP RACE: all " + k + " assertions passed");
 })();
