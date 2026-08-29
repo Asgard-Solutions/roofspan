@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 6 Phase B2A FINAL closure — truthful pending status + permanent CI triggers (2026-06) — DONE LOCALLY; no git ops
+- **Truthful pending save status:** added pure `WIRE.localSaveStatus(result)` (error/!ok→"Could not save on device"; ok&&pending→"Saving on device…"; ok&&!pending→"Saved on device") and made `RoofSketch.js` `settle()` + `retrySave()` BOTH use it (no more mapping every `!ok` to failure, and never "Saved" while a newer generation drains). Updated the controller `flush()` comment to document `ok`=no-error, `pending`=still-draining.
+- **CI path triggers:** added all 10 Field runtime modules (App.js, roofSketchFieldController/Wiring/View, screens/RoofSketch, components/RoofSketchCanvas+SketchInspector, tests roof_sketch_editor/view/live_wiring) to BOTH `on.push.paths` and `on.pull_request.paths` (existing paths preserved; mobile-contract job + `test:sketch` chain unchanged). YAML validated.
+- **Contracts:** live-wiring grew 31→**36** — Save(A)+Edit(B) now also asserts `resA.pending===true` + `localSaveStatus(resA)==="Saving on device…"`, `resB.pending===false` + `"Saved on device"`, and failure→"Could not save on device".
+- **Verification:** mobile test:sketch (…/viewport13/editor44/live-wiring36), test:measurements, test:transport PASS; photo 6/2/2 + queue race + sketch_cache PASS; Expo parse 9/9; push+pull_request paths include all Field modules (0 missing). No new dependency; `mobile/package-lock.json` unchanged; no `mobile/yarn.lock`.
+- **Files:** MODIFIED `.github/workflows/roof-takeoff-contract.yml`, `mobile/src/roofSketchFieldWiring.js`, `roofSketchFieldController.js`, `screens/RoofSketch.js`, `tests/roof_sketch_live_wiring.node.test.js`.
+- **Status:** B2A COMPLETE LOCALLY — awaiting published exact-SHA verification.
+
+
 ## Task 6 Phase B2A — 2nd correction (4 live-state defects) (2026-06) — FIXED & CONTRACT-COVERED; no git ops
 Independent review found 4 additional live-state defects; all fixed with contracts that actually assert the corrected behavior.
 - **1. Combined pinch+pan focal continuity:** rewrote `applyTwoTouchView` so the model point under the ORIGINAL midpoint lands under the NEW midpoint at the new scale (`ns=clamp(scale*ratio)`, `t=nowMid - modelUnderPrevMid*ns`). Contract now verifies `modelToScreen(modelUnderPrev, result)===nowMid` (not just `scale===2`).

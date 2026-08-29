@@ -71,6 +71,14 @@ function commitManualCreate(doc, vertexIds) {
   return { ok: true, doc: r.doc, facetId: r.facetId };
 }
 
+// Truthful on-device save status from a controller flush()/retry() result. A newer generation still
+// draining (ok && pending) must NOT read as "Saved" — only a durable, fully-drained state does.
+function localSaveStatus(result) {
+  if (!result || !result.ok || result.error) return "Could not save on device";
+  if (result.pending) return "Saving on device…";
+  return "Saved on device";
+}
+
 module.exports = {
   DRAG_THRESHOLD_PX,
   resolveFieldSketchLoad,
@@ -81,4 +89,5 @@ module.exports = {
   attemptJoin,
   commitFacetCreate,
   commitManualCreate,
+  localSaveStatus,
 };

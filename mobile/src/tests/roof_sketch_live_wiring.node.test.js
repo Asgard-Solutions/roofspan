@@ -182,8 +182,13 @@ function rect() {
     const resA = await flushA;
     assert.strictEqual(resA.error, null, "no storage error");
     assert.strictEqual(resA.ok, true); ok("A's flush with B still pending reports ok (no false 'Could not save')");
+    assert.strictEqual(resA.pending, true, "A's stale flush is flagged pending"); ok("A's stale flush reports pending=true");
+    assert.strictEqual(WIRE.localSaveStatus(resA), "Saving on device…"); ok("shared status adapter maps A's pending flush to 'Saving on device…' (NOT 'Saved')");
     const resB = await ed.flush();
+    assert.strictEqual(resB.pending, false, "B fully drained"); ok("B final flush pending=false");
     assert.strictEqual(resB.ok, true); ok("B settles ok once drained");
+    assert.strictEqual(WIRE.localSaveStatus(resB), "Saved on device"); ok("shared status adapter maps drained state to 'Saved on device'");
+    assert.strictEqual(WIRE.localSaveStatus({ ok: false, error: new Error("disk") }), "Could not save on device"); ok("shared status adapter maps a persistence failure to 'Could not save on device'");
   }
 
   console.log("\nFIELD LIVE WIRING: all " + n + " assertions passed");

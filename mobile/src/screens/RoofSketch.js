@@ -53,7 +53,7 @@ export default function RoofSketch({ route }) {
   const settle = useCallback(() => {
     if (!editor || readOnly) return;
     setStatus("Saving on device…"); rerender();
-    editor.flush().then((res) => setStatus(res && res.ok ? "Saved on device" : "Could not save on device"));
+    editor.flush().then((res) => setStatus(WIRE.localSaveStatus(res)));
   }, [editor, readOnly, rerender]);
 
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
@@ -82,7 +82,7 @@ export default function RoofSketch({ route }) {
     editor.commit(r.doc); setSelection({ type: "facet", id: r.facetId }); clearBuild(); settle();
   };
   const cancelBuild = () => { setSelection(null); clearBuild(); };
-  const retrySave = () => { if (editor) { setStatus("Saving on device…"); editor.retry().then((res) => setStatus(res && res.ok ? "Saved on device" : "Could not save on device")); } };
+  const retrySave = () => { if (editor) { setStatus("Saving on device…"); editor.retry().then((res) => setStatus(WIRE.localSaveStatus(res))); } };
 
   if (!ready || !editor) return <View style={sx.centered}><Text style={sx.dim}>{status}…</Text></View>;
 
