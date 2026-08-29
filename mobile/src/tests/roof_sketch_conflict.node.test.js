@@ -191,4 +191,155 @@ function reviewedFor(rev, struct, editGen, queueGen) {
   ok("defensive: a removed or already-synced row makes resolution stale (no writes)");
 }
 
+// ==== B3C FINAL CORRECTION: real all-or-nothing transaction + Undo/Redo defensive lock ====
+;(async () => {
+// The production storage transition wraps roofSketchConflict.applyResolutionInTx in a REAL SQLite
+// transaction (expo-sqlite withTransactionAsync). Here we drive that SAME function with an in-memory
+// executor + a snapshot/rollback wrapper that mimics withTransactionAsync (commit on success, restore on
+// throw) and inject a mid-transition failure at a named failpoint — proving nothing partial survives.
+function mkStore(rev, struct, editGen, queueGen) {
+  const cid = sketchUpdateMutationId(rev, struct);
+  return { rows: { [cid]: conflictRow(rev, struct, editGen, queueGen) }, cache: { [sketchDraftKey(rev, struct)]: localDraft(rev, struct, editGen) } };
+}
+function mkExecutor(store, overrides = {}) {
+  return Object.assign({
+    readConflictRow: async (cid) => store.rows[cid] || null,
+    readDraft: async (key) => (key in store.cache ? store.cache[key] : null),
+    writeCache: async (key, val) => { store.cache[key] = val; },
+    deleteConflictRow: async (cid, qg) => {
+      const r = store.rows[cid];
+      if (r && r.state === "conflict" && (Number(r.mutation_generation) || 1) === qg) { delete store.rows[cid]; return 1; }
+      return 0;
+    },
+    transitionConflictToPending: async (cid, qg, nextRow) => {
+      const r = store.rows[cid];
+      if (r && r.state === "conflict" && (Number(r.mutation_generation) || 1) === qg) { store.rows[cid] = nextRow; return 1; }
+      return 0;
+    },
+  }, overrides);
+}
+// mimic withTransactionAsync: snapshot, run applyResolutionInTx, restore-on-throw (all-or-nothing).
+async function runTx(store, choice, reviewed, { failAt, overrides } = {}) {
+  const snap = JSON.parse(JSON.stringify(store));
+  const failpoint = (name) => { if (name === failAt) throw new Error("injected@" + name); };
+  try {
+    const decision = await C.applyResolutionInTx(mkExecutor(store, overrides), choice, reviewed, failpoint);
+    return { committed: true, decision };
+  } catch (e) {
+    store.rows = snap.rows; store.cache = snap.cache;   // ROLLBACK
+    return { committed: false, reason: e.__stale || e.message };
+  }
+}
+const CID = sketchUpdateMutationId(REV, HOUSE), DK = sketchDraftKey(REV, HOUSE), TK = sketchDetailKey(REV, HOUSE);
+
+// ---- 14. Use Office transaction COMMITS together (exact conflict) ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const r = await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2));
+  assert.strictEqual(r.committed, true);
+  assert.strictEqual(store.cache[TK].document, OFFICE, "Office sketch cached");
+  assert.strictEqual(store.cache[DK], null, "local draft retired");
+  assert.ok(!store.rows[CID], "exact conflict row deleted");
+  ok("Use Office transaction commits all-or-nothing: cache + retire draft + delete row together");
+}
+
+// ---- 15. Keep Local transaction COMMITS together (exact conflict) ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const r = await runTx(store, "keep_local", reviewedFor(REV, HOUSE, 5, 2));
+  assert.strictEqual(r.committed, true);
+  assert.strictEqual(store.cache[DK].base_server_document, OFFICE, "draft rebased to Office base");
+  assert.strictEqual(store.rows[CID].state, "pending", "conflict row transitioned to pending");
+  assert.strictEqual(store.rows[CID].mutation_generation, 3, "mutation_generation advanced 2 -> 3");
+  assert.strictEqual(store.rows[CID].body.expected_version, 7);
+  ok("Keep Local transaction commits all-or-nothing: draft rebase + conflict->pending together");
+}
+
+// ---- 16. Use Office INTERRUPTED after first write -> full rollback, no partial state ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const r = await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2), { failAt: "use_office:after_cache" });
+  assert.strictEqual(r.committed, false);
+  assert.ok(!(TK in store.cache), "no Office sketch cached (rolled back)");
+  assert.deepStrictEqual(store.cache[DK].document, LOCAL, "local draft still = Local B");
+  assert.strictEqual(store.rows[CID].state, "conflict", "conflict row still exists");
+  assert.strictEqual(store.rows[CID].mutation_generation, 2);
+  ok("Use Office interrupted (after cache write): rolls back every durable change — no partial Use-Office state");
+}
+
+// ---- 17. Keep Local INTERRUPTED after draft rebase, before conflict->pending -> full rollback ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const r = await runTx(store, "keep_local", reviewedFor(REV, HOUSE, 5, 2), { failAt: "keep_local:after_draft" });
+  assert.strictEqual(r.committed, false);
+  assert.deepStrictEqual(store.cache[DK].base_server_document, BASE, "draft base still original (rebase rolled back)");
+  assert.strictEqual(store.cache[DK].document_version, 6, "draft version still original");
+  assert.strictEqual(store.rows[CID].state, "conflict", "original conflict row still exists (no fresh pending)");
+  assert.strictEqual(store.rows[CID].mutation_generation, 2, "mutation_generation did NOT advance");
+  ok("Keep Local interrupted (after draft rebase): rolls back the rebase too — no partial Keep-Local state");
+}
+
+// ---- 18. Guarded DELETE/UPDATE miss cannot leave partial cache/draft writes ----
+{
+  // Use Office: the DELETE hits 0 rows (concurrent change between read and delete) -> abort + rollback,
+  // even though cache + draft writes already ran inside the transaction.
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const r = await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2), { overrides: { deleteConflictRow: async () => 0 } });
+  assert.strictEqual(r.committed, false);
+  assert.strictEqual(r.reason, "delete_missed");
+  assert.ok(!(TK in store.cache), "cache write rolled back after the guarded DELETE missed");
+  assert.deepStrictEqual(store.cache[DK].document, LOCAL, "draft retire rolled back");
+  // Keep Local: the UPDATE hits 0 rows -> abort + rollback the draft rebase.
+  const store2 = mkStore(REV, HOUSE, 5, 2);
+  const r2 = await runTx(store2, "keep_local", reviewedFor(REV, HOUSE, 5, 2), { overrides: { transitionConflictToPending: async () => 0 } });
+  assert.strictEqual(r2.committed, false);
+  assert.strictEqual(r2.reason, "update_missed");
+  assert.deepStrictEqual(store2.cache[DK].base_server_document, BASE, "draft rebase rolled back after the guarded UPDATE missed");
+  ok("a guarded DELETE/UPDATE that misses its row rolls back all earlier writes — never a partial commit");
+}
+
+// ---- 19. restart AFTER a failed resolution still reconstructs the original conflict review ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2), { failAt: "use_office:after_cache" });   // fails + rolls back
+  const m = store.rows[CID];   // durable conflict row survived
+  const rev = C.conflictReview(m, store.cache[DK]);
+  assert.deepStrictEqual(rev.base, BASE); assert.deepStrictEqual(rev.local, LOCAL); assert.deepStrictEqual(rev.office, OFFICE);
+  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: m, running: false, currentGeneration: 5 }), "Conflict — review required");
+  ok("restart after a failed resolution: the original conflict reopens with Base/Local/Office review");
+}
+
+// ---- 20. Undo is blocked BEFORE it mutates the controller (real editingLocked + real controller) ----
+{
+  let persists = 0;
+  const ed = createFieldEditor({ revisionId: REV, structureId: HOUSE, initial: resolveInitialSketch({ structureId: HOUSE }), persist: async () => { persists++; } });
+  ed.commit({ ...ed.document, vertices: [{ id: "v1", x: 1, y: 1 }] });   // create undo history
+  const genBefore = ed.editGeneration, docBefore = JSON.stringify(ed.document), canUndoBefore = ed.canUndo(), pBefore = persists;
+  const locked = WIRE.editingLocked({ readOnly: false, conflict: C.conflictReview(conflictRow(REV, HOUSE, 5, 2), localDraft(REV, HOUSE, 5)) });
+  if (!locked) ed.undo();   // the screen's doUndo guard: skipped while locked
+  assert.strictEqual(locked, true, "conflict locks editing");
+  assert.strictEqual(ed.editGeneration, genBefore, "blocked Undo did not increment edit generation");
+  assert.strictEqual(JSON.stringify(ed.document), docBefore, "blocked Undo did not change the document");
+  assert.strictEqual(ed.canUndo(), canUndoBefore, "undo history not consumed");
+  assert.strictEqual(persists, pBefore, "blocked Undo did not persist");
+  ok("Undo blocked before controller mutation: no doc change, no generation bump, no persist");
+}
+
+// ---- 21. Redo is blocked BEFORE it mutates the controller ----
+{
+  let persists = 0;
+  const ed = createFieldEditor({ revisionId: REV, structureId: HOUSE, initial: resolveInitialSketch({ structureId: HOUSE }), persist: async () => { persists++; } });
+  ed.commit({ ...ed.document, vertices: [{ id: "v1", x: 1, y: 1 }] });
+  ed.undo();   // now a redo is available (done while unlocked)
+  const genBefore = ed.editGeneration, docBefore = JSON.stringify(ed.document), canRedoBefore = ed.canRedo(), pBefore = persists;
+  const locked = WIRE.editingLocked({ readOnly: false, conflict: C.conflictReview(conflictRow(REV, HOUSE, 5, 2), localDraft(REV, HOUSE, 5)) });
+  if (!locked) ed.redo();
+  assert.strictEqual(ed.editGeneration, genBefore, "blocked Redo did not increment edit generation");
+  assert.strictEqual(JSON.stringify(ed.document), docBefore, "blocked Redo did not change the document");
+  assert.strictEqual(ed.canRedo(), canRedoBefore, "redo history not consumed");
+  assert.strictEqual(persists, pBefore, "blocked Redo did not persist");
+  ok("Redo blocked before controller mutation: no doc change, no generation bump, no persist");
+}
+
 console.log("\nROOF SKETCH B3C ATOMIC CONFLICT RESOLUTION + LOCK: all " + n + " assertions passed");
+})().catch((e) => { console.error(e); process.exit(1); });
