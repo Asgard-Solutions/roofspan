@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -69,7 +69,9 @@ export async function runSync() {
     const pending = await loadPending();            // active scope only
     if (pending.length === 0) { _resetBackoff(); await _markSynced(); return; }
     const processed = await queue.processQueue(pending, send);
-    for (const m of processed) await saveMutation(m); // persist synced/conflict/failed/pending
+    // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
+    // edit while it was in flight (spec §20). Superseded/removed rows are preserved untouched.
+    for (const m of processed) await saveMutationIfCurrent(m);
     const stillPending = processed.some((m) => m.state === "pending");
     const retryablePhotoLeft = processed.some(
       (m) => m.state === "failed" && !queue.isPermanentFailure(m) && (m.attempts || 0) < MAX_AUTO_PHOTO_ATTEMPTS

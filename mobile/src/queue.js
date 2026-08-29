@@ -42,7 +42,7 @@ function _measurementUpdateId(kind, path) {
 // A caller may provide clientId when one logical offline draft must replace its own queued mutation.
 // Existing roof-measurement PUTs automatically get a revision-stable id so repeated offline edits
 // replace the same SQLite row instead of later conflicting with one another on a stale If-Match.
-function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null }) {
+function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1 }) {
   const id = clientId || _measurementUpdateId(kind, path) || uuidv4();
   return {
     client_id: id,
@@ -55,6 +55,11 @@ function makeMutation({ kind, method, path, body, ifMatch = null, label = "", sc
     label,
     scope,
     photo,
+    // Supersession token (spec §20). A NEW logical enqueue for an existing client_id bumps this; a
+    // retry writeback of the SAME queued mutation keeps it. A network response is applied only if the
+    // stored row still carries the same generation — so an older in-flight result can never overwrite
+    // a newer queued edit of the same structure.
+    mutation_generation: mutationGeneration,
     state: STATES.PENDING,
     server_id: null,
     serverValue: null,
@@ -64,6 +69,20 @@ function makeMutation({ kind, method, path, body, ifMatch = null, label = "", sc
     created_at: new Date().toISOString(),
   };
 }
+
+// --- Supersession helpers (pure; durable at the storage boundary uses these) ---
+// The generation a NEW logical enqueue should carry given whatever row (if any) it replaces.
+function nextGeneration(existingRow) {
+  const g = existingRow && Number(existingRow.mutation_generation);
+  return Number.isFinite(g) && g > 0 ? g + 1 : 1;
+}
+// Apply a network result ONLY when the currently-stored row for this client_id is the SAME generation
+// that was sent. If the row was superseded (newer generation) or removed, the old result is discarded.
+function shouldApplyResult(storedRow, sentRow) {
+  if (!storedRow) return false;                 // row removed (e.g. conflict resolved by "Use Server")
+  return Number(storedRow.mutation_generation) === Number(sentRow.mutation_generation);
+}
+function stampGeneration(m, gen) { return { ...m, mutation_generation: gen }; }
 
 // ---- Photo helpers (pure; safe to run in Node unit tests) ----
 function isPhotoMutation(m) {
@@ -161,6 +180,7 @@ async function processQueue(items, send) {
 
 module.exports = {
   STATES, uuidv4, makeMutation, processMutation, processQueue,
+  nextGeneration, shouldApplyResult, stampGeneration,
   SUPPORTED_PHOTO_TYPES, MAX_RELAY_PHOTO_BYTES, isPhotoMutation, validatePhotoMeta, validateLocalPhotoInfo,
   buildSendPlan, photoErrorLabel, isPermanentFailure,
 };
