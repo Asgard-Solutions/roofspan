@@ -6,11 +6,11 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
-import { conflictReview, planUseOffice, planKeepLocal } from "./roofSketchConflict";
+import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
 const LAST_SYNC = "last_sync_at";
@@ -243,52 +243,41 @@ export async function sketchConflictReview(revisionId, structureId) {
 }
 
 // B3C — resolve a Roof Sketch conflict by adopting the authoritative OFFICE version (local unsynced work
-// is intentionally discarded). Generation-safe: if durable local work advanced beyond the reviewed
-// conflict generation the plan is `stale` and NOTHING is changed. Returns the plan.
+// is intentionally discarded). The verify+apply is ONE atomic generation-checked storage transition
+// (storage.resolveSketchConflictTransition): if durable local work advanced beyond the reviewed conflict
+// generation, or a newer queue row landed, the transition is `stale` and NOTHING is changed. Returns the
+// decision (with `.editor` for the open screen to adopt Office).
 export async function resolveSketchConflictUseOffice(revisionId, structureId) {
   const m = await conflictSketchMutation(revisionId, structureId);
   if (!m) return { action: "noop" };
   const draft = await getCache(sketchDraftKey(revisionId, structureId));
-  const plan = planUseOffice(m, draft);
-  if (plan.action !== "use_office") return plan;
-  // a. cache the authoritative Office sketch (raw shape — same as a successful acknowledgement)
-  await putCache(sketchDetailKey(revisionId, structureId), plan.cacheDetail);
-  // b. retire the local draft ATOMICALLY, but ONLY if it is still the exact conflict generation (a newer
-  //    generation written concurrently is preserved — never an unguarded clearSketchDraft()).
-  await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
-    if (cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration) return cur;
-    return null;
+  const reviewed = buildReviewedContext(m, draft, {
+    draftKey: sketchDraftKey(revisionId, structureId), detailKey: sketchDetailKey(revisionId, structureId),
   });
-  // c. record the authoritative CAS floor so future staging can never regress below Office
-  noteCasFloor(revisionId, structureId, plan.cacheDetail.document_version);
-  // d. remove the conflict mutation for this structure (conflict rows are never auto-processed)
-  await _removeMutation(plan.removeClientId);
+  const decision = await resolveSketchConflictTransition("use_office", reviewed);
   _emit({ type: "queued" });
-  return plan;
+  if (decision.action !== "use_office") return decision;   // stale/noop -> nothing changed
+  noteCasFloor(revisionId, structureId, decision.casFloorVersion);
+  return decision;
 }
 
 // B3C — resolve a Roof Sketch conflict by KEEPING the LOCAL draft as the desired next version, rebased
-// onto the Office base/version and re-staged as a fresh pending mutation (expected_version = Office
-// version). Does NOT report Synced before Office acknowledges. Generation-safe (stale plan = no-op).
+// onto the Office base/version. The draft rebase AND the exact conflict->pending queue transition succeed
+// or fail together from the same freshly-read state (storage.resolveSketchConflictTransition). Never
+// reports Synced before Office acknowledges; sync is triggered only AFTER a successful transition.
 export async function resolveSketchConflictKeepLocal(revisionId, structureId) {
   const m = await conflictSketchMutation(revisionId, structureId);
   if (!m) return { action: "noop" };
   const draft = await getCache(sketchDraftKey(revisionId, structureId));
-  const plan = planKeepLocal(m, draft);
-  if (plan.action !== "keep_local") return plan;
-  // a. advance the durable draft's CAS base/version to Office, keeping local geometry + generation.
-  //    Guarded: preserve a newer generation written concurrently (never overwrite newer local work).
-  await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
-    if (cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration) return cur;
-    return plan.nextDraft;
+  const reviewed = buildReviewedContext(m, draft, {
+    draftKey: sketchDraftKey(revisionId, structureId), detailKey: sketchDetailKey(revisionId, structureId),
   });
-  // b. record the CAS floor at the Office version
-  noteCasFloor(revisionId, structureId, plan.requeue.body.expected_version);
-  // c. re-stage the local document as a FRESH pending mutation. queueMutation upserts the SAME
-  //    deterministic client_id, so the CONFLICT row is atomically replaced by a pending row (bumped
-  //    generation) and sync is re-attempted — nothing is pretended to be synced.
-  await queueMutation(plan.requeue);
-  return plan;
+  const decision = await resolveSketchConflictTransition("keep_local", reviewed);
+  if (decision.action !== "keep_local") { _emit({ type: "queued" }); return decision; }
+  noteCasFloor(revisionId, structureId, decision.casFloorVersion);
+  _emit({ type: "queued" });
+  runSync().catch(() => {});   // re-attempt sync only after the durable transition succeeded
+  return decision;
 }
 
 // Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the

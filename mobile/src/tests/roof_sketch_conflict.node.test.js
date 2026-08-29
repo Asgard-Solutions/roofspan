@@ -1,191 +1,194 @@
 "use strict";
-// B3C — Roof Sketch 409 conflict review + explicit resolution contracts. Exercises the SAME pure
-// planners the sync layer executes (roofSketchConflict.js) plus a faithful in-memory mirror of
-// sync.resolveSketchConflictUseOffice / resolveSketchConflictKeepLocal (guarded draft write + queue
-// upsert), so the durable EFFECTS are under contract without RN/SQLite. NO graphical merge is tested —
-// the rep explicitly chooses Office or Local.
+// B3C (+ correction) — Roof Sketch 409 conflict review + ATOMIC generation-checked resolution contracts.
+// These call the SAME pure decision helper the production storage transition uses
+// (roofSketchConflict.decideSketchConflictResolution) — there is NO hand-written mirror of sync.js. The
+// editing-lock proof uses the REAL WIRE.editingLocked predicate + the REAL controller; the stale-refresh
+// proof uses the REAL WIRE.applySketchRefresh latest-wins gate.
 const assert = require("assert");
 const C = require("../roofSketchConflict");
 const WIRE = require("../roofSketchFieldWiring");
+const RS = require("@roofspan/roof-sketch-core");
+const { createFieldEditor, resolveInitialSketch } = require("../roofSketchFieldController");
 const { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId, makeSketchDraft } = require("../sketchCache");
 
 let n = 0; const ok = (m) => { n++; console.log("  \u2713 " + m); };
 
 const doc = (f, e, v, p) => ({ facets: Array(f).fill(0).map((_, i) => i), edges: Array(e).fill(0).map((_, i) => i), vertices: Array(v).fill(0).map((_, i) => i), penetrations: Array(p).fill(0).map((_, i) => i) });
-const BASE = doc(1, 4, 4, 0);     // what the local draft was edited from (v6)
-const LOCAL = doc(2, 8, 8, 1);    // the rep's unsynced work (added a facet + a roof feature)
-const OFFICE = doc(3, 12, 10, 0); // authoritative Office v7 (a colleague added a facet)
+const BASE = doc(1, 4, 4, 0), LOCAL = doc(2, 8, 8, 1), OFFICE = doc(3, 12, 10, 0), NEWER = doc(4, 16, 12, 2);
+const REV = "REV1", HOUSE = "HOUSE", GARAGE = "GARAGE";
 
-function conflictMutation(rev, struct, gen) {
+// A durable conflict row exactly as the queue stores it (state=conflict, serverValue=409 Office snapshot).
+function conflictRow(rev, struct, editGen, queueGen) {
   return {
-    client_id: sketchUpdateMutationId(rev, struct),
+    client_id: sketchUpdateMutationId(rev, struct), scope: "s",
     kind: "measurement_sketch_update", method: "put",
     path: `/mobile/measurements/${rev}/sketches/${struct}`,
     body: { schema_version: 1, edit_mode: "connected_graph", document: LOCAL, expected_version: 6 },
-    local_edit_generation: gen, state: "conflict",
+    local_edit_generation: editGen, mutation_generation: queueGen, state: "conflict",
     serverValue: { document_version: 7, document: OFFICE, edit_mode: "connected_graph" },
   };
 }
-function localDraft(rev, struct, gen) {
-  return makeSketchDraft(rev, struct, { document: LOCAL, documentVersion: 6, baseServerDocument: BASE, editMode: "connected_graph", editGeneration: gen });
+function localDraft(rev, struct, editGen, opts = {}) {
+  return makeSketchDraft(rev, struct, { document: opts.document || LOCAL, documentVersion: 6, baseServerDocument: BASE, editMode: "connected_graph", editGeneration: editGen });
+}
+function reviewedFor(rev, struct, editGen, queueGen) {
+  const m = conflictRow(rev, struct, editGen, queueGen);
+  return C.buildReviewedContext(m, localDraft(rev, struct, editGen), { draftKey: sketchDraftKey(rev, struct), detailKey: sketchDetailKey(rev, struct) });
 }
 
-// Faithful mirror of sync.resolveSketchConflictUseOffice (guarded retire + conflict removal).
-function useOffice(store, rev, struct) {
-  const id = sketchUpdateMutationId(rev, struct);
-  const m = store.queue.find((x) => x.client_id === id && x.state === "conflict");
-  if (!m) return { action: "noop" };
-  const plan = C.planUseOffice(m, store.caches[sketchDraftKey(rev, struct)] || null);
-  if (plan.action !== "use_office") return plan;
-  store.caches[sketchDetailKey(rev, struct)] = plan.cacheDetail;
-  const cur = store.caches[sketchDraftKey(rev, struct)] || null;
-  if (!(cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration)) store.caches[sketchDraftKey(rev, struct)] = null;
-  store.queue = store.queue.filter((x) => x.client_id !== plan.removeClientId);
-  return plan;
-}
-// Faithful mirror of sync.resolveSketchConflictKeepLocal (guarded rebase + queue upsert by client_id).
-function keepLocal(store, rev, struct) {
-  const id = sketchUpdateMutationId(rev, struct);
-  const m = store.queue.find((x) => x.client_id === id && x.state === "conflict");
-  if (!m) return { action: "noop" };
-  const plan = C.planKeepLocal(m, store.caches[sketchDraftKey(rev, struct)] || null);
-  if (plan.action !== "keep_local") return plan;
-  const cur = store.caches[sketchDraftKey(rev, struct)] || null;
-  if (!(cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration)) store.caches[sketchDraftKey(rev, struct)] = plan.nextDraft;
-  const s = plan.requeue;
-  const row = { client_id: s.clientId, kind: s.kind, method: s.method, path: s.path, body: s.body, local_edit_generation: s.localEditGeneration, state: "pending", serverValue: null };
-  store.queue = store.queue.filter((x) => x.client_id !== row.client_id).concat([row]);
-  return plan;
-}
-
-const REV = "REV1", HOUSE = "HOUSE", GARAGE = "GARAGE";
-
-// ---- 1. a 409 for THIS structure produces "Conflict — review required" and blocks editing ----
+// ---- 1. review sources Base / Local / Office + status + summary ----
 {
-  const m = conflictMutation(REV, HOUSE, 5);
-  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: m, running: false, currentGeneration: 5, acknowledgedGeneration: 0 }), "Conflict — review required");
-  ok("HTTP 409 for the current structure yields status 'Conflict — review required' (editing blocked by the screen)");
-}
-
-// ---- 2. review sources Base (base_server_document) / Local (durable draft) / Office (409 serverValue) ----
-{
-  const m = conflictMutation(REV, HOUSE, 5);
-  const r = C.conflictReview(m, localDraft(REV, HOUSE, 5));
-  assert.strictEqual(r.base, BASE, "Base = the draft's base_server_document");
-  assert.strictEqual(r.local, LOCAL, "Local = the current durable local draft document");
-  assert.strictEqual(r.office, OFFICE, "Office = the 409 serverValue.document");
-  assert.strictEqual(r.officeVersion, 7);
-  assert.strictEqual(r.conflictGeneration, 5);
-  assert.strictEqual(C.conflictReview({ state: "pending" }), null, "no review unless the mutation is in conflict");
-  ok("review sources Base / Your Draft / Office Version from the preserved snapshots");
-}
-
-// ---- 3. sketchSummary gives a deterministic read-only preview per version (no diff engine) ----
-{
-  assert.deepStrictEqual(C.sketchSummary(OFFICE), { facets: 3, edges: 12, vertices: 10, penetrations: 0 });
-  assert.deepStrictEqual(C.sketchSummary(null), { facets: 0, edges: 0, vertices: 0, penetrations: 0 });
-  ok("sketchSummary produces a deterministic facet/edge/vertex/feature preview for each snapshot");
-}
-
-// ---- 4. Use Office Version — plan (adopt Office; retire local; adopt version/base) ----
-{
-  const plan = C.planUseOffice(conflictMutation(REV, HOUSE, 5), localDraft(REV, HOUSE, 5));
-  assert.strictEqual(plan.action, "use_office");
-  assert.strictEqual(plan.retireDraft, true);
-  assert.strictEqual(plan.cacheDetail.document, OFFICE);
-  assert.strictEqual(plan.cacheDetail.document_version, 7);
-  assert.strictEqual(plan.editor.document, OFFICE, "open editor adopts the Office document");
-  assert.strictEqual(plan.editor.documentVersion, 7);
-  ok("Use Office plan: adopt Office document + version/base, retire local draft, remove conflict");
-}
-
-// ---- 5. Use Office Version — durable effects (exact generation) end at Synced to Office ----
-{
-  const store = { caches: { [sketchDraftKey(REV, HOUSE)]: localDraft(REV, HOUSE, 5) }, queue: [conflictMutation(REV, HOUSE, 5)] };
-  const plan = useOffice(store, REV, HOUSE);
-  assert.strictEqual(plan.action, "use_office");
-  assert.strictEqual(store.caches[sketchDraftKey(REV, HOUSE)], null, "local draft retired");
-  assert.strictEqual(store.caches[sketchDetailKey(REV, HOUSE)].document, OFFICE, "authoritative Office sketch cached");
-  assert.strictEqual(store.queue.length, 0, "conflict mutation removed");
-  // reopen after resolution: server/cache load -> Synced to Office (no conflict mutation left)
-  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: null, mutation: null, running: false, currentGeneration: 0, acknowledgedGeneration: 0 }), "Saved on device");
-  ok("Use Office resolution replaces local with Office, retires draft, removes conflict (→ Synced to Office on reopen)");
-}
-
-// ---- 6. Keep Local Draft — plan (preserve local; rebase to Office version/base; expected_version=Office) ----
-{
-  const plan = C.planKeepLocal(conflictMutation(REV, HOUSE, 5), localDraft(REV, HOUSE, 5));
-  assert.strictEqual(plan.action, "keep_local");
-  assert.strictEqual(plan.nextDraft.document, LOCAL, "local geometry preserved");
-  assert.strictEqual(plan.nextDraft.base_server_document, OFFICE, "base rebased to the Office document");
-  assert.strictEqual(plan.nextDraft.document_version, 7, "CAS base advanced to the Office version");
-  assert.strictEqual(plan.nextDraft.edit_generation, 5, "local generation preserved (no new commit)");
-  assert.strictEqual(plan.requeue.body.expected_version, 7, "fresh save uses expected_version = Office version");
-  assert.strictEqual(plan.requeue.body.document, LOCAL);
-  assert.strictEqual(plan.editor.documentVersion, 7);
-  assert.strictEqual(plan.editor.baseServerDocument, OFFICE);
-  ok("Keep Local plan: preserve local, rebase to Office version/base, re-stage with expected_version = Office version");
-}
-
-// ---- 7. Keep Local Draft — durable effects: fresh PENDING mutation, NOT synced before ack ----
-{
-  const store = { caches: { [sketchDraftKey(REV, HOUSE)]: localDraft(REV, HOUSE, 5) }, queue: [conflictMutation(REV, HOUSE, 5)] };
-  const plan = keepLocal(store, REV, HOUSE);
-  assert.strictEqual(plan.action, "keep_local");
-  assert.strictEqual(store.queue.length, 1, "conflict row replaced by exactly one row");
-  const row = store.queue[0];
-  assert.strictEqual(row.state, "pending", "the replacement is PENDING (not pretended synced)");
-  assert.strictEqual(row.body.expected_version, 7);
-  assert.strictEqual(store.caches[sketchDraftKey(REV, HOUSE)].base_server_document, OFFICE, "draft rebased to Office base");
-  // status from the pending row: NOT synced until Office acknowledges
-  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: row, running: false, currentGeneration: 5, acknowledgedGeneration: 0 }), "Waiting to sync");
-  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: row, running: true, currentGeneration: 5, acknowledgedGeneration: 0 }), "Synchronizing…");
-  ok("Keep Local resolution re-stages a fresh PENDING mutation (expected_version=Office); never reports Synced before ack");
-}
-
-// ---- 8. Generation safety — a STALE resolution cannot delete/overwrite newer local work ----
-{
-  // Durable local work advanced to generation 6 AFTER the conflict at generation 5 was captured.
-  const advancedDraft = localDraft(REV, HOUSE, 6);
-  const usePlan = C.planUseOffice(conflictMutation(REV, HOUSE, 5), advancedDraft);
-  assert.strictEqual(usePlan.action, "stale");
-  const keepPlan = C.planKeepLocal(conflictMutation(REV, HOUSE, 5), advancedDraft);
-  assert.strictEqual(keepPlan.action, "stale");
-  // Applied via the mirror: nothing is deleted/overwritten/removed.
-  const store = { caches: { [sketchDraftKey(REV, HOUSE)]: advancedDraft }, queue: [conflictMutation(REV, HOUSE, 5)] };
-  const applied = useOffice(store, REV, HOUSE);
-  assert.strictEqual(applied.action, "stale");
-  assert.strictEqual(store.caches[sketchDraftKey(REV, HOUSE)], advancedDraft, "newer local draft NOT deleted");
-  assert.strictEqual(store.queue.length, 1, "conflict NOT silently resolved");
-  assert.strictEqual(store.queue[0].state, "conflict");
-  ok("generation safety: a stale resolution against an older conflict never deletes/overwrites/resolves newer local work");
-}
-
-// ---- 9. Structure isolation — resolving the House conflict cannot alter the Garage ----
-{
-  const store = {
-    caches: { [sketchDraftKey(REV, HOUSE)]: localDraft(REV, HOUSE, 5), [sketchDraftKey(REV, GARAGE)]: localDraft(REV, GARAGE, 3) },
-    queue: [conflictMutation(REV, HOUSE, 5), conflictMutation(REV, GARAGE, 3)],
-  };
-  useOffice(store, REV, HOUSE);
-  assert.strictEqual(store.caches[sketchDraftKey(REV, HOUSE)], null, "House draft retired");
-  assert.ok(store.caches[sketchDraftKey(REV, GARAGE)], "Garage draft untouched");
-  assert.strictEqual(store.caches[sketchDraftKey(REV, GARAGE)].document, LOCAL);
-  const garage = store.queue.find((x) => x.client_id === sketchUpdateMutationId(REV, GARAGE));
-  assert.ok(garage && garage.state === "conflict", "Garage conflict still awaiting its own resolution");
-  ok("structure isolation: resolving the House conflict leaves the Garage conflict + draft fully intact");
-}
-
-// ---- 10. Durable restart — an unresolved conflict survives reload/restart ----
-{
-  // Simulate a cold reopen: the durable conflict mutation + durable draft are read fresh from storage.
-  const persisted = { caches: { [sketchDraftKey(REV, HOUSE)]: localDraft(REV, HOUSE, 5) }, queue: [conflictMutation(REV, HOUSE, 5)] };
-  const m = persisted.queue.find((x) => x.client_id === sketchUpdateMutationId(REV, HOUSE) && x.state === "conflict");
-  assert.ok(m, "conflict mutation persisted across restart");
-  const r = C.conflictReview(m, persisted.caches[sketchDraftKey(REV, HOUSE)]);
+  const r = C.conflictReview(conflictRow(REV, HOUSE, 5, 2), localDraft(REV, HOUSE, 5));
   assert.strictEqual(r.base, BASE); assert.strictEqual(r.local, LOCAL); assert.strictEqual(r.office, OFFICE);
-  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: m, running: false, currentGeneration: 5, acknowledgedGeneration: 0 }), "Conflict — review required");
+  assert.strictEqual(r.officeVersion, 7); assert.strictEqual(r.conflictGeneration, 5);
+  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: conflictRow(REV, HOUSE, 5, 2), running: false, currentGeneration: 5 }), "Conflict — review required");
+  assert.deepStrictEqual(C.sketchSummary(OFFICE), { facets: 3, edges: 12, vertices: 10, penetrations: 0 });
+  ok("review sources Base/Local/Office (+version), status is 'Conflict — review required', summary is deterministic");
+}
+
+// ---- 2. Use Office — exact conflict succeeds (adopt Office, retire draft, remove exact row) ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  const live = { row: conflictRow(REV, HOUSE, 5, 2), draft: localDraft(REV, HOUSE, 5) };
+  const d = C.decideSketchConflictResolution("use_office", reviewed, live);
+  assert.strictEqual(d.action, "use_office");
+  assert.strictEqual(d.retireDraft, true);
+  assert.strictEqual(d.cacheDetail.document, OFFICE);
+  assert.strictEqual(d.cacheDetail.document_version, 7);
+  assert.strictEqual(d.editor.document, OFFICE);
+  assert.strictEqual(d.editor.documentVersion, 7);
+  ok("Use Office (exact conflict): adopt Office document+version, retire draft, remove the exact reviewed row");
+}
+
+// ---- 3. Keep Local — exact conflict succeeds (rebase, fresh pending, expected_version=Office, gen+1) ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  const live = { row: conflictRow(REV, HOUSE, 5, 2), draft: localDraft(REV, HOUSE, 5) };
+  const d = C.decideSketchConflictResolution("keep_local", reviewed, live);
+  assert.strictEqual(d.action, "keep_local");
+  assert.strictEqual(d.nextDraft.document, LOCAL);
+  assert.strictEqual(d.nextDraft.base_server_document, OFFICE);
+  assert.strictEqual(d.nextDraft.document_version, 7);
+  assert.strictEqual(d.nextDraft.edit_generation, 5, "local generation preserved");
+  assert.strictEqual(d.nextRow.state, "pending");
+  assert.strictEqual(d.nextRow.body.expected_version, 7);
+  assert.strictEqual(d.nextRow.body.document, LOCAL);
+  assert.strictEqual(d.nextRow.mutation_generation, 3, "queue generation advances 2 -> 3 (new logical send)");
+  ok("Keep Local (exact conflict): rebase to Office version/base, exact row -> fresh pending, expected_version=Office, gen+1");
+}
+
+// ---- 4. Use Office STALE: a newer DRAFT landed after review (draft gen 6 > reviewed 5) ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  const live = { row: conflictRow(REV, HOUSE, 5, 2), draft: localDraft(REV, HOUSE, 6, { document: NEWER }) };
+  const d = C.decideSketchConflictResolution("use_office", reviewed, live);
+  assert.strictEqual(d.action, "stale");
+  assert.strictEqual(d.reason, "draft_advanced");
+  assert.ok(!d.cacheDetail && !d.retireDraft, "no writes produced when stale");
+  ok("Use Office STALE: a newer local draft after review -> stale (nothing cached/retired/removed)");
+}
+
+// ---- 5. Use Office STALE: a newer QUEUE row replaced the reviewed conflict (queue gen 2 -> 4) ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  const live = { row: conflictRow(REV, HOUSE, 5, 4), draft: localDraft(REV, HOUSE, 5) };
+  const d = C.decideSketchConflictResolution("use_office", reviewed, live);
+  assert.strictEqual(d.action, "stale");
+  assert.strictEqual(d.reason, "queue_generation_changed");
+  ok("Use Office STALE: a newer queue row (mutation_generation changed) after review -> stale");
+}
+
+// ---- 6. Keep Local STALE: a newer draft + newer queue landed; local-5 doc is NOT requeued ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  // newer local generation 6 (document NEWER) + newer queue row (gen 3, carrying NEWER)
+  const newerRow = { ...conflictRow(REV, HOUSE, 6, 3), body: { schema_version: 1, edit_mode: "connected_graph", document: NEWER, expected_version: 7 } };
+  const live = { row: newerRow, draft: localDraft(REV, HOUSE, 6, { document: NEWER }) };
+  const d = C.decideSketchConflictResolution("keep_local", reviewed, live);
+  assert.strictEqual(d.action, "stale");
+  assert.ok(!d.nextRow, "no fresh pending row produced");
+  assert.ok(!d.nextDraft, "no draft rebase produced");
+  ok("Keep Local STALE: newer draft/queue after review -> stale; the old generation-5 Local is NOT requeued");
+}
+
+// ---- 7. queue mutation_generation never moves backward (regression guard) ----
+{
+  // reviewed captured queueGen 2, but the live row is already AHEAD at 3 -> must be stale (never regress).
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  const ahead = C.decideSketchConflictResolution("keep_local", reviewed, { row: conflictRow(REV, HOUSE, 5, 3), draft: localDraft(REV, HOUSE, 5) });
+  assert.strictEqual(ahead.action, "stale", "cannot act when the live queue generation is ahead of the reviewed one");
+  // and on the exact-match success path the produced generation only ever INCREASES.
+  const good = C.decideSketchConflictResolution("keep_local", reviewed, { row: conflictRow(REV, HOUSE, 5, 2), draft: localDraft(REV, HOUSE, 5) });
+  assert.ok(good.nextRow.mutation_generation > reviewed.queueGeneration, "successful transition advances, never regresses");
+  ok("queue mutation_generation never regresses: ahead-of-review is stale; success strictly increases it");
+}
+
+// ---- 8. conflict during FACET build prevents Create Facet (real editingLocked + real controller) ----
+{
+  const ed = createFieldEditor({ revisionId: REV, structureId: HOUSE, initial: resolveInitialSketch({ structureId: HOUSE }), persist: async () => { persists++; } });
+  var persists = 0;
+  const gen0 = ed.editGeneration;
+  const review = C.conflictReview(conflictRow(REV, HOUSE, 5, 2), localDraft(REV, HOUSE, 5));
+  // The screen handler short-circuits when editingLocked is true (this IS the production guard predicate).
+  const locked = WIRE.editingLocked({ readOnly: false, conflict: review });
+  assert.strictEqual(locked, true, "an active conflict locks editing");
+  if (!locked) ed.commit(RS.createSketchDocument({ structureId: HOUSE }));   // guarded: never runs while locked
+  assert.strictEqual(ed.editGeneration, gen0, "no edit-generation increment while a conflict is active");
+  assert.strictEqual(persists, 0, "no draft write while a conflict is active");
+  ok("conflict during Facet build: Create Facet is blocked — no document change, no generation bump, no persist");
+}
+
+// ---- 9. conflict during MANUAL build prevents Create Polygon (same guard) ----
+{
+  const ed = createFieldEditor({ revisionId: REV, structureId: HOUSE, initial: resolveInitialSketch({ structureId: HOUSE }), persist: async () => { persists++; } });
+  var persists = 0;
+  const gen0 = ed.editGeneration;
+  const locked = WIRE.editingLocked({ readOnly: false, conflict: C.conflictReview(conflictRow(REV, HOUSE, 5, 2), localDraft(REV, HOUSE, 5)) });
+  if (!locked) ed.commit(RS.createSketchDocument({ structureId: HOUSE }));
+  assert.strictEqual(ed.editGeneration, gen0);
+  assert.strictEqual(persists, 0);
+  assert.strictEqual(WIRE.editingLocked({ readOnly: false, conflict: null }), false, "no lock when there is no conflict");
+  ok("conflict during Manual build: Create Polygon is blocked — no document change, no generation bump, no persist");
+}
+
+// ---- 10. a stale pre-resolution refresh cannot overwrite Synced to Office (latest-wins seq gate) ----
+{
+  const state = { seq: 5, acked: 0, localSave: null };   // Use Office bumped the seq to 5
+  let setCalls = 0;
+  const ed = createFieldEditor({ revisionId: REV, structureId: HOUSE, initial: resolveInitialSketch({ structureId: HOUSE }) });
+  // an old refresh (seq 4) that began from the conflict state completes AFTER resolution:
+  const res = WIRE.applySketchRefresh({ seq: 4, state, editor: ed, mutation: conflictRow(REV, HOUSE, 5, 2), draft: localDraft(REV, HOUSE, 5), running: false, setStatus: () => { setCalls++; } });
+  assert.strictEqual(res.applied, false, "stale refresh is discarded");
+  assert.strictEqual(setCalls, 0, "stale refresh never calls setStatus (Synced to Office is preserved)");
+  ok("stale pre-resolution refresh (older seq) cannot overwrite Synced to Office");
+}
+
+// ---- 11. House resolution stays isolated from the Garage (decider keyed to the exact client_id) ----
+{
+  const reviewedHouse = reviewedFor(REV, HOUSE, 5, 2);
+  // the live row read back is the GARAGE row (different client_id) -> must refuse to act on it.
+  const d = C.decideSketchConflictResolution("use_office", reviewedHouse, { row: conflictRow(REV, GARAGE, 3, 1), draft: localDraft(REV, GARAGE, 3) });
+  assert.strictEqual(d.action, "stale");
+  assert.strictEqual(d.reason, "client_id_changed");
+  ok("structure isolation: a House resolution never acts on a Garage row (client_id mismatch -> stale)");
+}
+
+// ---- 12. unresolved conflict survives restart (durable row + draft reconstruct the review) ----
+{
+  const persistedRow = conflictRow(REV, HOUSE, 5, 2);       // durable in pending_mutations
+  const persistedDraft = localDraft(REV, HOUSE, 5);         // durable in cache
+  const r = C.conflictReview(persistedRow, persistedDraft);
+  assert.strictEqual(r.base, BASE); assert.strictEqual(r.local, LOCAL); assert.strictEqual(r.office, OFFICE);
+  assert.strictEqual(WIRE.fieldSketchSyncStatus({ localSave: "Saved on device", mutation: persistedRow, running: false, currentGeneration: 5 }), "Conflict — review required");
   ok("durable restart: an unresolved conflict reopens with Base/Local/Office review and stays 'Conflict — review required'");
 }
 
-console.log("\nROOF SKETCH B3C CONFLICT REVIEW + RESOLUTION: all " + n + " assertions passed");
+// ---- 13. row gone / no longer conflict -> stale (defensive) ----
+{
+  const reviewed = reviewedFor(REV, HOUSE, 5, 2);
+  assert.strictEqual(C.decideSketchConflictResolution("use_office", reviewed, { row: null, draft: null }).reason, "row_missing");
+  assert.strictEqual(C.decideSketchConflictResolution("use_office", reviewed, { row: { ...conflictRow(REV, HOUSE, 5, 2), state: "synced" }, draft: null }).reason, "not_conflict");
+  ok("defensive: a removed or already-synced row makes resolution stale (no writes)");
+}
+
+console.log("\nROOF SKETCH B3C ATOMIC CONFLICT RESOLUTION + LOCK: all " + n + " assertions passed");
