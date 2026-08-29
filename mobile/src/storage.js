@@ -271,7 +271,7 @@ export async function saveSketchDraftIfCurrent(draftKey, detailKey, incoming) {
       Number(existing && existing.document_version) || 0,
       Number(server && server.document_version) || 0
     );
-    const res = reconcileDraftWrite(existing, incoming, knownServerVersion);
+    const res = reconcileDraftWrite(existing, incoming, knownServerVersion, server);
     if (!res.write) return { written: false, reason: "stale_generation", draft: existing };
     await d.runAsync(
       "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",

@@ -37,10 +37,23 @@ function guardVersionFloor(proposedVersion, knownServerVersion) {
 }
 
 // Generation-safe draft write: monotonic edit_generation AND a version floor (never regress CAS).
-function reconcileDraftWrite(existing, incoming, knownServerVersion = 0) {
+// `knownServer` (optional) is the authoritative cached server sketch { document_version, document }.
+// When it (or an existing durable draft) raises the CAS version above incoming's own base, the matching
+// authoritative server DOCUMENT is adopted as base_server_document so the CAS version and its base stay
+// together for conflict review. Never fabricates a base (only adopts a real document) and never regresses
+// a newer existing/incoming base.
+function reconcileDraftWrite(existing, incoming, knownServerVersion = 0, knownServer = null) {
   const ok = !existing || (Number(incoming.edit_generation) || 0) >= (Number(existing.edit_generation) || 0);
   if (!ok) return { write: false, draft: existing };
-  return { write: true, draft: { ...incoming, document_version: maxV(incoming.document_version, knownServerVersion) } };
+  const nextVersion = maxV(incoming.document_version, knownServerVersion);
+  const candidates = [
+    { v: Number(incoming && incoming.document_version) || 0, doc: incoming ? incoming.base_server_document : null },
+    { v: Number(existing && existing.document_version) || 0, doc: existing ? existing.base_server_document : null },
+    { v: Number(knownServer && knownServer.document_version) || 0, doc: knownServer ? knownServer.document : null },
+  ].filter((c) => c.doc != null);
+  let base = incoming ? incoming.base_server_document : null;
+  if (candidates.length) { candidates.sort((a, b) => b.v - a.v); base = candidates[0].doc; }
+  return { write: true, draft: { ...incoming, document_version: nextVersion, base_server_document: base } };
 }
 
 // Atomic acknowledgement plan (pure): given the current draft AND the current pending mutation row,
