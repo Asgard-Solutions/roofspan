@@ -14,6 +14,7 @@
     "test:pairing": "node src/tests/pairing.node.test.js",
     "test:transport": "node src/tests/transport.node.test.js",
     "test:reconcile": "node src/tests/field_reconcile.node.test.js",
+    "test:resolve": "node scripts/verify-shared-package.js",
     "test:sketch": "node ../packages/roof-sketch-core/test/roofSketchCore.node.test.js && node ../packages/roof-sketch-core/test/topology.node.test.js && node ../packages/roof-sketch-core/test/edge_authority.node.test.js && node src/tests/sketch_cache.node.test.js && node src/tests/sketch_queue_race.node.test.js && node src/tests/roof_sketch_view.node.test.js && node src/tests/roof_sketch_editor.node.test.js && node src/tests/roof_sketch_live_wiring.node.test.js && node src/tests/roof_sketch_sync_stage.node.test.js && node src/tests/roof_sketch_ack.node.test.js && node src/tests/roof_sketch_live_status.node.test.js && node src/tests/roof_sketch_conflict.node.test.js"
   },
   "dependencies": {

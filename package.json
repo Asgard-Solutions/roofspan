@@ -1,0 +1,7 @@
+{
+  "name": "roofspan-workspace",
+  "workspaces": [
+    "mobile",
+    "packages/*"
+  ]
+}
