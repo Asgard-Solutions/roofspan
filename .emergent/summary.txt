@@ -1,506 +1,149 @@
-<analysis><analysis>
-**original_problem_statement**: 
-The user is building RoofSpan, a commercially distributed roofing business application (Windows local + Mobile app + Cloud Secure Relay/Control Plane). The current focus shifted from Windows installers to configuring and debugging cloud deployments on **Railway** for the marketing website () and the Control Plane API (), managing a monorepo setup, fixing DB dialect startup crashes, and syncing with the user's remote Git commits.
+<analysis>**original_problem_statement**: The user is driving the long-term development of the RoofSpan app. Currently, the focus is on **Plan 1 Task 6: Field/Mobile Roof Sketch Editor**. The immediate next step is **Phase B1A (Build Shared Roof Sketch Editor Engine — ADDITIVE ONLY)**. This requires porting the pure Office editor logic into the shared  so it can be consumed by both Office and Mobile, but strictly in an **additive** manner without modifying the existing Office codebase yet. PRODUCT REQUIREMENTS also dictate strict queue/offline safety which was partially addressed in previous turns.
 
-**User's preferred language**: English (INSTRUCT next agent to respond in the user's preferred language only)
+**User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
-**what currently exists?** 
-A monorepo containing a FastAPI backend (Control Plane & Secure Relay), React frontend, Expo React Native mobile app, and a static React website (). The repository includes complex deployment configurations for AWS (Terraform) and Railway (Nixpacks/Docker).
+**what currently exists?**: A full-stack monorepo containing a React SPA Office frontend, FastAPI/PostgreSQL backend, Expo React Native mobile app, Next.js static , and a  Node module containing deterministic geometry/topology. The offline queue supersession logic for mobile has just been stabilized.
 
 **Last working item**:
-    - Last item agent was working: The user requested a git pull from their remote repository () to retrieve fixes they made manually. The agent successfully fetched and fast-forwarded local  to commit  (which included user fixes for Railway healthchecks, splitting  from ). The agent then verified that the updated  imported cleanly.
-    - Status: USER VERIFICATION PENDING
-    - Agent Testing Done: Y (Checked  imports and validated routes locally)
-    - Which testing method agent to use? manual curl / python -c (once deployed to verify Stripe webhook or live health)
-    - User Testing Done: N (User needs to observe the subsequent Railway deployment)
+    - Last item agent was working: Plan 1 Task 6 Phase B1A (Shared Engine Creation - Additive). The agent explicitly skipped executing this task due to context window limitations to prevent leaving the codebase in a broken, half-migrated state.
+    - Status: NOT STARTED
+    - Agent Testing Done: N/A
+    - Which testing method agent to use?: backend testing agent (specifically running deterministic Node test contracts like  and  within the package).
+    - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  - Issue 1: Verify Control Plane Railway Deployment
-     - Attempted fixes: The user pushed a commit splitting  (liveness) and  (DB readiness) to prevent DB migrations from blocking the Railway healthcheck. The agent pulled this code and verified it locally.
-     - Next debug checklist: Await user confirmation that the Railway deployment succeeded. If it fails again, check Railway deployment logs and ensure the  healthcheck path aligns with the root  route.
-     - Why fix this issue and what will be achieved with the fix? Necessary to get the cloud component (Control Plane) of RoofSpan running in production.
-     - Status: USER VERIFICATION PENDING
-     - Is recurring issue? Y (Iterative debugging of Railway configs and startup scripts)
-     - Should Test frontend/backend/both after fix? backend
-     - Blocked on other issue: None
+  Issue 1: Plan 1 Task 6 Phase B1A: Build Shared Roof Sketch Editor Engine (P0)
+     - Attempted fixes: None. Deliberately deferred to start with a fresh context.
+     - Next debug checklist: Create , , , , and  inside . Port logic exactly from  into these files using CommonJS (/). Update . Write direct test contracts (). DO NOT touch the Office frontend source files during this pass.
+     - Why fix this issue and what will be achieved with the fix?: Ensures mobile/Field editor uses the exact same geometry/topology commands as Office without duplicating code, while protecting Office from regressions.
+     - Status: NOT STARTED
+     - Is recurring issue?: N
+     - Should Test frontend/backend/both after fix?: backend (Node test scripts for shared core, and verify Office build).
+     - Blocked on other issue: None.
+
+  Issue 2: Mobile Lockfile verification (P2)
+     - Attempted fixes: None.
+     - Next debug checklist: A  was inadvertently generated in an earlier pass. The project uses . Clean up  safely if it exists without breaking mobile dependencies, per user instruction.
+     - Why fix this issue and what will be achieved with the fix?: Repository compliance and avoiding conflicting package managers.
+     - Status: NOT STARTED
+     - Is recurring issue?: N
+     - Should Test frontend/backend/both after fix?: backend ( etc in mobile).
+     - Blocked on other issue: None.
 
 **In progress Task List**:
-  None. The previous task of syncing git and fixing DB dialects was completed.
+  Task 1: Plan 1 Task 6 Phase B1A: Shared Engine Promotion
+     - Where to resume: 
+     - What will be achieved with this?: A unified, platform-neutral command engine for both Office and Field.
+     - Status: NOT STARTED
+     - Should Test frontend/backend/both after fix?: backend (Node deterministic scripts).
+     - Blocked on something: Needs full context budget, which the new agent has.
 
-**Upcoming and Future Tasks**:
-  - P0: Stripe Webhook: Wire the  Stripe webhook endpoint and verify signature handling end to end once the domain is live.
-  - P1: Secure Relay Railway Service: Add a matching Railway Dockerfile + config for the Secure Relay () so cloud connectivity can deploy.
-  - P2: Sign & Publish: Wire Authenticode signing and CloudFront release upload into the Windows build/release scripts.
-  - P3: Resume core application workflows (job/project workflows, field photos, measurements).
+**Upcoming and Future Tasks**
+  - Phase B1B: Office wrapper migration + full parity verification (Switching Office to use the shared core) (P0)
+  - Phase B2: Field live editor UI implementation (P1)
+  - Phase B3: Field durability/conflict/read-only closure (P1)
+  - Phase C: Measurement mapping/proposal reconciliation (P2)
+  - Plan 1 Task 7: Full release regression (P3)
+  - Plan 2: Aerial/report imports (EagleView, HOVER, etc.) (P4)
 
-**Completed work in this session**:
-  - Fixed 3 stale ============================= test session starts ==============================
-platform linux -- Python 3.11.16, pytest-9.1.1, pluggy-1.6.0
-rootdir: /app
-plugins: anyio-4.14.2, xdist-3.8.0
-collected 286 items / 17 errors
+**Completed work in this session**
+- Plan 1 Task 4 Phase 3 final topology integrity closure ( loop safety, duplicate edge prevention) (DONE)
+- Next.js SEO enhancements on  (dedicated SEO pages, canonicals, 404, sitemap) (DONE)
+- Plan 1 Task 6 offline queue supersession logic and clean-timestamp race fix in mobile (, , ) (DONE)
 
-==================================== ERRORS ====================================
-_______ ERROR collecting backend/tests/integration/test_relay_valkey.py ________
-ImportError while importing test module '/app/backend/tests/integration/test_relay_valkey.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/integration/test_relay_valkey.py:25: in <module>
-    from relay import config as C
-E   ModuleNotFoundError: No module named 'relay'
-________________ ERROR collecting backend/tests/test_billing.py ________________
-ImportError while importing test module '/app/backend/tests/test_billing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_billing.py:14: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-_____________ ERROR collecting backend/tests/test_control_plane.py _____________
-ImportError while importing test module '/app/backend/tests/test_control_plane.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_control_plane.py:14: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-___________ ERROR collecting backend/tests/test_guard_middleware.py ____________
-ImportError while importing test module '/app/backend/tests/test_guard_middleware.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_guard_middleware.py:12: in <module>
-    from licensing import service
-E   ModuleNotFoundError: No module named 'licensing'
-_____________ ERROR collecting backend/tests/test_kms_issuance.py ______________
-ImportError while importing test module '/app/backend/tests/test_kms_issuance.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_kms_issuance.py:17: in <module>
-    from control_plane import config, keys as cp_keys, service, signer as cp_signer
-E   ModuleNotFoundError: No module named 'control_plane'
-______________ ERROR collecting backend/tests/test_kms_signer.py _______________
-ImportError while importing test module '/app/backend/tests/test_kms_signer.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_kms_signer.py:17: in <module>
-    from control_plane import config, signer as signer_mod
-E   ModuleNotFoundError: No module named 'control_plane'
-____________ ERROR collecting backend/tests/test_licensing_unit.py _____________
-ImportError while importing test module '/app/backend/tests/test_licensing_unit.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_licensing_unit.py:10: in <module>
-    from licensing import keys
-E   ModuleNotFoundError: No module named 'licensing'
-___________ ERROR collecting backend/tests/test_mapbox_geocoding.py ____________
-ImportError while importing test module '/app/backend/tests/test_mapbox_geocoding.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_mapbox_geocoding.py:1: in <module>
-    from mapbox_geocoding import evaluate_mapbox_result, make_query
-E   ModuleNotFoundError: No module named 'mapbox_geocoding'
-__________ ERROR collecting backend/tests/test_maptiler_geocoding.py ___________
-ImportError while importing test module '/app/backend/tests/test_maptiler_geocoding.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_maptiler_geocoding.py:1: in <module>
-    from maptiler import best_address_feature, evaluate_address_result
-E   ModuleNotFoundError: No module named 'maptiler'
-________________ ERROR collecting backend/tests/test_pairing.py ________________
-ImportError while importing test module '/app/backend/tests/test_pairing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_pairing.py:13: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-______________ ERROR collecting backend/tests/test_prod_infra.py _______________
-ImportError while importing test module '/app/backend/tests/test_prod_infra.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_prod_infra.py:7: in <module>
-    from control_plane import config, signer, operator_auth
-E   ModuleNotFoundError: No module named 'control_plane'
-____________ ERROR collecting backend/tests/test_property_dedup.py _____________
-ImportError while importing test module '/app/backend/tests/test_property_dedup.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_property_dedup.py:4: in <module>
-    from property_dedup import address_fingerprint, likely_duplicate
-E   ModuleNotFoundError: No module named 'property_dedup'
-__________ ERROR collecting backend/tests/test_property_occupancy.py ___________
-ImportError while importing test module '/app/backend/tests/test_property_occupancy.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_property_occupancy.py:3: in <module>
-    from routers.properties import _occupancy_status
-E   ModuleNotFoundError: No module named 'routers'
-_________________ ERROR collecting backend/tests/test_relay.py _________________
-ImportError while importing test module '/app/backend/tests/test_relay.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_relay.py:23: in <module>
-    from relay import protocol as P
-E   ModuleNotFoundError: No module named 'relay'
-____________ ERROR collecting backend/tests/test_relay_multinode.py ____________
-ImportError while importing test module '/app/backend/tests/test_relay_multinode.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_relay_multinode.py:14: in <module>
-    from relay import config as C
-E   ModuleNotFoundError: No module named 'relay'
-____________ ERROR collecting backend/tests/test_stripe_billing.py _____________
-ImportError while importing test module '/app/backend/tests/test_stripe_billing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_stripe_billing.py:22: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-_______________________ ERROR collecting backend_test.py _______________________
-import file mismatch:
-imported module 'backend_test' has this __file__ attribute:
-  /app/backend/tests/backend_test.py
-which is not the same as the test file we want to collect:
-  /app/backend_test.py
-HINT: remove __pycache__ / .pyc files and/or use a unique basename for your test file modules
-=========================== short test summary info ============================
-ERROR backend/tests/integration/test_relay_valkey.py
-ERROR backend/tests/test_billing.py
-ERROR backend/tests/test_control_plane.py
-ERROR backend/tests/test_guard_middleware.py
-ERROR backend/tests/test_kms_issuance.py
-ERROR backend/tests/test_kms_signer.py
-ERROR backend/tests/test_licensing_unit.py
-ERROR backend/tests/test_mapbox_geocoding.py
-ERROR backend/tests/test_maptiler_geocoding.py
-ERROR backend/tests/test_pairing.py
-ERROR backend/tests/test_prod_infra.py
-ERROR backend/tests/test_property_dedup.py
-ERROR backend/tests/test_property_occupancy.py
-ERROR backend/tests/test_relay.py
-ERROR backend/tests/test_relay_multinode.py
-ERROR backend/tests/test_stripe_billing.py
-ERROR backend_test.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 17 errors during collection !!!!!!!!!!!!!!!!!!!
-============================== 17 errors in 1.85s ============================== failures in  caused by upstream refactors (by mocking  imports) (DONE)
-  - Created Railway Nixpacks configuration () and production build script () for  (DONE)
-  - Restored Control Plane deployment files (, ) from a dangling PR branch to  (DONE)
-  - Fixed Control Plane DB connection crash () by forcing the  scheme in  (DONE)
-  - Pulled and merged latest upstream commits () fixing Railway healthcheck paths (DONE)
+**Earlier issues found/mentioned but not fixed**
+   Issue 1: Live Office & Field Walkthrough is not runnable in this environment
+   - Debug checklist: Rely entirely on deterministic Node test contracts instead of browser/device e2e tests for sketch logic.
+   - Why to solve this issue and what will be achieved with this?: Overcomes lack of valid licensed sessions in the pod.
+   - Should Test frontend/backend/both after fix: backend (Node tests)
+   - Is recurring issue?: Y (Environmental limitation)
 
-**Earlier issues found/mentioned but not fixed**:
-  - None
+   Issue 2:  in mobile fails with 404
+   - Debug checklist: Ignore this specific test failure as it requires a live reachable Office backend which is not available in the pod. Do not treat it as a regression.
+   - Why to solve this issue and what will be achieved with this?: Prevents false-negative test reporting.
+   - Should Test frontend/backend/both after fix: N/A
+   - Is recurring issue?: Y
 
-**Known issue recurrence from previous fork**:
-  - Issue recurrence in previous fork: None
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: None explicitly affecting the current task.
   - Recurrence count: 0
   - Status: RESOLVED
 
-**Code Architecture**:
-- : FastApi endpoints, Alembic migrations, Control Plane (, ), Secure Relay ().
-- : React browser UI.
-- : React Native Expo app.
-- : Public marketing website (React/CRA).
-- : PyInstaller specs, Wix toolset installers, pywin32 services.
-- : Railway-specific deployment configurations (Dockerfiles).
+**Code Architecture**
+- : FastAPI + Postgres (SQLAlchemy).
+- : React SPA (Office application).
+- : Expo React Native app.
+- : Shared Node module geometry engine (CommonJS).
+- : Next.js Static Export website.
 
-**Key Technical Concepts**:
-- Railway Deployments (Nixpacks, Dockerfile builders, Config-as-code).
-- FastAPI ASGI servers ().
-- SQLAlchemy URL schemes ( vs ).
-- Monorepo management and routing.
+**Key Technical Concepts**
+- Identity-preserving persistence using UUIDs.
+- Deterministic queue coalescing for mobile (offline-first, SQLite,  supersession).
+- Shared, pure Node geometry engine independent of React/DOM.
 
-**key DB schema**:
-  - , , , . (Note: Control Plane uses a *separate* database engine from the local business DB).
+**key DB schema**
+  -  -> 
+  - Mobile SQLite  (uses  and ).
 
-**changes in tech stack**:
+**changes in tech stack**
   - None.
 
-**All files of reference**:
-  -  &  (Website deployment config).
-  -  &  (Control Plane deployment config).
-  -  (Control Plane ASGI entrypoint).
-  -  (CP DB URL normalization).
+**All files of reference**
+  -  (Reference logic to port)
+  -  (Reference logic to port)
+  -  (Reference logic to port)
+  -  (Reference logic to port)
+  -  (Reference logic to port)
+  -  (Needs updating to export new commands)
+  -  (Needs to be created)
+  -  & 
 
-**Areas that need refactoring**:
-  - Monorepo deployment configurations (multiple  files for different services) require careful path handling, but no immediate refactoring is required.
+**Areas that need refactoring**
+  -  needs to receive all the pure logic currently housed in the Office frontend components.
 
-**key api endpoints**:
-  -  (Control plane liveness)
-  -  (Control plane DB readiness)
+**key api endpoints**
+  - 
 
-**Critical Info for New Agent**:
-  - **Git Workflow**: The user frequently updates their remote repo () and will ask you to pull. Always use  and  to fast-forward. Do not force push.
-  - **Railway Monorepo Gotchas**: Railway resolves the  Config-as-code path from the *repository root*, regardless of the Railway Root Directory setting.
-  - **Database Dialects**: The Control Plane backend uses  for its runtime engine, but  (sync) for Alembic migrations. Railway provides plain  URLs in its environment variables, which must be forced to  in code to prevent SQLAlchemy from attempting to load  (which is not installed in the container).
+**Critical Info for New Agent**
+- **CRITICAL**: Phase B1A is an **ADDITIVE ONLY** pass. Do **NOT** modify or replace the existing Office frontend files (, , etc.). You are only copying and adapting their logic into  using CommonJS format.
+- Do NOT convert  to ESM. Use  and .
+- You must create a new test file  that tests these newly shared commands by importing them *only* from the shared package index.
+- Do NOT perform any Git operations (On branch main
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	mobile/yarn.lock
+	roofspan-website/yarn.lock
 
-**documents and test reports created in this job**:
-  -  (Updated)
+nothing added to commit but untracked files present (use "git add" to track), , etc.).
+- Maintain max parallel tool calling where possible.
 
-**Last 10 User Messages and any pending HUMAN messages**:
- 1. *User*: Please use ask_human tool and confirm your plan now. (Agent confirms plan to fix 3 stale Pytests).
- 2. *User*: Need to resolve the roofspan build failing on railway. (Agent investigates, realizes monorepo needs specific setup).
- 3. *User*: Which app are you deploying? roofspan-website. Config path? Not sure. (Agent creates website railway config inside ).
- 4. *User*: Still getting failed (Screenshot). (Agent explains Railway config path resolution in the dashboard).
- 5. *User*: still getting failed (Screenshot showing ). (Agent realizes this is a different service, the Control Plane, which was missing files in the current branch. Restores files).
- 6. *User*: Container crashed: ModuleNotFoundError: No module named 'psycopg2'. (Agent fixes asyncpg URL parsing fallback).
- 7. *User*: I need you to pull the latest from Git as I have updated files that you could not fix. (Agent pulls, fast-forwards to , verifies new healthcheck code).
+**documents and test reports created in this job**
+  -  (Updated with completion states for SEO and Task 6 Queue Safety).
 
-**Project Health Check**:
-  - Broken: Control Plane cloud deployment is pending user verification after the most recent git pull.
-  - Mocked: None.
+**Last 10 User Messages and any pending HUMAN messages** 
+ - *Latest*: Plan 1 Task 6 Phase B1A: Build Shared Roof Sketch Editor Engine — ADDITIVE ONLY (Instructs porting Office commands to shared package WITHOUT modifying Office frontend).
+ - Plan 1 Task 6 Phase B1: Shared Editor Engine Promotion + Office Parity Gate (Deferred).
+ - Plan 1 Task 6 Phase B: Live Field Roof Sketch Editor Core (Agent implemented Part 0 Queue Micro-correction).
+ - Plan 1 Task 6: Field/Mobile Roof Sketch Editor + Offline Crash Recovery (Agent implemented offline queue/sync safety).
+ - RoofSpan — Plan 1 Task 4 Phase 3 FINAL Topology Integrity Closure (Completed topology fixes).
+ - Implement the SEO improvements for the RoofSpan public website (Completed Next.js SEO updates).
+ - Handover summary.
 
-**3rd Party Integrations**:
-  - Stripe (Payments) — requires User API Key
-  - Railway (Hosting/Deployment)
+**Project Health Check:**
+Healthy. All backend/frontend/mobile Node test suites are passing (excluding environmental network 404s). 
 
-**Testing status**:
-  - Testing agent used after significant changes: NO (relied on curl, ============================= test session starts ==============================
-platform linux -- Python 3.11.16, pytest-9.1.1, pluggy-1.6.0
-rootdir: /app
-plugins: anyio-4.14.2, xdist-3.8.0
-collected 286 items / 17 errors
+**3rd Party Integrations**
+- MapTiler / MapLibre (Mapping)
+- Stripe (Payments) — requires User API Key
 
-==================================== ERRORS ====================================
-_______ ERROR collecting backend/tests/integration/test_relay_valkey.py ________
-ImportError while importing test module '/app/backend/tests/integration/test_relay_valkey.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/integration/test_relay_valkey.py:25: in <module>
-    from relay import config as C
-E   ModuleNotFoundError: No module named 'relay'
-________________ ERROR collecting backend/tests/test_billing.py ________________
-ImportError while importing test module '/app/backend/tests/test_billing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_billing.py:14: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-_____________ ERROR collecting backend/tests/test_control_plane.py _____________
-ImportError while importing test module '/app/backend/tests/test_control_plane.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_control_plane.py:14: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-___________ ERROR collecting backend/tests/test_guard_middleware.py ____________
-ImportError while importing test module '/app/backend/tests/test_guard_middleware.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_guard_middleware.py:12: in <module>
-    from licensing import service
-E   ModuleNotFoundError: No module named 'licensing'
-_____________ ERROR collecting backend/tests/test_kms_issuance.py ______________
-ImportError while importing test module '/app/backend/tests/test_kms_issuance.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_kms_issuance.py:17: in <module>
-    from control_plane import config, keys as cp_keys, service, signer as cp_signer
-E   ModuleNotFoundError: No module named 'control_plane'
-______________ ERROR collecting backend/tests/test_kms_signer.py _______________
-ImportError while importing test module '/app/backend/tests/test_kms_signer.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_kms_signer.py:17: in <module>
-    from control_plane import config, signer as signer_mod
-E   ModuleNotFoundError: No module named 'control_plane'
-____________ ERROR collecting backend/tests/test_licensing_unit.py _____________
-ImportError while importing test module '/app/backend/tests/test_licensing_unit.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_licensing_unit.py:10: in <module>
-    from licensing import keys
-E   ModuleNotFoundError: No module named 'licensing'
-___________ ERROR collecting backend/tests/test_mapbox_geocoding.py ____________
-ImportError while importing test module '/app/backend/tests/test_mapbox_geocoding.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_mapbox_geocoding.py:1: in <module>
-    from mapbox_geocoding import evaluate_mapbox_result, make_query
-E   ModuleNotFoundError: No module named 'mapbox_geocoding'
-__________ ERROR collecting backend/tests/test_maptiler_geocoding.py ___________
-ImportError while importing test module '/app/backend/tests/test_maptiler_geocoding.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_maptiler_geocoding.py:1: in <module>
-    from maptiler import best_address_feature, evaluate_address_result
-E   ModuleNotFoundError: No module named 'maptiler'
-________________ ERROR collecting backend/tests/test_pairing.py ________________
-ImportError while importing test module '/app/backend/tests/test_pairing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_pairing.py:13: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-______________ ERROR collecting backend/tests/test_prod_infra.py _______________
-ImportError while importing test module '/app/backend/tests/test_prod_infra.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_prod_infra.py:7: in <module>
-    from control_plane import config, signer, operator_auth
-E   ModuleNotFoundError: No module named 'control_plane'
-____________ ERROR collecting backend/tests/test_property_dedup.py _____________
-ImportError while importing test module '/app/backend/tests/test_property_dedup.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_property_dedup.py:4: in <module>
-    from property_dedup import address_fingerprint, likely_duplicate
-E   ModuleNotFoundError: No module named 'property_dedup'
-__________ ERROR collecting backend/tests/test_property_occupancy.py ___________
-ImportError while importing test module '/app/backend/tests/test_property_occupancy.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_property_occupancy.py:3: in <module>
-    from routers.properties import _occupancy_status
-E   ModuleNotFoundError: No module named 'routers'
-_________________ ERROR collecting backend/tests/test_relay.py _________________
-ImportError while importing test module '/app/backend/tests/test_relay.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_relay.py:23: in <module>
-    from relay import protocol as P
-E   ModuleNotFoundError: No module named 'relay'
-____________ ERROR collecting backend/tests/test_relay_multinode.py ____________
-ImportError while importing test module '/app/backend/tests/test_relay_multinode.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_relay_multinode.py:14: in <module>
-    from relay import config as C
-E   ModuleNotFoundError: No module named 'relay'
-____________ ERROR collecting backend/tests/test_stripe_billing.py _____________
-ImportError while importing test module '/app/backend/tests/test_stripe_billing.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend/tests/test_stripe_billing.py:22: in <module>
-    from licensing import reqsig
-E   ModuleNotFoundError: No module named 'licensing'
-_______________________ ERROR collecting backend_test.py _______________________
-import file mismatch:
-imported module 'backend_test' has this __file__ attribute:
-  /app/backend/tests/backend_test.py
-which is not the same as the test file we want to collect:
-  /app/backend_test.py
-HINT: remove __pycache__ / .pyc files and/or use a unique basename for your test file modules
-=========================== short test summary info ============================
-ERROR backend/tests/integration/test_relay_valkey.py
-ERROR backend/tests/test_billing.py
-ERROR backend/tests/test_control_plane.py
-ERROR backend/tests/test_guard_middleware.py
-ERROR backend/tests/test_kms_issuance.py
-ERROR backend/tests/test_kms_signer.py
-ERROR backend/tests/test_licensing_unit.py
-ERROR backend/tests/test_mapbox_geocoding.py
-ERROR backend/tests/test_maptiler_geocoding.py
-ERROR backend/tests/test_pairing.py
-ERROR backend/tests/test_prod_infra.py
-ERROR backend/tests/test_property_dedup.py
-ERROR backend/tests/test_property_occupancy.py
-ERROR backend/tests/test_relay.py
-ERROR backend/tests/test_relay_multinode.py
-ERROR backend/tests/test_stripe_billing.py
-ERROR backend_test.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 17 errors during collection !!!!!!!!!!!!!!!!!!!
-============================== 17 errors in 0.46s ==============================, and local python execution to verify import dependencies).
+**Testing status**
+  - Testing agent used after significant changes: YES (using exhaustive  test contracts)
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: None new this session.
+  - Test files created: , , .
   - Known regressions: None.
 
-**Credentials to test flow**:
-  Located in 
+**Credentials to test flow:**
+Standard users present in .
 
-**What agent forgot to execute**:
-  Nothing. The agent successfully fetched the user's external commits, fast-forwarded, and verified the application state before finishing.
-</analysis></analysis>
+**What agent forgot to execute**
+The agent intentionally and safely deferred the execution of Phase B1A (Shared Editor Engine Promotion) because its token window was running out, which would have risked leaving the package in a half-written state. This is exactly what the new agent needs to execute immediately.</analysis>
