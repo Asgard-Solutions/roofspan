@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -90,7 +90,8 @@ export async function runSync() {
   }
 }
 
-async function _markSynced() { await putCache(LAST_SYNC, new Date().toISOString()); }
+// Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
+async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
 export async function syncNow() { _resetBackoff(); return runSync(); }
 

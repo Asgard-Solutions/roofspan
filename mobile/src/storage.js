@@ -95,26 +95,47 @@ export async function saveMutationIfCurrent(m) {
   });
 }
 
+// Atomically mark the scoped queue "clean" (advance last_sync) ONLY if no pending work exists — the
+// count check and the marker write run inside the SAME serialized critical section as enqueue (spec §0),
+// so a mutation B enqueued concurrently can never slip between the clean check and the marker write.
+export async function markCleanIfNoPending(cacheKey, value) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const row = await d.getFirstAsync(
+      "SELECT COUNT(*) AS c FROM pending_mutations WHERE state = 'pending' AND (scope = ? OR scope IS NULL)",
+      scope
+    );
+    if (row && Number(row.c) > 0) return false;   // current work exists -> do NOT advance last_sync
+    await putCache(cacheKey, value);
+    return true;
+  });
+}
+
 // Remove exactly ONE mutation (used by the "Remove failed photo" recovery control). Scoped so a
 // device can only delete its own account's row; never touches other Leads/Jobs/Visits/Inspections.
 export async function removeMutation(client_id) {
-  const d = await db();
-  const scope = getScope();
-  await d.runAsync(
-    "DELETE FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
-    client_id, scope
-  );
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    await d.runAsync(
+      "DELETE FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      client_id, scope
+    );
+  });
 }
 
 // Remove ALL failed mutations for the active scope (Sync Center "Remove all failed"). Never touches
 // pending/synced/conflict rows, and never other scopes.
 export async function removeFailedMutations() {
-  const d = await db();
-  const scope = getScope();
-  await d.runAsync(
-    "DELETE FROM pending_mutations WHERE state = 'failed' AND (scope = ? OR scope IS NULL)",
-    scope
-  );
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    await d.runAsync(
+      "DELETE FROM pending_mutations WHERE state = 'failed' AND (scope = ? OR scope IS NULL)",
+      scope
+    );
+  });
 }
 
 // Pending (not-yet-synced) mutations for the ACTIVE scope only.
