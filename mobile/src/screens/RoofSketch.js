@@ -29,8 +29,7 @@ export default function RoofSketch({ route }) {
   const editorRef = useRef(null);
   const coordRef = useRef(null);
   const stageTimer = useRef(null);
-  const localSaveRef = useRef(null);   // last honest on-device save status string
-  const ackedRef = useRef(0);          // highest local generation Office has acknowledged for this structure
+  const syncStateRef = useRef({ seq: 0, acked: 0, localSave: null }); // latest-wins refresh state
   const editedRef = useRef(false);     // has the rep committed a local edit this session?
   const runningRef = useRef(false);    // sync engine actively processing (from sync_start/sync_end)
   const [size, setSize] = useState({ width: 360, height: 480 });
@@ -62,24 +61,17 @@ export default function RoofSketch({ route }) {
   const refreshSync = useCallback(async () => {
     const ed = editorRef.current;
     if (!ed || readOnly) return;
+    const seq = WIRE.nextRefreshSeq(syncStateRef.current);   // claim this refresh's sequence number
     const m = await currentSketchMutation(revision_id, structure_id);
     // Untouched sketch (server/cache/new) with no mutation: keep its initial label — an unrelated
     // onSyncChange() event (another structure / a photo) must NOT relabel it.
     if (!editedRef.current && !m) return;
     const draft = await loadSketchDraft(revision_id, structure_id);
-    if (draft && draft.document_version != null) {
-      ed.adoptServerVersion({ documentVersion: draft.document_version, baseServerDocument: draft.base_server_document });
-    } else if (m && m.state === "synced" && m.serverValue) {
-      ed.adoptServerVersion({ documentVersion: m.serverValue.document_version, baseServerDocument: m.serverValue.document });
-    }
-    if (m && m.state === "synced") ackedRef.current = Number(m.local_edit_generation) || ackedRef.current;
-    setStatus(WIRE.fieldSketchSyncStatus({
-      localSave: localSaveRef.current,
-      mutation: m,
-      running: runningRef.current || isSyncing(),
-      currentGeneration: ed.editGeneration,
-      acknowledgedGeneration: ackedRef.current,
-    }));
+    // Latest-wins: discard this result if a newer refresh has since started (out-of-order async reads).
+    WIRE.applySketchRefresh({
+      seq, state: syncStateRef.current, editor: ed, mutation: m, draft,
+      running: runningRef.current || isSyncing(), setStatus,
+    });
   }, [readOnly, revision_id, structure_id]);
 
   // Subscribe to the EXISTING sync events only (no polling/timer). Refresh this structure's status when
@@ -110,9 +102,9 @@ export default function RoofSketch({ route }) {
   const settle = useCallback(() => {
     if (!editor || readOnly) return;
     editedRef.current = true;
-    localSaveRef.current = "Saving on device…";
+    syncStateRef.current.localSave = "Saving on device…";
     setStatus("Saving on device…"); rerender();
-    editor.flush().then((res) => { localSaveRef.current = WIRE.localSaveStatus(res); refreshSync(); });
+    editor.flush().then((res) => { syncStateRef.current.localSave = WIRE.localSaveStatus(res); refreshSync(); });
     if (stageTimer.current) clearTimeout(stageTimer.current);
     stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow().then(() => refreshSync()); }, 800);
   }, [editor, readOnly, rerender, stageNow, refreshSync]);
@@ -145,10 +137,10 @@ export default function RoofSketch({ route }) {
   const cancelBuild = () => { setSelection(null); clearBuild(); };
   const retrySave = () => {
     if (!editor) return;
-    localSaveRef.current = "Saving on device…";
+    syncStateRef.current.localSave = "Saving on device…";
     setStatus("Saving on device…");
     editor.retry().then((res) => {
-      localSaveRef.current = WIRE.localSaveStatus(res);
+      syncStateRef.current.localSave = WIRE.localSaveStatus(res);
       syncNow().catch(() => {});   // also re-attempt server sync (for "Sync issue — retry needed")
       refreshSync();
     });
