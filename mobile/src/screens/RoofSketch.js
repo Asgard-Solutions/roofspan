@@ -171,6 +171,11 @@ export default function RoofSketch({ route }) {
   const changeTool = (t) => { setTool(t); setSelection(null); clearBuild(); };
   const changeMode = (m) => { if (editingBlocked || !editor) return; setEditMode(m); editor.setEditMode(m); setSelection(null); clearBuild(); settle(); };
 
+  // B3C: Undo/Redo must be blocked BEFORE they mutate the controller (settle()'s guard runs too late).
+  // Uses the same fresh editingBlockedRef as the other defensive routes — not just the button's disabled.
+  const doUndo = () => { if (!editor || editingBlockedRef.current) return; editor.undo(); settle(); };
+  const doRedo = () => { if (!editor || editingBlockedRef.current) return; editor.redo(); settle(); };
+
   const createFacetFromSelection = () => {
     if (!editor || editingBlocked || !selection || selection.type !== "facet_build") return;
     const r = WIRE.commitFacetCreate(editor.document, selection.edgeIds);
@@ -216,8 +221,8 @@ export default function RoofSketch({ route }) {
           <TouchableOpacity testID="mode-manual" disabled={editingBlocked} onPress={() => changeMode("manual_polygon")} style={[sx.modeBtn, editMode === "manual_polygon" && sx.modeOn, editingBlocked && sx.disabled]}><Text style={[sx.modeText, editMode === "manual_polygon" && sx.modeTextOn]}>Manual</Text></TouchableOpacity>
         </View>
         <View style={sx.modeToggle}>
-          <TouchableOpacity testID="undo-btn" disabled={editingBlocked || !editor.canUndo()} onPress={() => { editor.undo(); settle(); }} style={[sx.modeBtn, (editingBlocked || !editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
-          <TouchableOpacity testID="redo-btn" disabled={editingBlocked || !editor.canRedo()} onPress={() => { editor.redo(); settle(); }} style={[sx.modeBtn, (editingBlocked || !editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
+          <TouchableOpacity testID="undo-btn" disabled={editingBlocked || !editor.canUndo()} onPress={doUndo} style={[sx.modeBtn, (editingBlocked || !editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
+          <TouchableOpacity testID="redo-btn" disabled={editingBlocked || !editor.canRedo()} onPress={doRedo} style={[sx.modeBtn, (editingBlocked || !editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
           <TouchableOpacity testID="save-sketch-btn" disabled={editingBlocked} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow().then(() => refreshSync()); }} style={[sx.modeBtn, sx.modeOn, editingBlocked && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
         </View>
       </View>

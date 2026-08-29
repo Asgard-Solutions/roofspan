@@ -5,7 +5,7 @@ import * as SQLite from "expo-sqlite";
 import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
 import { planExpectedVersionFloor, reconcileDraftWrite } from "./roofSketchAck";
-import { decideSketchConflictResolution } from "./roofSketchConflict";
+import { applyResolutionInTx } from "./roofSketchConflict";
 
 let _db = null;
 let _inst = "none";
@@ -298,45 +298,58 @@ export async function getCacheMeta(name) {
   return row ? { updated_at: row.updated_at } : null;
 }
 
-// B3C (atomic): resolve a Roof Sketch 409 conflict in ONE serialized critical section. The conflict row
-// AND the durable draft are re-read FRESH here (never a stale snapshot), handed to the SAME pure decision
-// helper the contracts use (decideSketchConflictResolution), and the resulting writes are applied with
-// generation/state-guarded SQL. If ANY invariant drifted (a newer draft or queue row landed after review)
-// the decision is `stale` and NOTHING is written. Use Office removes ONLY the exact reviewed conflict row;
-// Keep Local transitions ONLY that exact row to a fresh pending send — a newer row is never clobbered.
+// B3C (atomic + transactional): resolve a Roof Sketch 409 conflict in ONE serialized critical section
+// whose durable writes run inside a REAL SQLite transaction (expo-sqlite withTransactionAsync). The
+// conflict row AND the durable draft are re-read FRESH inside the transaction and handed to the SAME pure
+// transactional body the contracts use (roofSketchConflict.applyResolutionInTx). If ANY invariant drifted,
+// a guarded DELETE/UPDATE fails to hit exactly its row, or a write throws, the transaction rolls back and
+// NOTHING is committed — the original conflict row + draft survive for the rep to reopen. Use Office and
+// Keep Local are each all-or-nothing.
+function _resolutionTxExecutor(d, scope, now) {
+  return {
+    readConflictRow: async (clientId) => {
+      const raw = await d.getFirstAsync(
+        "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)", clientId, scope);
+      return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
+    },
+    readDraft: async (draftKey) => {
+      const row = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, draftKey));
+      return row ? JSON.parse(row.json) : null;
+    },
+    writeCache: async (key, value) => {
+      await d.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, key), JSON.stringify(value), now);
+    },
+    deleteConflictRow: async (clientId, queueGen) => {
+      const r = await d.runAsync(
+        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
+        clientId, queueGen, scope);
+      return (r && (r.changes != null ? r.changes : r.rowsAffected)) || 0;
+    },
+    transitionConflictToPending: async (clientId, queueGen, nextRow) => {
+      const r = await d.runAsync(
+        "UPDATE pending_mutations SET json = ?, state = 'pending', mutation_generation = ? WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
+        JSON.stringify(nextRow), nextRow.mutation_generation, clientId, queueGen, scope);
+      return (r && (r.changes != null ? r.changes : r.rowsAffected)) || 0;
+    },
+  };
+}
+
 export async function resolveSketchConflictTransition(choice, reviewed) {
   return _serialize(async () => {
     const d = await db();
     const scope = getScope();
-    const raw = await d.getFirstAsync(
-      "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
-      reviewed.clientId, scope
-    );
-    const liveRow = raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
-    const draftRow = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, reviewed.draftKey));
-    const liveDraft = draftRow ? JSON.parse(draftRow.json) : null;
-
-    const decision = decideSketchConflictResolution(choice, reviewed, { row: liveRow, draft: liveDraft });
-    if (decision.action === "stale" || decision.action === "noop") return decision;
-
     const now = new Date().toISOString();
-    if (decision.action === "use_office") {
-      await d.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, reviewed.detailKey), JSON.stringify(decision.cacheDetail), now);
-      await d.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, reviewed.draftKey), JSON.stringify(null), now);   // retire exact draft
-      const del = await d.runAsync(
-        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
-        reviewed.clientId, reviewed.queueGeneration, scope
-      );
-      if (!((del && (del.changes || del.rowsAffected || 0)) > 0)) return { action: "stale", reason: "row_changed_on_write" };
-      return decision;
+    let decision = null;
+    try {
+      // Real all-or-nothing SQLite transaction: reads, invariant checks, and every durable write commit
+      // together or roll back together. applyResolutionInTx throws to abort.
+      await d.withTransactionAsync(async () => {
+        decision = await applyResolutionInTx(_resolutionTxExecutor(d, scope, now), choice, reviewed);
+      });
+    } catch (e) {
+      if (e && e.__stale) return { action: "stale", reason: e.__stale };   // rolled back -> nothing changed
+      throw e;   // real SQL failure: transaction rolled back; caller keeps the conflict, records nothing
     }
-    // keep_local
-    await d.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, reviewed.draftKey), JSON.stringify(decision.nextDraft), now);
-    const upd = await d.runAsync(
-      "UPDATE pending_mutations SET json = ?, state = 'pending', mutation_generation = ? WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
-      JSON.stringify(decision.nextRow), decision.nextRow.mutation_generation, reviewed.clientId, reviewed.queueGeneration, scope
-    );
-    if (!((upd && (upd.changes || upd.rowsAffected || 0)) > 0)) return { action: "stale", reason: "row_changed_on_write" };
-    return decision;
+    return decision;   // committed
   });
 }

@@ -125,4 +125,44 @@ function decideSketchConflictResolution(choice, reviewed, live) {
   return { action: "noop" };
 }
 
-module.exports = { conflictReview, sketchSummary, buildReviewedContext, decideSketchConflictResolution };
+// Thrown to abort + roll back the resolution transaction as a STALE (no-op) outcome (distinct from a
+// real SQL error, which also rolls back but propagates). Carries `__stale` so the caller maps it back to
+// { action: "stale" } only AFTER the transaction has rolled everything back.
+function _stale(reason) { const e = new Error("stale:" + reason); e.__stale = reason; return e; }
+
+// The transactional resolution body. Runs against a small executor interface so production can back it
+// with a REAL SQLite transaction (expo-sqlite withTransactionAsync) while the contracts drive it with an
+// in-memory snapshot/rollback executor + an injected failpoint. Every read, the invariant decision, and
+// every durable write happen here: throwing anywhere (stale, a guarded DELETE/UPDATE that did not affect
+// exactly one row, an injected failure, or a real SQL error) aborts the whole transaction so NOTHING is
+// committed. `failpoint(name)` is a no-op in production.
+//   tx interface:
+//     readConflictRow(clientId) -> live row (any state) | null
+//     readDraft(draftKey)       -> live draft | null
+//     writeCache(key, value)    -> void   (value === null retires the draft)
+//     deleteConflictRow(clientId, queueGen)               -> affected row count
+//     transitionConflictToPending(clientId, queueGen, row) -> affected row count
+async function applyResolutionInTx(tx, choice, reviewed, failpoint = () => {}) {
+  const liveRow = await tx.readConflictRow(reviewed.clientId);
+  const liveDraft = await tx.readDraft(reviewed.draftKey);
+  const decision = decideSketchConflictResolution(choice, reviewed, { row: liveRow, draft: liveDraft });
+  if (decision.action !== "use_office" && decision.action !== "keep_local") throw _stale(decision.reason || decision.action);
+
+  if (decision.action === "use_office") {
+    await tx.writeCache(reviewed.detailKey, decision.cacheDetail);   // cache authoritative Office sketch
+    failpoint("use_office:after_cache");
+    await tx.writeCache(reviewed.draftKey, null);                    // retire the exact local draft
+    failpoint("use_office:after_draft");
+    const affected = await tx.deleteConflictRow(reviewed.clientId, reviewed.queueGeneration);
+    if (affected !== 1) throw _stale("delete_missed");               // guarded DELETE missed -> roll back
+    return decision;
+  }
+  // keep_local
+  await tx.writeCache(reviewed.draftKey, decision.nextDraft);        // rebase draft to Office version/base
+  failpoint("keep_local:after_draft");
+  const affected = await tx.transitionConflictToPending(reviewed.clientId, reviewed.queueGeneration, decision.nextRow);
+  if (affected !== 1) throw _stale("update_missed");                 // guarded UPDATE missed -> roll back draft too
+  return decision;
+}
+
+module.exports = { conflictReview, sketchSummary, buildReviewedContext, decideSketchConflictResolution, applyResolutionInTx };
