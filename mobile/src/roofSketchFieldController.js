@@ -46,9 +46,12 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
   const baseServerDocument = initial.baseServerDocument || null;
 
   // Serialized write chain: every committed state persists in strict edit-generation order; a later
-  // commit can never resolve before an earlier one (no A-overwrites-B).
+  // commit can never resolve before an earlier one (no A-overwrites-B). A failed durable write is
+  // recorded (never silently swallowed) but must NOT poison the chain — later writes still drain.
   let chain = Promise.resolve();
   let lastPersistedGeneration = 0;
+  let lastScheduledGeneration = 0;
+  let persistError = null;
 
   function buildDraft() {
     return makeSketchDraft(revisionId, structureId, {
@@ -57,8 +60,17 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
   }
   function schedulePersist() {
     const gen = editGeneration;
+    lastScheduledGeneration = Math.max(lastScheduledGeneration, gen);
     const draft = buildDraft();
-    chain = chain.then(async () => { await save(draft, gen); lastPersistedGeneration = gen; }).catch(() => {});
+    chain = chain.then(async () => {
+      try {
+        await save(draft, gen);
+        lastPersistedGeneration = Math.max(lastPersistedGeneration, gen);
+        if (lastPersistedGeneration >= lastScheduledGeneration) persistError = null;
+      } catch (e) {
+        persistError = e || new Error("persist_failed");
+      }
+    });
     return chain;
   }
   function commitDoc(nextHistory, nextDoc) {
@@ -75,6 +87,7 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     get editMode() { return editMode; },
     get source() { return initial.source; },
     get lastPersistedGeneration() { return lastPersistedGeneration; },
+    get persistError() { return persistError; },
     canUndo: () => RS.historyCanUndo(history),
     canRedo: () => RS.historyCanRedo(history),
 
@@ -94,7 +107,14 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     setEditMode(mode) { const next = RS.setEditMode(working, mode); editMode = next.edit_mode; return this.commit(next); },
     validate() { return RS.validateSketch(working); },
     buildDraft,
-    flush() { return chain; },
+    // Truthful drain: resolves to a status object; ok ONLY when the latest scheduled generation is
+    // durably persisted with no outstanding error.
+    async flush() {
+      await chain;
+      return { ok: persistError === null && lastPersistedGeneration >= lastScheduledGeneration, lastPersistedGeneration, lastScheduledGeneration, error: persistError };
+    },
+    // Re-attempt persisting the CURRENT working document at the current generation (no history/gen bump).
+    retry() { schedulePersist(); return this.flush(); },
   };
 
   // undo/redo replace the present from history without pushing a new state, but still bump the

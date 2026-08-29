@@ -1,11 +1,13 @@
 // Field Roof Sketch inspector (touch-friendly bottom sheet). Delegates every mutation to the shared
-// engine (@roofspan/roof-sketch-core) through the onCommit callback. No local geometry/topology math.
+// engine via onCommit; join type-conflicts go through the shared attemptJoin adapter. No local math.
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, TextInput, ScrollView, StyleSheet } from "react-native";
 import * as RS from "@roofspan/roof-sketch-core";
+import * as WIRE from "../roofSketchFieldWiring";
 import { C } from "../theme";
 
 const EDGE_TYPES = ["unclassified", "eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"];
+const CLASSIFIED = ["eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"];
 const PITCHES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12];
 const PEN_TYPES = ["pipe_boot", "static_vent", "skylight", "turbine", "powered_vent", "exhaust_vent", "chimney", "satellite", "other"];
 
@@ -18,12 +20,9 @@ function Chip({ label, active, disabled, onPress, testID }) {
   );
 }
 
-export default function SketchInspector({ doc, selection, readOnly, onCommit, onCalibrate, onClose }) {
-  const [confirmText, setConfirmText] = useState("");
-  const [calibText, setCalibText] = useState("");
+export default function SketchInspector({ doc, selection, readOnly, onCommit, onError, onClose }) {
   if (!selection || !selection.type) return null;
   const disabled = !!readOnly;
-
   const edge = selection.type === "edge" ? RS.eById(doc, selection.id) : null;
   const facet = selection.type === "facet" ? RS.fById(doc, selection.id) : null;
   const vertex = selection.type === "vertex" ? RS.vById(doc, selection.id) : null;
@@ -32,15 +31,12 @@ export default function SketchInspector({ doc, selection, readOnly, onCommit, on
   return (
     <View testID="sketch-inspector" style={st.sheet}>
       <View style={st.header}>
-        <Text style={st.title}>
-          {edge ? "Edge" : facet ? "Facet" : vertex ? "Vertex" : pen ? "Penetration" : "Inspect"}
-        </Text>
+        <Text style={st.title}>{edge ? "Edge" : facet ? "Facet" : vertex ? "Vertex" : pen ? "Penetration" : "Inspect"}</Text>
         <TouchableOpacity testID="inspector-close" onPress={onClose}><Text style={st.close}>Done</Text></TouchableOpacity>
       </View>
-      <ScrollView style={{ maxHeight: 280 }}>
-        {edge && <EdgeBody edge={edge} doc={doc} disabled={disabled} onCommit={onCommit} onCalibrate={onCalibrate}
-          confirmText={confirmText} setConfirmText={setConfirmText} calibText={calibText} setCalibText={setCalibText} />}
-        {facet && <FacetBody facet={facet} disabled={disabled} onCommit={onCommit} />}
+      <ScrollView style={{ maxHeight: 300 }}>
+        {edge && <EdgeBody edge={edge} doc={doc} disabled={disabled} onCommit={onCommit} onError={onError} />}
+        {facet && <FacetBody facet={facet} doc={doc} disabled={disabled} onCommit={onCommit} />}
         {vertex && <VertexBody vertex={vertex} disabled={disabled} onCommit={onCommit} />}
         {pen && <PenBody pen={pen} disabled={disabled} onCommit={onCommit} />}
       </ScrollView>
@@ -48,9 +44,20 @@ export default function SketchInspector({ doc, selection, readOnly, onCommit, on
   );
 }
 
-function EdgeBody({ edge, doc, disabled, onCommit, onCalibrate, confirmText, setConfirmText, calibText, setCalibText }) {
+function EdgeBody({ edge, doc, disabled, onCommit, onError }) {
+  const [confirmText, setConfirmText] = useState("");
+  const [calibText, setCalibText] = useState("");
+  const [joinPending, setJoinPending] = useState(null); // { candidateId } awaiting a result type
   const dim = RS.edgeDimension(doc, edge);
   const candidates = joinCandidates(doc, edge);
+
+  const tryJoin = (cid, resultType) => {
+    const r = WIRE.attemptJoin(doc, edge.id, cid, resultType);
+    if (r.ok) { setJoinPending(null); onCommit(r.doc); return; }
+    if (r.needsType) { setJoinPending({ candidateId: cid }); return; }
+    setJoinPending(null); onError && onError(r.reason);
+  };
+
   return (
     <View>
       <Text style={st.small}>Type</Text>
@@ -86,23 +93,29 @@ function EdgeBody({ edge, doc, disabled, onCommit, onCalibrate, confirmText, set
       {candidates.length ? <>
         <Text style={st.small}>Join Edge</Text>
         <View style={st.chips}>{candidates.map((cid) => (
-          <Chip key={cid} testID={`edge-join-${cid}`} label={"Join → " + cid.slice(0, 6)} disabled={disabled}
-            onPress={() => { const r = RS.joinEdges(doc, edge.id, cid); if (r.ok) onCommit(r.doc); }} />))}</View>
+          <Chip key={cid} testID={`edge-join-${cid}`} label={"Join → " + cid.slice(0, 6)} disabled={disabled} onPress={() => tryJoin(cid)} />))}</View>
       </> : null}
+
+      {joinPending ? <View testID="join-type-conflict">
+        <Text style={st.warn}>These edges have different types — choose the resulting type:</Text>
+        <View style={st.chips}>{CLASSIFIED.map((t) => (
+          <Chip key={t} testID={`join-result-${t}`} label={t} disabled={disabled} onPress={() => tryJoin(joinPending.candidateId, t)} />))}</View>
+        <TouchableOpacity testID="join-cancel" style={st.ghost} onPress={() => setJoinPending(null)}><Text style={st.ghostText}>Cancel join</Text></TouchableOpacity>
+      </View> : null}
 
       <TouchableOpacity testID="edge-delete" disabled={disabled} style={[st.btn, st.danger]} onPress={() => onCommit(RS.deleteEdge(doc, edge.id))}><Text style={st.btnText}>Delete edge</Text></TouchableOpacity>
     </View>
   );
 }
 
-function FacetBody({ facet, disabled, onCommit }) {
+function FacetBody({ facet, doc, disabled, onCommit }) {
   const [label, setLabel] = useState(facet.label || "");
   return (
     <View>
       <Text style={st.small}>Label</Text>
       <View style={st.row}>
         <TextInput testID="facet-label-input" style={st.input} editable={!disabled} value={label} onChangeText={setLabel} />
-        <TouchableOpacity testID="facet-label-set" disabled={disabled} style={st.btn} onPress={() => onCommit(RS.setFacetLabel(getDocSafe(), facet.id, label))}><Text style={st.btnText}>Set</Text></TouchableOpacity>
+        <TouchableOpacity testID="facet-label-set" disabled={disabled} style={st.btn} onPress={() => onCommit((d) => RS.setFacetLabel(d, facet.id, label))}><Text style={st.btnText}>Set</Text></TouchableOpacity>
       </View>
       <Text style={st.small}>Pitch</Text>
       <View style={st.chips}>{PITCHES.map((p) => (
@@ -115,7 +128,6 @@ function FacetBody({ facet, disabled, onCommit }) {
       <TouchableOpacity testID="facet-delete" disabled={disabled} style={[st.btn, st.danger]} onPress={() => onCommit((d) => RS.deleteFacet(d, facet.id))}><Text style={st.btnText}>Delete facet</Text></TouchableOpacity>
     </View>
   );
-  function getDocSafe() { return facet.__doc || {}; }
 }
 
 function VertexBody({ vertex, disabled, onCommit }) {
@@ -140,8 +152,7 @@ function PenBody({ pen, disabled, onCommit }) {
   );
 }
 
-// Candidate edges that share exactly one endpoint with `edge` (plausible adjacency only; joinEdges
-// makes the final validity decision).
+// Edges sharing exactly one endpoint with `edge` (plausible adjacency only; joinEdges decides validity).
 function joinCandidates(doc, edge) {
   const ends = [edge.v1, edge.v2];
   return (doc.edges || []).filter((o) => o.id !== edge.id && (ends.includes(o.v1) !== ends.includes(o.v2))).map((o) => o.id);
@@ -160,6 +171,8 @@ const st = StyleSheet.create({
   btn: { backgroundColor: C.brand, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10, marginLeft: 8, marginTop: 8 },
   btnText: { color: "#fff", fontWeight: "800" },
   danger: { backgroundColor: C.danger, marginTop: 14 },
+  ghost: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#94A3B8", marginTop: 8, alignSelf: "flex-start" },
+  ghostText: { color: C.sub, fontWeight: "700" },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, marginRight: 6, marginBottom: 6 },
   chipActive: { backgroundColor: C.brand, borderColor: C.brand },
