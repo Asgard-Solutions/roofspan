@@ -8,9 +8,7 @@
 
 function _leadIdFrom(detail) {
   if (!detail) return null;
-  if (detail.lead_id != null) return detail.lead_id;
-  if (detail.existing_lead_id != null) return detail.existing_lead_id;
-  return null;
+  return detail.lead_id != null ? detail.lead_id : null;
 }
 
 // Resolve which cached Property a synced mutation belongs to (server value first, then request context).
@@ -58,7 +56,7 @@ function reconcilePropertyDetail(kind, serverValue, cur) {
 
   if (kind === "lead_create") {
     const leadId = serverValue.id != null ? String(serverValue.id) : null;
-    return { ...base, lead_id: leadId, existing_lead_id: leadId };
+    return { ...base, lead_id: leadId };
   }
 
   return base;
@@ -108,6 +106,32 @@ function optimisticCanvassPatch(propertyId, patch, cur) {
   };
 }
 
+// B3C-style conflict resolution for a Field Property/Visit/DNK mutation stuck in `conflict` state.
+// The rep chooses:
+//   "use_server" -> discard the local mutation and adopt the server snapshot into caches (no data loss:
+//                   the local change is intentionally abandoned in favor of Office).
+//   "keep_local" -> re-queue the SAME local body (re-attempt), preserving the rep's work.
+// Returns a plan the sync layer executes; never deletes work without the rep's explicit choice.
+function resolveConflictPlan(mutation, choice) {
+  if (!mutation || mutation.state !== "conflict") return { action: "noop" };
+  if (choice === "use_server") {
+    return {
+      action: "use_server",
+      removeClientId: mutation.client_id,
+      propertyId: propertyIdForMutation(mutation),
+      serverValue: mutation.serverValue || null,   // 409 detail.server snapshot
+    };
+  }
+  if (choice === "keep_local") {
+    return {
+      action: "keep_local",
+      requeue: { ...mutation, state: "pending", error: null, errorCode: null, attempts: 0, serverValue: null },
+    };
+  }
+  return { action: "noop" };
+}
+
 module.exports = {
   propertyIdForMutation, reconcilePropertyDetail, reconcileCanvassFeatures, optimisticCanvassPatch,
+  resolveConflictPlan,
 };

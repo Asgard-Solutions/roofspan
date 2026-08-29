@@ -2,13 +2,14 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { cache, patchCachedDetail, patchCanvassFeature } from "../cache";
-import { queueMutation } from "../sync";
+import { queueMutation, conflictMutationForProperty, resolveFieldConflict } from "../sync";
+import { api } from "../api";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 
-// Canonical RoofSpan visit outcomes (stored value -> friendly label) — mirrors the backend
-// visit_outcomes definition. Field and Office offer the SAME six choices.
-const OUTCOMES = [
+// Canonical RoofSpan visit outcomes fallback (used offline / before the backend list loads). The live
+// list is fetched from GET /api/visit-outcomes so Field and Office render from ONE backend source.
+const FALLBACK_OUTCOMES = [
   ["no_answer", "No answer"],
   ["not_interested", "Not interested"],
   ["interested", "Interested"],
@@ -30,20 +31,37 @@ export default function Property({ route, navigation }) {
   const [stale, setStale] = useState(false);
   const [outcome, setOutcome] = useState("no_answer");
   const [notes, setNotes] = useState("");
+  const [outcomes, setOutcomes] = useState(FALLBACK_OUTCOMES);
+  const [conflict, setConflict] = useState(null);
+  const OUTCOME_LABEL = Object.fromEntries(outcomes);
 
   const load = useCallback(async () => {
     const r = await cache.property(id);
     setProp(r.data); setStale(!!r.stale);
+    setConflict(await conflictMutationForProperty(id));
+    try {
+      const res = await api.get("/visit-outcomes");                 // ONE backend source of truth
+      if (res && res.data && Array.isArray(res.data.outcomes) && res.data.outcomes.length) {
+        setOutcomes(res.data.outcomes.map((o) => [o.value, o.label]));
+      }
+    } catch (e) { /* offline: keep fallback list */ }
   }, [id]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   if (!prop) return <View style={s.wrap}><Text>Loading…</Text></View>;
 
-  // Canonical fields (fall back to the temporary compat aliases while both are served).
+  // Canonical fields only (compat aliases retired).
   const contacts = prop.contacts || [];
-  const owner = contacts.find((c) => c.kind === "owner") || (prop.owner_name ? { name: prop.owner_name, phone: prop.owner_phone } : null);
+  const owner = contacts.find((c) => c.kind === "owner") || null;
   const renter = contacts.find((c) => c.kind === "renter") || null;
-  const leadId = prop.lead_id || prop.existing_lead_id || null;
+  const leadId = prop.lead_id || null;
+
+  const resolveConflict = async (choice) => {
+    await resolveFieldConflict(conflict.client_id, choice);
+    setConflict(null);
+    await load();
+    Alert.alert("Conflict resolved", choice === "use_server" ? "Using Office's version." : "Keeping your local change — retrying.");
+  };
 
   const recordVisit = async () => {
     await queueMutation({
@@ -84,6 +102,16 @@ export default function Property({ route, navigation }) {
   return (
     <ScrollView style={s.wrap} contentContainerStyle={{ paddingBottom: 40 }}>
       {stale ? <Text style={s.staleBar}>Showing saved copy — offline</Text> : null}
+      {conflict ? (
+        <View style={s.conflict} testID="property-conflict-banner">
+          <Text style={s.conflictTitle}>Sync conflict — review required</Text>
+          <Text style={s.conflictSub}>This home changed in Office while your change was offline.</Text>
+          <View style={s.conflictRow}>
+            <TouchableOpacity style={s.conflictBtn} onPress={() => resolveConflict("use_server")} testID="conflict-use-server"><Text style={s.conflictBtnText}>Use Office version</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.conflictBtn, s.conflictBtnAlt]} onPress={() => resolveConflict("keep_local")} testID="conflict-keep-local"><Text style={[s.conflictBtnText, s.conflictBtnTextAlt]}>Keep my change</Text></TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
       {prop.do_not_knock ? (
         <View style={s.dnk} testID="property-dnk-banner">
           <Text style={s.dnkText}>DO NOT KNOCK</Text>
@@ -140,7 +168,7 @@ export default function Property({ route, navigation }) {
 
       <Text style={s.h}>Record visit</Text>
       <View style={s.outcomes}>
-        {OUTCOMES.map(([value, label]) => {
+        {outcomes.map(([value, label]) => {
           const sel = outcome === value;
           const isDnk = value === "do_not_knock";
           return (
@@ -179,6 +207,14 @@ export default function Property({ route, navigation }) {
 const s = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#F8FAFC", padding: 16 },
   staleBar: { backgroundColor: "#FEF3C7", color: "#92400E", textAlign: "center", paddingVertical: 6, fontSize: 12, fontWeight: "600", borderRadius: 8, marginBottom: 10 },
+  conflict: { backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5", borderRadius: 12, padding: 14, marginBottom: 12 },
+  conflictTitle: { color: "#991B1B", fontWeight: "800", fontSize: 15 },
+  conflictSub: { color: "#B91C1C", marginTop: 2, fontSize: 13 },
+  conflictRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  conflictBtn: { flex: 1, backgroundColor: "#DC2626", borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  conflictBtnText: { color: "#fff", fontWeight: "800" },
+  conflictBtnAlt: { backgroundColor: "#fff", borderWidth: 2, borderColor: "#DC2626" },
+  conflictBtnTextAlt: { color: "#DC2626" },
   dnk: { backgroundColor: C.dnk, borderRadius: 12, padding: 16, marginBottom: 14 },
   dnkText: { color: "#fff", fontSize: 22, fontWeight: "900" },
   dnkSub: { color: "#FEE2E2", marginTop: 2 },

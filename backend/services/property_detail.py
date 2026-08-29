@@ -77,17 +77,3 @@ async def build_property_detail(db: AsyncSession, p: Property) -> dict:
         "created_at": p.created_at,
         "updated_at": p.updated_at,
     }
-
-
-def with_field_compat_aliases(detail: dict) -> dict:
-    """TEMPORARY Field backward-compat: additive aliases derived DIRECTLY from the canonical detail (no
-    separate queries/logic). The next Field UI iteration migrates to `contacts[]` + `lead_id`, after
-    which these three keys are removed.
-        owner_name / owner_phone  <- the owner contact in `contacts[]`
-        existing_lead_id          <- `lead_id`
-    """
-    owner = next((c for c in detail.get("contacts", []) if c.get("kind") == "owner"), None)
-    detail["owner_name"] = owner["name"] if owner else None
-    detail["owner_phone"] = owner["phone"] if owner else None
-    detail["existing_lead_id"] = detail.get("lead_id")
-    return detail

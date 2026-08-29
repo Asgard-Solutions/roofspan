@@ -87,20 +87,16 @@ def test_office_and_field_return_canonical_keys(owner_h, owner_property_id):
     assert not missing_off, f"office missing canonical keys: {missing_off}"
     assert not missing_mob, f"mobile missing canonical keys: {missing_mob}"
 
-    # Field must include compat aliases
-    missing_compat = [k for k in COMPAT_KEYS if k not in mob]
-    assert not missing_compat, f"mobile missing compat aliases: {missing_compat}"
+    # Field no longer carries compat aliases (migrated to canonical contacts[]/lead_id)
+    present_compat = [k for k in COMPAT_KEYS if k in mob]
+    assert not present_compat, f"compat aliases should be removed but present: {present_compat}"
 
     # values equal for canonical keys shared
     for k in CANONICAL_KEYS:
         assert off[k] == mob[k], f"canonical parity mismatch on '{k}': office={off[k]!r} mobile={mob[k]!r}"
 
-    # compat aliases align with canonical values
-    owner_contact = next((c for c in mob["contacts"] if c.get("kind") == "owner"), None)
-    if owner_contact:
-        assert mob["owner_name"] == owner_contact.get("name")
-        assert mob["owner_phone"] == owner_contact.get("phone")
-    assert mob["existing_lead_id"] == mob["lead_id"]
+    # compat aliases removed — Field consumes canonical contacts[]/lead_id
+    assert "owner_name" not in mob and "owner_phone" not in mob and "existing_lead_id" not in mob
 
 
 # ---------------- DNK ON/OFF via mobile PATCH (owner authorized) ----------------

@@ -19,11 +19,11 @@ from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
-from services.property_detail import build_property_detail, with_field_compat_aliases
+from services.property_detail import build_property_detail
 from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
 from schemas_sketch import SketchWriteIn
-from schemas_phase2 import MobilePropertyDetail
+from schemas_phase2 import PropertyDetail
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -838,12 +838,11 @@ async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_
 # ============================================================================
 # Mobile Property detail (salesperson-authorized; canvass/field context only)
 # ============================================================================
-@router.get("/properties/{property_id}", response_model=MobilePropertyDetail)
+@router.get("/properties/{property_id}", response_model=PropertyDetail)
 async def get_property(property_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
     # SAME canonical builder + SAME Pydantic serialization as Office GET /api/properties/{id}.
-    detail = with_field_compat_aliases(await build_property_detail(db, p))
-    return MobilePropertyDetail(**detail)
+    return PropertyDetail(**await build_property_detail(db, p))
 
 
 class MobilePropertyPatch(BaseModel):
@@ -870,5 +869,4 @@ async def patch_property(property_id: str, payload: MobilePropertyPatch, request
     await db.refresh(p)
     if "do_not_knock" in fields:
         await log_action(db, user=user, action="property.do_not_knock", entity_type="property", entity_id=p.id, detail={"do_not_knock": p.do_not_knock, "via": "mobile"}, request=request)
-    detail = with_field_compat_aliases(await build_property_detail(db, p))
-    return MobilePropertyDetail(**detail)
+    return PropertyDetail(**await build_property_detail(db, p))

@@ -134,12 +134,12 @@ async def _run():
         assert office["lead_id"] == str(active_lead.id), "archived newer lead must not become canonical lead_id"
         print("PASS: Office/Field canonical parity + all attributes + non-archived lead_id selection")
 
-        # ---- 2. Field compat aliases derived from canonical values ----
+        # ---- 2. Compat aliases REMOVED — Field now uses canonical contacts[]/lead_id ----
         owner_contact = next(c for c in mobile["contacts"] if c["kind"] == "owner")
-        assert mobile["owner_name"] == owner_contact["name"] == "Homer S"
-        assert mobile["owner_phone"] == owner_contact["phone"] == "555-0100"
-        assert mobile["existing_lead_id"] == mobile["lead_id"] == str(active_lead.id)
-        print("PASS: temporary Field aliases (owner_name/owner_phone/existing_lead_id) match canonical values")
+        assert owner_contact["name"] == "Homer S" and owner_contact["phone"] == "555-0100"
+        assert mobile["lead_id"] == str(active_lead.id)
+        assert "owner_name" not in mobile and "owner_phone" not in mobile and "existing_lead_id" not in mobile, "temporary compat aliases must be gone"
+        print("PASS: compat aliases removed; Field reads canonical contacts[]/lead_id")
 
         # ---- 3b. Archived-only leads -> lead_id null (deterministic) ----
         p2 = Property(id=_uuid.uuid4(), source="test", formatted_address="Archived-only home")

@@ -93,8 +93,9 @@ const feat = (coll, id) => coll.features.find((f) => f.properties.id === id).pro
 
 // ---- 9. lead acknowledgement updates lead_id (detail) + has_lead (canvass) ----
 {
-  const detail = R.reconcilePropertyDetail("lead_create", { id: "L5", property_id: "P1" }, { id: "P1", lead_id: null, existing_lead_id: null });
-  assert.strictEqual(detail.lead_id, "L5"); assert.strictEqual(detail.existing_lead_id, "L5");
+  const detail = R.reconcilePropertyDetail("lead_create", { id: "L5", property_id: "P1" }, { id: "P1", lead_id: null });
+  assert.strictEqual(detail.lead_id, "L5");
+  assert.ok(!("existing_lead_id" in detail), "legacy existing_lead_id alias is not written");
   const coll = R.reconcileCanvassFeatures("lead_create", { id: "L5", property_id: "P1" }, "P1", featureColl([{ id: "P1", has_lead: false }]));
   assert.strictEqual(feat(coll, "P1").has_lead, true);
   ok("lead ack sets Property.lead_id (Create->Open lead) and canvass has_lead=true");
@@ -147,6 +148,25 @@ const feat = (coll, id) => coll.features.find((f) => f.properties.id === id).pro
   assert.strictEqual(R.propertyIdForMutation({ kind: "property_patch", path: "/mobile/properties/PB" }), "PB");
   assert.strictEqual(R.propertyIdForMutation({ kind: "lead_create", body: { property_id: "PC" } }), "PC");
   ok("propertyIdForMutation resolves the target property from server value, path, or body");
+}
+
+// ---- B3C-style conflict resolution plans (use_server / keep_local) ----
+{
+  const conflicted = { client_id: "property-patch:P1", kind: "property_patch", state: "conflict",
+    body: { do_not_knock: true }, path: "/mobile/properties/P1",
+    serverValue: { id: "P1", do_not_knock: false, do_not_knock_reason: null, visits: [], lead_id: null } };
+  const useServer = R.resolveConflictPlan(conflicted, "use_server");
+  assert.strictEqual(useServer.action, "use_server");
+  assert.strictEqual(useServer.removeClientId, "property-patch:P1");
+  assert.strictEqual(useServer.propertyId, "P1");
+  assert.strictEqual(useServer.serverValue.do_not_knock, false);
+  const keepLocal = R.resolveConflictPlan(conflicted, "keep_local");
+  assert.strictEqual(keepLocal.action, "keep_local");
+  assert.strictEqual(keepLocal.requeue.state, "pending");
+  assert.strictEqual(keepLocal.requeue.attempts, 0);
+  assert.deepStrictEqual(keepLocal.requeue.body, { do_not_knock: true }, "keep-local preserves the rep's body");
+  assert.strictEqual(R.resolveConflictPlan({ state: "synced" }, "use_server").action, "noop", "only conflict rows resolve");
+  ok("conflict resolution: use_server adopts server + drops local; keep_local re-queues the rep's body");
 }
 
 console.log("\nFIELD PROPERTY/MAP CACHE SYNC: all " + n + " assertions passed");

@@ -8,7 +8,7 @@ import queue from "./queue";
 import { send } from "./api";
 import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
-import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation } from "./fieldReconcile";
+import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
@@ -150,6 +150,43 @@ async function _reconcileFieldAcks(processed) {
     }
   }
 }
+// B3C-style Property conflict surfacing: the durable Property/Visit/DNK mutation for ONE property that
+// is currently in `conflict` state (or null). Drives the Use-Server / Keep-Local banner on Property.js.
+export async function conflictMutationForProperty(propertyId) {
+  const all = await loadAllMutations();
+  return all.find((m) =>
+    m.state === "conflict"
+    && (m.kind === "visit" || m.kind === "property_patch" || m.kind === "lead_create")
+    && propertyIdForMutation(m) === String(propertyId)
+  ) || null;
+}
+
+// Resolve a Property conflict per the rep's choice (never loses work without an explicit choice):
+//   "use_server" -> drop the local mutation and adopt the server snapshot into detail + canvass caches
+//   "keep_local" -> re-queue the same local body and re-attempt sync
+export async function resolveFieldConflict(client_id, choice) {
+  const all = await loadAllMutations();
+  const m = all.find((x) => x.client_id === client_id);
+  if (!m) return { action: "noop" };
+  const plan = resolveConflictPlan(m, choice);
+  if (plan.action === "use_server") {
+    if (plan.propertyId && plan.serverValue) {
+      await mutateCache(`property:${plan.propertyId}`, (cur) => reconcilePropertyDetail("property_patch", plan.serverValue, cur));
+      const names = await listCacheNames("section:");
+      for (const name of names) {
+        if (name.endsWith(":props")) await mutateCache(name, (cur) => reconcileCanvassFeatures("property_patch", plan.serverValue, plan.propertyId, cur));
+      }
+    }
+    await _removeMutation(plan.removeClientId);
+    _emit({ type: "queued" });
+  } else if (plan.action === "keep_local") {
+    await saveMutation(plan.requeue);
+    _emit({ type: "queued" });
+    runSync().catch(() => {});
+  }
+  return plan;
+}
+
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
 export async function syncNow() { _resetBackoff(); return runSync(); }
 
