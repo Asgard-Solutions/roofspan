@@ -10,6 +10,7 @@ import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loa
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
+import { conflictReview, planUseOffice, planKeepLocal } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
 const LAST_SYNC = "last_sync_at";
@@ -224,6 +225,70 @@ export async function currentSketchMutation(revisionId, structureId) {
   const id = sketchUpdateMutationId(revisionId, structureId);
   const all = await loadAllMutations();
   return all.find((x) => x.client_id === id) || null;
+}
+
+// B3C: the CONFLICT (409) Roof Sketch mutation for exactly ONE structure, or null. Never the global queue.
+export async function conflictSketchMutation(revisionId, structureId) {
+  const id = sketchUpdateMutationId(revisionId, structureId);
+  const all = await loadAllMutations();
+  return all.find((x) => x.client_id === id && x.state === "conflict") || null;
+}
+
+// B3C: Base / Your Draft / Office Version review payload for the current sketch conflict (or null).
+export async function sketchConflictReview(revisionId, structureId) {
+  const m = await conflictSketchMutation(revisionId, structureId);
+  if (!m) return null;
+  const draft = await getCache(sketchDraftKey(revisionId, structureId));
+  return { mutation: m, ...conflictReview(m, draft) };
+}
+
+// B3C — resolve a Roof Sketch conflict by adopting the authoritative OFFICE version (local unsynced work
+// is intentionally discarded). Generation-safe: if durable local work advanced beyond the reviewed
+// conflict generation the plan is `stale` and NOTHING is changed. Returns the plan.
+export async function resolveSketchConflictUseOffice(revisionId, structureId) {
+  const m = await conflictSketchMutation(revisionId, structureId);
+  if (!m) return { action: "noop" };
+  const draft = await getCache(sketchDraftKey(revisionId, structureId));
+  const plan = planUseOffice(m, draft);
+  if (plan.action !== "use_office") return plan;
+  // a. cache the authoritative Office sketch (raw shape — same as a successful acknowledgement)
+  await putCache(sketchDetailKey(revisionId, structureId), plan.cacheDetail);
+  // b. retire the local draft ATOMICALLY, but ONLY if it is still the exact conflict generation (a newer
+  //    generation written concurrently is preserved — never an unguarded clearSketchDraft()).
+  await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
+    if (cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration) return cur;
+    return null;
+  });
+  // c. record the authoritative CAS floor so future staging can never regress below Office
+  noteCasFloor(revisionId, structureId, plan.cacheDetail.document_version);
+  // d. remove the conflict mutation for this structure (conflict rows are never auto-processed)
+  await _removeMutation(plan.removeClientId);
+  _emit({ type: "queued" });
+  return plan;
+}
+
+// B3C — resolve a Roof Sketch conflict by KEEPING the LOCAL draft as the desired next version, rebased
+// onto the Office base/version and re-staged as a fresh pending mutation (expected_version = Office
+// version). Does NOT report Synced before Office acknowledges. Generation-safe (stale plan = no-op).
+export async function resolveSketchConflictKeepLocal(revisionId, structureId) {
+  const m = await conflictSketchMutation(revisionId, structureId);
+  if (!m) return { action: "noop" };
+  const draft = await getCache(sketchDraftKey(revisionId, structureId));
+  const plan = planKeepLocal(m, draft);
+  if (plan.action !== "keep_local") return plan;
+  // a. advance the durable draft's CAS base/version to Office, keeping local geometry + generation.
+  //    Guarded: preserve a newer generation written concurrently (never overwrite newer local work).
+  await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
+    if (cur && (Number(cur.edit_generation) || 0) > plan.conflictGeneration) return cur;
+    return plan.nextDraft;
+  });
+  // b. record the CAS floor at the Office version
+  noteCasFloor(revisionId, structureId, plan.requeue.body.expected_version);
+  // c. re-stage the local document as a FRESH pending mutation. queueMutation upserts the SAME
+  //    deterministic client_id, so the CONFLICT row is atomically replaced by a pending row (bumped
+  //    generation) and sync is re-attempted — nothing is pretended to be synced.
+  await queueMutation(plan.requeue);
+  return plan;
 }
 
 // Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the

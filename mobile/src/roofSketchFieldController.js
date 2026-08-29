@@ -109,6 +109,20 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
       // nv < documentVersion -> ignore both (stale)
       return { documentVersion, baseServerDocument };
     },
+    // B3C "Use Office Version": replace the working sketch with the authoritative Office document and
+    // clear local edit history (Office is now the chosen authoritative state). Adopts the Office version
+    // and base. Does NOT schedule a draft persist — the caller has already retired the local draft and
+    // cached the Office sketch, so re-persisting would resurrect the discarded draft.
+    adoptOfficeDocument({ document: doc, documentVersion: v, editMode: m } = {}) {
+      const next = RS.normalizeSketchDocument(doc || {});
+      history = RS.makeHistory(next);
+      working = next;
+      if (m) editMode = m;
+      const nv = Number(v);
+      if (!Number.isNaN(nv)) documentVersion = nv;
+      baseServerDocument = doc || null;
+      return { document: working, documentVersion, baseServerDocument, editMode };
+    },
     // Authoritative save snapshot for queue staging: the COMMITTED document (history.present, never a
     // live drag/gesture preview), the CAS documentVersion, editMode, and the committed editGeneration.
     authoritativeSnapshot() { return { document: history.present, documentVersion, editMode, editGeneration }; },

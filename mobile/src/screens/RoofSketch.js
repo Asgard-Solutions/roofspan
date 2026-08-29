@@ -8,9 +8,11 @@ import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
 import { loadSketchDraft, saveSketchDraftStrict, cache } from "../cache";
-import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, syncNow } from "../sync";
+import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
+import { conflictReview } from "../roofSketchConflict";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
+import SketchConflictReview from "../components/SketchConflictReview";
 import { C } from "../theme";
 
 const TOOLS = [["select", "Select"], ["draw", "Draw"], ["facet", "Facet"], ["penetration", "Roof feature"], ["pan", "Pan"]];
@@ -24,6 +26,8 @@ export default function RoofSketch({ route }) {
   const [selection, setSelection] = useState(null);
   const [status, setStatus] = useState(readOnly ? "Locked" : "Loading");
   const [resetToken, setResetToken] = useState(0);
+  const [conflict, setConflict] = useState(null);       // B3C: Base/Local/Office review, or null
+  const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
   const [, bump] = useState(0);
   const rerender = useCallback(() => bump((x) => x + 1), []);
   const editorRef = useRef(null);
@@ -67,6 +71,9 @@ export default function RoofSketch({ route }) {
     // onSyncChange() event (another structure / a photo) must NOT relabel it.
     if (!editedRef.current && !m) return;
     const draft = await loadSketchDraft(revision_id, structure_id);
+    if (seq !== syncStateRef.current.seq) return;   // a newer refresh superseded this one
+    // B3C: a real 409 for THIS structure surfaces the Base/Local/Office review and locks editing.
+    setConflict(m && m.state === "conflict" ? conflictReview(m, draft) : null);
     // Latest-wins: discard this result if a newer refresh has since started (out-of-order async reads).
     WIRE.applySketchRefresh({
       seq, state: syncStateRef.current, editor: ed, mutation: m, draft,
@@ -88,7 +95,35 @@ export default function RoofSketch({ route }) {
   }, [ready, readOnly, refreshSync]);
 
   const editor = editorRef.current;
+  const conflictActive = !!conflict;                  // B3C: a real 409 is awaiting explicit resolution
+  const editingBlocked = readOnly || conflictActive;  // no geometry edits/undo/redo/mode/Save while blocked
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
+
+  // B3C — Use Office Version: discard local unsynced work, adopt the authoritative Office document into
+  // the OPEN editor (fresh history) and return status to Synced to Office. Generation-safe in sync.js.
+  const useOfficeVersion = useCallback(async () => {
+    const plan = await resolveSketchConflictUseOffice(revision_id, structure_id);
+    if (plan.action !== "use_office") { setReviewOpen(false); refreshSync(); return; }
+    if (editorRef.current) {
+      editorRef.current.adoptOfficeDocument({ document: plan.editor.document, documentVersion: plan.editor.documentVersion, editMode: plan.editor.editMode });
+      setEditMode(plan.editor.editMode);
+    }
+    editedRef.current = false;                 // no pending local work remains
+    syncStateRef.current.acked = 0;
+    setSelection(null); setConflict(null); setReviewOpen(false);
+    setStatus("Synced to Office"); rerender();
+  }, [revision_id, structure_id, refreshSync, rerender]);
+
+  // B3C — Keep Local Draft: keep local geometry, rebase onto the Office base/version, and re-stage as a
+  // fresh pending mutation (expected_version = Office version). Status stays pending until Office acks.
+  const keepLocalDraft = useCallback(async () => {
+    const plan = await resolveSketchConflictKeepLocal(revision_id, structure_id);
+    if (plan.action !== "keep_local") { setReviewOpen(false); refreshSync(); return; }
+    if (editorRef.current) editorRef.current.adoptServerVersion({ documentVersion: plan.editor.documentVersion, baseServerDocument: plan.editor.baseServerDocument });
+    setConflict(null); setReviewOpen(false);
+    refreshSync();
+  }, [revision_id, structure_id, refreshSync]);
+
 
   // Stage the current committed generation into the EXISTING durable queue, but only once it is locally
   // durable (B3A). Reuses the shared coordinator; no new network/retry logic here.
@@ -112,7 +147,7 @@ export default function RoofSketch({ route }) {
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
   const doCommit = (arg) => {
-    if (!editor || readOnly) return;
+    if (!editor || editingBlocked) return;
     const next = typeof arg === "function" ? arg(editor.document) : arg;
     if (!next || next === editor.document) return;
     editor.commit(next); settle();
@@ -120,7 +155,7 @@ export default function RoofSketch({ route }) {
 
   const clearBuild = () => setResetToken((x) => x + 1);
   const changeTool = (t) => { setTool(t); setSelection(null); clearBuild(); };
-  const changeMode = (m) => { if (readOnly || !editor) return; setEditMode(m); editor.setEditMode(m); setSelection(null); clearBuild(); settle(); };
+  const changeMode = (m) => { if (editingBlocked || !editor) return; setEditMode(m); editor.setEditMode(m); setSelection(null); clearBuild(); settle(); };
 
   const createFacetFromSelection = () => {
     if (!editor || !selection || selection.type !== "facet_build") return;
@@ -155,26 +190,27 @@ export default function RoofSketch({ route }) {
       <View style={sx.statusBar}>
         <Text style={sx.structure} testID="roof-sketch-title">{structure_name}</Text>
         <View style={sx.statusRight}>
-          <Text style={sx.status} testID="roof-sketch-status">{status}</Text>
+          <Text style={[sx.status, conflictActive && sx.statusConflict]} testID="roof-sketch-status">{status}</Text>
+          {conflictActive ? <TouchableOpacity testID="review-conflict" onPress={() => setReviewOpen(true)} style={sx.review}><Text style={sx.retryText}>Review</Text></TouchableOpacity> : null}
           {(status === "Could not save on device" || status === "Sync issue — retry needed") ? <TouchableOpacity testID="retry-save" onPress={retrySave} style={sx.retry}><Text style={sx.retryText}>Retry</Text></TouchableOpacity> : null}
         </View>
       </View>
 
       <View style={sx.controlRow}>
         <View style={sx.modeToggle}>
-          <TouchableOpacity testID="mode-connected" disabled={readOnly} onPress={() => changeMode("connected_graph")} style={[sx.modeBtn, editMode === "connected_graph" && sx.modeOn]}><Text style={[sx.modeText, editMode === "connected_graph" && sx.modeTextOn]}>Connected</Text></TouchableOpacity>
-          <TouchableOpacity testID="mode-manual" disabled={readOnly} onPress={() => changeMode("manual_polygon")} style={[sx.modeBtn, editMode === "manual_polygon" && sx.modeOn]}><Text style={[sx.modeText, editMode === "manual_polygon" && sx.modeTextOn]}>Manual</Text></TouchableOpacity>
+          <TouchableOpacity testID="mode-connected" disabled={editingBlocked} onPress={() => changeMode("connected_graph")} style={[sx.modeBtn, editMode === "connected_graph" && sx.modeOn, editingBlocked && sx.disabled]}><Text style={[sx.modeText, editMode === "connected_graph" && sx.modeTextOn]}>Connected</Text></TouchableOpacity>
+          <TouchableOpacity testID="mode-manual" disabled={editingBlocked} onPress={() => changeMode("manual_polygon")} style={[sx.modeBtn, editMode === "manual_polygon" && sx.modeOn, editingBlocked && sx.disabled]}><Text style={[sx.modeText, editMode === "manual_polygon" && sx.modeTextOn]}>Manual</Text></TouchableOpacity>
         </View>
         <View style={sx.modeToggle}>
-          <TouchableOpacity testID="undo-btn" disabled={readOnly || !editor.canUndo()} onPress={() => { editor.undo(); settle(); }} style={[sx.modeBtn, (!editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
-          <TouchableOpacity testID="redo-btn" disabled={readOnly || !editor.canRedo()} onPress={() => { editor.redo(); settle(); }} style={[sx.modeBtn, (!editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
-          <TouchableOpacity testID="save-sketch-btn" disabled={readOnly} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow().then(() => refreshSync()); }} style={[sx.modeBtn, sx.modeOn, readOnly && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
+          <TouchableOpacity testID="undo-btn" disabled={editingBlocked || !editor.canUndo()} onPress={() => { editor.undo(); settle(); }} style={[sx.modeBtn, (editingBlocked || !editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
+          <TouchableOpacity testID="redo-btn" disabled={editingBlocked || !editor.canRedo()} onPress={() => { editor.redo(); settle(); }} style={[sx.modeBtn, (editingBlocked || !editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
+          <TouchableOpacity testID="save-sketch-btn" disabled={editingBlocked} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow().then(() => refreshSync()); }} style={[sx.modeBtn, sx.modeOn, editingBlocked && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
         </View>
       </View>
 
       <View style={sx.canvasWrap} onLayout={(e) => { const { width, height } = e.nativeEvent.layout; setSize({ width, height }); }}>
         <RoofSketchCanvas
-          editor={editor} tool={tool} editMode={editMode} readOnly={readOnly}
+          editor={editor} tool={tool} editMode={editMode} readOnly={editingBlocked}
           selection={selection} onSelect={setSelection} onChanged={settle} onError={onError}
           canvasSize={size} resetToken={resetToken}
         />
@@ -203,20 +239,29 @@ export default function RoofSketch({ route }) {
       ) : null}
 
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
+      {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
 
       <View style={sx.toolStrip}>
         {TOOLS.map(([t, label]) => (
-          <TouchableOpacity key={t} testID={`tool-${t}`} disabled={readOnly && t !== "select" && t !== "pan"}
-            onPress={() => changeTool(t)} style={[sx.tool, tool === t && sx.toolOn, (readOnly && t !== "select" && t !== "pan") && sx.disabled]}>
+          <TouchableOpacity key={t} testID={`tool-${t}`} disabled={editingBlocked && t !== "select" && t !== "pan"}
+            onPress={() => changeTool(t)} style={[sx.tool, tool === t && sx.toolOn, (editingBlocked && t !== "select" && t !== "pan") && sx.disabled]}>
             <Text style={[sx.toolText, tool === t && sx.toolTextOn]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
       {selection && ["edge", "facet", "vertex", "penetration"].includes(selection.type) ? (
-        <SketchInspector doc={editor.document} selection={selection} readOnly={readOnly}
+        <SketchInspector doc={editor.document} selection={selection} readOnly={editingBlocked}
           onCommit={doCommit} onError={onError} onClose={() => setSelection(null)} />
       ) : null}
+
+      <SketchConflictReview
+        visible={reviewOpen && conflictActive}
+        review={conflict}
+        onUseOffice={useOfficeVersion}
+        onKeepLocal={keepLocalDraft}
+        onClose={() => setReviewOpen(false)}
+      />
     </View>
   );
 }
@@ -260,7 +305,9 @@ const sx = StyleSheet.create({
   statusRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   structure: { color: "#fff", fontSize: 16, fontWeight: "800" },
   status: { color: "#94A3B8", fontSize: 12, fontWeight: "600" },
+  statusConflict: { color: "#FCA5A5" },
   retry: { backgroundColor: C.danger, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  review: { backgroundColor: "#B45309", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   retryText: { color: "#fff", fontWeight: "800", fontSize: 12 },
   controlRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, marginBottom: 6 },
   modeToggle: { flexDirection: "row", backgroundColor: "#1E293B", borderRadius: 10, padding: 3 },
@@ -280,6 +327,7 @@ const sx = StyleSheet.create({
   vErr: { color: "#FCA5A5", backgroundColor: "rgba(220,38,38,0.15)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginRight: 8, fontSize: 12, overflow: "hidden" },
   vWarn: { color: "#FDE68A", backgroundColor: "rgba(180,83,9,0.18)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginRight: 8, fontSize: 12, overflow: "hidden" },
   locked: { color: "#FBBF24", textAlign: "center", paddingVertical: 6, fontWeight: "700" },
+  conflictBanner: { color: "#FCA5A5", backgroundColor: "rgba(220,38,38,0.15)", textAlign: "center", paddingVertical: 6, fontWeight: "700" },
   toolStrip: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 10, paddingHorizontal: 6, backgroundColor: "#0B1220", borderTopWidth: 1, borderTopColor: "#1E293B" },
   tool: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 },
   toolOn: { backgroundColor: C.brand },
