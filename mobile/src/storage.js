@@ -217,6 +217,16 @@ export async function getCache(name) {
   return row ? JSON.parse(row.json) : null;
 }
 
+// List cached NAMES (scope stripped) whose name starts with `prefix`, for the active scope. Used to
+// reconcile every canvass-section Property list that may contain a changed home.
+export async function listCacheNames(prefix) {
+  const d = await db();
+  const scope = getScope();
+  const strip = `${scope || "none::anon"}::`;
+  const rows = await d.getAllAsync("SELECT key FROM cache WHERE key LIKE ?", `${strip}${prefix}%`);
+  return (rows || []).map((r) => (r.key.startsWith(strip) ? r.key.slice(strip.length) : r.key));
+}
+
 // Serialized cache write — runs inside the SAME critical section (`_serialize`) as `mutateCache` and the
 // pending-queue writes. Used for Roof Sketch DRAFT writes so an editor draft write (generation C) and an
 // acknowledgement reconciliation can never interleave on the same scoped draft key (B3B1 atomicity).

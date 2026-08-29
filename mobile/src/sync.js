@@ -6,8 +6,9 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
+import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
@@ -77,6 +78,7 @@ export async function runSync() {
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
       await _reconcileSketchAcks(processed);
+      await _reconcileFieldAcks(processed);
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -124,6 +126,28 @@ async function _reconcileSketchAcks(processed) {
     await floorPendingSketchExpectedVersion(m.client_id, serverVersion);
     // d. live coordinator floor (in-memory convenience; durable storage above remains authoritative)
     noteCasFloor(revisionId, structureId, serverVersion);
+  }
+}
+
+// Field convergence: after a Property/Visit/DNK/Lead mutation is ACKNOWLEDGED, apply the authoritative
+// server state into BOTH the Property detail cache and every cached canvass/Map Property list, so no
+// cache disagrees with Postgres. Optimistic local values are not permanently authoritative. Only synced
+// rows are reconciled — pending/failed/conflict work is left untouched (no data loss).
+async function _reconcileFieldAcks(processed) {
+  const KINDS = new Set(["visit", "property_patch", "lead_create"]);
+  for (const m of processed) {
+    if (m.state !== "synced" || !KINDS.has(m.kind)) continue;
+    const sv = m.serverValue || null;
+    const propertyId = propertyIdForMutation(m);
+    if (!propertyId) continue;
+    // 1. Property/Visit detail cache — authoritative server state back into the saved copy.
+    await mutateCache(`property:${propertyId}`, (cur) => reconcilePropertyDetail(m.kind, sv, cur));
+    // 2. Map/canvass caches — patch the matching feature in any cached section Property list.
+    const names = await listCacheNames("section:");
+    for (const name of names) {
+      if (!name.endsWith(":props")) continue;
+      await mutateCache(name, (cur) => reconcileCanvassFeatures(m.kind, sv, propertyId, cur));
+    }
   }
 }
 export async function lastSyncAt() { return getCache(LAST_SYNC); }

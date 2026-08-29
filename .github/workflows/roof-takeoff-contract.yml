@@ -79,6 +79,8 @@ on:
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
       - "mobile/src/tests/roof_sketch_ack.node.test.js"
       - "mobile/src/tests/roof_sketch_live_status.node.test.js"
+      - "mobile/src/tests/field_reconcile.node.test.js"
+      - "mobile/src/fieldReconcile.js"
       - ".github/workflows/roof-takeoff-contract.yml"
   pull_request:
     paths:
@@ -154,6 +156,8 @@ on:
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
       - "mobile/src/tests/roof_sketch_ack.node.test.js"
       - "mobile/src/tests/roof_sketch_live_status.node.test.js"
+      - "mobile/src/tests/field_reconcile.node.test.js"
+      - "mobile/src/fieldReconcile.js"
       - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
@@ -275,10 +279,12 @@ jobs:
         run: npm run test:measurements
       - name: Run roof sketch core + Field sketch-cache contracts
         run: npm run test:sketch
+      - name: Run Field Property/Map cache synchronization contracts
+        run: npm run test:reconcile
       - name: Parse Field measurement + roof sketch modules with Expo Babel
         run: >-
           node -e "const b=require('@babel/core');
-          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/roofSketchFieldController.js','src/roofSketchView.js','src/roofSketchFieldWiring.js','src/roofSketchSyncCoordinator.js','src/roofSketchAck.js','src/sync.js','App.js']
+          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/roofSketchFieldController.js','src/roofSketchView.js','src/roofSketchFieldWiring.js','src/roofSketchSyncCoordinator.js','src/roofSketchAck.js','src/sync.js','src/fieldReconcile.js','src/screens/Property.js','App.js']
           .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
           console.log('Field measurement + sketch modules parsed');"
 

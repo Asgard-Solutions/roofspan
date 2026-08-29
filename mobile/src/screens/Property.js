@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { cache, patchCachedDetail } from "../cache";
+import { cache, patchCachedDetail, patchCanvassFeature } from "../cache";
 import { queueMutation } from "../sync";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
@@ -53,10 +53,12 @@ export default function Property({ route, navigation }) {
     });
     // Optimistic local reflection of the pending visit (+ DNK when that outcome is chosen).
     const pendingVisit = { id: `pending-${Date.now()}`, outcome, notes: notes || null, visited_at: new Date().toISOString(), user_email: "you (pending)" };
-    const patch = { visits: [pendingVisit, ...(prop.visits || [])] };
+    const patch = { visits: [pendingVisit, ...(prop.visits || [])], last_outcome: outcome, last_visited_at: pendingVisit.visited_at };
     if (outcome === "do_not_knock") { patch.do_not_knock = true; patch.do_not_knock_reason = prop.do_not_knock_reason || "Marked during visit"; }
     setProp((p) => ({ ...p, ...patch }));
     await patchCachedDetail(`property:${id}`, patch);
+    // Optimistic Map/canvass reflection (authoritative reconcile happens on acknowledgement).
+    await patchCanvassFeature(id, { last_outcome: outcome, last_visited_at: pendingVisit.visited_at, ...(outcome === "do_not_knock" ? { do_not_knock: true } : {}) });
     setNotes("");
     Alert.alert("Saved offline", "Visit recorded — we'll sync when Office is available.");
   };
@@ -70,6 +72,7 @@ export default function Property({ route, navigation }) {
     const patch = { do_not_knock: next, do_not_knock_reason: next ? (prop.do_not_knock_reason || "Marked by field rep") : null };
     setProp((p) => ({ ...p, ...patch }));
     await patchCachedDetail(`property:${id}`, patch);
+    await patchCanvassFeature(id, { do_not_knock: next });
     Alert.alert("Saved offline", `Do Not Knock turned ${next ? "ON" : "OFF"} — will sync when Office is available.`);
   };
 
