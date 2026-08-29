@@ -163,5 +163,72 @@ const ackDraftReducer = (ackGeneration, serverValue) => (cur) => {
   ok("cross-module reverse race: a late sync-side ack floors a freshly opened coordinator's next staging");
 }
 
+// ---- B3B1 FINAL CORRECTION: late draft write can never regress CAS (both orderings + restart) ----
+const { reconcileDraftWrite: _rdw } = require("../roofSketchAck");
+const { resolveInitialSketch } = require("../roofSketchFieldController");
+
+// Mirrors storage.saveSketchDraftIfCurrent EXACTLY: knownServerVersion = max(existing draft base, cached
+// server sketch version), then the shared reconcileDraftWrite rule decides the write.
+const guardedDraftWrite = (existing, server, incoming) => {
+  const knownServerVersion = Math.max(
+    Number(existing && existing.document_version) || 0,
+    Number(server && server.document_version) || 0
+  );
+  return _rdw(existing, incoming, knownServerVersion);
+};
+
+// Required example — ordering: A(based v5) -> Office accepts A=v6 -> ack completes (A draft retired) ->
+// a LATER local B write arrives carrying stale document_version 5. Final durable B MUST be v6, not 5.
+let restartDraft = null;
+{
+  const existingAfterAck = null;                 // ack retired A's draft
+  const cachedServer = server(6);                // ack cached the raw v6 server sketch
+  const B = draftOf("RR", "SS", 11, 5);          // late B write, stale base v5
+  const res = guardedDraftWrite(existingAfterAck, cachedServer, B);
+  assert.strictEqual(res.write, true);
+  assert.strictEqual(res.draft.edit_generation, 11, "final B keeps B's generation");
+  assert.strictEqual(res.draft.document.vertices[0].id, "v11", "final B keeps B's document");
+  assert.strictEqual(res.draft.document_version, 6, "final B floored to v6 — NEVER 5");
+  restartDraft = res.draft;
+  ok("late B write after ack A is floored to the authoritative v6 (never regresses to 5)");
+}
+
+// Restart: the durable B draft exists; the editor resolves from it; its CAS version is 6; the next
+// staged mutation uses expected_version: 6 (durable storage authoritative across restart).
+{
+  const initial = resolveInitialSketch({ draft: restartDraft, server: null, structureId: "SS" });
+  assert.strictEqual(initial.source, "local_draft");
+  assert.strictEqual(initial.documentVersion, 6, "restart resolves CAS version 6 from the durable draft");
+  let captured = null;
+  const co = createSketchSyncCoordinator({ queueMutation: async (spec) => { captured = spec; return {}; } });
+  const r = await co.stage({ revisionId: "RR", structureId: "SS", document: initial.document, documentVersion: initial.documentVersion, editMode: initial.editMode, editGeneration: 12, durable: true });
+  assert.strictEqual(r.expectedVersion, 6);
+  assert.strictEqual(captured.body.expected_version, 6, "next staged mutation after restart uses expected_version 6");
+  ok("restart from the resulting draft retains CAS v6 and the next staged mutation uses expected_version 6");
+}
+
+// Opposite ordering — local B written FIRST, then ack A arrives second: B remains and becomes v6.
+{
+  const B = draftOf("RR", "SS", 11, 5);          // B durable at stale v5
+  const d = applySketchAck({ draft: B, ackGeneration: 10, serverValue: server(6) });
+  assert.strictEqual(d.case, "superseded");
+  assert.strictEqual(d.retireDraft, false, "B not retired");
+  assert.strictEqual(d.nextDraft.edit_generation, 11, "B kept");
+  assert.strictEqual(d.nextDraft.document.vertices[0].id, "v11", "B document kept");
+  assert.strictEqual(d.nextDraft.document_version, 6, "B advanced 5 -> 6");
+  ok("opposite ordering (B first, then ack A) keeps B and advances it to v6");
+}
+
+// A late OLDER generation can never overwrite a newer durable draft (even if it carries a stale base).
+{
+  const existingB = draftOf("RR", "SS", 12, 6);  // newest durable work
+  const lateA = draftOf("RR", "SS", 10, 5);       // stale older generation arriving late
+  const res = guardedDraftWrite(existingB, server(6), lateA);
+  assert.strictEqual(res.write, false, "older generation rejected");
+  assert.strictEqual(res.draft.edit_generation, 12, "newer draft preserved unchanged");
+  assert.strictEqual(res.draft.document_version, 6, "CAS version not regressed");
+  ok("a late older generation cannot overwrite a newer durable draft or regress its CAS version");
+}
+
 console.log("\nFIELD SKETCH ACK / CAS REBASE (B3B1): all " + n + " assertions passed");
 })().catch((e) => { console.error(e); process.exit(1); });

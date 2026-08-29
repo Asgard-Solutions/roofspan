@@ -4,7 +4,7 @@
 import * as SQLite from "expo-sqlite";
 import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
-import { planExpectedVersionFloor } from "./roofSketchAck";
+import { planExpectedVersionFloor, reconcileDraftWrite } from "./roofSketchAck";
 
 let _db = null;
 let _inst = "none";
@@ -246,6 +246,38 @@ export async function mutateCache(name, fn) {
       key, JSON.stringify(next), new Date().toISOString()
     );
     return next;
+  });
+}
+
+// B3B1 (CAS-monotonic strict draft write): the ONLY path the editor uses to persist a Roof Sketch draft.
+// Runs the read-modify-write in ONE serialized critical section (shared with mutateCache/putCacheSerialized
+// and the pending-queue writes) and applies the shared reconcileDraftWrite rule so that: (1) a late OLDER
+// edit-generation can never clobber a newer durable draft, and (2) document_version never regresses below
+// the highest known authoritative server version (the cached server sketch OR the current draft's own
+// base). A storage failure PROPAGATES (durability contract); a stale-generation REJECTION is a no-op
+// (not an error) because newer work is already durable. `draftKey`/`detailKey` are passed by the caller
+// so this stays generic and never changes cache behavior for unrelated features.
+export async function saveSketchDraftIfCurrent(draftKey, detailKey, incoming) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const draftRow = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, draftKey));
+    const existing = draftRow ? JSON.parse(draftRow.json) : null;
+    const detailRow = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, detailKey));
+    const server = detailRow ? JSON.parse(detailRow.json) : null;
+    // Highest known authoritative CAS version: the acknowledged server sketch AND the draft's own base
+    // (which may already have been advanced to v6 by a prior ack reconciliation).
+    const knownServerVersion = Math.max(
+      Number(existing && existing.document_version) || 0,
+      Number(server && server.document_version) || 0
+    );
+    const res = reconcileDraftWrite(existing, incoming, knownServerVersion);
+    if (!res.write) return { written: false, reason: "stale_generation", draft: existing };
+    await d.runAsync(
+      "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+      scopedKey(scope, draftKey), JSON.stringify(res.draft), new Date().toISOString()
+    );
+    return { written: true, draft: res.draft };
   });
 }
 
