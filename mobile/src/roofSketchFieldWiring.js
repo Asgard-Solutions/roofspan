@@ -104,6 +104,32 @@ function fieldSketchSyncStatus({ localSave, mutation, running, currentGeneration
   return "Saved on device";   // durable locally, newer than the acknowledged generation, not yet acked
 }
 
+// B3B2 race guard (latest-wins): apply a completed async status refresh ONLY if it is still the newest.
+// `state` is a mutable holder { seq, acked, localSave }. `seq` is the sequence captured when THIS refresh
+// began (see nextRefreshSeq). Overlapping onSyncChange() refreshes can finish out of order; a stale one
+// must not revert a newer synced result or replace newer CAS metadata. Returns { applied, status }.
+function nextRefreshSeq(state) { state.seq = (Number(state.seq) || 0) + 1; return state.seq; }
+
+function applySketchRefresh({ seq, state, editor, mutation, draft, running, setStatus } = {}) {
+  if (!editor || !state) return { applied: false, status: null };
+  if (seq !== state.seq) return { applied: false, status: null };   // a newer refresh superseded this one
+  // adoptServerVersion is itself monotonic; the seq gate additionally discards the WHOLE stale refresh.
+  if (draft && draft.document_version != null) {
+    editor.adoptServerVersion({ documentVersion: draft.document_version, baseServerDocument: draft.base_server_document });
+  } else if (mutation && mutation.state === "synced" && mutation.serverValue) {
+    editor.adoptServerVersion({ documentVersion: mutation.serverValue.document_version, baseServerDocument: mutation.serverValue.document });
+  }
+  if (mutation && mutation.state === "synced") {
+    state.acked = Math.max(Number(state.acked) || 0, Number(mutation.local_edit_generation) || 0);
+  }
+  const status = fieldSketchSyncStatus({
+    localSave: state.localSave, mutation, running,
+    currentGeneration: editor.editGeneration, acknowledgedGeneration: state.acked,
+  });
+  if (setStatus) setStatus(status);
+  return { applied: true, status };
+}
+
 module.exports = {
   DRAG_THRESHOLD_PX,
   resolveFieldSketchLoad,
@@ -116,6 +142,8 @@ module.exports = {
   commitManualCreate,
   localSaveStatus,
   fieldSketchSyncStatus,
+  nextRefreshSeq,
+  applySketchRefresh,
   stageFromController,
 };
 

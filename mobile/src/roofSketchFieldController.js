@@ -90,13 +90,23 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     get persistError() { return persistError; },
     get documentVersion() { return documentVersion; },
     get baseServerDocument() { return baseServerDocument; },
-    // B3B2: adopt newly acknowledged authoritative CAS metadata into the OPEN editor. Advances the CAS
-    // token (monotonic — never regresses) and the base server document ONLY. It must NEVER change the
-    // rep's working geometry, edit generation, undo/redo history or selection. Returns the new metadata.
+    // B3B2: adopt newly acknowledged authoritative CAS metadata into the OPEN editor. Version-guarded and
+    // latest-wins so a STALE refresh cannot replace a newer authoritative version/base pair:
+    //   incoming < current -> ignore version AND base
+    //   incoming > current -> adopt the new version and its matching base
+    //   incoming == current -> only FILL a missing base (never replace an already-known one)
+    // It must NEVER change the rep's working geometry, edit generation, undo/redo history or selection.
     adoptServerVersion({ documentVersion: v, baseServerDocument: b } = {}) {
       const nv = Number(v);
-      if (v != null && !Number.isNaN(nv) && nv >= documentVersion) documentVersion = nv;
-      if (b !== undefined && b !== null) baseServerDocument = b;
+      if (v == null || Number.isNaN(nv)) return { documentVersion, baseServerDocument };
+      const haveBase = b !== undefined && b !== null;
+      if (nv > documentVersion) {
+        documentVersion = nv;
+        if (haveBase) baseServerDocument = b;               // adopt the matching newer base
+      } else if (nv === documentVersion) {
+        if (haveBase && (baseServerDocument === null || baseServerDocument === undefined)) baseServerDocument = b; // fill only
+      }
+      // nv < documentVersion -> ignore both (stale)
       return { documentVersion, baseServerDocument };
     },
     // Authoritative save snapshot for queue staging: the COMMITTED document (history.present, never a
