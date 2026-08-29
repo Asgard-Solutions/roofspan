@@ -19,7 +19,7 @@ from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
-from services.property_detail import build_property_detail
+from services.property_detail import build_property_detail, conflict_if_stale
 from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
 from schemas_sketch import SketchWriteIn
@@ -77,6 +77,7 @@ class MobileVisitIn(BaseModel):
     outcome: str = "no_answer"
     notes: str | None = None
     visited_at: datetime | None = None
+    expected_updated_at: datetime | None = None    # optimistic-concurrency token
 
     @field_validator("outcome")
     @classmethod
@@ -92,6 +93,7 @@ async def create_visit(payload: MobileVisitIn, request: Request, idempotency_key
         if v:
             return _visit_out(v, replayed=True)
     p = await mauthz.assert_property_access(db, payload.property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     v = Visit(property_id=p.id, user_id=user.id, user_email=user.email,
               visited_at=payload.visited_at or datetime.now(timezone.utc), outcome=payload.outcome, notes=payload.notes)
     db.add(v)
@@ -849,6 +851,7 @@ class MobilePropertyPatch(BaseModel):
     do_not_knock: bool | None = None
     do_not_knock_reason: str | None = None
     notes: str | None = None
+    expected_updated_at: datetime | None = None    # optimistic-concurrency token
 
 
 @router.patch("/properties/{property_id}")
@@ -858,6 +861,7 @@ async def patch_property(property_id: str, payload: MobilePropertyPatch, request
     enforced server-side (canvass/lead/job scope for sales). DNK behavior mirrors Office exactly — it
     simply sets the same do_not_knock/reason columns (no divergent mobile rule)."""
     p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     fields = payload.model_dump(exclude_unset=True)
     if "do_not_knock" in fields:
         p.do_not_knock = fields["do_not_knock"]

@@ -13,7 +13,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import PhotoGallery from "@/components/PhotoGallery";
 import { Ban, User, Home, MapPin, Loader2, UserPlus, Bed, Bath, Ruler, CalendarClock, Crosshair, CheckCircle2, AlertTriangle } from "lucide-react";
 
-const OUTCOMES = [
+// Fallback list (used before the backend list loads). The live labels come from GET /api/visit-outcomes
+// so Office and Field render from ONE backend source.
+const FALLBACK_OUTCOMES = [
   { value: "no_answer", label: "No answer" },
   { value: "not_interested", label: "Not interested" },
   { value: "interested", label: "Interested" },
@@ -77,6 +79,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
   const [loading, setLoading] = useState(false);
   const [locating, setLocating] = useState(false);
   const [visitOutcome, setVisitOutcome] = useState("no_answer");
+  const [outcomes, setOutcomes] = useState(FALLBACK_OUTCOMES);
   const [visitNotes, setVisitNotes] = useState("");
   const [savingVisit, setSavingVisit] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
@@ -92,6 +95,13 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
   useEffect(() => {
     if (open && propertyId) load();
   }, [open, propertyId]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!open) return;
+    api.get("/visit-outcomes")
+      .then((r) => { if (Array.isArray(r.data?.outcomes) && r.data.outcomes.length) setOutcomes(r.data.outcomes); })
+      .catch(() => { /* keep fallback */ });
+  }, [open]); // eslint-disable-line
 
   const locateProperty = async () => {
     if (!p?.id) return;
@@ -218,7 +228,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                 <Select value={visitOutcome} onValueChange={setVisitOutcome}>
                   <SelectTrigger data-testid="visit-outcome"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {OUTCOMES.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    {outcomes.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Textarea value={visitNotes} onChange={(e) => setVisitNotes(e.target.value)} placeholder="Notes (optional)" data-testid="visit-notes" />
@@ -234,7 +244,7 @@ export default function PropertySheet({ propertyId, open, onOpenChange, onChange
                 <div className="mt-2 space-y-1.5" data-testid="visit-history">
                   {p.visits.map((v) => (
                     <div key={v.id} className="rounded-md border border-border px-3 py-2 text-sm">
-                      <div className="flex justify-between"><span className="font-medium text-slate-800">{OUTCOMES.find((o) => o.value === v.outcome)?.label || v.outcome}</span><span className="text-xs text-slate-400">{new Date(v.visited_at).toLocaleDateString()}</span></div>
+                      <div className="flex justify-between"><span className="font-medium text-slate-800">{outcomes.find((o) => o.value === v.outcome)?.label || v.outcome}</span><span className="text-xs text-slate-400">{new Date(v.visited_at).toLocaleDateString()}</span></div>
                       {v.notes && <div className="text-slate-500">{v.notes}</div>}
                       <div className="mt-2"><PhotoGallery recordType="visit" recordId={v.id} compact hideWhenEmpty testid={`visit-photos-${v.id}`} /></div>
                     </div>

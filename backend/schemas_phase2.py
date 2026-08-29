@@ -59,6 +59,7 @@ class VisitIn(BaseModel):
     outcome: str = "no_answer"
     notes: Optional[str] = None
     visited_at: Optional[datetime] = None
+    expected_updated_at: Optional[datetime] = None   # optimistic-concurrency token (Property.updated_at)
 
     @field_validator("outcome")
     @classmethod
@@ -115,6 +116,7 @@ class PropertyPatch(BaseModel):
     do_not_knock_reason: Optional[str] = None
     notes: Optional[str] = None
     territory_id: Optional[str] = None
+    expected_updated_at: Optional[datetime] = None   # optimistic-concurrency token (Property.updated_at)
 
 
 # ---- Imports ----

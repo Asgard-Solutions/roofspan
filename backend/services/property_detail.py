@@ -6,6 +6,7 @@ of the same Property. Routes may differ in AUTHORIZATION, but never in the shape
 """
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
 
 from models import Property, PropertyContact, Visit, Lead
 
@@ -77,3 +78,13 @@ async def build_property_detail(db: AsyncSession, p: Property) -> dict:
         "created_at": p.created_at,
         "updated_at": p.updated_at,
     }
+
+
+async def conflict_if_stale(db: AsyncSession, p: Property, expected_updated_at) -> None:
+    """Optimistic-concurrency guard. If the caller sent an `expected_updated_at` token that no longer
+    matches the property's current `updated_at`, raise 409 with the AUTHORITATIVE server snapshot under
+    detail.server — exactly the shape the Field queue captures to drive the conflict banner."""
+    if expected_updated_at is None:
+        return
+    if p.updated_at != expected_updated_at:
+        raise HTTPException(status_code=409, detail={"code": "conflict", "server": await build_property_detail(db, p)})

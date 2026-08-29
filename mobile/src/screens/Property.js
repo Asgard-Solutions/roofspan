@@ -66,7 +66,7 @@ export default function Property({ route, navigation }) {
   const recordVisit = async () => {
     await queueMutation({
       kind: "visit", method: "post", path: "/mobile/visits",
-      body: { property_id: id, outcome, notes: notes || null },
+      body: { property_id: id, outcome, notes: notes || null, expected_updated_at: prop.updated_at || null },
       label: `Visit — ${OUTCOME_LABEL[outcome] || outcome}`,
     });
     // Optimistic local reflection of the pending visit (+ DNK when that outcome is chosen).
@@ -84,7 +84,7 @@ export default function Property({ route, navigation }) {
   const toggleDNK = async (next) => {
     await queueMutation({
       kind: "property_patch", method: "patch", path: `/mobile/properties/${id}`,
-      body: { do_not_knock: next, do_not_knock_reason: next ? (prop.do_not_knock_reason || "Marked by field rep") : null },
+      body: { do_not_knock: next, do_not_knock_reason: next ? (prop.do_not_knock_reason || "Marked by field rep") : null, expected_updated_at: prop.updated_at || null },
       label: next ? "Do Not Knock ON" : "Do Not Knock OFF",
     });
     const patch = { do_not_knock: next, do_not_knock_reason: next ? (prop.do_not_knock_reason || "Marked by field rep") : null };

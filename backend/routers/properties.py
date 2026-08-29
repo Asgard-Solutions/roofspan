@@ -8,7 +8,7 @@ from db import get_db
 from models import Property, PropertyContact, Visit, Lead, Territory, User
 from core import get_current_user, require_roles, MANAGE_ROLES, FIELD_ROLES, log_action
 from services import mobile_authz as mauthz
-from services.property_detail import build_property_detail
+from services.property_detail import build_property_detail, conflict_if_stale
 from schemas_phase2 import (
     PropertyOut, PropertyDetail, VisitOut, VisitIn,
     PropertyCreate, PropertyPatch, ConvertLeadIn, LeadOut,
@@ -227,6 +227,7 @@ async def verify_property_address_legacy(
 @router.patch("/{property_id}", response_model=PropertyOut)
 async def patch_property(property_id: str, payload: PropertyPatch, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     fields = payload.model_dump(exclude_unset=True)
     if "do_not_knock" in fields:
         p.do_not_knock = fields["do_not_knock"]
@@ -246,6 +247,7 @@ async def patch_property(property_id: str, payload: PropertyPatch, request: Requ
 @router.post("/{property_id}/visits", response_model=VisitOut, status_code=201)
 async def create_visit(property_id: str, payload: VisitIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
+    await conflict_if_stale(db, p, payload.expected_updated_at)
     v = Visit(
         property_id=p.id, user_id=user.id, user_email=user.email,
         visited_at=payload.visited_at or datetime.now(timezone.utc),
