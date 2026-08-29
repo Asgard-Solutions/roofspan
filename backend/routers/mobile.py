@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, U
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from fastapi.responses import Response
 
 from db import get_db
@@ -19,6 +19,8 @@ from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
+from services.property_detail import build_property_detail, with_field_compat_aliases
+from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
 from schemas_sketch import SketchWriteIn
 
@@ -74,6 +76,11 @@ class MobileVisitIn(BaseModel):
     outcome: str = "no_answer"
     notes: str | None = None
     visited_at: datetime | None = None
+
+    @field_validator("outcome")
+    @classmethod
+    def _valid_outcome(cls, v: str) -> str:
+        return validate_outcome(v)
 
 
 @router.post("/visits", status_code=201)
@@ -833,16 +840,8 @@ async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_
 @router.get("/properties/{property_id}")
 async def get_property(property_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
-    from models import PropertyContact
-    owner = (await db.execute(select(PropertyContact).where(PropertyContact.property_id == p.id, PropertyContact.kind == "owner"))).scalars().first()
-    vrows = (await db.execute(select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()))).scalars().all()
-    lead = (await db.execute(select(Lead).where(Lead.property_id == p.id, Lead.status != "archived").order_by(Lead.created_at.desc()))).scalars().first()
-    return {
-        "id": str(p.id), "formatted_address": p.formatted_address, "latitude": p.latitude, "longitude": p.longitude,
-        "property_type": p.property_type, "owner_occupied": p.owner_occupied,
-        "do_not_knock": p.do_not_knock, "do_not_knock_reason": p.do_not_knock_reason, "notes": p.notes,
-        "owner_name": owner.name if owner else None, "owner_phone": owner.phone if owner else None,
-        "existing_lead_id": str(lead.id) if lead else None,
-        "visits": [{"id": str(v.id), "outcome": v.outcome, "notes": v.notes,
-                    "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows],
-    }
+    # SAME canonical builder as Office GET /api/properties/{id} — one interpretation of the home.
+    detail = await build_property_detail(db, p)
+    # TEMPORARY additive Field compat aliases (owner_name/owner_phone/existing_lead_id) derived from the
+    # canonical detail; removed once the Field UI migrates to contacts[]/lead_id (next iteration).
+    return with_field_compat_aliases(detail)
