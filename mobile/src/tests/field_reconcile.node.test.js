@@ -169,4 +169,21 @@ const feat = (coll, id) => coll.features.find((f) => f.properties.id === id).pro
   ok("conflict resolution: use_server adopts server + drops local; keep_local re-queues the rep's body");
 }
 
+// ---- conflict DIFF preview (server vs local) ----
+{
+  const m = { kind: "property_patch", state: "conflict",
+    body: { do_not_knock: true, do_not_knock_reason: "Rep guess" },
+    serverValue: { id: "P1", do_not_knock: false, do_not_knock_reason: null, notes: "x" } };
+  const rows = R.conflictDiff(m);
+  const byField = Object.fromEntries(rows.map((r) => [r.field, r]));
+  assert.deepStrictEqual(byField.do_not_knock, { field: "do_not_knock", label: "Do Not Knock", server: "OFF", local: "ON" });
+  assert.strictEqual(byField.do_not_knock_reason.server, "—");
+  assert.strictEqual(byField.do_not_knock_reason.local, "Rep guess");
+  assert.ok(!("notes" in byField), "unchanged/unedited fields (notes not in body) are not shown");
+  // identical values produce no diff row
+  const same = R.conflictDiff({ body: { do_not_knock: true }, serverValue: { do_not_knock: true } });
+  assert.strictEqual(same.length, 0, "no row when server and local agree");
+  ok("conflict diff shows only edited fields that actually differ (Office vs You)");
+}
+
 console.log("\nFIELD PROPERTY/MAP CACHE SYNC: all " + n + " assertions passed");

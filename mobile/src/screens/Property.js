@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert 
 import { useFocusEffect } from "@react-navigation/native";
 import { cache, patchCachedDetail, patchCanvassFeature } from "../cache";
 import { queueMutation, conflictMutationForProperty, resolveFieldConflict } from "../sync";
-import { api } from "../api";
+import { conflictDiff } from "../fieldReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 
@@ -39,12 +39,11 @@ export default function Property({ route, navigation }) {
     const r = await cache.property(id);
     setProp(r.data); setStale(!!r.stale);
     setConflict(await conflictMutationForProperty(id));
-    try {
-      const res = await api.get("/visit-outcomes");                 // ONE backend source of truth
-      if (res && res.data && Array.isArray(res.data.outcomes) && res.data.outcomes.length) {
-        setOutcomes(res.data.outcomes.map((o) => [o.value, o.label]));
-      }
-    } catch (e) { /* offline: keep fallback list */ }
+    // Cached read-through: renders the six labels instantly and stays correct on a cold offline open.
+    const oc = await cache.visitOutcomes();
+    if (oc && oc.data && Array.isArray(oc.data.outcomes) && oc.data.outcomes.length) {
+      setOutcomes(oc.data.outcomes.map((o) => [o.value, o.label]));
+    }
   }, [id]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -106,6 +105,12 @@ export default function Property({ route, navigation }) {
         <View style={s.conflict} testID="property-conflict-banner">
           <Text style={s.conflictTitle}>Sync conflict — review required</Text>
           <Text style={s.conflictSub}>This home changed in Office while your change was offline.</Text>
+          {conflictDiff(conflict).map((row) => (
+            <View key={row.field} style={s.diffRow} testID={`conflict-diff-${row.field}`}>
+              <Text style={s.diffLabel}>{row.label}</Text>
+              <Text style={s.diffVals}><Text style={s.diffOffice}>Office: {row.server}</Text>  ·  <Text style={s.diffMine}>You: {row.local}</Text></Text>
+            </View>
+          ))}
           <View style={s.conflictRow}>
             <TouchableOpacity style={s.conflictBtn} onPress={() => resolveConflict("use_server")} testID="conflict-use-server"><Text style={s.conflictBtnText}>Use Office version</Text></TouchableOpacity>
             <TouchableOpacity style={[s.conflictBtn, s.conflictBtnAlt]} onPress={() => resolveConflict("keep_local")} testID="conflict-keep-local"><Text style={[s.conflictBtnText, s.conflictBtnTextAlt]}>Keep my change</Text></TouchableOpacity>
@@ -210,6 +215,11 @@ const s = StyleSheet.create({
   conflict: { backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5", borderRadius: 12, padding: 14, marginBottom: 12 },
   conflictTitle: { color: "#991B1B", fontWeight: "800", fontSize: 15 },
   conflictSub: { color: "#B91C1C", marginTop: 2, fontSize: 13 },
+  diffRow: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#FECACA" },
+  diffLabel: { color: "#7F1D1D", fontWeight: "700", fontSize: 12 },
+  diffVals: { fontSize: 13, marginTop: 2 },
+  diffOffice: { color: "#991B1B", fontWeight: "700" },
+  diffMine: { color: "#1D4ED8", fontWeight: "700" },
   conflictRow: { flexDirection: "row", gap: 10, marginTop: 12 },
   conflictBtn: { flex: 1, backgroundColor: "#DC2626", borderRadius: 10, paddingVertical: 12, alignItems: "center" },
   conflictBtnText: { color: "#fff", fontWeight: "800" },

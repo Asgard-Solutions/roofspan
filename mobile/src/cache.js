@@ -28,6 +28,7 @@ export const cache = {
   sections: () => readThrough("sections", () => api.get("/mobile/canvass-sections")),
   sectionProperties: (id) => readThrough(`section:${id}:props`, () => api.get(`/mobile/canvass-sections/${id}/properties`)),
   property: (id) => readThrough(`property:${id}`, () => api.get(`/mobile/properties/${id}`)),
+  visitOutcomes: () => readThrough("visit_outcomes", () => api.get("/visit-outcomes")),
   mapConfig: () => readThrough("mapcfg", () => api.get("/map-config")),
   measurements: (scope) => readThrough(
     measurementKeys.scopeKey(scope),

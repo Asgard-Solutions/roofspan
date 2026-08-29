@@ -131,7 +131,32 @@ function resolveConflictPlan(mutation, choice) {
   return { action: "noop" };
 }
 
+// Conflict DIFF for the banner: which changed fields differ between the rep's local mutation body and
+// the authoritative server snapshot. Only fields the rep actually changed, and only real differences.
+function conflictDiff(mutation) {
+  if (!mutation) return [];
+  const body = mutation.body || {};
+  const server = mutation.serverValue || {};
+  const fmtBool = (v) => (v === true ? "ON" : v === false ? "OFF" : "—");
+  const fmtStr = (v) => (v == null || v === "" ? "—" : String(v));
+  const fields = [
+    ["do_not_knock", "Do Not Knock", fmtBool],
+    ["do_not_knock_reason", "DNK reason", fmtStr],
+    ["notes", "Notes", fmtStr],
+    ["outcome", "Visit outcome", fmtStr],
+  ];
+  const rows = [];
+  for (const [key, label, fmt] of fields) {
+    if (!(key in body)) continue;
+    const local = fmt(body[key]);
+    const srv = fmt(server[key]);
+    if (local === srv) continue;
+    rows.push({ field: key, label, server: srv, local });
+  }
+  return rows;
+}
+
 module.exports = {
   propertyIdForMutation, reconcilePropertyDetail, reconcileCanvassFeatures, optimisticCanvassPatch,
-  resolveConflictPlan,
+  resolveConflictPlan, conflictDiff,
 };
