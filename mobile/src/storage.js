@@ -4,6 +4,7 @@
 import * as SQLite from "expo-sqlite";
 import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
+import { planExpectedVersionFloor } from "./roofSketchAck";
 
 let _db = null;
 let _inst = "none";
@@ -112,6 +113,31 @@ export async function markCleanIfNoPending(cacheKey, value) {
   });
 }
 
+// B3B1 (durable, generation-safe): floor a still-pending Roof Sketch mutation's expected_version to at
+// least the acknowledged server version, operating on the CURRENT stored row INSIDE the serialization
+// boundary. Preserves the row's document, local_edit_generation and mutation_generation; NEVER
+// resurrects a missing row; scoped so it can only touch this account's own row. This closes B->C
+// supersession without a stale read/write retry loop (the write reads the live row, not a snapshot).
+export async function floorPendingSketchExpectedVersion(client_id, serverVersion) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const row = await d.getFirstAsync(
+      "SELECT json FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      client_id, scope
+    );
+    if (!row) return { updated: false, reason: "missing" };   // never resurrect a removed/synced row
+    const m = JSON.parse(row.json);
+    const plan = planExpectedVersionFloor(m, serverVersion);
+    if (!plan.updated) return { updated: false, reason: m.state !== "pending" ? "not_pending" : "already_floored" };
+    await d.runAsync(
+      "UPDATE pending_mutations SET json = ? WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      JSON.stringify(plan.next), client_id, scope
+    );
+    return { updated: true, expected_version: plan.expected_version };
+  });
+}
+
 // Remove exactly ONE mutation (used by the "Remove failed photo" recovery control). Scoped so a
 // device can only delete its own account's row; never touches other Leads/Jobs/Visits/Inspections.
 export async function removeMutation(client_id) {
@@ -189,6 +215,38 @@ export async function getCache(name) {
   const d = await db();
   const row = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(getScope(), name));
   return row ? JSON.parse(row.json) : null;
+}
+
+// Serialized cache write — runs inside the SAME critical section (`_serialize`) as `mutateCache` and the
+// pending-queue writes. Used for Roof Sketch DRAFT writes so an editor draft write (generation C) and an
+// acknowledgement reconciliation can never interleave on the same scoped draft key (B3B1 atomicity).
+export async function putCacheSerialized(name, value) {
+  return _serialize(async () => {
+    const d = await db();
+    await d.runAsync(
+      "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+      scopedKey(getScope(), name), JSON.stringify(value), new Date().toISOString()
+    );
+  });
+}
+
+// Serialized read-modify-write of a single scoped cache row. The reducer `fn(current)` runs against the
+// FRESHLY re-read value inside the critical section, so a concurrent editor draft write (C) that landed
+// after the ack was computed is still seen here — the generation-safe reducer then preserves it rather
+// than deleting/overwriting newer work. Returns the written value.
+export async function mutateCache(name, fn) {
+  return _serialize(async () => {
+    const d = await db();
+    const key = scopedKey(getScope(), name);
+    const row = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", key);
+    const cur = row ? JSON.parse(row.json) : null;
+    const next = fn(cur);
+    await d.runAsync(
+      "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+      key, JSON.stringify(next), new Date().toISOString()
+    );
+    return next;
+  });
 }
 
 export async function getCacheMeta(name) {

@@ -43,4 +43,35 @@ function reconcileDraftWrite(existing, incoming, knownServerVersion = 0) {
   return { write: true, draft: { ...incoming, document_version: maxV(incoming.document_version, knownServerVersion) } };
 }
 
-module.exports = { applySketchAck, guardVersionFloor, reconcileDraftWrite };
+// Atomic acknowledgement plan (pure): given the current draft AND the current pending mutation row,
+// decide the durable writes. Generation-guarded so a newer draft/mutation (C) written concurrently is
+// never overwritten and the CAS version never regresses. Consumed verbatim by the storage boundary.
+function reconcileAckPlan({ draft, currentMutation, ackGeneration, serverValue } = {}) {
+  const d = applySketchAck({ draft, ackGeneration, serverValue });
+  const serverVersion = serverValue ? (Number(serverValue.document_version) || 0) : 0;
+  let mutationUpdate = null;
+  if (currentMutation && currentMutation.state === "pending") {
+    const floored = Math.max(Number((currentMutation.body || {}).expected_version) || 0, serverVersion);
+    // update ONLY expected_version; preserve C's document + mutation_generation (write guarded by gen)
+    mutationUpdate = { client_id: currentMutation.client_id, mutation_generation: currentMutation.mutation_generation, body: { ...(currentMutation.body || {}), expected_version: floored } };
+  }
+  return { cacheDetail: d.cacheServer || null, retireDraft: d.retireDraft, nextDraft: d.nextDraft, mutationUpdate, case: d.case };
+}
+
+// Pure plan for the DURABLE expected_version floor (consumed verbatim by
+// storage.floorPendingSketchExpectedVersion). Operates on a full pending mutation row: preserves the
+// row's document, local_edit_generation and mutation_generation; only ever RAISES expected_version to
+// the known server version (monotonic, never regresses). A non-pending row is left untouched.
+function planExpectedVersionFloor(mutation, serverVersion) {
+  if (!mutation || mutation.state !== "pending") return { updated: false };
+  const cur = Number((mutation.body || {}).expected_version) || 0;
+  const floored = Math.max(cur, Number(serverVersion) || 0);
+  if (floored === cur) return { updated: false, expected_version: cur };
+  return {
+    updated: true,
+    expected_version: floored,
+    next: { ...mutation, body: { ...(mutation.body || {}), expected_version: floored } },
+  };
+}
+
+module.exports = { applySketchAck, guardVersionFloor, reconcileDraftWrite, reconcileAckPlan, planExpectedVersionFloor };

@@ -5,6 +5,7 @@
 // mutation to the existing queueMutation() (which coalesces by the shared clientId). Newest generation
 // wins because we always stage the latest snapshot under the same mutation identity.
 const { sketchUpdateMutation } = require("./sketchCache");
+const casFloor = require("./roofSketchCasFloor");
 
 const clone = (doc) => JSON.parse(JSON.stringify(doc || {}));
 function deepFreeze(o) {
@@ -19,9 +20,12 @@ function createSketchSyncCoordinator({ queueMutation, buildMutation = sketchUpda
   const serverFloor = {};
   const key = (r, s) => `${r}:${s}`;
   // Record an authoritative server version so later staging cannot regress the CAS version (§reverse race).
+  // Also mirrored into the shared module-scope floor so a late ack processed in sync.js (a DIFFERENT
+  // module, with no reference to this coordinator) still floors this open screen's next staging.
   function noteServerVersion(revisionId, structureId, version) {
     const k = key(revisionId, structureId);
     serverFloor[k] = Math.max(serverFloor[k] || 0, Number(version) || 0);
+    casFloor.noteVersion(revisionId, structureId, version);
   }
 
   async function stage({ revisionId, structureId, document, documentVersion, editMode, editGeneration, durable }) {
@@ -31,8 +35,9 @@ function createSketchSyncCoordinator({ queueMutation, buildMutation = sketchUpda
     const gen = Number(editGeneration) || 0;
     // 4. dedupe: never re-stage an already-staged (or older) generation
     if (lastStaged[k] != null && gen <= lastStaged[k]) return { staged: false, reason: "deduped", generation: lastStaged[k] };
-    // reverse-race guard: never stage below a known authoritative server version
-    const version = Math.max(Number(documentVersion) || 0, serverFloor[k] || 0);
+    // reverse-race guard: never stage below a known authoritative server version (this coordinator's own
+    // floor OR the shared cross-module floor fed by a late sync.js acknowledgement)
+    const version = Math.max(Number(documentVersion) || 0, serverFloor[k] || 0, casFloor.floor(revisionId, structureId));
     // 3. freeze the snapshot so later Field edits can't mutate staged work in memory
     const snapshot = deepFreeze(clone(document));
     const spec = buildMutation({ revisionId, structureId, document: snapshot, documentVersion: version, editMode });

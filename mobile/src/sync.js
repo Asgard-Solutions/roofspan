@@ -6,8 +6,9 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
+import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { sketchDraftKey, sketchDetailKey } from "./sketchCache";
 
 const LAST_SYNC = "last_sync_at";
@@ -96,23 +97,33 @@ export async function runSync() {
 // Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
 async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
 
-// B3B1: generation-safe application of successful sketch acknowledgements. Matched generation retires
-// its draft + caches the server sketch; a superseded newer draft (B) is preserved and only its CAS
-// base/expected_version is advanced (B stays pending for the existing rerun). Never resurrects A.
+// B3B1 (atomic): generation-safe application of successful sketch acknowledgements. All three writes are
+// concurrency-safe against a newer local edit (C) landing mid-reconciliation:
+//  a. the acknowledged sketch is cached in the NORMAL raw shape (the same shape read-through/GET store),
+//  b. the draft is retired/preserved ATOMICALLY via mutateCache — the decision runs against the FRESHLY
+//     re-read draft inside the serialized boundary (shared with the editor's putCacheSerialized draft
+//     write), so a concurrent newer generation C is preserved (never deleted, never clobbered by A),
+//  c. the still-pending row's expected_version is floored DURABLY on the live stored row (never a stale
+//     snapshot), so B->C supersession keeps C's document/generation while raising its CAS floor,
+//  d. the authoritative version is recorded in the shared CAS floor for the open screen's live staging.
 async function _reconcileSketchAcks(processed) {
   for (const m of processed) {
     if (m.kind !== "measurement_sketch_update" || m.state !== "synced" || !m.serverValue) continue;
     const [, revisionId, structureId] = String(m.client_id).split(":");
-    const draftKey = sketchDraftKey(revisionId, structureId);
-    const draft = await getCache(draftKey);
-    const d = applySketchAck({ draft, ackGeneration: m.local_edit_generation, serverValue: m.serverValue });
-    if (d.cacheServer) await putCache(sketchDetailKey(revisionId, structureId), { data: d.cacheServer, stale: false, cachedAt: new Date().toISOString() });
-    if (d.retireDraft) await putCache(draftKey, null);
-    else if (d.nextDraft) await putCache(draftKey, d.nextDraft);
-    if (d.requeue) {
-      const cur = (await loadAllMutations()).find((x) => x.client_id === m.client_id && x.state === "pending");
-      if (cur) await saveMutation({ ...cur, body: { ...(cur.body || {}), expected_version: d.requeue.expected_version } });
-    }
+    const serverVersion = Number(m.serverValue.document_version) || 0;
+    // a. raw authoritative sketch cache (NO { data, stale, cachedAt } read-through envelope)
+    await putCache(sketchDetailKey(revisionId, structureId), m.serverValue);
+    // b. atomic draft acknowledgement decided against the current (possibly newer) draft
+    await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
+      const d = applySketchAck({ draft: cur, ackGeneration: m.local_edit_generation, serverValue: m.serverValue });
+      if (d.retireDraft) return null;      // matched: retire exactly the acked generation
+      if (d.nextDraft) return d.nextDraft; // superseded: preserve newer draft, advance only its CAS base
+      return cur;
+    });
+    // c. durable, generation-safe rebase of the still-pending row (no stale read/write retry loop)
+    await floorPendingSketchExpectedVersion(m.client_id, serverVersion);
+    // d. live coordinator floor (in-memory convenience; durable storage above remains authoritative)
+    noteCasFloor(revisionId, structureId, serverVersion);
   }
 }
 export async function lastSyncAt() { return getCache(LAST_SYNC); }

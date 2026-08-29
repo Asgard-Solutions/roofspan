@@ -2,7 +2,7 @@
 // the fresh copy; on any failure fall back to the last scoped cache so the app stays usable offline.
 // Returns { data, stale } — `stale:true` means the value came from cache, not Office.
 import { api } from "./api";
-import { putCache, getCache, getCacheMeta } from "./storage";
+import { putCache, getCache, getCacheMeta, putCacheSerialized } from "./storage";
 const measurementKeys = require("./measurementCache");
 const sketchKeys = require("./sketchCache");
 
@@ -49,14 +49,16 @@ export async function saveSketchDraft(revisionId, structureId, draft) {
 }
 // Strict variant for the Roof Sketch editor: local durability IS the B2A persistence contract, so a
 // storage failure must PROPAGATE (the controller records it and the screen shows an honest status).
+// Uses the SERIALIZED write so an editor draft write (generation C) and an acknowledgement
+// reconciliation are mutually serialized against the same scoped draft key (B3B1 atomicity).
 export async function saveSketchDraftStrict(revisionId, structureId, draft) {
-  await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), draft);
+  await putCacheSerialized(sketchKeys.sketchDraftKey(revisionId, structureId), draft);
 }
 export async function loadSketchDraft(revisionId, structureId) {
   try { return await getCache(sketchKeys.sketchDraftKey(revisionId, structureId)); } catch (e) { return null; }
 }
 export async function clearSketchDraft(revisionId, structureId) {
-  try { await putCache(sketchKeys.sketchDraftKey(revisionId, structureId), null); } catch (e) { /* best effort */ }
+  try { await putCacheSerialized(sketchKeys.sketchDraftKey(revisionId, structureId), null); } catch (e) { /* best effort */ }
 }
 export async function cacheSketchDetail(revisionId, structureId, sketch) {
   try { await putCache(sketchKeys.sketchDetailKey(revisionId, structureId), sketch); } catch (e) { /* best effort */ }

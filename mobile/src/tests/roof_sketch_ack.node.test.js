@@ -85,5 +85,83 @@ const server = (ver) => ({ document_version: ver, document: { vertices: [] }, ed
   assert.strictEqual(afterB.retireDraft, true); ok("release example A5->B->A6->B6->B7 completes with zero loss of B");
 }
 
+// ---- B3B1 CORRECTION: atomic storage-level concurrency contracts ----
+const { planExpectedVersionFloor } = require("../roofSketchAck");
+const casFloor = require("../roofSketchCasFloor");
+
+// The production reducer used inside storage.mutateCache(draftKey, fn) in sync._reconcileSketchAcks.
+// Re-declared identically here so the test exercises the exact decision the atomic write performs.
+const ackDraftReducer = (ackGeneration, serverValue) => (cur) => {
+  const d = applySketchAck({ draft: cur, ackGeneration, serverValue });
+  if (d.retireDraft) return null;
+  if (d.nextDraft) return d.nextDraft;
+  return cur;
+};
+
+// Atomicity: a NEWER local edit C (gen 12) landed AFTER A's ack was computed. Because mutateCache runs
+// the reducer against the FRESHLY re-read draft, the reducer sees C — and must NEVER delete it.
+{
+  const C = draftOf("R", "S", 12, 5);                       // concurrent newer local work
+  const reducer = ackDraftReducer(10, server(6));           // A (gen 10) acknowledged at v6
+  const next = reducer(C);
+  assert.ok(next, "concurrent newer draft C is NOT deleted by A's acknowledgement");
+  assert.strictEqual(next.edit_generation, 12, "C's generation preserved");
+  assert.strictEqual(next.document.vertices[0].id, "v12", "C's document preserved (not overwritten by A)");
+  assert.strictEqual(next.document_version, 6, "C's authoritative base advanced to v6 (never regressed)");
+  ok("atomic draft reduce: a newer edit C written mid-ack is preserved + advanced, never deleted");
+}
+
+// Atomicity: when the re-read draft IS exactly the acked generation, retire it (returns null to delete).
+{
+  const next = ackDraftReducer(10, server(6))(draftOf("R", "S", 10, 5));
+  assert.strictEqual(next, null, "matched generation retires the exact draft");
+  ok("atomic draft reduce: matched generation retires only that exact draft");
+}
+
+// Atomicity: an empty slot (draft already cleared) stays cleared (no resurrection of A's document).
+{
+  const next = ackDraftReducer(10, server(6))(null);
+  assert.strictEqual(next, null, "no draft -> stays null (A never resurrected into the draft slot)");
+  ok("atomic draft reduce: an already-cleared draft is never resurrected");
+}
+
+// Durable expected_version floor (storage.floorPendingSketchExpectedVersion planner): raises the CAS
+// floor on the LIVE pending row (C) while preserving its document, local_edit_generation and generation.
+{
+  const rowC = {
+    client_id: "measurement-sketch-update:R:S", state: "pending", mutation_generation: 3,
+    local_edit_generation: 12,
+    body: { schema_version: 1, edit_mode: "connected_graph", document: { vertices: [{ id: "v12" }] }, expected_version: 5 },
+  };
+  const plan = planExpectedVersionFloor(rowC, 6);
+  assert.strictEqual(plan.updated, true);
+  assert.strictEqual(plan.next.body.expected_version, 6, "expected_version floored 5 -> 6");
+  assert.deepStrictEqual(plan.next.body.document, rowC.body.document, "C's document preserved");
+  assert.strictEqual(plan.next.local_edit_generation, 12, "C's local_edit_generation preserved");
+  assert.strictEqual(plan.next.mutation_generation, 3, "C's supersession generation preserved");
+  ok("durable floor: raises C's expected_version to the server version, preserving document + both generations");
+}
+
+// Floor never regresses, never touches an already-floored / non-pending / missing row.
+{
+  assert.strictEqual(planExpectedVersionFloor({ state: "pending", body: { expected_version: 9 } }, 6).updated, false, "already >= server: no write");
+  assert.strictEqual(planExpectedVersionFloor({ state: "synced", body: { expected_version: 5 } }, 6).updated, false, "synced row: not floored");
+  assert.strictEqual(planExpectedVersionFloor(null, 6).updated, false, "missing row: never resurrected");
+  ok("durable floor: monotonic + never resurrects/updates a missing, synced, or already-floored row");
+}
+
+// Cross-module reverse race: a late ack processed in sync.js feeds the SHARED casFloor; a freshly opened
+// coordinator (its own per-instance floor is empty) still cannot stage below that server version.
+{
+  casFloor.noteVersion("RX", "SX", 6);                      // simulates sync._reconcileSketchAcks after ack
+  assert.strictEqual(casFloor.floor("RX", "SX"), 6);
+  let captured = null;
+  const co = createSketchSyncCoordinator({ queueMutation: async (spec) => { captured = spec; return {}; } });
+  const r = await co.stage({ revisionId: "RX", structureId: "SX", document: { vertices: [] }, documentVersion: 5, editMode: "connected_graph", editGeneration: 20, durable: true });
+  assert.strictEqual(r.expectedVersion, 6, "coordinator with empty own-floor is floored by the shared cross-module floor");
+  assert.strictEqual(captured.body.expected_version, 6);
+  ok("cross-module reverse race: a late sync-side ack floors a freshly opened coordinator's next staging");
+}
+
 console.log("\nFIELD SKETCH ACK / CAS REBASE (B3B1): all " + n + " assertions passed");
 })().catch((e) => { console.error(e); process.exit(1); });
