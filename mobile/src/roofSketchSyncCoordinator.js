@@ -16,7 +16,13 @@ function deepFreeze(o) {
 // shared sketchUpdateMutation so the deterministic identity/body are reused).
 function createSketchSyncCoordinator({ queueMutation, buildMutation = sketchUpdateMutation } = {}) {
   const lastStaged = {};
+  const serverFloor = {};
   const key = (r, s) => `${r}:${s}`;
+  // Record an authoritative server version so later staging cannot regress the CAS version (§reverse race).
+  function noteServerVersion(revisionId, structureId, version) {
+    const k = key(revisionId, structureId);
+    serverFloor[k] = Math.max(serverFloor[k] || 0, Number(version) || 0);
+  }
 
   async function stage({ revisionId, structureId, document, documentVersion, editMode, editGeneration, durable }) {
     // 1. local durability MUST precede queueing
@@ -25,16 +31,18 @@ function createSketchSyncCoordinator({ queueMutation, buildMutation = sketchUpda
     const gen = Number(editGeneration) || 0;
     // 4. dedupe: never re-stage an already-staged (or older) generation
     if (lastStaged[k] != null && gen <= lastStaged[k]) return { staged: false, reason: "deduped", generation: lastStaged[k] };
+    // reverse-race guard: never stage below a known authoritative server version
+    const version = Math.max(Number(documentVersion) || 0, serverFloor[k] || 0);
     // 3. freeze the snapshot so later Field edits can't mutate staged work in memory
     const snapshot = deepFreeze(clone(document));
-    const spec = buildMutation({ revisionId, structureId, document: snapshot, documentVersion, editMode });
+    const spec = buildMutation({ revisionId, structureId, document: snapshot, documentVersion: version, editMode });
     // 5. reuse the existing queue; local_edit_generation is queue-only metadata (NOT in the request body)
     const stored = await queueMutation({ ...spec, label: "Roof sketch", localEditGeneration: gen });
     lastStaged[k] = gen;
-    return { staged: true, generation: gen, mutation: stored, snapshot };
+    return { staged: true, generation: gen, mutation: stored, snapshot, expectedVersion: version };
   }
 
-  return { stage, lastStagedGeneration: (r, s) => (lastStaged[key(r, s)] == null ? null : lastStaged[key(r, s)]) };
+  return { stage, noteServerVersion, lastStagedGeneration: (r, s) => (lastStaged[key(r, s)] == null ? null : lastStaged[key(r, s)]) };
 }
 
 module.exports = { createSketchSyncCoordinator, deepFreeze };

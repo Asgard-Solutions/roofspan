@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Task 6 Phase B3B1 — safe server acknowledgement + CAS rebase (2026-06) — DONE LOCALLY; no git ops
+Generation-safe processing of successful sketch acknowledgements — advances the authoritative CAS version without ever deleting/overwriting newer local work or regressing the version.
+- **New pure `mobile/src/roofSketchAck.js`:** `applySketchAck({draft, ackGeneration, serverValue})` → Case 1 (draft gen == ack) retires that exact draft + caches the Office sketch; Case 2 (draft gen > ack, newer B) preserves B's document + generation, advances ONLY B's base/`document_version` to the server version, requeues B's `expected_version`, leaves B pending (never resurrects A). Plus `guardVersionFloor` + `reconcileDraftWrite` (monotonic generation + CAS floor — a late older write can't clobber newer, and version never regresses).
+- **Coordinator reverse-race guard:** `createSketchSyncCoordinator` gained `noteServerVersion(rev,struct,v)` + a per-structure floor so `stage()` can never queue an `expected_version` below a known server version (B staged with stale v5 after ack→6 is floored to 6).
+- **Wired into `sync.js`:** after `processQueue`/`saveMutationIfCurrent`, `_reconcileSketchAcks(processed)` applies the decision for each synced `measurement_sketch_update` with `serverValue` (caches server detail, retires or advances the draft, and bumps the still-pending B row's `expected_version`). Superseded A's SYNCED writeback is already a no-op via existing generation supersession → B stays pending for the existing rerun.
+- **Boundary (B3B2/B3C NOT started):** no 409 conflict UI, no Use-Server/Keep-Local, no live lock, no AppState/background, no Phase C, no graph merge.
+- **Verification:** NEW `roof_sketch_ack.node.test.js` **10** (matched retire+cache; Save(A)+Edit(B)→A-ack preserves B/advances 5→6/keeps pending; A can't overwrite/resurrect B; reverse race B-after-ack floored 5→6; monotonic+floor draft write; B succeeds v7 retires; House/Garage independent; full release example A5→B→A6→B6→B7 zero loss). Full mobile test:sketch (…/sync16/**ack10**) + measurements + transport PASS; photo/queue/cache PASS; Expo parse OK (incl. sync.js); CI push+pull_request include ack module + test. No new dependency; `mobile/package-lock.json` unchanged; no `mobile/yarn.lock`.
+- **Files:** NEW `mobile/src/roofSketchAck.js`, `mobile/src/tests/roof_sketch_ack.node.test.js`; MODIFIED `mobile/src/sync.js`, `roofSketchSyncCoordinator.js`, `package.json`, `.github/workflows/roof-takeoff-contract.yml`.
+
+
 ## Task 6 Phase B3A correction — stage the EXACT committed/durable CAS state (2026-06) — DONE LOCALLY; no git ops
 Fixed authoritative staging that read the visual document instead of the controller's committed CAS state.
 - **Controller getters:** `documentVersion` (CAS token, from initial — not the sketch JSON), `authoritativeSnapshot()` = `{document: history.present (COMMITTED, never a preview), documentVersion, editMode, editGeneration}`, `isGenerationDurable(gen)` = `persistError===null && lastPersistedGeneration>=gen`.

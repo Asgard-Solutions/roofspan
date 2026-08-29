@@ -68,6 +68,7 @@ on:
       - "mobile/src/roofSketchFieldController.js"
       - "mobile/src/roofSketchFieldWiring.js"
       - "mobile/src/roofSketchSyncCoordinator.js"
+      - "mobile/src/roofSketchAck.js"
       - "mobile/src/roofSketchView.js"
       - "mobile/src/screens/RoofSketch.js"
       - "mobile/src/components/RoofSketchCanvas.js"
@@ -76,6 +77,7 @@ on:
       - "mobile/src/tests/roof_sketch_view.node.test.js"
       - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
+      - "mobile/src/tests/roof_sketch_ack.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
   pull_request:
     paths:
@@ -140,6 +142,7 @@ on:
       - "mobile/src/roofSketchFieldController.js"
       - "mobile/src/roofSketchFieldWiring.js"
       - "mobile/src/roofSketchSyncCoordinator.js"
+      - "mobile/src/roofSketchAck.js"
       - "mobile/src/roofSketchView.js"
       - "mobile/src/screens/RoofSketch.js"
       - "mobile/src/components/RoofSketchCanvas.js"
@@ -148,6 +151,7 @@ on:
       - "mobile/src/tests/roof_sketch_view.node.test.js"
       - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
+      - "mobile/src/tests/roof_sketch_ack.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
@@ -272,7 +276,7 @@ jobs:
       - name: Parse Field measurement + roof sketch modules with Expo Babel
         run: >-
           node -e "const b=require('@babel/core');
-          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/roofSketchFieldController.js','src/roofSketchView.js','src/roofSketchFieldWiring.js','src/roofSketchSyncCoordinator.js','App.js']
+          ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/roofSketchFieldController.js','src/roofSketchView.js','src/roofSketchFieldWiring.js','src/roofSketchSyncCoordinator.js','src/roofSketchAck.js','src/sync.js','App.js']
           .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
           console.log('Field measurement + sketch modules parsed');"
 
