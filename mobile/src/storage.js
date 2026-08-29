@@ -33,51 +33,66 @@ async function _rawRow(d, client_id) {
   return d.getFirstAsync("SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ?", client_id);
 }
 
+// Serialize all pending-queue writes so same-client enqueues/writebacks cannot interleave at the JS
+// boundary (spec §A9) — no external locking library needed.
+let _writeChain = Promise.resolve();
+function _serialize(fn) { const run = _writeChain.then(fn, fn); _writeChain = run.then(() => {}, () => {}); return run; }
+
 // ---- Pending mutation queue (survives app restart; carries its owning scope) ----
-// A NEW logical enqueue bumps the supersession generation for this client_id (so a later edit's row
-// replaces an in-flight older one and the older network result can be safely discarded).
+// A NEW logical enqueue bumps the supersession generation ATOMICALLY via SQL UPSERT (spec §A9), so two
+// overlapping same-client enqueues can never receive the same generation. Returns the durable stamped row.
 export async function enqueue(m) {
-  const d = await db();
-  const scope = m.scope || getScope();
-  const existing = await _rawRow(d, m.client_id);
-  const existingRow = existing ? { mutation_generation: existing.mutation_generation } : null;
-  const gen = queue.nextGeneration(existingRow);
-  const stamped = { ...m, mutation_generation: gen };
-  await d.runAsync(
-    "INSERT OR REPLACE INTO pending_mutations (client_id, json, state, scope, mutation_generation) VALUES (?, ?, ?, ?, ?)",
-    stamped.client_id, JSON.stringify(stamped), stamped.state, scope, gen
-  );
-  return stamped;
+  return _serialize(async () => {
+    const d = await db();
+    const scope = m.scope || getScope();
+    await d.runAsync(
+      `INSERT INTO pending_mutations (client_id, json, state, scope, mutation_generation)
+       VALUES (?, ?, ?, ?, 1)
+       ON CONFLICT(client_id) DO UPDATE SET
+         json = excluded.json, state = excluded.state, scope = excluded.scope,
+         mutation_generation = COALESCE(pending_mutations.mutation_generation, 1) + 1`,
+      m.client_id, JSON.stringify(m), m.state, scope
+    );
+    const row = await d.getFirstAsync("SELECT mutation_generation FROM pending_mutations WHERE client_id = ?", m.client_id);
+    const gen = row && row.mutation_generation != null ? row.mutation_generation : 1;
+    const stamped = { ...m, mutation_generation: gen };
+    await d.runAsync("UPDATE pending_mutations SET json = ? WHERE client_id = ?", JSON.stringify(stamped), m.client_id);
+    return stamped;
+  });
 }
 
 // Plain writeback preserving the row's existing generation (revive/replace/restore paths). Never bumps.
 export async function saveMutation(m) {
-  const d = await db();
-  const scope = m.scope || getScope();
-  const existing = await _rawRow(d, m.client_id);
-  const gen = Number(m.mutation_generation) || (existing && Number(existing.mutation_generation)) || 1;
-  const stamped = { ...m, mutation_generation: gen };
-  await d.runAsync(
-    "INSERT OR REPLACE INTO pending_mutations (client_id, json, state, scope, mutation_generation) VALUES (?, ?, ?, ?, ?)",
-    stamped.client_id, JSON.stringify(stamped), stamped.state, scope, gen
-  );
+  return _serialize(async () => {
+    const d = await db();
+    const scope = m.scope || getScope();
+    const existing = await _rawRow(d, m.client_id);
+    const gen = Number(m.mutation_generation) || (existing && Number(existing.mutation_generation)) || 1;
+    const stamped = { ...m, mutation_generation: gen };
+    await d.runAsync(
+      "INSERT OR REPLACE INTO pending_mutations (client_id, json, state, scope, mutation_generation) VALUES (?, ?, ?, ?, ?)",
+      stamped.client_id, JSON.stringify(stamped), stamped.state, scope, gen
+    );
+  });
 }
 
-// Generation-guarded writeback for network results (spec §20). Applies the processed row ONLY if the
-// stored row is still the same generation that was sent; otherwise the (older) result is discarded and
-// the newer queued row is preserved untouched. Returns whether the result was applied.
+// Generation-guarded writeback for network results (spec §A6/§A7). ATOMIC conditional UPDATE at the SQL
+// boundary — applies the processed row ONLY if the stored row still carries the same generation that was
+// sent (COALESCE handles legacy NULL as 1, §A8). It NEVER inserts a missing row, so a late result can
+// never resurrect a removed mutation. Returns whether the result was applied.
 export async function saveMutationIfCurrent(m) {
-  const d = await db();
-  const existing = await _rawRow(d, m.client_id);
-  const storedRow = existing ? { mutation_generation: existing.mutation_generation == null ? 1 : existing.mutation_generation } : null;
-  const sentRow = { mutation_generation: m.mutation_generation == null ? 1 : m.mutation_generation };
-  if (!queue.shouldApplyResult(storedRow, sentRow)) return false;
-  const scope = m.scope || getScope();
-  await d.runAsync(
-    "INSERT OR REPLACE INTO pending_mutations (client_id, json, state, scope, mutation_generation) VALUES (?, ?, ?, ?, ?)",
-    m.client_id, JSON.stringify(m), m.state, scope, sentRow.mutation_generation
-  );
-  return true;
+  return _serialize(async () => {
+    const d = await db();
+    const scope = m.scope || getScope();
+    const gen = m.mutation_generation == null ? 1 : m.mutation_generation;
+    const stamped = { ...m, mutation_generation: gen };
+    const res = await d.runAsync(
+      `UPDATE pending_mutations SET json = ?, state = ?, scope = ?, mutation_generation = ?
+       WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ?`,
+      JSON.stringify(stamped), stamped.state, scope, gen, m.client_id, gen
+    );
+    return (res && (res.changes || res.rowsAffected || 0)) > 0;
+  });
 }
 
 // Remove exactly ONE mutation (used by the "Remove failed photo" recovery control). Scoped so a

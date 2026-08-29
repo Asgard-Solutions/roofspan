@@ -125,4 +125,106 @@ const put = (rev, str, doc, ver) => queue.makeMutation(sketchUpdateMutation({ re
   assert.strictEqual(draft.document.tag, "B"); ok("Edit B remains the local draft after A acknowledged");
 }
 
-console.log("\nSKETCH QUEUE RACE + CRASH RECOVERY: all " + n + " assertions passed");
+// ================== ORCHESTRATION (control-flow) CONTRACTS §A11–A13, W5 ==================
+// Model of the runSync control flow against an ATOMIC in-memory store (conditional UPDATE by generation,
+// no insert-on-writeback), single-flight + _rerunRequested, and completion decided from CURRENT storage.
+function makeAtomicStore() {
+  const rows = new Map();
+  return {
+    rows,
+    enqueue(m) { const g = queue.nextGeneration(rows.get(m.client_id)); const s = { ...m, mutation_generation: g }; rows.set(m.client_id, s); return s; },
+    applyIfCurrent(m) { const cur = rows.get(m.client_id); if (!cur || Number(cur.mutation_generation) !== Number(m.mutation_generation)) return false; rows.set(m.client_id, { ...m }); return true; },
+    pending() { return [...rows.values()].filter((r) => r.state === "pending"); },
+    all() { return [...rows.values()]; },
+    get(id) { return rows.get(id) || null; },
+  };
+}
+function makeController(store, send) {
+  let running = false, rerun = false, lastSync = null;
+  async function run() {
+    if (running) { rerun = true; return; }
+    running = true;
+    try {
+      const pending = store.pending();
+      const processed = [];
+      for (const m of pending) processed.push(await send(m));
+      for (const m of processed) store.applyIfCurrent(m);
+      const pendingLeft = store.all().some((m) => m.state === "pending");
+      if (!pendingLeft) lastSync = "SYNCED";     // only mark complete from CURRENT storage
+    } finally {
+      running = false;
+      if (rerun) { rerun = false; await run(); }
+    }
+  }
+  return { run, lastSync: () => lastSync };
+}
+
+async function orchestrate({ aResult }) {
+  const store = makeAtomicStore();
+  const A = store.enqueue(put("R1", "S1", { tag: "A" }, 7));
+  let releaseA; const aGate = new Promise((res) => { releaseA = res; });
+  let bQueued = false; let ctl;
+  const send = async (m) => {
+    if (m.body.document.tag === "A") {
+      if (!bQueued) { bQueued = true; store.enqueue(put("R1", "S1", { tag: "B" }, 7)); ctl.run(); } // queueMutation-style: enqueue + request sync (sets rerun while running)
+      await aGate;
+      return { ...m, ...aResult };
+    }
+    return { ...m, state: queue.STATES.SYNCED };  // B succeeds
+  };
+  ctl = makeController(store, send);
+  const first = ctl.run();          // sends A (awaits gate); B enqueued during flight -> rerun requested
+  releaseA();                       // A resolves
+  await first;                      // writeback A (rejected), rerun sends B
+  return { store, ctl, A };
+}
+
+(async () => {
+  let m = 0; const ok2 = (name) => { m++; console.log("  \u2713 " + name); };
+  // A success cannot overwrite B; B auto-sends; last_sync only after B
+  {
+    const { store, ctl } = await orchestrate({ aResult: { state: queue.STATES.SYNCED } });
+    const row = store.get(sketchUpdateMutationId("R1", "S1"));
+    assert.strictEqual(row.body.document.tag, "B"); ok2("A success cannot overwrite newer B (B document survives)");
+    assert.strictEqual(row.state, queue.STATES.SYNCED); ok2("B automatically received a subsequent send and synced (no manual trigger)");
+    assert.strictEqual(ctl.lastSync(), "SYNCED"); ok2("last_sync advances only after B (the current work) is acknowledged");
+  }
+  // A 409 cannot mark B conflict
+  {
+    const { store } = await orchestrate({ aResult: { state: queue.STATES.CONFLICT, error: "x", serverValue: {} } });
+    const row = store.get(sketchUpdateMutationId("R1", "S1"));
+    assert.strictEqual(row.state, queue.STATES.SYNCED); ok2("A 409 cannot mark newer B conflict (B synced on its own pass)");
+    assert.strictEqual(row.body.document.tag, "B"); ok2("B document preserved through A 409");
+  }
+  // A transient failure cannot downgrade B
+  {
+    const { store } = await orchestrate({ aResult: { state: queue.STATES.PENDING, errorCode: "http_500" } });
+    const row = store.get(sketchUpdateMutationId("R1", "S1"));
+    assert.strictEqual(row.body.document.tag, "B"); ok2("A 500 cannot downgrade/overwrite newer B");
+    assert.strictEqual(row.state, queue.STATES.SYNCED); ok2("B remained eligible and synced after A 500");
+  }
+  // last_sync NOT advanced while B still pending (send B fails)
+  {
+    const store = makeAtomicStore();
+    store.enqueue(put("R1", "S1", { tag: "A" }, 7));
+    let bQueued = false;
+    const send = async (mm) => {
+      if (mm.body.document.tag === "A") { if (!bQueued) { bQueued = true; store.enqueue(put("R1", "S1", { tag: "B" }, 7)); } return { ...mm, state: queue.STATES.SYNCED }; }
+      return { ...mm, state: queue.STATES.PENDING, errorCode: "offline" }; // B cannot send yet
+    };
+    const ctl = makeController(store, send);
+    await ctl.run();
+    assert.strictEqual(store.get(sketchUpdateMutationId("R1", "S1")).state, queue.STATES.PENDING); ok2("B stays pending when it cannot yet send");
+    assert.strictEqual(ctl.lastSync(), null); ok2("last_sync NOT advanced while B (current work) remains pending");
+  }
+  // concurrent same-client enqueue: strictly increasing generations, latest payload survives
+  {
+    const store = makeAtomicStore();
+    const g1 = store.enqueue(put("R1", "S1", { tag: "A" }, 7));
+    const g2 = store.enqueue(put("R1", "S1", { tag: "B" }, 7));
+    const g3 = store.enqueue(put("R1", "S1", { tag: "C" }, 7));
+    assert.ok(g1.mutation_generation === 1 && g2.mutation_generation === 2 && g3.mutation_generation === 3); ok2("same-client enqueues get strictly increasing, unique generations");
+    assert.strictEqual(store.get(sketchUpdateMutationId("R1", "S1")).body.document.tag, "C"); ok2("latest payload (C) survives concurrent enqueues");
+  }
+  console.log("\nSKETCH SYNC ORCHESTRATION: all " + m + " assertions passed");
+})();

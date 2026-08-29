@@ -17,14 +17,15 @@ function _emit(evt) { for (const cb of _listeners) { try { cb(evt); } catch (e) 
 // Create + durably persist a field mutation (tagged with the active scope), then attempt sync.
 export async function queueMutation(spec) {
   const m = queue.makeMutation({ ...spec, scope: getScope() });
-  await enqueue(m);
+  const stored = await enqueue(m);          // durable stamped generation (spec §A10)
   _emit({ type: "queued" });
   _resetBackoff();
   runSync().catch(() => {});
-  return m;
+  return stored;
 }
 
 let _running = false;
+let _rerunRequested = false;                 // a mutation queued during an active run requests one more pass (§A3)
 
 // --- Gentle auto-retry with backoff -----------------------------------------
 // While transient work remains (pending items, or failed PHOTOS that are safe to retry), we re-run
@@ -56,7 +57,7 @@ async function _reviveRetryablePhotos() {
 }
 
 export async function runSync() {
-  if (_running) return;              // never run two syncs at once (no duplicate submissions)
+  if (_running) { _rerunRequested = true; return; }   // never concurrent; remember another pass is needed (§A3)
   _running = true;
   _emit({ type: "sync_start" });
   try {
@@ -67,20 +68,25 @@ export async function runSync() {
     }
     await _reviveRetryablePhotos();                 // let transiently-failed photos rejoin the queue
     const pending = await loadPending();            // active scope only
-    if (pending.length === 0) { _resetBackoff(); await _markSynced(); return; }
-    const processed = await queue.processQueue(pending, send);
-    // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
-    // edit while it was in flight (spec §20). Superseded/removed rows are preserved untouched.
-    for (const m of processed) await saveMutationIfCurrent(m);
-    const stillPending = processed.some((m) => m.state === "pending");
-    const retryablePhotoLeft = processed.some(
+    if (pending.length > 0) {
+      const processed = await queue.processQueue(pending, send);
+      // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
+      // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
+      for (const m of processed) await saveMutationIfCurrent(m);
+    }
+    // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
+    // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
+    const all = await loadAllMutations();
+    const pendingLeft = all.some((m) => m.state === "pending");
+    const retryablePhotoLeft = all.some(
       (m) => m.state === "failed" && !queue.isPermanentFailure(m) && (m.attempts || 0) < MAX_AUTO_PHOTO_ATTEMPTS
     );
-    if (stillPending || retryablePhotoLeft) _scheduleRetry();
-    else { _resetBackoff(); if (!stillPending) await _markSynced(); }
+    if (pendingLeft || retryablePhotoLeft) _scheduleRetry();
+    else { _resetBackoff(); await _markSynced(); }  // last_sync_at only when no current work remains
   } finally {
     _running = false;
     _emit({ type: "sync_end" });
+    if (_rerunRequested) { _rerunRequested = false; runSync().catch(() => {}); }  // superseded B sends automatically (§A4)
   }
 }
 
