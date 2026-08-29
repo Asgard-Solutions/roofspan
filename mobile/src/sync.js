@@ -9,7 +9,7 @@ import { send } from "./api";
 import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
-import { sketchDraftKey, sketchDetailKey } from "./sketchCache";
+import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -128,6 +128,17 @@ async function _reconcileSketchAcks(processed) {
 }
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
 export async function syncNow() { _resetBackoff(); return runSync(); }
+
+// B3B2: whether the sync engine is actively processing right now (drives the "Synchronizing…" status).
+export function isSyncing() { return _running; }
+
+// B3B2: the durable mutation for exactly ONE structure's Roof Sketch (deterministic client_id). Returns
+// null when there is no pending/failed/conflict/synced row for this structure. Never the global queue.
+export async function currentSketchMutation(revisionId, structureId) {
+  const id = sketchUpdateMutationId(revisionId, structureId);
+  const all = await loadAllMutations();
+  return all.find((x) => x.client_id === id) || null;
+}
 
 // Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the
 // selected item is removed; all other offline work is preserved. Then refresh listeners.

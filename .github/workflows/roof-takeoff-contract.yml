@@ -78,6 +78,7 @@ on:
       - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
       - "mobile/src/tests/roof_sketch_ack.node.test.js"
+      - "mobile/src/tests/roof_sketch_live_status.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
   pull_request:
     paths:
@@ -152,6 +153,7 @@ on:
       - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - "mobile/src/tests/roof_sketch_sync_stage.node.test.js"
       - "mobile/src/tests/roof_sketch_ack.node.test.js"
+      - "mobile/src/tests/roof_sketch_live_status.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
