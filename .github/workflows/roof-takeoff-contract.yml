@@ -65,6 +65,10 @@ on:
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - "mobile/App.js"
+      - "mobile/metro.config.js"
+      - "mobile/scripts/verify-shared-package.js"
+      - "package.json"
+      - "package-lock.json"
       - "mobile/src/roofSketchFieldController.js"
       - "mobile/src/roofSketchFieldWiring.js"
       - "mobile/src/roofSketchSyncCoordinator.js"
@@ -145,6 +149,10 @@ on:
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
       - "mobile/App.js"
+      - "mobile/metro.config.js"
+      - "mobile/scripts/verify-shared-package.js"
+      - "package.json"
+      - "package-lock.json"
       - "mobile/src/roofSketchFieldController.js"
       - "mobile/src/roofSketchFieldWiring.js"
       - "mobile/src/roofSketchSyncCoordinator.js"
@@ -278,9 +286,12 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: mobile/package-lock.json
-      - name: Install Field dependencies
+          cache-dependency-path: package-lock.json
+      - name: Install workspace dependencies (npm workspace root)
+        working-directory: ${{ github.workspace }}
         run: npm ci
+      - name: Verify @roofspan/roof-sketch-core resolves to the shared workspace package
+        run: npm run test:resolve
       - name: Run deterministic Field measurement/offline contracts
         run: npm run test:measurements
       - name: Run roof sketch core + Field sketch-cache contracts
@@ -293,6 +304,8 @@ jobs:
           ['src/screens/Measurements.js','src/cache.js','src/queue.js','src/measurementCache.js','src/sketchCache.js','src/screens/RoofSketch.js','src/components/RoofSketchCanvas.js','src/components/SketchInspector.js','src/components/SketchConflictReview.js','src/roofSketchFieldController.js','src/roofSketchView.js','src/roofSketchFieldWiring.js','src/roofSketchSyncCoordinator.js','src/roofSketchAck.js','src/roofSketchConflict.js','src/sync.js','src/fieldReconcile.js','src/screens/Property.js','App.js']
           .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
           console.log('Field measurement + sketch modules parsed');"
+      - name: Prove a production Metro/Expo Android bundle resolves the shared package
+        run: npx expo export --platform android --output-dir "$RUNNER_TEMP/expo-export"
 
   office-build:
     runs-on: ubuntu-latest
