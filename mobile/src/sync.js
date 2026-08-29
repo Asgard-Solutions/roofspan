@@ -7,6 +7,8 @@ import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
 import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { applySketchAck } from "./roofSketchAck";
+import { sketchDraftKey, sketchDetailKey } from "./sketchCache";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -73,6 +75,7 @@ export async function runSync() {
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
+      await _reconcileSketchAcks(processed);
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -92,6 +95,26 @@ export async function runSync() {
 
 // Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
 async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
+
+// B3B1: generation-safe application of successful sketch acknowledgements. Matched generation retires
+// its draft + caches the server sketch; a superseded newer draft (B) is preserved and only its CAS
+// base/expected_version is advanced (B stays pending for the existing rerun). Never resurrects A.
+async function _reconcileSketchAcks(processed) {
+  for (const m of processed) {
+    if (m.kind !== "measurement_sketch_update" || m.state !== "synced" || !m.serverValue) continue;
+    const [, revisionId, structureId] = String(m.client_id).split(":");
+    const draftKey = sketchDraftKey(revisionId, structureId);
+    const draft = await getCache(draftKey);
+    const d = applySketchAck({ draft, ackGeneration: m.local_edit_generation, serverValue: m.serverValue });
+    if (d.cacheServer) await putCache(sketchDetailKey(revisionId, structureId), { data: d.cacheServer, stale: false, cachedAt: new Date().toISOString() });
+    if (d.retireDraft) await putCache(draftKey, null);
+    else if (d.nextDraft) await putCache(draftKey, d.nextDraft);
+    if (d.requeue) {
+      const cur = (await loadAllMutations()).find((x) => x.client_id === m.client_id && x.state === "pending");
+      if (cur) await saveMutation({ ...cur, body: { ...(cur.body || {}), expected_version: d.requeue.expected_version } });
+    }
+  }
+}
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
 export async function syncNow() { _resetBackoff(); return runSync(); }
 
