@@ -58,13 +58,8 @@ export default function RoofSketch({ route }) {
   // durable (B3A). Reuses the shared coordinator; no new network/retry logic here.
   const stageNow = useCallback(async () => {
     if (!editor || !coordRef.current || readOnly) return;
-    const res = await editor.flush();
-    if (!res.ok) return; // local persistence failed -> do NOT queue this generation
-    await coordRef.current.stage({
-      revisionId: revision_id, structureId: structure_id,
-      document: editor.document, documentVersion: editor.document.document_version || 0,
-      editMode: editor.editMode, editGeneration: editor.editGeneration, durable: true,
-    });
+    // Stage the controller's authoritative committed CAS snapshot (never the visual document).
+    await WIRE.stageFromController(editor, coordRef.current, { revisionId: revision_id, structureId: structure_id });
   }, [editor, readOnly, revision_id, structure_id]);
 
   // After any committed edit, drain the serialized chain, report the HONEST result, and debounce-stage.
