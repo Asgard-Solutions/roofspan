@@ -35,6 +35,7 @@ export default function RoofSketch({ route }) {
   const stageTimer = useRef(null);
   const syncStateRef = useRef({ seq: 0, acked: 0, localSave: null }); // latest-wins refresh state
   const editedRef = useRef(false);     // has the rep committed a local edit this session?
+  const editingBlockedRef = useRef(false);  // B3C: fresh editingBlocked for stable useCallback handlers
   const runningRef = useRef(false);    // sync engine actively processing (from sync_start/sync_end)
   const [size, setSize] = useState({ width: 360, height: 480 });
 
@@ -96,20 +97,33 @@ export default function RoofSketch({ route }) {
 
   const editor = editorRef.current;
   const conflictActive = !!conflict;                  // B3C: a real 409 is awaiting explicit resolution
-  const editingBlocked = readOnly || conflictActive;  // no geometry edits/undo/redo/mode/Save while blocked
+  const editingBlocked = WIRE.editingLocked({ readOnly, conflict });  // no edits/undo/redo/mode/Save/build while blocked
+  editingBlockedRef.current = editingBlocked;         // fresh value for stable useCallback handlers
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
 
+  // B3C: when a conflict becomes active, cancel any in-flight Facet/Manual build so no build-commit route
+  // can survive into the locked state (defensive, in addition to the disabled UI + handler guards below).
+  useEffect(() => {
+    if (!conflictActive) return;
+    setSelection((sel) => (sel && (sel.type === "facet_build" || sel.type === "manual_build") ? null : sel));
+    setResetToken((x) => x + 1);
+  }, [conflictActive]);
+
   // B3C — Use Office Version: discard local unsynced work, adopt the authoritative Office document into
-  // the OPEN editor (fresh history) and return status to Synced to Office. Generation-safe in sync.js.
+  // the OPEN editor (fresh history) and return status to Synced to Office (atomic + generation-checked in
+  // storage). Invalidate any in-flight refresh (latest-wins) so a stale pre-resolution refresh started
+  // from the conflict state cannot overwrite the resolved Synced-to-Office status.
   const useOfficeVersion = useCallback(async () => {
     const plan = await resolveSketchConflictUseOffice(revision_id, structure_id);
     if (plan.action !== "use_office") { setReviewOpen(false); refreshSync(); return; }
+    WIRE.nextRefreshSeq(syncStateRef.current);   // supersede any refresh that began from the conflict state
     if (editorRef.current) {
       editorRef.current.adoptOfficeDocument({ document: plan.editor.document, documentVersion: plan.editor.documentVersion, editMode: plan.editor.editMode });
       setEditMode(plan.editor.editMode);
     }
     editedRef.current = false;                 // no pending local work remains
     syncStateRef.current.acked = 0;
+    syncStateRef.current.localSave = null;
     setSelection(null); setConflict(null); setReviewOpen(false);
     setStatus("Synced to Office"); rerender();
   }, [revision_id, structure_id, refreshSync, rerender]);
@@ -128,21 +142,21 @@ export default function RoofSketch({ route }) {
   // Stage the current committed generation into the EXISTING durable queue, but only once it is locally
   // durable (B3A). Reuses the shared coordinator; no new network/retry logic here.
   const stageNow = useCallback(async () => {
-    if (!editor || !coordRef.current || readOnly) return;
+    if (!editor || !coordRef.current || editingBlockedRef.current) return;
     // Stage the controller's authoritative committed CAS snapshot (never the visual document).
     await WIRE.stageFromController(editor, coordRef.current, { revisionId: revision_id, structureId: structure_id });
-  }, [editor, readOnly, revision_id, structure_id]);
+  }, [editor, revision_id, structure_id]);
 
   // After any committed edit, drain the serialized chain, report the HONEST result, and debounce-stage.
   const settle = useCallback(() => {
-    if (!editor || readOnly) return;
+    if (!editor || editingBlockedRef.current) return;
     editedRef.current = true;
     syncStateRef.current.localSave = "Saving on device…";
     setStatus("Saving on device…"); rerender();
     editor.flush().then((res) => { syncStateRef.current.localSave = WIRE.localSaveStatus(res); refreshSync(); });
     if (stageTimer.current) clearTimeout(stageTimer.current);
     stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow().then(() => refreshSync()); }, 800);
-  }, [editor, readOnly, rerender, stageNow, refreshSync]);
+  }, [editor, rerender, stageNow, refreshSync]);
 
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
@@ -158,13 +172,13 @@ export default function RoofSketch({ route }) {
   const changeMode = (m) => { if (editingBlocked || !editor) return; setEditMode(m); editor.setEditMode(m); setSelection(null); clearBuild(); settle(); };
 
   const createFacetFromSelection = () => {
-    if (!editor || !selection || selection.type !== "facet_build") return;
+    if (!editor || editingBlocked || !selection || selection.type !== "facet_build") return;
     const r = WIRE.commitFacetCreate(editor.document, selection.edgeIds);
     if (!r.ok) { onError(r.reason); return; }
     editor.commit(r.doc); setSelection({ type: "facet", id: r.facetId }); clearBuild(); settle();
   };
   const createManualPolygon = () => {
-    if (!editor || !selection || selection.type !== "manual_build") return;
+    if (!editor || editingBlocked || !selection || selection.type !== "manual_build") return;
     const r = WIRE.commitManualCreate(editor.document, selection.vertexIds);
     if (!r.ok) { onError(r.reason); return; }
     editor.commit(r.doc); setSelection({ type: "facet", id: r.facetId }); clearBuild(); settle();

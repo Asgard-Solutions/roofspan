@@ -52,62 +52,77 @@ function _isStale(draft, conflictGeneration) {
   return (Number(draft.edit_generation) || 0) > (Number(conflictGeneration) || 0);
 }
 
-// USE OFFICE VERSION — discard the local unsynced work and adopt the authoritative Office document.
-// Plan: cache the Office sketch as the authoritative detail, retire the local draft (guarded), remove the
-// conflict mutation, and re-init the open editor to the Office document (fresh history) -> Synced to Office.
-function planUseOffice(mutation, draft) {
-  const review = conflictReview(mutation, draft);
-  if (!review) return { action: "noop" };
-  if (_isStale(draft, review.conflictGeneration)) {
-    return { action: "stale", reason: "newer_local_work", conflictGeneration: review.conflictGeneration };
-  }
-  const cacheDetail = {
-    ...(mutation.serverValue || {}),
-    document: review.office || {},
-    document_version: review.officeVersion,
-    edit_mode: review.officeEditMode,
-  };
+// Snapshot captured at REVIEW time and carried into the atomic durable transition. It records the exact
+// conflict identity (client_id + generations) plus the chosen Office/Local documents, so the transition
+// can (a) verify the live durable state still matches this exact reviewed conflict and (b) build the
+// resolution writes WITHOUT re-reading (avoids a plan/apply skew).
+function buildReviewedContext(mutation, draft, keys = {}) {
+  const r = conflictReview(mutation, draft) || {};
   return {
-    action: "use_office",
-    revisionId: review.revisionId, structureId: review.structureId,
-    removeClientId: mutation.client_id,
-    conflictGeneration: review.conflictGeneration,
-    cacheDetail,
-    retireDraft: true,
-    editor: { document: review.office || {}, documentVersion: review.officeVersion, editMode: review.officeEditMode },
+    clientId: mutation ? mutation.client_id : null,
+    draftKey: keys.draftKey || null,
+    detailKey: keys.detailKey || null,
+    conflictGeneration: r.conflictGeneration != null ? r.conflictGeneration : (Number(mutation && mutation.local_edit_generation) || 0),
+    queueGeneration: mutation && mutation.mutation_generation != null ? Number(mutation.mutation_generation) : null,
+    revisionId: r.revisionId || null, structureId: r.structureId || null,
+    base: r.base || null, local: r.local || null, localEditMode: r.localEditMode || "connected_graph",
+    office: r.office || null, officeVersion: r.officeVersion || 0, officeEditMode: r.officeEditMode || "connected_graph",
+    serverValue: (mutation && mutation.serverValue) || {},
   };
 }
 
-// KEEP LOCAL DRAFT — keep the local geometry as the desired NEXT version, rebased onto the Office base.
-// Plan: advance the durable draft's CAS base/version to Office (keeping local document + generation), and
-// re-stage the local document as a FRESH pending mutation with expected_version = Office document_version.
-// It does NOT pretend the conflict is already synced — status stays pending until Office acknowledges.
-function planKeepLocal(mutation, draft) {
-  const review = conflictReview(mutation, draft);
-  if (!review) return { action: "noop" };
-  if (_isStale(draft, review.conflictGeneration)) {
-    return { action: "stale", reason: "newer_local_work", conflictGeneration: review.conflictGeneration };
+// THE single atomic resolution decision. Consumed VERBATIM by the storage transition (production) AND by
+// the contracts — there is no separate mirror. `live` = the FRESHLY re-read durable state inside the
+// _serialize boundary: { row: current pending_mutations row|null, draft: current durable draft|null }.
+// Every invariant is checked against `live`; ANY drift returns `{action:"stale"}` and produces NO writes.
+// On success it returns the exact writes to apply (built from the reviewed snapshot, never from a stale plan).
+function decideSketchConflictResolution(choice, reviewed, live) {
+  const row = live && live.row;
+  const draft = live && live.draft;
+  // ---- invariants against the LIVE durable state (immediately before making the change permanent) ----
+  if (!row) return { action: "stale", reason: "row_missing" };
+  if (row.client_id !== reviewed.clientId) return { action: "stale", reason: "client_id_changed" };
+  if (row.state !== "conflict") return { action: "stale", reason: "not_conflict" };
+  if ((Number(row.local_edit_generation) || 0) !== (Number(reviewed.conflictGeneration) || 0)) return { action: "stale", reason: "conflict_generation_changed" };
+  if (reviewed.queueGeneration != null && (Number(row.mutation_generation) || 0) !== (Number(reviewed.queueGeneration) || 0)) return { action: "stale", reason: "queue_generation_changed" };
+  if (_isStale(draft, reviewed.conflictGeneration)) return { action: "stale", reason: "draft_advanced" };
+
+  if (choice === "use_office") {
+    const cacheDetail = { ...(reviewed.serverValue || {}), document: reviewed.office || {}, document_version: reviewed.officeVersion, edit_mode: reviewed.officeEditMode };
+    return {
+      action: "use_office", clientId: reviewed.clientId,
+      conflictGeneration: reviewed.conflictGeneration, queueGeneration: reviewed.queueGeneration,
+      cacheDetail, retireDraft: true, casFloorVersion: reviewed.officeVersion,
+      editor: { document: reviewed.office || {}, documentVersion: reviewed.officeVersion, editMode: reviewed.officeEditMode },
+    };
   }
-  const nextDraft = makeSketchDraft(review.revisionId, review.structureId, {
-    document: review.local || {},
-    documentVersion: review.officeVersion,        // adopt the Office version as the new CAS base version
-    baseServerDocument: review.office || null,    // adopt the Office document as base_server_document
-    editMode: review.localEditMode,
-    editGeneration: review.conflictGeneration,    // preserve the local generation (no new commit)
-  });
-  const spec = sketchUpdateMutation({
-    revisionId: review.revisionId, structureId: review.structureId,
-    document: review.local || {}, documentVersion: review.officeVersion, editMode: review.localEditMode,
-  });
-  return {
-    action: "keep_local",
-    revisionId: review.revisionId, structureId: review.structureId,
-    conflictGeneration: review.conflictGeneration,
-    nextDraft,
-    // expected_version = Office document_version; local_edit_generation preserved for traceability.
-    requeue: { ...spec, label: "Roof sketch", localEditGeneration: review.conflictGeneration },
-    editor: { documentVersion: review.officeVersion, baseServerDocument: review.office || null },
-  };
+  if (choice === "keep_local") {
+    const nextDraft = makeSketchDraft(reviewed.revisionId, reviewed.structureId, {
+      document: reviewed.local || {}, documentVersion: reviewed.officeVersion,
+      baseServerDocument: reviewed.office || null, editMode: reviewed.localEditMode,
+      editGeneration: reviewed.conflictGeneration,
+    });
+    const spec = sketchUpdateMutation({
+      revisionId: reviewed.revisionId, structureId: reviewed.structureId,
+      document: reviewed.local || {}, documentVersion: reviewed.officeVersion, editMode: reviewed.localEditMode,
+    });
+    // Transition the EXACT conflict row into a fresh pending send: preserve identity/scope/local
+    // geometry + local generation; advance mutation_generation as a NEW logical send (never regresses).
+    const nextRow = {
+      ...row,
+      kind: spec.kind, method: spec.method, path: spec.path, body: spec.body,
+      local_edit_generation: reviewed.conflictGeneration,
+      mutation_generation: (Number(row.mutation_generation) || 1) + 1,
+      state: "pending", serverValue: null, error: null, errorCode: null, attempts: 0,
+    };
+    return {
+      action: "keep_local", clientId: reviewed.clientId,
+      conflictGeneration: reviewed.conflictGeneration, queueGeneration: reviewed.queueGeneration,
+      nextDraft, nextRow, casFloorVersion: reviewed.officeVersion,
+      editor: { documentVersion: reviewed.officeVersion, baseServerDocument: reviewed.office || null },
+    };
+  }
+  return { action: "noop" };
 }
 
-module.exports = { conflictReview, sketchSummary, planUseOffice, planKeepLocal };
+module.exports = { conflictReview, sketchSummary, buildReviewedContext, decideSketchConflictResolution };

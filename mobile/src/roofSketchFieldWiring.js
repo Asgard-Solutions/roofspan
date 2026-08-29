@@ -130,6 +130,13 @@ function applySketchRefresh({ seq, state, editor, mutation, draft, running, setS
   return { applied: true, status };
 }
 
+// B3C: the single predicate for whether document-changing routes are blocked. A locked revision
+// (readOnly) OR an unresolved sync conflict blocks every commit/stage/undo/redo/mode/build path. Used by
+// BOTH the screen handlers (defensive guards, not just disabled UI) and contracts.
+function editingLocked({ readOnly, conflict } = {}) {
+  return !!readOnly || !!conflict;
+}
+
 module.exports = {
   DRAG_THRESHOLD_PX,
   resolveFieldSketchLoad,
@@ -144,6 +151,7 @@ module.exports = {
   fieldSketchSyncStatus,
   nextRefreshSeq,
   applySketchRefresh,
+  editingLocked,
   stageFromController,
 };
 
