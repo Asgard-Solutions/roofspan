@@ -42,7 +42,7 @@ function _measurementUpdateId(kind, path) {
 // A caller may provide clientId when one logical offline draft must replace its own queued mutation.
 // Existing roof-measurement PUTs automatically get a revision-stable id so repeated offline edits
 // replace the same SQLite row instead of later conflicting with one another on a stale If-Match.
-function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1 }) {
+function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {
   const id = clientId || _measurementUpdateId(kind, path) || uuidv4();
   return {
     client_id: id,
@@ -55,11 +55,10 @@ function makeMutation({ kind, method, path, body, ifMatch = null, label = "", sc
     label,
     scope,
     photo,
-    // Supersession token (spec §20). A NEW logical enqueue for an existing client_id bumps this; a
-    // retry writeback of the SAME queued mutation keeps it. A network response is applied only if the
-    // stored row still carries the same generation — so an older in-flight result can never overwrite
-    // a newer queued edit of the same structure.
     mutation_generation: mutationGeneration,
+    // Local-only metadata (B3A): the Field edit_generation that produced this staged snapshot. Never
+    // part of the backend request body; used for coordinator/debug traceability only.
+    local_edit_generation: localEditGeneration,
     state: STATES.PENDING,
     server_id: null,
     serverValue: null,
@@ -146,7 +145,9 @@ async function processMutation(m, send) {
     const res = await send(m);
     const s = res.status;
     if (s === 200 || s === 201) {
-      return { ...m, state: STATES.SYNCED, server_id: (res.data && res.data.id) || m.server_id, error: null, attempts };
+      // Retain the authoritative server response (document_version, document) for B3B reconciliation.
+      const serverValue = (res.data && typeof res.data === "object") ? res.data : null;
+      return { ...m, state: STATES.SYNCED, server_id: (res.data && res.data.id) || m.server_id, serverValue, error: null, attempts };
     }
     if (s === 409) {
       const detail = res.data && res.data.detail;
