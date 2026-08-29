@@ -5,8 +5,10 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
 import * as RS from "@roofspan/roof-sketch-core";
 import { createFieldEditor } from "../roofSketchFieldController";
+import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
 import { loadSketchDraft, saveSketchDraftStrict, cache } from "../cache";
+import { queueMutation } from "../sync";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
 import { C } from "../theme";
@@ -25,6 +27,8 @@ export default function RoofSketch({ route }) {
   const [, bump] = useState(0);
   const rerender = useCallback(() => bump((x) => x + 1), []);
   const editorRef = useRef(null);
+  const coordRef = useRef(null);
+  const stageTimer = useRef(null);
   const [size, setSize] = useState({ width: 360, height: 480 });
 
   useEffect(() => {
@@ -39,6 +43,7 @@ export default function RoofSketch({ route }) {
         revision_id, structure_id, initial,
         persist: (d) => saveSketchDraftStrict(revision_id, structure_id, d),
       }));
+      coordRef.current = createSketchSyncCoordinator({ queueMutation });
       setEditMode(initial.editMode);
       setStatus(readOnly ? "Locked" : initialStatus(initial, statusMeta));
       setReady(true);
@@ -49,12 +54,27 @@ export default function RoofSketch({ route }) {
   const editor = editorRef.current;
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
 
-  // After any committed edit, drain the serialized chain and report the HONEST result.
+  // Stage the current committed generation into the EXISTING durable queue, but only once it is locally
+  // durable (B3A). Reuses the shared coordinator; no new network/retry logic here.
+  const stageNow = useCallback(async () => {
+    if (!editor || !coordRef.current || readOnly) return;
+    const res = await editor.flush();
+    if (!res.ok) return; // local persistence failed -> do NOT queue this generation
+    await coordRef.current.stage({
+      revisionId: revision_id, structureId: structure_id,
+      document: editor.document, documentVersion: editor.document.document_version || 0,
+      editMode: editor.editMode, editGeneration: editor.editGeneration, durable: true,
+    });
+  }, [editor, readOnly, revision_id, structure_id]);
+
+  // After any committed edit, drain the serialized chain, report the HONEST result, and debounce-stage.
   const settle = useCallback(() => {
     if (!editor || readOnly) return;
     setStatus("Saving on device…"); rerender();
     editor.flush().then((res) => setStatus(WIRE.localSaveStatus(res)));
-  }, [editor, readOnly, rerender]);
+    if (stageTimer.current) clearTimeout(stageTimer.current);
+    stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow(); }, 800);
+  }, [editor, readOnly, rerender, stageNow]);
 
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
@@ -106,6 +126,7 @@ export default function RoofSketch({ route }) {
         <View style={sx.modeToggle}>
           <TouchableOpacity testID="undo-btn" disabled={readOnly || !editor.canUndo()} onPress={() => { editor.undo(); settle(); }} style={[sx.modeBtn, (!editor.canUndo()) && sx.disabled]}><Text style={sx.modeText}>Undo</Text></TouchableOpacity>
           <TouchableOpacity testID="redo-btn" disabled={readOnly || !editor.canRedo()} onPress={() => { editor.redo(); settle(); }} style={[sx.modeBtn, (!editor.canRedo()) && sx.disabled]}><Text style={sx.modeText}>Redo</Text></TouchableOpacity>
+          <TouchableOpacity testID="save-sketch-btn" disabled={readOnly} onPress={() => { if (stageTimer.current) clearTimeout(stageTimer.current); stageNow(); }} style={[sx.modeBtn, sx.modeOn, readOnly && sx.disabled]}><Text style={sx.modeTextOn}>Save Sketch</Text></TouchableOpacity>
         </View>
       </View>
 
