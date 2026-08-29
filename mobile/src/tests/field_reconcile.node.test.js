@@ -186,4 +186,25 @@ const feat = (coll, id) => coll.features.find((f) => f.properties.id === id).pro
   ok("conflict diff shows only edited fields that actually differ (Office vs You)");
 }
 
+// ---- diff-aware per-field merge resolution ----
+{
+  const m = { client_id: "property-patch:P1", kind: "property_patch", state: "conflict",
+    path: "/mobile/properties/P1",
+    body: { do_not_knock: true, notes: "mine notes" },
+    serverValue: { id: "P1", do_not_knock: false, notes: "office notes", updated_at: "T-NEW", visits: [], lead_id: null } };
+  // keep MY do_not_knock, take Office notes
+  const plan = R.mergeConflictResolution(m, { do_not_knock: "mine", notes: "office" });
+  assert.strictEqual(plan.action, "merge");
+  assert.strictEqual(plan.removeClientId, "property-patch:P1");
+  assert.deepStrictEqual(plan.optimistic, { do_not_knock: true }, "only the kept field is re-applied");
+  assert.strictEqual(plan.requeue.kind, "property_patch");
+  assert.strictEqual(plan.requeue.body.do_not_knock, true);
+  assert.ok(!("notes" in plan.requeue.body), "Office-chosen field is not re-queued");
+  assert.strictEqual(plan.requeue.body.expected_updated_at, "T-NEW", "re-queue carries the server's fresh token");
+  // all Office -> no requeue (pure adopt-server)
+  const allOffice = R.mergeConflictResolution(m, { do_not_knock: "office", notes: "office" });
+  assert.strictEqual(allOffice.requeue, null, "all-Office choices need no re-queue");
+  ok("per-field merge: keep-mine re-queued with server token, take-Office adopted, mixed choices honored");
+}
+
 console.log("\nFIELD PROPERTY/MAP CACHE SYNC: all " + n + " assertions passed");

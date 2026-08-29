@@ -156,7 +156,35 @@ function conflictDiff(mutation) {
   return rows;
 }
 
+// Diff-aware (per-field) conflict resolution. `choices` maps a diff field -> "mine" | "office" (default
+// "office"). Server is adopted as the base; the fields the rep keeps ("mine") are re-queued as a fresh
+// mutation carrying the server's new concurrency token so it applies cleanly on top.
+function mergeConflictResolution(mutation, choices) {
+  if (!mutation || mutation.state !== "conflict") return { action: "noop" };
+  const server = mutation.serverValue || {};
+  const body = mutation.body || {};
+  const mine = {};
+  for (const row of conflictDiff(mutation)) {
+    if ((choices || {})[row.field] === "mine" && row.field in body) mine[row.field] = body[row.field];
+  }
+  const propertyId = propertyIdForMutation(mutation);
+  const token = server.updated_at != null ? server.updated_at : null;
+  let requeue = null;
+  if (Object.keys(mine).length) {
+    const isVisit = mutation.kind === "visit" || "outcome" in mine;
+    const rbody = { ...mine, expected_updated_at: token };
+    if (isVisit) rbody.property_id = propertyId;
+    requeue = {
+      kind: isVisit ? "visit" : "property_patch",
+      method: isVisit ? "post" : "patch",
+      path: isVisit ? "/mobile/visits" : `/mobile/properties/${propertyId}`,
+      body: rbody,
+    };
+  }
+  return { action: "merge", removeClientId: mutation.client_id, propertyId, adoptServer: server, optimistic: mine, requeue };
+}
+
 module.exports = {
   propertyIdForMutation, reconcilePropertyDetail, reconcileCanvassFeatures, optimisticCanvassPatch,
-  resolveConflictPlan, conflictDiff,
+  resolveConflictPlan, conflictDiff, mergeConflictResolution,
 };

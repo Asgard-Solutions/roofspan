@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Diff-aware per-field conflict merge + outcome status colors (Field) (2026-06) — DONE (deterministic contracts); no git ops
+Two Field UX enhancements (mobile-only; no backend change):
+- **Diff-aware per-field merge:** NEW pure `fieldReconcile.mergeConflictResolution(mutation, choices)` + `sync.resolveFieldConflictMerge(client_id, choices)`. The conflict banner now shows a Mine/Office toggle per differing field (do_not_knock, DNK reason, notes, outcome) with an "Apply my choices" action. Resolution adopts the server snapshot as the base into detail + canvass caches, drops the conflicted mutation, and re-queues ONLY the fields the rep keeps ("mine") as a fresh mutation carrying the server's new `expected_updated_at` token (so it applies without re-conflicting). All-Office choices need no re-queue; the quick "Use all Office" / "Keep all mine" shortcuts remain.
+- **Outcome status colors:** per-outcome color dots (`OUTCOME_COLOR`) on the visit-selection chips and in visit history so reps scan status at a glance (icon-free; no new dependency — react-native-svg is the only vector lib present).
+- **Verification:** `field_reconcile.node.test.js` 13→**14** (per-field merge: keep-mine re-queued with server token, take-Office adopted, mixed + all-Office honored). Full `test:sketch` (sketch16/ack26/live-status16 + others) PASS; babel-preset-expo parse OK for Property/fieldReconcile/sync. Files: MODIFIED `mobile/src/fieldReconcile.js`, `mobile/src/sync.js`, `mobile/src/screens/Property.js`, `mobile/src/tests/field_reconcile.node.test.js`. No backend/dependency/lockfile change.
+- **Limitation:** RN screen (per-field toggles + colored dots) code-reviewed + Babel-parsed, NOT device-tested (Expo can't run on a device in-pod); the merge logic is under contract.
+
+
 ## Outcomes caching + conflict diff preview (Field) (2026-06) — DONE (deterministic contracts); no git ops
 Two Field UX enhancements (mobile-only; no backend change):
 - **Outcomes caching:** NEW `cache.visitOutcomes()` read-through (`visit_outcomes` cache key) — `Property.js` renders the six visit labels instantly and keeps them correct on a cold/offline open (falls back to the durable cached list; refreshes from `GET /api/visit-outcomes` when online). Removed the ad-hoc `api.get` in the screen.

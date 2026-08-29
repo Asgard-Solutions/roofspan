@@ -2,10 +2,20 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { cache, patchCachedDetail, patchCanvassFeature } from "../cache";
-import { queueMutation, conflictMutationForProperty, resolveFieldConflict } from "../sync";
+import { queueMutation, conflictMutationForProperty, resolveFieldConflict, resolveFieldConflictMerge } from "../sync";
 import { conflictDiff } from "../fieldReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
+
+// Per-outcome status color (scan-at-a-glance dot on chips + history). Icon-free (no extra dep).
+const OUTCOME_COLOR = {
+  no_answer: "#94A3B8",
+  not_interested: "#EF4444",
+  interested: "#22C55E",
+  callback: "#3B82F6",
+  appointment: "#8B5CF6",
+  do_not_knock: C.dnk,
+};
 
 // Canonical RoofSpan visit outcomes fallback (used offline / before the backend list loads). The live
 // list is fetched from GET /api/visit-outcomes so Field and Office render from ONE backend source.
@@ -33,6 +43,7 @@ export default function Property({ route, navigation }) {
   const [notes, setNotes] = useState("");
   const [outcomes, setOutcomes] = useState(FALLBACK_OUTCOMES);
   const [conflict, setConflict] = useState(null);
+  const [choices, setChoices] = useState({});
   const OUTCOME_LABEL = Object.fromEntries(outcomes);
 
   const load = useCallback(async () => {
@@ -57,9 +68,15 @@ export default function Property({ route, navigation }) {
 
   const resolveConflict = async (choice) => {
     await resolveFieldConflict(conflict.client_id, choice);
-    setConflict(null);
+    setConflict(null); setChoices({});
     await load();
     Alert.alert("Conflict resolved", choice === "use_server" ? "Using Office's version." : "Keeping your local change — retrying.");
+  };
+  const applyMerge = async () => {
+    await resolveFieldConflictMerge(conflict.client_id, choices);
+    setConflict(null); setChoices({});
+    await load();
+    Alert.alert("Conflict resolved", "Applied your per-field choices.");
   };
 
   const recordVisit = async () => {
@@ -105,15 +122,28 @@ export default function Property({ route, navigation }) {
         <View style={s.conflict} testID="property-conflict-banner">
           <Text style={s.conflictTitle}>Sync conflict — review required</Text>
           <Text style={s.conflictSub}>This home changed in Office while your change was offline.</Text>
-          {conflictDiff(conflict).map((row) => (
-            <View key={row.field} style={s.diffRow} testID={`conflict-diff-${row.field}`}>
-              <Text style={s.diffLabel}>{row.label}</Text>
-              <Text style={s.diffVals}><Text style={s.diffOffice}>Office: {row.server}</Text>  ·  <Text style={s.diffMine}>You: {row.local}</Text></Text>
-            </View>
-          ))}
+          {conflictDiff(conflict).map((row) => {
+            const pick = choices[row.field] || "office";
+            return (
+              <View key={row.field} style={s.diffRow} testID={`conflict-diff-${row.field}`}>
+                <Text style={s.diffLabel}>{row.label}</Text>
+                <View style={s.diffPick}>
+                  <TouchableOpacity onPress={() => setChoices((c) => ({ ...c, [row.field]: "office" }))} style={[s.pickBtn, pick === "office" && s.pickOffice]} testID={`conflict-pick-office-${row.field}`}>
+                    <Text style={[s.pickText, pick === "office" && s.pickTextOn]}>Office: {row.server}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setChoices((c) => ({ ...c, [row.field]: "mine" }))} style={[s.pickBtn, pick === "mine" && s.pickMine]} testID={`conflict-pick-mine-${row.field}`}>
+                    <Text style={[s.pickText, pick === "mine" && s.pickTextOn]}>You: {row.local}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })}
+          <TouchableOpacity style={s.applyBtn} onPress={applyMerge} testID="conflict-apply">
+            <Text style={s.conflictBtnText}>Apply my choices</Text>
+          </TouchableOpacity>
           <View style={s.conflictRow}>
-            <TouchableOpacity style={s.conflictBtn} onPress={() => resolveConflict("use_server")} testID="conflict-use-server"><Text style={s.conflictBtnText}>Use Office version</Text></TouchableOpacity>
-            <TouchableOpacity style={[s.conflictBtn, s.conflictBtnAlt]} onPress={() => resolveConflict("keep_local")} testID="conflict-keep-local"><Text style={[s.conflictBtnText, s.conflictBtnTextAlt]}>Keep my change</Text></TouchableOpacity>
+            <TouchableOpacity style={s.conflictBtn} onPress={() => resolveConflict("use_server")} testID="conflict-use-server"><Text style={s.conflictBtnText}>Use all Office</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.conflictBtn, s.conflictBtnAlt]} onPress={() => resolveConflict("keep_local")} testID="conflict-keep-local"><Text style={[s.conflictBtnText, s.conflictBtnTextAlt]}>Keep all mine</Text></TouchableOpacity>
           </View>
         </View>
       ) : null}
@@ -179,7 +209,10 @@ export default function Property({ route, navigation }) {
           return (
             <TouchableOpacity key={value} testID={`property-visit-${value}`}
               style={[s.chip, sel && s.chipOn, isDnk && { borderColor: C.dnk }]} onPress={() => setOutcome(value)}>
-              <Text style={[s.chipText, sel && s.chipTextOn, isDnk && !sel && { color: C.dnk }]}>{label}</Text>
+              <View style={s.chipInner}>
+                <View style={[s.dot, { backgroundColor: OUTCOME_COLOR[value] || "#94A3B8" }]} />
+                <Text style={[s.chipText, sel && s.chipTextOn, isDnk && !sel && { color: C.dnk }]}>{label}</Text>
+              </View>
             </TouchableOpacity>
           );
         })}
@@ -199,7 +232,10 @@ export default function Property({ route, navigation }) {
       <Text style={s.h}>Visit history</Text>
       {(prop.visits || []).map((v) => (
         <View key={v.id} style={s.visit}>
-          <Text style={s.visitOut}>{OUTCOME_LABEL[v.outcome] || v.outcome}</Text>
+          <View style={s.visitHead}>
+            <View style={[s.dot, { backgroundColor: OUTCOME_COLOR[v.outcome] || "#94A3B8" }]} />
+            <Text style={s.visitOut}>{OUTCOME_LABEL[v.outcome] || v.outcome}</Text>
+          </View>
           <Text style={s.visitMeta}>{new Date(v.visited_at).toLocaleString()} · {v.user_email}</Text>
           {v.notes ? <Text style={s.visitNote}>{v.notes}</Text> : null}
         </View>
@@ -217,10 +253,17 @@ const s = StyleSheet.create({
   conflictSub: { color: "#B91C1C", marginTop: 2, fontSize: 13 },
   diffRow: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#FECACA" },
   diffLabel: { color: "#7F1D1D", fontWeight: "700", fontSize: 12 },
-  diffVals: { fontSize: 13, marginTop: 2 },
-  diffOffice: { color: "#991B1B", fontWeight: "700" },
-  diffMine: { color: "#1D4ED8", fontWeight: "700" },
-  conflictRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  diffPick: { flexDirection: "row", gap: 8, marginTop: 6 },
+  pickBtn: { flex: 1, borderWidth: 1, borderColor: "#FCA5A5", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 8, alignItems: "center" },
+  pickOffice: { backgroundColor: "#991B1B", borderColor: "#991B1B" },
+  pickMine: { backgroundColor: "#1D4ED8", borderColor: "#1D4ED8" },
+  pickText: { fontSize: 12, fontWeight: "700", color: "#7F1D1D" },
+  pickTextOn: { color: "#fff" },
+  applyBtn: { backgroundColor: "#DC2626", borderRadius: 10, paddingVertical: 12, alignItems: "center", marginTop: 12 },
+  conflictRow: { flexDirection: "row", gap: 10, marginTop: 10 },
+  dot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
+  chipInner: { flexDirection: "row", alignItems: "center" },
+  visitHead: { flexDirection: "row", alignItems: "center" },
   conflictBtn: { flex: 1, backgroundColor: "#DC2626", borderRadius: 10, paddingVertical: 12, alignItems: "center" },
   conflictBtnText: { color: "#fff", fontWeight: "800" },
   conflictBtnAlt: { backgroundColor: "#fff", borderWidth: 2, borderColor: "#DC2626" },

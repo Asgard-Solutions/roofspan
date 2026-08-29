@@ -8,7 +8,7 @@ import queue from "./queue";
 import { send } from "./api";
 import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
-import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan } from "./fieldReconcile";
+import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 
@@ -183,6 +183,31 @@ export async function resolveFieldConflict(client_id, choice) {
     await saveMutation(plan.requeue);
     _emit({ type: "queued" });
     runSync().catch(() => {});
+  }
+  return plan;
+}
+
+// Diff-aware per-field merge: adopt the server base into caches, drop the conflicted mutation, then
+// re-queue ONLY the fields the rep chose to keep (with the server's fresh concurrency token).
+export async function resolveFieldConflictMerge(client_id, choices) {
+  const all = await loadAllMutations();
+  const m = all.find((x) => x.client_id === client_id);
+  if (!m) return { action: "noop" };
+  const plan = mergeConflictResolution(m, choices);
+  if (plan.action !== "merge") return plan;
+  if (plan.propertyId && plan.adoptServer) {
+    await mutateCache(`property:${plan.propertyId}`, (cur) => reconcilePropertyDetail("property_patch", plan.adoptServer, cur));
+    const names = await listCacheNames("section:");
+    for (const name of names) {
+      if (name.endsWith(":props")) await mutateCache(name, (cur) => reconcileCanvassFeatures("property_patch", plan.adoptServer, plan.propertyId, cur));
+    }
+  }
+  await _removeMutation(plan.removeClientId);
+  if (plan.requeue) {
+    await mutateCache(`property:${plan.propertyId}`, (cur) => ({ ...(cur || {}), ...plan.optimistic }));
+    await queueMutation(plan.requeue);
+  } else {
+    _emit({ type: "queued" });
   }
   return plan;
 }
