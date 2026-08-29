@@ -107,8 +107,9 @@ function createFieldEditor({ revisionId, structureId, initial, persist } = {}) {
     setEditMode(mode) { const next = RS.setEditMode(working, mode); editMode = next.edit_mode; return this.commit(next); },
     validate() { return RS.validateSketch(working); },
     buildDraft,
-    // Truthful drain: resolves to a status object; ok ONLY when the latest scheduled generation is
-    // durably persisted with no outstanding error.
+    // Truthful drain: resolves to a status object. ok = NO persistence error (durability). pending =
+    // a newer generation is still draining (not yet the final durable state). Callers must treat
+    // (ok && pending) as "still saving", not "saved" — see WIRE.localSaveStatus.
     async flush() {
       await chain;
       // ok reflects DURABILITY ONLY: a newer generation still pending (no error) is not a failure.

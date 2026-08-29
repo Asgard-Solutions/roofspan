@@ -64,6 +64,16 @@ on:
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
+      - "mobile/App.js"
+      - "mobile/src/roofSketchFieldController.js"
+      - "mobile/src/roofSketchFieldWiring.js"
+      - "mobile/src/roofSketchView.js"
+      - "mobile/src/screens/RoofSketch.js"
+      - "mobile/src/components/RoofSketchCanvas.js"
+      - "mobile/src/components/SketchInspector.js"
+      - "mobile/src/tests/roof_sketch_editor.node.test.js"
+      - "mobile/src/tests/roof_sketch_view.node.test.js"
+      - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
   pull_request:
     paths:
@@ -124,6 +134,16 @@ on:
       - "frontend/src/components/MeasurementWorksheet.jsx"
       - "mobile/src/sketchCache.js"
       - "mobile/src/tests/sketch_cache.node.test.js"
+      - "mobile/App.js"
+      - "mobile/src/roofSketchFieldController.js"
+      - "mobile/src/roofSketchFieldWiring.js"
+      - "mobile/src/roofSketchView.js"
+      - "mobile/src/screens/RoofSketch.js"
+      - "mobile/src/components/RoofSketchCanvas.js"
+      - "mobile/src/components/SketchInspector.js"
+      - "mobile/src/tests/roof_sketch_editor.node.test.js"
+      - "mobile/src/tests/roof_sketch_view.node.test.js"
+      - "mobile/src/tests/roof_sketch_live_wiring.node.test.js"
       - ".github/workflows/roof-takeoff-contract.yml"
 
 jobs:
