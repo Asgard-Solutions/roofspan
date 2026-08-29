@@ -174,7 +174,7 @@ const guardedDraftWrite = (existing, server, incoming) => {
     Number(existing && existing.document_version) || 0,
     Number(server && server.document_version) || 0
   );
-  return _rdw(existing, incoming, knownServerVersion);
+  return _rdw(existing, incoming, knownServerVersion, server);
 };
 
 // Required example — ordering: A(based v5) -> Office accepts A=v6 -> ack completes (A draft retired) ->
@@ -228,6 +228,77 @@ let restartDraft = null;
   assert.strictEqual(res.draft.edit_generation, 12, "newer draft preserved unchanged");
   assert.strictEqual(res.draft.document_version, 6, "CAS version not regressed");
   ok("a late older generation cannot overwrite a newer durable draft or regress its CAS version");
+}
+
+// ---- B3B1 DATA CONSISTENCY: CAS version and base_server_document stay together ----
+const S5 = { vertices: [{ id: "s5" }] };   // authoritative server document at v5
+const S6 = { vertices: [{ id: "s6" }] };   // authoritative server document at v6
+const S7 = { vertices: [{ id: "s7" }] };
+const srv = (v, doc) => ({ document_version: v, document: doc, edit_mode: "connected_graph" });
+const draftBase = (gen, ver, base) => makeSketchDraft("RB", "SB", { document: { vertices: [{ id: "b" + gen }] }, documentVersion: ver, baseServerDocument: base, editGeneration: gen });
+
+// Forward ordering — ack v6 (cached S6) -> late B(v5/base S5). Final durable B: local doc B, gen B,
+// version 6, base S6 (base advanced with the version, not left at S5).
+let consistencyDraft = null;
+{
+  const B = draftBase(11, 5, S5);
+  const res = guardedDraftWrite(null /* A retired */, srv(6, S6), B);
+  assert.strictEqual(res.write, true);
+  assert.strictEqual(res.draft.document_version, 6, "version floored 5 -> 6");
+  assert.deepStrictEqual(res.draft.base_server_document, S6, "base advanced S5 -> S6 with the version");
+  assert.strictEqual(res.draft.edit_generation, 11, "B's generation unchanged");
+  assert.strictEqual(res.draft.document.vertices[0].id, "b11", "B's LOCAL document unchanged (not replaced by S6)");
+  consistencyDraft = res.draft;
+  ok("ack v6 -> late B(v5/base S5) produces B(v6/base S6); local document + generation unchanged");
+}
+
+// Restart restores BOTH the CAS version 6 AND the base S6 from the durable draft.
+{
+  const initial = resolveInitialSketch({ draft: consistencyDraft, server: null, structureId: "SB" });
+  assert.strictEqual(initial.documentVersion, 6, "restart CAS version 6");
+  assert.deepStrictEqual(initial.baseServerDocument, S6, "restart base_server_document S6");
+  ok("restart restores CAS version 6 and base S6 together from the durable draft");
+}
+
+// Opposite ordering — B first (v5/base S5), then ack A at v6 -> B(v6/base S6) via applySketchAck.
+{
+  const B = draftBase(11, 5, S5);
+  const d = applySketchAck({ draft: B, ackGeneration: 10, serverValue: srv(6, S6) });
+  assert.strictEqual(d.case, "superseded");
+  assert.strictEqual(d.nextDraft.document_version, 6);
+  assert.deepStrictEqual(d.nextDraft.base_server_document, S6, "B's base advanced to S6");
+  assert.strictEqual(d.nextDraft.document.vertices[0].id, "b11", "B's local document preserved");
+  ok("opposite ordering (B first, then ack A) also produces B(v6/base S6)");
+}
+
+// A newer authoritative base already on the durable draft is NOT regressed by an older cached server.
+{
+  const existing = draftBase(11, 7, S7);      // durable draft already advanced to v7/S7
+  const incoming = draftBase(12, 5, S5);       // newer generation but stale base
+  const res = guardedDraftWrite(existing, srv(6, S6), incoming);
+  assert.strictEqual(res.write, true);
+  assert.strictEqual(res.draft.document_version, 7, "version not regressed below existing v7");
+  assert.deepStrictEqual(res.draft.base_server_document, S7, "existing newer base S7 preserved (not S6)");
+  ok("an existing newer authoritative base (S7) is not regressed by an older cached server (S6)");
+}
+
+// No authoritative server document available -> do NOT fabricate a base.
+{
+  const B = draftBase(11, 5, null);
+  const res = guardedDraftWrite(null, null, B);
+  assert.strictEqual(res.write, true);
+  assert.strictEqual(res.draft.base_server_document, null, "no base fabricated when none is available");
+  ok("no authoritative server document available -> base is not fabricated");
+}
+
+// Generation protection unchanged: an older generation still cannot overwrite newer durable work.
+{
+  const existing = draftBase(12, 6, S6);
+  const res = guardedDraftWrite(existing, srv(6, S6), draftBase(10, 5, S5));
+  assert.strictEqual(res.write, false, "older generation rejected");
+  assert.strictEqual(res.draft.edit_generation, 12);
+  assert.deepStrictEqual(res.draft.base_server_document, S6, "newer durable base preserved");
+  ok("generation protection unchanged: an older generation cannot overwrite newer durable work");
 }
 
 console.log("\nFIELD SKETCH ACK / CAS REBASE (B3B1): all " + n + " assertions passed");
