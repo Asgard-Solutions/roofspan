@@ -115,8 +115,12 @@ export default function RoofSketchCanvas({
       const g = gesture.current;
       const t = e.nativeEvent.touches;
       if (t.length >= 2) {
+        // A second finger during a vertex/penetration drag must discard the uncommitted preview so no
+        // moved-but-unsaved geometry survives into a later commit (data-integrity §2).
+        if ((g.mode === "drag" || g.mode === "possible_drag") && (g.dragVertexId || g.dragPenId)) { restore(); g.dragVertexId = null; g.dragPenId = null; }
         const now = twoState(t);
-        if (g.two) setView((v) => WIRE.applyTwoTouchView(v, g.two, now, { min: 0.05, max: 40 }));
+        if (!g.two) g.two = now;
+        else setView((v) => WIRE.applyTwoTouchView(v, g.two, now, { min: 0.05, max: 40 }));
         g.two = now; g.mode = "twofinger"; return;
       }
       const { locationX: sx, locationY: sy } = e.nativeEvent;
@@ -144,6 +148,16 @@ export default function RoofSketchCanvas({
         const r = RS.applyVertexDrop(g.startDoc, g.dragVertexId, cand);
         if (r.ok) { editor.commitFrom(g.startDoc, r.doc); onChanged && onChanged(); } else { restore(); onError && onError(r.reason); }
       } else if (g.mode === "drag" && g.dragPenId) { editor.commitFrom(g.startDoc, editor.document); onChanged && onChanged(); }
+      setSnap(null);
+      gesture.current = { mode: null, lastVertexId: g.lastVertexId, manualVertexIds: g.manualVertexIds, facetEdges: g.facetEdges };
+      rerender();
+    },
+    onPanResponderTerminationRequest: () => false,
+    // Interrupted gesture (OS/navigation): restore any uncommitted drag preview — never leave moved,
+    // unsaved geometry behind.
+    onPanResponderTerminate: () => {
+      const g = gesture.current;
+      if ((g.mode === "drag" || g.mode === "possible_drag") && (g.dragVertexId || g.dragPenId)) restore();
       setSnap(null);
       gesture.current = { mode: null, lastVertexId: g.lastVertexId, manualVertexIds: g.manualVertexIds, facetEdges: g.facetEdges };
       rerender();
