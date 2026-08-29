@@ -98,6 +98,14 @@ class PropertyDetail(PropertyOut):
     updated_at: Optional[datetime] = None
 
 
+class MobilePropertyDetail(PropertyDetail):
+    # TEMPORARY Field backward-compat aliases (derived from the canonical detail). Serialized through the
+    # SAME Pydantic model as Office so timestamps/JSON are byte-identical across the two apps.
+    owner_name: Optional[str] = None
+    owner_phone: Optional[str] = None
+    existing_lead_id: Optional[str] = None
+
+
 class PropertyCreate(BaseModel):
     territory_id: Optional[str] = None
     address_line1: str = ""

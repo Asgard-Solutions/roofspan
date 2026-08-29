@@ -108,10 +108,19 @@ async def _run():
         rep_other_u = FakeUser(rep_other.id, role="sales", email=rep_other.email)
 
         # ---- 1 & 3. Parity: Office and Field build the SAME canonical detail ----
-        office = (await office_get_property(str(p.id), user=owner_u, db=db)).model_dump()
-        mobile = await mobile_get_property(str(p.id), user=rep_u, db=db)
+        office_model = await office_get_property(str(p.id), user=owner_u, db=db)
+        mobile_model = await mobile_get_property(str(p.id), user=rep_u, db=db)
+        office = office_model.model_dump()
+        mobile = mobile_model.model_dump()
         for k in CANONICAL_KEYS:
             assert office[k] == mobile[k], f"canonical field '{k}' differs: office={office[k]!r} mobile={mobile[k]!r}"
+        # WIRE parity: serialized JSON timestamps must be byte-identical (both go through Pydantic).
+        import json as _json
+        o_json = _json.loads(office_model.model_dump_json())
+        m_json = _json.loads(mobile_model.model_dump_json())
+        for k in ("created_at", "updated_at"):
+            assert o_json[k] == m_json[k], f"wire timestamp '{k}' differs: {o_json[k]!r} vs {m_json[k]!r}"
+        assert o_json["visits"] == m_json["visits"], "wire visits[] (incl. timestamps) must be byte-identical"
         # every canonical attribute is present and correct
         assert office["external_id"] == "RS-PARITY-EXT-1"
         assert office["bedrooms"] == 4 and office["bathrooms"] == 2.5 and office["square_footage"] == 2450
@@ -160,7 +169,7 @@ async def _run():
         print("PASS: all 6 canonical outcomes validate; unsupported outcomes rejected on both schemas")
 
         # ---- 5. Authorization: authorized rep OK; unauthorized rep 403 on BOTH routes ----
-        assert (await mobile_get_property(str(p.id), user=rep_u, db=db))["id"] == str(p.id)
+        assert (await mobile_get_property(str(p.id), user=rep_u, db=db)).id == str(p.id)
         assert (await office_get_property(str(p.id), user=rep_u, db=db)).id == str(p.id)
         for route, label in ((mobile_get_property, "mobile"), (office_get_property, "office")):
             try:

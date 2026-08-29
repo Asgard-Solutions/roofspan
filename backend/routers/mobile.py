@@ -23,6 +23,7 @@ from services.property_detail import build_property_detail, with_field_compat_al
 from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
 from schemas_sketch import SketchWriteIn
+from schemas_phase2 import MobilePropertyDetail
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
@@ -837,11 +838,37 @@ async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_
 # ============================================================================
 # Mobile Property detail (salesperson-authorized; canvass/field context only)
 # ============================================================================
-@router.get("/properties/{property_id}")
+@router.get("/properties/{property_id}", response_model=MobilePropertyDetail)
 async def get_property(property_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     p = await mauthz.assert_property_access(db, property_id, user)
-    # SAME canonical builder as Office GET /api/properties/{id} — one interpretation of the home.
-    detail = await build_property_detail(db, p)
-    # TEMPORARY additive Field compat aliases (owner_name/owner_phone/existing_lead_id) derived from the
-    # canonical detail; removed once the Field UI migrates to contacts[]/lead_id (next iteration).
-    return with_field_compat_aliases(detail)
+    # SAME canonical builder + SAME Pydantic serialization as Office GET /api/properties/{id}.
+    detail = with_field_compat_aliases(await build_property_detail(db, p))
+    return MobilePropertyDetail(**detail)
+
+
+class MobilePropertyPatch(BaseModel):
+    do_not_knock: bool | None = None
+    do_not_knock_reason: str | None = None
+    notes: str | None = None
+
+
+@router.patch("/properties/{property_id}")
+async def patch_property(property_id: str, payload: MobilePropertyPatch, request: Request,
+                         user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Authorized Field Property mutation (Do Not Knock on/off + notes). Property-level authorization is
+    enforced server-side (canvass/lead/job scope for sales). DNK behavior mirrors Office exactly — it
+    simply sets the same do_not_knock/reason columns (no divergent mobile rule)."""
+    p = await mauthz.assert_property_access(db, property_id, user)
+    fields = payload.model_dump(exclude_unset=True)
+    if "do_not_knock" in fields:
+        p.do_not_knock = fields["do_not_knock"]
+    if "do_not_knock_reason" in fields:
+        p.do_not_knock_reason = fields["do_not_knock_reason"]
+    if "notes" in fields:
+        p.notes = fields["notes"]
+    await db.commit()
+    await db.refresh(p)
+    if "do_not_knock" in fields:
+        await log_action(db, user=user, action="property.do_not_knock", entity_type="property", entity_id=p.id, detail={"do_not_knock": p.do_not_knock, "via": "mobile"}, request=request)
+    detail = with_field_compat_aliases(await build_property_detail(db, p))
+    return MobilePropertyDetail(**detail)
