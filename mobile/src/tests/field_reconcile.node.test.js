@@ -207,4 +207,21 @@ const feat = (coll, id) => coll.features.find((f) => f.properties.id === id).pro
   ok("per-field merge: keep-mine re-queued with server token, take-Office adopted, mixed choices honored");
 }
 
+// ---- merge audit note (which fields were kept-mine vs took-Office rides along for Office) ----
+{
+  const m = { client_id: "property-patch:P1", kind: "property_patch", state: "conflict",
+    path: "/mobile/properties/P1",
+    body: { do_not_knock: true, notes: "mine notes" },
+    serverValue: { id: "P1", do_not_knock: false, notes: "office notes", updated_at: "T-NEW", visits: [], lead_id: null } };
+  // keep MY do_not_knock, take Office notes -> audit note recorded on the re-queued patch
+  const plan = R.mergeConflictResolution(m, { do_not_knock: "mine", notes: "office" });
+  assert.deepStrictEqual(plan.resolution, { kept_mine: ["do_not_knock"], took_office: ["notes"] }, "plan carries the resolution record");
+  assert.deepStrictEqual(plan.requeue.body.resolution, { kept_mine: ["do_not_knock"], took_office: ["notes"] }, "audit note rides along on the re-queued patch");
+  // pure adopt-Office -> resolution still computed, but NO patch/audit note is emitted
+  const allOffice = R.mergeConflictResolution(m, { do_not_knock: "office", notes: "office" });
+  assert.deepStrictEqual(allOffice.resolution, { kept_mine: [], took_office: ["do_not_knock", "notes"] });
+  assert.strictEqual(allOffice.requeue, null, "pure adopt-Office records no audit note (no re-queue)");
+  ok("merge audit note: kept-mine vs took-Office recorded on the re-queue; pure adopt-Office emits none");
+}
+
 console.log("\nFIELD PROPERTY/MAP CACHE SYNC: all " + n + " assertions passed");

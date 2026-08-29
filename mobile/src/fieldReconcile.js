@@ -163,25 +163,28 @@ function mergeConflictResolution(mutation, choices) {
   if (!mutation || mutation.state !== "conflict") return { action: "noop" };
   const server = mutation.serverValue || {};
   const body = mutation.body || {};
-  const mine = {};
+  const PROP_FIELDS = new Set(["do_not_knock", "do_not_knock_reason", "notes"]);
+  const kept_mine = [];
+  const took_office = [];
+  const mineProps = {};
   for (const row of conflictDiff(mutation)) {
-    if ((choices || {})[row.field] === "mine" && row.field in body) mine[row.field] = body[row.field];
+    const mine = (choices || {})[row.field] === "mine";
+    (mine ? kept_mine : took_office).push(row.field);
+    if (mine && PROP_FIELDS.has(row.field) && row.field in body) mineProps[row.field] = body[row.field];
   }
   const propertyId = propertyIdForMutation(mutation);
   const token = server.updated_at != null ? server.updated_at : null;
-  let requeue = null;
-  if (Object.keys(mine).length) {
-    const isVisit = mutation.kind === "visit" || "outcome" in mine;
-    const rbody = { ...mine, expected_updated_at: token };
-    if (isVisit) rbody.property_id = propertyId;
-    requeue = {
-      kind: isVisit ? "visit" : "property_patch",
-      method: isVisit ? "post" : "patch",
-      path: isVisit ? "/mobile/visits" : `/mobile/properties/${propertyId}`,
-      body: rbody,
-    };
-  }
-  return { action: "merge", removeClientId: mutation.client_id, propertyId, adoptServer: server, optimistic: mine, requeue };
+  const resolution = { kept_mine, took_office };
+  // Only re-queue when the rep kept at least one field. The audit note (which fields were kept-mine vs
+  // took-Office) rides along on that patch so Office sees how the conflict was settled. A pure
+  // adopt-Office resolution needs no patch — nothing to write and no audit note is recorded.
+  const requeue = kept_mine.length
+    ? {
+        kind: "property_patch", method: "patch", path: `/mobile/properties/${propertyId}`,
+        body: { ...mineProps, resolution, expected_updated_at: token },
+      }
+    : null;
+  return { action: "merge", removeClientId: mutation.client_id, propertyId, adoptServer: server, optimistic: mineProps, resolution, requeue };
 }
 
 module.exports = {

@@ -847,10 +847,37 @@ async def get_property(property_id: str, user: User = Depends(require_roles(*FIE
     return PropertyDetail(**await build_property_detail(db, p))
 
 
+class ConflictResolution(BaseModel):
+    kept_mine: list[str] = []
+    took_office: list[str] = []
+
+
+# Human-readable labels for the merge audit note (matches the Field conflict-diff labels).
+_RESOLUTION_FIELD_LABELS = {
+    "do_not_knock": "Do Not Knock",
+    "do_not_knock_reason": "DNK reason",
+    "notes": "Notes",
+    "outcome": "Visit outcome",
+}
+
+
+def _resolution_note(res: ConflictResolution) -> str:
+    def _labels(fields):
+        return ", ".join(_RESOLUTION_FIELD_LABELS.get(f, f) for f in fields)
+    parts = []
+    if res.kept_mine:
+        parts.append(f"kept {_labels(res.kept_mine)} (yours)")
+    if res.took_office:
+        parts.append(f"took {_labels(res.took_office)} (Office)")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"— Sync conflict resolved {ts}: " + "; ".join(parts)
+
+
 class MobilePropertyPatch(BaseModel):
     do_not_knock: bool | None = None
     do_not_knock_reason: str | None = None
     notes: str | None = None
+    resolution: ConflictResolution | None = None   # merge audit note (kept-mine vs took-Office)
     expected_updated_at: datetime | None = None    # optimistic-concurrency token
 
 
@@ -869,8 +896,17 @@ async def patch_property(property_id: str, payload: MobilePropertyPatch, request
         p.do_not_knock_reason = fields["do_not_knock_reason"]
     if "notes" in fields:
         p.notes = fields["notes"]
+    # Merge audit note: how the rep settled a sync conflict (which fields were kept-mine vs took-Office).
+    # Appended to the property notes AND recorded in the audit log so Office can see how it was resolved.
+    has_resolution = payload.resolution is not None and (payload.resolution.kept_mine or payload.resolution.took_office)
+    if has_resolution:
+        note = _resolution_note(payload.resolution)
+        p.notes = f"{p.notes}\n{note}" if p.notes else note
     await db.commit()
     await db.refresh(p)
     if "do_not_knock" in fields:
         await log_action(db, user=user, action="property.do_not_knock", entity_type="property", entity_id=p.id, detail={"do_not_knock": p.do_not_knock, "via": "mobile"}, request=request)
+    if has_resolution:
+        await log_action(db, user=user, action="property.conflict_resolved", entity_type="property", entity_id=p.id,
+                         detail={"kept_mine": payload.resolution.kept_mine, "took_office": payload.resolution.took_office, "via": "mobile"}, request=request)
     return PropertyDetail(**await build_property_detail(db, p))
