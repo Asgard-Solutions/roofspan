@@ -7,12 +7,14 @@ import * as RS from "@roofspan/roof-sketch-core";
 import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
-import { loadSketchDraft, saveSketchDraftStrict, cache } from "../cache";
-import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
+import { loadSketchDraft, saveSketchDraftStrict, cache, cacheMeasurementDetail } from "../cache";
+import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, currentMeasurementMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
 import { conflictReview } from "../roofSketchConflict";
+import * as RECON from "../roofProposalReconcile";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
 import SketchConflictReview from "../components/SketchConflictReview";
+import ProposalPanel from "../components/ProposalPanel";
 import { C } from "../theme";
 
 const TOOLS = [["select", "Select"], ["draw", "Draw"], ["facet", "Facet"], ["penetration", "Roof feature"], ["pan", "Pan"]];
@@ -29,6 +31,8 @@ export default function RoofSketch({ route }) {
   const [conflict, setConflict] = useState(null);       // B3C: Base/Local/Office review, or null
   const [locked, setLocked] = useState(false);          // B3D: revision locked live while editor is open
   const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
+  const [measDetail, setMeasDetail] = useState(null);   // Phase C: authoritative measurement revision detail
+  const [measMutState, setMeasMutState] = useState(null); // Phase C: measurement_update mutation state
   const [, bump] = useState(0);
   const rerender = useCallback(() => bump((x) => x + 1), []);
   const editorRef = useRef(null);
@@ -190,6 +194,61 @@ export default function RoofSketch({ route }) {
     return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
   }, [ready, readOnly, stageNow, refreshSync]);
 
+  // Phase C: load the authoritative Measurement Revision detail + the measurement_update mutation state,
+  // then FINALIZE any pending acceptances whose value the revision now actually holds (durable promotion,
+  // skipped while editing is blocked so a locked revision is never mutated). Event-driven off the queue.
+  const refreshMeasurement = useCallback(async () => {
+    try {
+      const res = await cache.measurement(revision_id);
+      const detail = res && res.data ? res.data : null;
+      const mm = await currentMeasurementMutation(revision_id);
+      setMeasDetail(detail);
+      setMeasMutState(mm ? mm.state : null);
+      const ed = editorRef.current;
+      if (ed && !editingBlockedRef.current) {
+        const fin = RECON.finalizeDecisions(ed.document, { measurementDetail: detail, measurementMutationState: mm ? mm.state : null });
+        if (fin.changed) { ed.commit(fin.doc); settle(); }
+      }
+    } catch (e) { /* offline/cache miss — proposals simply compare against what we have */ }
+  }, [revision_id, settle]);
+
+  useEffect(() => {
+    if (!ready) return;
+    refreshMeasurement();
+    const unsub = onSyncChange(() => refreshMeasurement());
+    return unsub;
+  }, [ready, refreshMeasurement]);
+
+  // Accept Proposed: route the value through the EXISTING Field measurement_update workflow (newest
+  // durable revision detail, ONLY the mapped value changed, all else preserved, coalescing + If-Match),
+  // AND record a durable pending_accept provenance decision on the sketch. Never reports Accepted here —
+  // promotion happens only in refreshMeasurement once the authoritative revision holds the value.
+  const onAcceptProposal = useCallback(async (row) => {
+    const ed = editorRef.current;
+    if (!ed || editingBlockedRef.current || !row || !row.canAccept || !row.relational_id) return;
+    const rec = { target_type: row.target_type, metric: row.metric, target_id: row.sketch_id };
+    const res = await cache.measurement(revision_id);
+    const current = res && res.data ? res.data : measDetail;
+    const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });
+    if (upd.changed) {
+      await cacheMeasurementDetail(upd.nextDetail);
+      await queueMutation({ kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`, body: upd.body, ifMatch: upd.ifMatch, label: "Roof measurement" });
+    }
+    ed.commit(RECON.acceptProposalDecision(ed.document, rec, row.relational_id, row.proposed));
+    settle();
+    refreshMeasurement();
+  }, [revision_id, measDetail, settle, refreshMeasurement]);
+
+  // Keep Current: provenance only — no measurement mutation. Durable via the sketch draft/queue.
+  const onKeepCurrent = useCallback((row) => {
+    const ed = editorRef.current;
+    if (!ed || editingBlockedRef.current || !row || !row.canKeep) return;
+    const rec = { target_type: row.target_type, metric: row.metric, target_id: row.sketch_id };
+    ed.commit(RECON.keepCurrentDecision(ed.document, rec, row.relational_id || row.sketch_id));
+    settle();
+    rerender();
+  }, [settle, rerender]);
+
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
   const doCommit = (arg) => {
@@ -235,6 +294,10 @@ export default function RoofSketch({ route }) {
   if (!ready || !editor) return <View style={sx.centered}><Text style={sx.dim}>{status}…</Text></View>;
 
   const scaleResolved = editor.document.scale && editor.document.scale.resolved;
+  const proposals = RECON.buildFieldProposals({
+    doc: editor.document, measurementDetail: measDetail, structureId: structure_id,
+    editingBlocked, measurementMutationState: measMutState,
+  });
 
   return (
     <View style={sx.container} testID="roof-sketch-screen">
@@ -292,6 +355,8 @@ export default function RoofSketch({ route }) {
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
       {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
+
+      <ProposalPanel rows={proposals} onAccept={onAcceptProposal} onKeep={onKeepCurrent} />
 
       <View style={sx.toolStrip}>
         {TOOLS.map(([t, label]) => (
