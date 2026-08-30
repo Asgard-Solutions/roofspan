@@ -2,7 +2,7 @@
 // inspector, tools, undo/redo, validation, and HONEST on-device draft status. Uses the pure wiring
 // adapters so the production paths are the ones under contract. B2A = LOCAL draft only (no PUT — B3).
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, AppState } from "react-native";
 import * as RS from "@roofspan/roof-sketch-core";
 import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
@@ -27,6 +27,7 @@ export default function RoofSketch({ route }) {
   const [status, setStatus] = useState(readOnly ? "Locked" : "Loading");
   const [resetToken, setResetToken] = useState(0);
   const [conflict, setConflict] = useState(null);       // B3C: Base/Local/Office review, or null
+  const [locked, setLocked] = useState(false);          // B3D: revision locked live while editor is open
   const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
   const [, bump] = useState(0);
   const rerender = useCallback(() => bump((x) => x + 1), []);
@@ -73,6 +74,10 @@ export default function RoofSketch({ route }) {
     if (!editedRef.current && !m) return;
     const draft = await loadSketchDraft(revision_id, structure_id);
     if (seq !== syncStateRef.current.seq) return;   // a newer refresh superseded this one
+    // B3D: a live immutable-revision lock for THIS structure surfaces the locked banner and blocks
+    // editing immediately. It preserves the local draft (never adopts stale server/cache over newer
+    // local work — applySketchRefresh only advances CAS metadata monotonically, never the geometry).
+    setLocked(WIRE.deriveSketchLocked(m));
     // B3C: a real 409 for THIS structure surfaces the Base/Local/Office review and locks editing.
     setConflict(m && m.state === "conflict" ? conflictReview(m, draft) : null);
     // Latest-wins: discard this result if a newer refresh has since started (out-of-order async reads).
@@ -97,7 +102,7 @@ export default function RoofSketch({ route }) {
 
   const editor = editorRef.current;
   const conflictActive = !!conflict;                  // B3C: a real 409 is awaiting explicit resolution
-  const editingBlocked = WIRE.editingLocked({ readOnly, conflict });  // no edits/undo/redo/mode/Save/build while blocked
+  const editingBlocked = WIRE.editingLocked({ readOnly, conflict, locked });  // no edits/undo/redo/mode/Save/build while blocked
   editingBlockedRef.current = editingBlocked;         // fresh value for stable useCallback handlers
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
 
@@ -157,6 +162,33 @@ export default function RoofSketch({ route }) {
     if (stageTimer.current) clearTimeout(stageTimer.current);
     stageTimer.current = setTimeout(() => { stageTimer.current = null; stageNow().then(() => refreshSync()); }, 800);
   }, [editor, rerender, stageNow, refreshSync]);
+
+  // B3D: app lifecycle durability + recovery (event-driven; NO polling).
+  //  • Background/inactive: flush the LATEST COMMITTED generation to durable local persistence, THEN
+  //    stage it into the durable deterministic queue — in that exact order. stageFromController awaits
+  //    the editor's serialized persist chain, so an in-flight persist safely completes first and the
+  //    queue can never capture an older generation. If editing is blocked (locked/conflict) we still
+  //    flush so the unsynced draft is preserved on device, but never stage against a locked revision.
+  //  • Foreground: re-run the same generation/CAS-safe refresh (existing auto-sync re-sends pending
+  //    work on foreground; a now-locked revision surfaces via that send's lock response).
+  useEffect(() => {
+    if (!ready || readOnly) return;
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "background" || s === "inactive") {
+        if (stageTimer.current) { clearTimeout(stageTimer.current); stageTimer.current = null; }
+        const ed = editorRef.current;
+        if (!ed) return;
+        if (editedRef.current && !editingBlockedRef.current) {
+          stageNow().then(() => refreshSync()).catch(() => {});
+        } else {
+          ed.flush().catch(() => {});   // preserve the latest committed draft durably, even when blocked
+        }
+      } else if (s === "active") {
+        refreshSync();
+      }
+    });
+    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
+  }, [ready, readOnly, stageNow, refreshSync]);
 
   const onError = (reason) => Alert.alert("Cannot do that", humanReason(reason));
 
@@ -258,6 +290,7 @@ export default function RoofSketch({ route }) {
       ) : null}
 
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
+      {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
 
       <View style={sx.toolStrip}>

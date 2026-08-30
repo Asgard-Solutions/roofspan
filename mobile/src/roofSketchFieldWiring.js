@@ -94,6 +94,7 @@ function fieldSketchSyncStatus({ localSave, mutation, running, currentGeneration
   if (localSave === "Could not save on device") return localSave;
   if (localSave === "Saving on device…") return localSave;
   const state = mutation && mutation.state;
+  if (state === "locked") return "Measurement revision locked";   // B3D: immutable revision — terminal
   if (state === "conflict") return "Conflict — review required";
   if (state === "failed") return "Sync issue — retry needed";     // durable, will NOT auto-retry
   if (state === "pending") return running ? "Synchronizing…" : "Waiting to sync";
@@ -130,11 +131,17 @@ function applySketchRefresh({ seq, state, editor, mutation, draft, running, setS
   return { applied: true, status };
 }
 
-// B3C: the single predicate for whether document-changing routes are blocked. A locked revision
-// (readOnly) OR an unresolved sync conflict blocks every commit/stage/undo/redo/mode/build path. Used by
-// BOTH the screen handlers (defensive guards, not just disabled UI) and contracts.
-function editingLocked({ readOnly, conflict } = {}) {
-  return !!readOnly || !!conflict;
+// B3C/B3D: the single predicate for whether document-changing routes are blocked. A locked revision
+// (readOnly, OR a live-detected immutable-revision lock), OR an unresolved sync conflict blocks every
+// commit/stage/undo/redo/mode/build path. Used by BOTH the screen handlers (defensive guards, not just
+// disabled UI) and contracts.
+function editingLocked({ readOnly, conflict, locked } = {}) {
+  return !!readOnly || !!conflict || !!locked;
+}
+
+// B3D: the durable mutation for THIS structure is in the terminal immutable-revision LOCKED state.
+function deriveSketchLocked(mutation) {
+  return !!(mutation && mutation.state === "locked");
 }
 
 module.exports = {
@@ -152,6 +159,7 @@ module.exports = {
   nextRefreshSeq,
   applySketchRefresh,
   editingLocked,
+  deriveSketchLocked,
   stageFromController,
 };
 
