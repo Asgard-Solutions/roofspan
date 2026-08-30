@@ -334,12 +334,13 @@ export async function replacePhoto(client_id, photo) {
 // Simple salesperson-facing status derived from the durable queue.
 export async function pendingSummary() {
   const all = await loadAllMutations();
-  const by = { pending: 0, failed: 0, conflict: 0, synced: 0 };
+  const by = { pending: 0, failed: 0, conflict: 0, synced: 0, locked: 0 };
   for (const m of all) by[m.state] = (by[m.state] || 0) + 1;
   const last = await getCache(LAST_SYNC);
   const waiting = by.pending + by.failed;
   let label = "All changes synced";
   if (by.conflict > 0) label = `${by.conflict} sync issue${by.conflict > 1 ? "s" : ""} to review`;
+  else if (by.locked > 0) label = `${by.locked} locked revision sketch${by.locked > 1 ? "es" : ""} — new revision needed`;
   else if (_running) label = "Synchronizing…";
   else if (waiting > 0) label = `${waiting} change${waiting > 1 ? "s" : ""} waiting to sync`;
   return { items: all, counts: by, waiting, lastSyncAt: last, label, syncing: _running };

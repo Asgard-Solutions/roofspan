@@ -2,7 +2,18 @@
 // No Expo/React imports so it is unit-testable in Node against the live backend.
 // CommonJS so it runs in both Metro (RN) and plain Node.
 
-const STATES = { PENDING: "pending", SYNCED: "synced", FAILED: "failed", CONFLICT: "conflict" };
+const STATES = { PENDING: "pending", SYNCED: "synced", FAILED: "failed", CONFLICT: "conflict", LOCKED: "locked" };
+
+// B3D: precise, SCOPED classification of a Roof Sketch 409. The sketch PUT route emits EXACTLY two
+// 409s: (a) a version conflict, whose detail is an OBJECT carrying the authoritative `server` sketch,
+// and (b) an immutable/locked-revision refusal, whose detail is a plain STRING ("...revision is locked
+// ... Create a new revision..."). We treat the absence of a `server` object on a measurement_sketch_update
+// 409 as the locked case — never a broad global substring rule, so unrelated mutations are unaffected.
+function isSketchRevisionLocked(mutation, detail) {
+  if (!mutation || mutation.kind !== "measurement_sketch_update") return false;
+  const hasServer = detail && typeof detail === "object" && detail.server != null;
+  return !hasServer;   // sketch conflicts always carry `server`; the only other sketch 409 is the lock
+}
 
 // Formats the Office /api/mobile/photos endpoint accepts. Reject others locally instead of queuing
 // an item the backend will 4xx.
@@ -151,6 +162,15 @@ async function processMutation(m, send) {
     }
     if (s === 409) {
       const detail = res.data && res.data.detail;
+      // B3D: an immutable/locked measurement revision is a DURABLE terminal state — the salesperson's
+      // unsynced document (m.body.document + local_edit_generation) is preserved verbatim and NEVER
+      // auto-retried (processQueue only reprocesses pending/failed). Scoped strictly to sketch PUTs.
+      if (isSketchRevisionLocked(m, detail)) {
+        const message = (typeof detail === "string" && detail)
+          || (detail && detail.message)
+          || "This measurement revision is locked. Create a new revision to edit its sketch.";
+        return { ...m, state: STATES.LOCKED, error: message, errorCode: "revision_locked", attempts };
+      }
       const msg = (detail && detail.message) || "Changed on server — needs your attention";
       const serverValue = (detail && detail.server) || null;
       return { ...m, state: STATES.CONFLICT, error: msg, serverValue, attempts };
@@ -183,5 +203,5 @@ module.exports = {
   STATES, uuidv4, makeMutation, processMutation, processQueue,
   nextGeneration, shouldApplyResult, stampGeneration,
   SUPPORTED_PHOTO_TYPES, MAX_RELAY_PHOTO_BYTES, isPhotoMutation, validatePhotoMeta, validateLocalPhotoInfo,
-  buildSendPlan, photoErrorLabel, isPermanentFailure,
+  buildSendPlan, photoErrorLabel, isPermanentFailure, isSketchRevisionLocked,
 };

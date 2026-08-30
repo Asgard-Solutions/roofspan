@@ -1517,3 +1517,38 @@ Verified: grep confirms no other stray OUTCOMES refs (LeadDetail.js has its own 
 `npx expo export --platform android` bundles cleanly (jsc temp during hermesc pod limitation, reverted);
 node contracts test:reconcile 15/15, test:sketch B3C 23/23 pass. test:sync fails w/ 404 = no live
 backend in pod (pre-existing env limitation, unrelated). User must trigger fresh EAS build to test on device.
+
+## PHASE B3D — Field Live Revision Lock + Background/Foreground Durability (2026-06) — DONE (client-only)
+Goal: close the reliability gap so an open Field Roof Sketch survives backgrounding/offline/restart and
+STOPS editing the instant Office locks the measurement revision, with zero silent data loss. NO backend
+changes (immutability behavior byte-identical; the live pytest 502/DB-less env limits stand).
+Key insight: the sketch PUT route already returns 409 for BOTH a version conflict (detail is an OBJECT
+with `server`) and an immutable/locked revision (detail is a plain STRING, no `server`). B3D distinguishes
+them CLIENT-side, scoped strictly to kind==="measurement_sketch_update".
+Changes:
+- queue.js: new durable state STATES.LOCKED + isSketchRevisionLocked(mutation, detail). A sketch 409 with
+  no detail.server -> LOCKED (terminal): never auto-retried (processQueue only reprocesses pending/failed),
+  local document + local_edit_generation preserved verbatim, errorCode "revision_locked". Non-sketch 409s
+  untouched (scope guard — a 'locked' word in an unrelated 409 is NOT hijacked).
+- roofSketchFieldWiring.js: fieldSketchSyncStatus -> "Measurement revision locked"; editingLocked() now
+  also blocks on {locked}; new deriveSketchLocked(mutation).
+- RoofSketch.js: AppState listener. BACKGROUND/INACTIVE -> flush latest COMMITTED gen to durable local
+  persist THEN stage into durable queue (stageFromController awaits the serialized persist chain, so an
+  in-flight persist lands first; queue can't capture an older gen). If blocked, still flush (preserve
+  draft) but never stage a locked revision. ACTIVE -> refreshSync (gen/CAS-safe; never overwrites newer
+  local work). refreshSync sets locked via deriveSketchLocked; editingBlocked includes locked; new
+  "revision-locked-banner". Conflict-then-lock: a conflict row is never auto-resent/auto-resolved (only
+  pending/failed are processed) so the draft + conflict info are preserved, editing stays disabled.
+- sync.js: pendingSummary honestly reports locked ("N locked revision sketch(es) — new revision needed");
+  locked never counted as "waiting to sync".
+Test: NEW deterministic contract mobile/src/tests/roof_sketch_live_lock.node.test.js (13 assertions),
+added to `npm run test:sketch`. ALL green: sketch suite (Core26/Topo31/EdgeAuth10/Cache15/SyncOrch11/
+CleanRace8/Viewport13/Editor44/LiveWiring36/B3A16/B3B1-26/B3B2-16/B3C23/B3D13), reconcile15, measurements,
+canvass/pairing/map/transport. Backend HERMETIC regression (started local Postgres 15 + alembic head):
+test_measurement_sketch_service/api/concurrency + test_measurements_lifecycle PASS (immutability locked→409
+intact); geometry core 26/31/10. Metro `expo export --platform android` bundles clean (jsc temp, reverted).
+Env limits (unchanged): mobile refresh/sync node tests + backend *_pytest/photos live tests need a
+running/seeded server (localhost:8001 / external preview) — not runnable in pod.
+DEVICE-ONLY validation for the fresh EAS build: background/return with pending work; app restart with
+pending sketch; reconnect+sync; Office locks the revision live -> banner + all edit paths (draw/move/delete/
+facet/manual/feature/calibrate/dimensions/Undo/Redo/Save) disabled; unsynced work preserved after lock.
