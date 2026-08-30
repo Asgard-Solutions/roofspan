@@ -16,6 +16,8 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
+      - "package.json"
+      - "package-lock.json"
       - "windows/**"
       - "deploy/railway/**"
       - "infra/config/production.endpoints.env.example"
@@ -35,6 +37,8 @@ on:
       - "frontend/src/pages/admin/Users.jsx"
       - "frontend/yarn.lock"
       - "mobile/**"
+      - "package.json"
+      - "package-lock.json"
       - "windows/**"
       - "deploy/railway/**"
       - "infra/config/production.endpoints.env.example"
@@ -94,10 +98,13 @@ jobs:
           CI: "false"
         run: yarn build
 
+      - name: Install RoofSpan Mobile dependencies (npm workspace root)
+        working-directory: ${{ github.workspace }}
+        run: npm ci
+
       - name: Validate RoofSpan Mobile pairing configuration and helpers
         working-directory: mobile
         run: |
-          npm ci
           npm run test:pairing
           npx expo config --type public > /tmp/roofspan-expo-config.json
           grep -q 'cp.roofspan.io' /tmp/roofspan-expo-config.json
