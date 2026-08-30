@@ -1507,3 +1507,13 @@ are skipped by Save. FIX: apply the needed change to the generated file via `sea
 identical to the tool's output). Confirmed with support@emergent.sh. This is why the corrected
 `frontend/yarn.lock` (adding `@roofspan/roof-sketch-core@file:` entry) repeatedly failed to publish
 until re-applied via search_replace (blob 1d4e4c1, replacing broken 2d6b580).
+
+## MOBILE CRASH FIX — Property.js OUTCOMES ReferenceError (2026-06)
+FIXED: `mobile/src/screens/Property.js` line 30 referenced undefined `OUTCOMES` in
+`Object.fromEntries(OUTCOMES)` — the array had been renamed to `FALLBACK_OUTCOMES` (line 22) but this
+usage was missed. Caused `ReferenceError: Property 'OUTCOMES' doesn't exist` (FATAL JavascriptException)
+crashing the native Android app instantly on launch. Fix: `Object.fromEntries(FALLBACK_OUTCOMES)`.
+Verified: grep confirms no other stray OUTCOMES refs (LeadDetail.js has its own local const, fine);
+`npx expo export --platform android` bundles cleanly (jsc temp during hermesc pod limitation, reverted);
+node contracts test:reconcile 15/15, test:sketch B3C 23/23 pass. test:sync fails w/ 404 = no live
+backend in pod (pre-existing env limitation, unrelated). User must trigger fresh EAS build to test on device.

@@ -27,7 +27,7 @@ const FALLBACK_OUTCOMES = [
   ["appointment", "Appointment set"],
   ["do_not_knock", "Do Not Knock"],
 ];
-const OUTCOME_LABEL = Object.fromEntries(OUTCOMES);
+const OUTCOME_LABEL = Object.fromEntries(FALLBACK_OUTCOMES);
 
 function occupancyLabel(v) {
   if (v === true) return "Owner-occupied";
