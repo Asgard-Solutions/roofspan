@@ -341,5 +341,31 @@ const CID = sketchUpdateMutationId(REV, HOUSE), DK = sketchDraftKey(REV, HOUSE),
   ok("Redo blocked before controller mutation: no doc change, no generation bump, no persist");
 }
 
+// ---- 22. Concurrency isolation: Structure A resolution rollback does NOT roll back Structure B's ack ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);                       // A = HOUSE conflict
+  const bDetailKey = sketchDetailKey(REV, GARAGE);               // B = GARAGE authoritative ack cache
+  store.cache[bDetailKey] = { document_version: 9, document: OFFICE, edit_mode: "connected_graph" };
+  const rA = await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2), { failAt: "use_office:after_cache" });
+  assert.strictEqual(rA.committed, false, "A rolled back");
+  assert.strictEqual(store.rows[CID].state, "conflict", "A conflict preserved after A rollback");
+  assert.ok(!(TK in store.cache), "A's own tx writes rolled back");
+  assert.strictEqual(store.cache[bDetailKey].document_version, 9, "B's acknowledgement cache NOT rolled back with A");
+  ok("concurrency: Structure A resolution rollback leaves Structure B's authoritative ack cache intact (A cannot alter B)");
+}
+
+// ---- 23. Reverse order: B ack first, then A resolution commits — neither absorbs the other ----
+{
+  const store = mkStore(REV, HOUSE, 5, 2);
+  const bDetailKey = sketchDetailKey(REV, GARAGE);
+  store.cache[bDetailKey] = { document_version: 9, document: OFFICE, edit_mode: "connected_graph" };   // B ack ran first
+  const rA = await runTx(store, "use_office", reviewedFor(REV, HOUSE, 5, 2));                          // A commits after B
+  assert.strictEqual(rA.committed, true);
+  assert.ok(!store.rows[CID], "A conflict resolved (exact row deleted)");
+  assert.strictEqual(store.cache[TK].document, OFFICE, "A's Office cache committed");
+  assert.strictEqual(store.cache[bDetailKey].document_version, 9, "B's earlier ack cache preserved (B cannot alter A)");
+  ok("concurrency (reverse): B acknowledgement then A resolution — both persist, neither absorbed into the other");
+}
+
 console.log("\nROOF SKETCH B3C ATOMIC CONFLICT RESOLUTION + LOCK: all " + n + " assertions passed");
 })().catch((e) => { console.error(e); process.exit(1); });
