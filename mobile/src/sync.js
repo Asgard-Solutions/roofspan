@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
@@ -114,8 +114,10 @@ async function _reconcileSketchAcks(processed) {
     if (m.kind !== "measurement_sketch_update" || m.state !== "synced" || !m.serverValue) continue;
     const [, revisionId, structureId] = String(m.client_id).split(":");
     const serverVersion = Number(m.serverValue.document_version) || 0;
-    // a. raw authoritative sketch cache (NO { data, stale, cachedAt } read-through envelope)
-    await putCache(sketchDetailKey(revisionId, structureId), m.serverValue);
+    // a. raw authoritative sketch cache (NO { data, stale, cachedAt } read-through envelope). Written via
+    //    the SERIALIZED cache helper so it waits its turn on the shared _serialize chain alongside the
+    //    exclusive B3C conflict transaction + the draft ack below — never absorbed into / lost to it.
+    await putCacheSerialized(sketchDetailKey(revisionId, structureId), m.serverValue);
     // b. atomic draft acknowledgement decided against the current (possibly newer) draft
     await mutateCache(sketchDraftKey(revisionId, structureId), (cur) => {
       const d = applySketchAck({ draft: cur, ackGeneration: m.local_edit_generation, serverValue: m.serverValue });

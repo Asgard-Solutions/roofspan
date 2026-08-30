@@ -298,35 +298,35 @@ export async function getCacheMeta(name) {
   return row ? { updated_at: row.updated_at } : null;
 }
 
-// B3C (atomic + transactional): resolve a Roof Sketch 409 conflict in ONE serialized critical section
-// whose durable writes run inside a REAL SQLite transaction (expo-sqlite withTransactionAsync). The
-// conflict row AND the durable draft are re-read FRESH inside the transaction and handed to the SAME pure
-// transactional body the contracts use (roofSketchConflict.applyResolutionInTx). If ANY invariant drifted,
-// a guarded DELETE/UPDATE fails to hit exactly its row, or a write throws, the transaction rolls back and
-// NOTHING is committed — the original conflict row + draft survive for the rep to reopen. Use Office and
-// Keep Local are each all-or-nothing.
-function _resolutionTxExecutor(d, scope, now) {
+// B3C (atomic + EXCLUSIVE transaction): resolve a Roof Sketch 409 conflict in ONE serialized critical
+// section whose durable writes run inside an EXCLUSIVE expo-sqlite transaction. Exclusive (not the
+// non-exclusive withTransactionAsync) so unrelated async cache/ack queries can NEVER be absorbed into the
+// conflict transaction. The conflict row AND the durable draft are re-read FRESH inside the transaction
+// via the callback's `txn` and handed to the SAME pure body the contracts use (applyResolutionInTx). If
+// ANY invariant drifted, a guarded DELETE/UPDATE misses its row, or a write throws, the transaction rolls
+// back and NOTHING is committed. Use Office and Keep Local are each all-or-nothing.
+function _resolutionTxExecutor(txn, scope, now) {
   return {
     readConflictRow: async (clientId) => {
-      const raw = await d.getFirstAsync(
+      const raw = await txn.getFirstAsync(
         "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)", clientId, scope);
       return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
     },
     readDraft: async (draftKey) => {
-      const row = await d.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, draftKey));
+      const row = await txn.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, draftKey));
       return row ? JSON.parse(row.json) : null;
     },
     writeCache: async (key, value) => {
-      await d.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, key), JSON.stringify(value), now);
+      await txn.runAsync("INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)", scopedKey(scope, key), JSON.stringify(value), now);
     },
     deleteConflictRow: async (clientId, queueGen) => {
-      const r = await d.runAsync(
+      const r = await txn.runAsync(
         "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
         clientId, queueGen, scope);
       return (r && (r.changes != null ? r.changes : r.rowsAffected)) || 0;
     },
     transitionConflictToPending: async (clientId, queueGen, nextRow) => {
-      const r = await d.runAsync(
+      const r = await txn.runAsync(
         "UPDATE pending_mutations SET json = ?, state = 'pending', mutation_generation = ? WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = 'conflict' AND (scope = ? OR scope IS NULL)",
         JSON.stringify(nextRow), nextRow.mutation_generation, clientId, queueGen, scope);
       return (r && (r.changes != null ? r.changes : r.rowsAffected)) || 0;
@@ -341,10 +341,10 @@ export async function resolveSketchConflictTransition(choice, reviewed) {
     const now = new Date().toISOString();
     let decision = null;
     try {
-      // Real all-or-nothing SQLite transaction: reads, invariant checks, and every durable write commit
-      // together or roll back together. applyResolutionInTx throws to abort.
-      await d.withTransactionAsync(async () => {
-        decision = await applyResolutionInTx(_resolutionTxExecutor(d, scope, now), choice, reviewed);
+      // EXCLUSIVE all-or-nothing SQLite transaction: every read/write runs through the callback's `txn`
+      // (never the outer `d`), so no unrelated query is absorbed. applyResolutionInTx throws to abort.
+      await d.withExclusiveTransactionAsync(async (txn) => {
+        decision = await applyResolutionInTx(_resolutionTxExecutor(txn, scope, now), choice, reviewed);
       });
     } catch (e) {
       if (e && e.__stale) return { action: "stale", reason: e.__stale };   // rolled back -> nothing changed
