@@ -1597,3 +1597,31 @@ server (localhost:8001 / external preview) — not runnable in pod. RN panel = d
 NOT started (explicitly deferred): New-Revision Handoff, Locked Work Tray, EagleView/HOVER/GAF/aerial
 imports. Plan 1 release-ready is NOT declared from Node tests — final closure/device regression is a
 separate step per user.
+
+## PLAN 1 FINAL CLOSURE REGRESSION (2026-09) — AUTOMATED PASS (device acceptance pending)
+Baseline pod HEAD 1acb08b (contains Phase C fc403bd; user remote main a3143f5). NO code changes needed —
+zero Plan 1 defects found; working tree clean at end. Started local Postgres 15 + backend (uvicorn 8001)
++ seeded owner (backend/.env ADMIN) + one property, enabling previously-skipped LIVE tests.
+Results (exact):
+- Shared core (mobile test:sketch): Core26, Topology31, EdgeAuthority+Proposals10 — PASS.
+- Field Roof Sketch: Cache15, SyncOrch11, CleanRace8, Viewport13, Editor44, LiveWiring36 — PASS.
+- B3A16, B3B1-26, B3B2-16, B3C23, B3D13 — PASS. Phase C reconciliation 12 — PASS.
+- Field measurements: MeasurementCache(all), EdgeIdentity4, scope7, reconcile15 — PASS.
+- Mobile LIVE vs localhost:8001: sync.node SYNC LIFECYCLE PASS; refresh.node SILENT SESSION RENEWAL PASS.
+- Mobile other: canvass, map, pairing11, transport8, photo6, photo_display2, photo_transport2, inspection — PASS.
+- Backend hermetic: sketch service/api/concurrency/clone/survival + measurements lifecycle = 6 passed.
+- Backend LIVE: test_measurement_sketch_api_live 1 passed; test_measurements_pytest 9 passed (locked->409,
+  delete-on-locked, new-revision-clone-from-locked, mobile idempotent).
+- Photo sync (script main): ALL PASSED incl locked-revision 409 + clone remap.
+- Takeoff: test_takeoff_core 11 passed (no auto-recalc from sketch edit/Accept; measurement_update never
+  triggers takeoff; takeoff remains explicit).
+- Office contracts: proposalLifecycle24, mapping18, commands18, geometryOps39, gestureOps36,
+  topologyIntegrity63, sharedDelegation22, saveLifecycle19, saveCloseLifecycle29 — PASS.
+- Office production build (yarn build): SUCCESS. Field Expo Android export: SUCCESS (shared core resolves
+  as single engine, no mobile copy; jsc temp for pod hermesc, app.json reverted — no config drift).
+- Alembic: exactly ONE head e0f1a2b3c4d5.
+ENVIRONMENT LIMITATION (not a Roof Sketch defect): backend test_relay_tiles.py 9/10 passed; the 1 failure
+test_tile_bad_user_token_propagates_401 returns 404 tile_unavailable instead of 401 because MapTiler
+upstream isn't configured in the pod (the tile fetch short-circuits before the token-propagation path).
+Map-tile proxy only; unrelated to Roof Sketch and to offline/queue/sync transport (all green).
+STATUS: Plan 1 automated closure PASS — device acceptance PENDING (RN panel + physical device flows).
