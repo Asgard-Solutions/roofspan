@@ -1716,3 +1716,16 @@ deterministic autosave-vs-Save race guard (generation token so a late persist ca
 working draft); #16 Office 409 → hard "Needs Review" state that BLOCKS Save until explicit Use-Latest/Keep-Mine;
 #18 strengthened semantic parity test (section contract, no-Facet, pitch x/12, ft/in, primary+secondary,
 gutter_notes, reported-area-not-editable, Save Measurements).
+
+## MEASUREMENT CLOSURE cont. (2026-09) — #13 race guard added; remainder still open
+Baseline ee9d429. Added #13 Save/autosave race guard: savedGuard ref set at Save start; persistWorking()
+returns early when savedGuard true, so a late autosave cannot recreate a working draft after Save (Save
+also clears timer + working draft + resets baseline). Verified: mobile test:measurements green (cache/
+edge4/persistence9/parity5). NOTE: #13 still needs a deterministic RN regression test (not added).
+STILL OPEN (no technical blocker — just not yet implemented this session): #1 full Field structure labels
++ Remove Structure; #2/#4 remaining user-facing "Facet"→"Roof Plane" (notes/photos/totals/empty-state) +
+Remove buttons for Roof Planes & Roof Lines in Field; #3 pitch x/12 parity (both); #6 split summary into
+Existing Roof & Deck / Ventilation / Access (both); #7 Office Gutter Notes + parity token; #8 remove
+editable Reported Area SF from Office normal form; #9 "Save Measurements" wording both; #16 Office 409 →
+hard Needs-Review state blocking Save until Use-Latest/Keep-Mine; #18 semantic/render parity test. Then
+full regression + Office build + Field expo export + single alembic head.
