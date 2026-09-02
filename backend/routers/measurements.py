@@ -13,7 +13,7 @@ from models import (
     User, MeasurementSet, MeasurementRevision, MeasurementStructure, MeasurementFacet,
     MeasurementEdge, MeasurementPenetration, MeasurementSummary,
 )
-from core import get_current_user, require_roles, FIELD_ROLES, log_action
+from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_measurements import (
     MeasurementRevisionIn, MeasurementRevisionOut, MeasurementRevisionListItem, StatusChangeIn,
 )
@@ -89,6 +89,16 @@ async def change_status(revision_id: str, payload: StatusChangeIn, request: Requ
     await svc.transition_status(db, rev, payload.to, user)
     out = await svc.build_out(db, rev)
     await log_action(db, user=user, action=f"measurement.status.{payload.to}", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
+    await db.commit()
+    return out
+
+
+@router.post("/{revision_id}/unlock", response_model=MeasurementRevisionOut)
+async def unlock_revision(revision_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    rev = await _get_rev_or_404(db, revision_id)
+    await svc.unlock_revision(db, rev, user)
+    out = await svc.build_out(db, rev)
+    await log_action(db, user=user, action="measurement.unlock", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
     await db.commit()
     return out
 

@@ -1,0 +1,24 @@
+{
+  "summary": "Validated backend POST /api/measurements/{revision_id}/unlock. 8/9 pytest cases PASS, 1 SKIPPED (estimate-referenced path documented as not-exercised per request note). Coverage: (1) Happy path — drove a draft through field_complete -> office_verified -> locked, confirmed GET shows status='locked' + is_immutable=true + locked_by/locked_at populated, then POST /unlock returned 200 with status='office_verified', is_immutable=false, locked_by/locked_at cleared; re-GET confirms persisted state. (2) Post-unlock usability — same revision was successfully transitioned back to 'draft' via POST /{id}/status, proving the immutable guard was lifted. (3) Guard: unlock on status='draft' -> 409 with detail 'Only a locked revision can be unlocked' and state unchanged. (4) Guard: unlock on status='field_complete' -> 409, state unchanged. (5) Guard: unlock on status='office_verified' -> 409, state unchanged (is_immutable stayed false). (6) Bogus revision id -> 404. (7) Role guard: sales user (sales1_38f545f9@example.com) received 403 on /unlock while revision remained locked; owner then unlocked it successfully. (8) Estimate-referenced 409 path — SKIPPED and clearly noted: requires takeoff template + estimate acceptance wiring not reachable in a small number of API calls; direct EstimateTakeoff insert requires valid estimate_id + template_revision_id FKs. Service code at services/measurements.py:611-613 performs the SELECT + 409 raise inline; the code path is present but was not exercised end-to-end. Frontend UI SKIPPED per request (SPA behind subscription/billing gate).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_measurement_unlock_iter62.py",
+    "/app/test_reports/pytest/iter62_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "services/measurements.py unlock_revision (lines 604-619) correctly orders checks: 409 if !locked -> 403 if !VERIFY_ROLES -> 409 if EstimateTakeoff exists -> then mutate. Router (routers/measurements.py:96-101) additionally guards with require_roles(*MANAGE_ROLES), so non-MANAGE roles get 403 at the router before service code. Note: because router already gates by MANAGE_ROLES==VERIFY_ROLES, the service-level 403 branch (line 609-610) is effectively unreachable via HTTP — harmless defense-in-depth; keep for direct service callers.",
+    "log_action is called AFTER svc.unlock_revision returns and AFTER build_out on the mutated model; commit happens at request end. Correct.",
+    "unlock clears is_immutable, locked_by, locked_at, and sets status back to 'office_verified' (updated_at bumped). Does not touch verified_by/verified_at — correct: unlock preserves who verified the revision. Confirmed on GET after unlock.",
+    "EstimateTakeoff reference check uses .limit(1) — efficient. ondelete='RESTRICT' on measurement_revision_id at the FK level provides DB-level safety net."
+  ],
+  "updated_files": ["/app/backend/tests/test_measurement_unlock_iter62.py (new)"],
+  "success_rate": {"backend": "100% (8/8 executed; 1 intentional skip for out-of-scope estimate wiring)", "frontend": "N/A - skipped per request (SPA behind subscription gate)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 ; Sales (used for 403 test): sales1_38f545f9@example.com / Sales1#2026. Note: sales@example.com / SalesRS#2026 from test_credentials.md failed login (401) — file may be stale for that entry.",
+  "seed_data_creation": "Created ~7 draft measurement revisions on the reused office lead's property set during tests. 3 were driven to 'locked' then successfully unlocked (now office_verified; one further returned to draft). 1 remains at field_complete, 1 at office_verified. Harmless; consistent with prior iterations' seed pattern.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app && pytest backend/tests/test_measurement_unlock_iter62.py -v -o addopts=''. To exercise the estimate-referenced 409 path: (a) create a takeoff template + revision, (b) create an estimate for the lead, (c) generate takeoff on the locked measurement (POST to takeoff generation endpoint) so an EstimateTakeoff row exists with measurement_revision_id=rev.id, (d) POST /unlock -> expect 409 with 'used by an estimate/quote' detail. Alternatively, accept an estimate to trigger lock_measurement_for_accepted_estimate then attempt unlock. Frontend testid 'measurement-unlock-btn' in MeasurementWorksheet.jsx is only shown when rev.status==='locked' && isOffice; UI not exercised.",
+  "rca of the issue": "N/A — feature implementation matches spec; no bugs found. All guards (status, role, existence) and side effects (state fields cleared, audit log via router) behave as designed."
+}
