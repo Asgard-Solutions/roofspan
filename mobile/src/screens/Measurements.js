@@ -59,6 +59,7 @@ export default function Measurements({ route, navigation }) {
   const [showGutters, setShowGutters] = useState(false);
 
   const autosaveTimer = useRef(null);
+  const savedGuard = useRef(false);        // #13: set at Save so a late autosave can't resurrect a stale draft
   const baselineRef = useRef("");          // JSON of the last hydrated form — autosave only fires on real edits
   const captureBaseline = useRef(false);   // set on hydrate so the first effect pass captures, never persists
 
@@ -68,7 +69,7 @@ export default function Measurements({ route, navigation }) {
   );
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
-    if (readonly) return true;
+    if (readonly || savedGuard.current) return true;   // #13: never re-create a working draft after Save
     return await saveMeasurementWorkingDraft(scope, {
       working: true, base: existing ? { ...existing } : null,
       local_client_id: localDraft ? localDraft.client_id : null,
@@ -337,6 +338,7 @@ export default function Measurements({ route, navigation }) {
       });
     }
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+    savedGuard.current = true;   // #13: block any in-flight/late autosave from recreating the working draft
     await clearMeasurementWorkingDraft(scope);
     baselineRef.current = formJson();
     Alert.alert("Saved", markComplete ? "Measurement marked Field Complete and queued to sync." : "Measurement saved and queued to sync.");
