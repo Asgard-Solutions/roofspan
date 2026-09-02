@@ -457,7 +457,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       </div>
 
       {rev.status === "locked" && <div className="text-xs text-slate-500"><Lock className="mr-1 inline h-3 w-3" />This revision is locked. Use “New revision” to make changes — history is preserved.</div>}
-      <div className="rounded-lg border border-border p-3" data-testid="measurement-allphotos-card"><div className="mb-2 text-sm font-semibold text-slate-700">All measurement photos</div><PhotoGallery sourceUrl={`/mobile/photos/measurement/${rev.id}`} testid="measurement-allphotos" hideWhenEmpty={false} recordType="measurement_all" recordId={rev.id} /></div>
+      <div className="rounded-lg border border-border p-3" data-testid="measurement-allphotos-card"><div className="mb-2 text-sm font-semibold text-slate-700">Measurement Photos</div><PhotoGallery sourceUrl={`/mobile/photos/measurement/${rev.id}`} testid="measurement-allphotos" hideWhenEmpty={false} recordType="measurement_all" recordId={rev.id} /></div>
     </>}
     {sketchFor && rev && (() => {
       const scoped = scopeForStructure({ structure: { id: sketchFor.id }, facets: ed?.facets || [], edges: ed?.edges || [], penetrations: ed?.penetrations || [] });

@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Measurement UI Parity — final cleanup (Measurement Photos heading + last facet text + stronger guard) — (2026-06) — DONE (Node parity 12/12 + regression proof + builds green); STOP before full regression
+Text-only + test-guard cleanup of the two remaining user-facing parity gaps a source review found.
+- **Photo section heading unified to "Measurement Photos" in BOTH:** Office was "All measurement photos" → "Measurement Photos" (`MeasurementWorksheet.jsx`, card testid unchanged `measurement-allphotos-card`). Field was "General measurement photos" → "Measurement Photos" (`Measurements.js`, `<Section title>`).
+- **Removed last user-facing "facet" text:** Field helper "…before attaching roof/facet photos." → "…before attaching measurement photos." Internal `facet_*` identifiers untouched.
+- **Stronger parity guard (`measurement_field_parity.node.test.js`):** replaced the pattern-limited facet check with a corpus-based check — it extracts only USER-VISIBLE strings (JSX/RN text nodes `>…<` + placeholder/title/label attribute values) and whole-word matches `/\bfacets?\b/i`, so it now catches facet/Facet/facets/Facets in labels/headings/placeholders/helper text while still allowing internal `facet_id`/`facet_ref`/`facet_label`/`facets`/`measurement_facet`/testids/API. Proven: the guard flags the old "roof/facet photos" string and passes internal-only code. Also added "Measurement Photos" to the section-parity contract (now Existing Roof & Deck / Ventilation / Access / Conditions / Gutters (Optional) / Measurement Photos required in both).
+- **Verification:** field parity 12/12 (incl. new corpus guard + Measurement Photos section), persistence+parity 9, edge identity 4, save/autosave race 5, reconcile 15, rebase 7, backend measurement suite 13 (serial) — all pass. Babel parse OK for both edited source files; Office webpack compiles (pre-existing warnings only). No dependency/env/lockfile changes.
+- **NEXT (not started):** full closure regression (Roof Sketch/Relay/photo/takeoff/estimates), then aerial/report imports, then report-metadata UI.
+
+
+
 ## Measurement UI Parity & Simple Roofer Workflow — (2026-06) — DONE (testing_agent iteration_58 100% Office + Node parity 12/12 + builds); STOP before final regression/aerial
 Presentation/parity only. Office and Field now present the same simple roofing form. All data-safety work preserved (measurementRebase, Needs Review/Use Latest/Keep My Version, If-Match, Field seal, save/autosave race) — re-verified green.
 - **Canonical section order (both):** Structures → Roof Planes → Roof Lines → Penetrations → Existing Roof & Deck → Ventilation → Access / Conditions → Gutters (Optional) → Measurement Photos → Save Measurements.
