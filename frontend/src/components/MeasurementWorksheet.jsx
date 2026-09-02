@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -105,6 +105,51 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     })();
     return () => { alive = false; };
   }, [rev?.id]);
+
+  // --- Live two-way sync (auto-refresh) --------------------------------------------------------------
+  // Keep this worksheet in step with Field edits without a manual reload. Every 15s (and on window focus)
+  // we re-pull the current revision. If the Office user has NO unsaved edits we quietly adopt the latest;
+  // if they are mid-edit (dirty) or already reviewing a conflict, we only surface a banner so their work
+  // is never overwritten — Save still runs the existing stale-version (409) review flow.
+  const [remoteUpdate, setRemoteUpdate] = useState(false);
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  const busyRef = useRef(busy); busyRef.current = busy;
+  const needsReviewRef = useRef(needsReview); needsReviewRef.current = needsReview;
+  const revIdRef = useRef(null); revIdRef.current = rev?.id || null;
+  const revUpdatedRef = useRef(null); revUpdatedRef.current = rev?.updated_at || null;
+
+  const checkRemote = useCallback(async () => {
+    const id = revIdRef.current;
+    if (!id || busyRef.current) return;
+    let latest;
+    try { latest = (await api.get(`/measurements/${id}`)).data; }
+    catch { return; }   // transient/offline — try again next tick
+    if (!latest?.updated_at || latest.updated_at === revUpdatedRef.current) return;
+    if (dirtyRef.current || needsReviewRef.current) {
+      setRemoteUpdate(true);   // changed while we're editing — never clobber unsaved work
+    } else {
+      setRev(latest); setEd(toEditable(latest)); setDirty(false); setRemoteUpdate(false);
+      loadList();
+      toast.message("Updated with the latest changes from the field");
+    }
+  }, [loadList]);
+
+  useEffect(() => {
+    const iv = setInterval(() => { checkRemote(); }, 15000);
+    const onFocus = () => checkRemote();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(iv); window.removeEventListener("focus", onFocus); };
+  }, [checkRemote]);
+
+  // Adopt the latest server copy on demand from the banner (discards unsaved Office edits by explicit choice).
+  const loadRemoteLatest = async () => {
+    const id = revIdRef.current;
+    if (!id) return;
+    setBusy(true);
+    try { await loadRevision(id); setRemoteUpdate(false); setNeedsReview(null); toast.message("Loaded the latest version from the field."); }
+    catch (e) { toast.error(apiError(e)); }
+    finally { setBusy(false); }
+  };
 
   const editable = rev ? rev.editable : true;
   const totals = rev?.totals;
@@ -327,6 +372,13 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           </div>}
         </div>
       </div>
+    </div>}
+
+    {remoteUpdate && !needsReview && <div className="flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 p-3" data-testid="measurement-remote-update">
+      <RefreshCw className="h-4 w-4 shrink-0 text-sky-600" />
+      <span className="flex-1 text-xs text-sky-900">New changes from the field are available for this measurement. Your unsaved edits are kept — saving will prompt you to review.</span>
+      <Button size="sm" variant="outline" onClick={loadRemoteLatest} disabled={busy} data-testid="measurement-remote-update-load"><RefreshCw className="mr-1 h-4 w-4" />Load latest</Button>
+      <Button size="sm" variant="ghost" onClick={() => setRemoteUpdate(false)} disabled={busy} data-testid="measurement-remote-update-dismiss">Keep editing</Button>
     </div>}
 
     {!rev && <div className="rounded border border-dashed border-border p-6 text-center text-sm text-slate-500">No roof measurement yet. Start one to capture structures, roof planes, roof lines and penetrations.</div>}

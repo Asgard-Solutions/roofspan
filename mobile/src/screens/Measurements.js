@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView } from "../measurementReconcile";
@@ -253,6 +253,22 @@ export default function Measurements({ route, navigation }) {
   }, [conflict, load]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Live two-way sync while this screen is open: every 15s push any local pending edits up to Office, and
+  // — only when the rep is NOT mid-edit — pull the latest Office copy down so both apps show the same
+  // numbers. Active typing is never interrupted (a dirty form is skipped); a clean form adopts server
+  // changes via the normal read-through, and any real conflict still surfaces on Save.
+  const loadRef = useRef(load); loadRef.current = load;
+  const formJsonRef = useRef(formJson); formJsonRef.current = formJson;
+  useFocusEffect(useCallback(() => {
+    const iv = setInterval(() => {
+      syncNow().catch(() => {});
+      if (AppState.currentState === "active" && formJsonRef.current() === baselineRef.current) {
+        loadRef.current().catch(() => {});
+      }
+    }, 15000);
+    return () => clearInterval(iv);
+  }, []));
 
   const totals = useMemo(() => {
     const scopedRefs = new Set(structures.filter((st) => st.included_in_scope !== false).map((st) => st.ref));
