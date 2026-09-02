@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Office: Delete a roof-measurement Revision (2026-06)
+User: in Office, be able to delete a Rev for the roof measurement. Choice: Draft-only (finalized/locked/immutable protected), confirm prompt, auto-select next after delete.
+- Backend `DELETE /api/measurements/{revision_id}` already existed (require_roles FIELD_ROLES; 409 "Only a Draft revision can be deleted" if status!='draft' or is_immutable; writes audit log 'measurement.delete'). No backend change needed.
+- Office UI (`frontend/src/components/MeasurementWorksheet.jsx`): added a "Delete revision" button (testid `measurement-delete-revision-btn`) shown only when `rev.status === 'draft' && !rev.is_immutable`; an inline confirm bar (`measurement-delete-confirm` / `-confirm-btn` / `-cancel-btn`) matching the existing confirm pattern; `deleteRevision()` calls the endpoint, reloads the list, auto-selects the most recent remaining revision (or empty state), and toasts success.
+- Verified (testing_agent iteration_61.json, 6/6, no issues): draft delete → 200, gone from list + 404 on GET (lead_id & property_id scopes); non-draft delete → 409 and revision preserved; sibling revisions intact after delete; owner role authorized. Office browser UI e2e SKIPPED — SPA behind the tenant subscription/billing gate; delete verified via JSON API. Frontend compiles (HTTP 200).
+- Files: `frontend/src/components/MeasurementWorksheet.jsx`; NEW `backend/tests/test_measurement_delete_revision_iter61.py`.
+
+
+
 ## BUG FIX: Field showed "Saved on device" (empty local draft) instead of Office measurements (2026-06) — VERIFIED
 - Symptom: Office had roof measurements but the Field showed nothing with status "Saved on device"; user expected to see exactly what Office has.
 - Root cause: in `mobile/src/screens/Measurements.js` `load()`, a persisted working draft short-circuited the load UNCONDITIONALLY (showing "Saved on device"), so the authoritative Office branch below was never reached — even when the working draft was empty/orphaned.

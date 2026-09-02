@@ -68,6 +68,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   const [busy, setBusy] = useState(false);
   const [needsReview, setNeedsReview] = useState(null);   // {server} when Office save hit a stale-version 409
   const [confirmKeep, setConfirmKeep] = useState(false);  // warning gate before Keep My Version overwrites
+  const [confirmDelete, setConfirmDelete] = useState(false); // confirm gate before deleting a draft revision
   const [sketchFor, setSketchFor] = useState(null); // structure row being sketched
   const [sketchStructIds, setSketchStructIds] = useState(new Set());
 
@@ -308,6 +309,21 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
+  // Delete a Draft revision, then auto-select the next most recent (or empty state if none remain).
+  const deleteRevision = async () => {
+    if (!rev?.id) return;
+    setBusy(true);
+    try {
+      const num = rev.revision_number;
+      await api.delete(`/measurements/${rev.id}`);
+      setConfirmDelete(false); setNeedsReview(null); setRemoteUpdate(false);
+      const rows = await loadList();
+      if (rows.length) { await loadRevision(rows[0].id); }
+      else { setRev(null); setEd(null); setDirty(false); }
+      toast.success(`Revision ${num} deleted`);
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+
   if (loading) return <div className="p-3 text-sm text-slate-500" data-testid="measurement-loading"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Loading measurements…</div>;
 
   const applySketchProposal = ({ target_type, target_id, metric, value }) => {
@@ -360,8 +376,23 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         {rev?.status === "field_complete" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("office_verified")} disabled={busy}><ShieldCheck className="mr-1 h-4 w-4" />Office Verify</Button>}
         {rev?.status === "office_verified" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("locked")} disabled={busy}><Lock className="mr-1 h-4 w-4" />Lock</Button>}
         {rev && ["field_complete", "office_verified"].includes(rev.status) && isOffice && <Button size="sm" variant="ghost" onClick={() => changeStatus("draft")} disabled={busy}><Undo2 className="mr-1 h-4 w-4" />Return to field</Button>}
+        {rev?.status === "draft" && !rev.is_immutable && <Button size="sm" variant="outline" className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => setConfirmDelete(true)} disabled={busy} data-testid="measurement-delete-revision-btn"><Trash2 className="mr-1 h-4 w-4" />Delete revision</Button>}
       </div>
     </div>
+
+    {confirmDelete && rev && <div className="rounded-lg border border-rose-300 bg-rose-50 p-3" data-testid="measurement-delete-confirm">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+        <div className="flex-1 space-y-2">
+          <div className="text-sm font-semibold text-rose-900">Delete Revision {rev.revision_number}?</div>
+          <p className="text-xs text-rose-800">This permanently removes this draft roof measurement revision and all of its structures, roof planes, roof lines and penetrations. This can't be undone.</p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button size="sm" variant="destructive" onClick={deleteRevision} disabled={busy} data-testid="measurement-delete-confirm-btn">{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}Delete revision</Button>
+            <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)} disabled={busy} data-testid="measurement-delete-cancel-btn">Cancel</Button>
+          </div>
+        </div>
+      </div>
+    </div>}
 
     {needsReview && <div className="rounded-lg border border-amber-300 bg-amber-50 p-3" data-testid="measurement-needs-review">
       <div className="flex items-start gap-2">
