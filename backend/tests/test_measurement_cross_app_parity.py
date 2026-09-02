@@ -201,8 +201,49 @@ def test_two_field_saves_before_sync_preserve_hidden_metadata():
     assert after["summary"]["gutter_lf"] == 50
 
 
+def test_office_token_round_trips_no_spurious_conflict():
+    """REGRESSION: the Office GET serializes updated_at via the Pydantic response model ('...Z'), while the
+    server historically compared If-Match against updated_at.isoformat() ('...+00:00'). The two strings
+    never matched, so EVERY single-actor Office save 409'd spuriously. The token the client receives must
+    round-trip: PUT with the Office GET's own updated_at must succeed (200), and only a genuinely stale
+    token must 409."""
+    h = {"Authorization": f"Bearer {_tok()}"}
+    props = requests.get(f"{API}/api/properties", params={"limit": 1}, headers=h, timeout=30).json()
+    pid = props[0]["id"]
+    r = requests.post(f"{API}/api/measurements", headers=h, json={"property_id": pid, "source": "office",
+        "structures": [{"ref": "s1", "name": "Main", "structure_type": "main_house"}],
+        "facets": [{"ref": "f1", "structure_ref": "s1", "facet_label": "F1", "area_sqft": 100}],
+        "edges": [], "penetrations": [], "summary": {}}, timeout=30)
+    assert r.status_code in (200, 201), (r.status_code, r.text)
+    rid = r.json()["id"]
+
+    # Office GET → Pydantic-serialized updated_at (the '...Z' form the worksheet stores in React state).
+    v1 = requests.get(f"{API}/api/measurements/{rid}", headers=h, timeout=30).json()
+    office_token = v1["updated_at"]
+
+    # A normal single-actor save echoing that exact token must SUCCEED (not spuriously 409).
+    upd = _passthrough_update(v1, lambda b: b["facets"][0].__setitem__("area_sqft", 150))
+    r2 = requests.put(f"{API}/api/measurements/{rid}", headers={**h, "If-Match": office_token}, json=upd, timeout=30)
+    assert r2.status_code == 200, (f"Office GET token must round-trip without a spurious conflict", r2.status_code, r2.text)
+    v2 = requests.get(f"{API}/api/measurements/{rid}", headers=h, timeout=30).json()
+    assert v2["facets"][0]["area_sqft"] == 150
+
+    # The now-stale earlier token must still 409 (real concurrency still enforced).
+    upd_stale = _passthrough_update(v1, lambda b: b["facets"][0].__setitem__("area_sqft", 999))
+    r3 = requests.put(f"{API}/api/measurements/{rid}", headers={**h, "If-Match": office_token}, json=upd_stale, timeout=30)
+    assert r3.status_code == 409, (r3.status_code, r3.text)
+
+    # Explicit '+00:00' form of the SAME instant must also be accepted (format tolerance both ways).
+    fresh_z = v2["updated_at"]
+    fresh_plus = fresh_z.replace("Z", "+00:00")
+    upd2 = _passthrough_update(v2, lambda b: b["facets"][0].__setitem__("area_sqft", 175))
+    r4 = requests.put(f"{API}/api/measurements/{rid}", headers={**h, "If-Match": fresh_plus}, json=upd2, timeout=30)
+    assert r4.status_code == 200, ("'+00:00' token form must also round-trip", r4.status_code, r4.text)
+
+
 if __name__ == "__main__":
     test_cross_app_no_erasure_round_trip()
     test_office_stale_cannot_silently_overwrite_newer()
     test_two_field_saves_before_sync_preserve_hidden_metadata()
-    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE + OFFICE-STALE + TWO-SAVES-METADATA: PASS")
+    test_office_token_round_trips_no_spurious_conflict()
+    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE + OFFICE-STALE + TWO-SAVES-METADATA + OFFICE-TOKEN-ROUND-TRIP: PASS")

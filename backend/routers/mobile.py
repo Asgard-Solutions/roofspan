@@ -275,8 +275,7 @@ async def update_measurement(revision_id: str, payload: MeasurementRevisionIn, r
         raise HTTPException(status_code=404, detail="Measurement revision not found")
     s = await db.get(MeasurementSet, rev.set_id)
     await _assert_measurement_scope(db, s, user)
-    token = rev.updated_at.isoformat() if rev.updated_at else None
-    if if_match and token and if_match != token:
+    if meas_svc.token_conflict(rev.updated_at, if_match):
         out = await meas_svc.build_out(db, rev)
         raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": jsonable_encoder(out)})
     await meas_svc.replace_children(db, rev, payload)

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PhotoGallery from "@/components/PhotoGallery";
-import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch, PencilRuler } from "lucide-react";
+import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch, PencilRuler, AlertTriangle, RefreshCw } from "lucide-react";
 import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
 import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
 import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
@@ -65,6 +65,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [needsReview, setNeedsReview] = useState(null);   // {server} when Office save hit a stale-version 409
+  const [confirmKeep, setConfirmKeep] = useState(false);  // warning gate before Keep My Version overwrites
   const [sketchFor, setSketchFor] = useState(null); // structure row being sketched
   const [sketchStructIds, setSketchStructIds] = useState(new Set());
 
@@ -136,10 +138,13 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
 
-  const buildPayload = () => ({
+  // `base` supplies the hidden/system metadata (provider/report_id/notes/source) the Office user does not
+  // edit. Normally that is the loaded revision; for "Keep My Version" it is the newer authoritative server
+  // copy so those hidden values stay current while the user's editable measurement fields win.
+  const buildPayload = (base = rev) => ({
     lead_id: leadId || null, property_id: propertyId || null, inspection_id: inspectionId || null,
-    source: rev?.source || "office", reported_area_sqft: num(ed.reported_area_sqft),
-    provider: rev?.provider ?? null, report_id: rev?.report_id ?? null, notes: rev?.notes ?? null,
+    source: base?.source || "office", reported_area_sqft: num(ed.reported_area_sqft),
+    provider: base?.provider ?? null, report_id: base?.report_id ?? null, notes: base?.notes ?? null,
     structures: ed.structures.map((row, i) => ({
       ref: row.ref, name: row.name || "", structure_type: row.structure_type || "main_house",
       included_in_scope: row.included_in_scope !== false, stories: num(row.stories), approx_height_ft: num(row.approx_height_ft),
@@ -183,6 +188,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   };
 
   const save = async () => {
+    if (needsReview) return;   // blocked until the stale-version conflict is explicitly resolved
     setBusy(true);
     try {
       const body = buildPayload();
@@ -197,11 +203,50 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     } catch (e) {
       if (e?.response?.status === 409) {
         const server = e.response.data?.detail?.server;
-        toast.error("Measurement changed in Office/Field since you opened it. Your unsaved edits were NOT overwritten — refresh to review the newer version, then re-apply your changes.");
-        if (server) { setRev(server); }   // load the newer authoritative revision for review; editable form keeps the user's edits until they reconcile
+        // #16: enter an explicit Needs Review state. Do NOT advance rev/token under the dirty form —
+        // that would let a second Save overwrite the newer version. Save stays blocked until resolved.
+        setNeedsReview({ server: server || null });
+        toast.error("Measurement changed elsewhere. Review required before saving.");
       } else {
         toast.error(apiError(e));
       }
+    } finally { setBusy(false); }
+  };
+
+  // Use Latest Version: adopt the newer authoritative server revision into the working form. The user's
+  // stale local edits are discarded ONLY because they explicitly chose this. Clears Needs Review.
+  const useLatestVersion = async () => {
+    setBusy(true);
+    try {
+      const server = needsReview?.server;
+      if (server) { setRev(server); setEd(toEditable(server)); }
+      else if (rev?.id) { await loadRevision(rev.id); }
+      setDirty(false); setNeedsReview(null); setConfirmKeep(false);
+      toast.message("Loaded the latest version. Your unsaved changes were discarded.");
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+
+  // Keep My Version: the user's current editable measurement fields intentionally win. We rebase onto the
+  // newer authoritative server revision — preserving ITS hidden/system metadata (provider/report_id/notes)
+  // and using ITS fresh If-Match token — then save. If the server changed AGAIN meanwhile, it 409s again
+  // (never force-writes). Clears Needs Review only after the authoritative save succeeds.
+  const keepMyVersion = async () => {
+    const server = needsReview?.server;
+    if (!server || !rev) return;
+    setBusy(true);
+    try {
+      const body = buildPayload(server);
+      const saved = (await api.put(`/measurements/${rev.id}`, body, { headers: server.updated_at ? { "If-Match": server.updated_at } : {} })).data;
+      toast.success("Your version saved over the newer copy");
+      await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
+      setNeedsReview(null); setConfirmKeep(false);
+      await finalizePending(saved);
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        const again = e.response.data?.detail?.server;
+        setNeedsReview({ server: again || null }); setConfirmKeep(false);
+        toast.error("Measurement changed again while saving. Review the latest version once more.");
+      } else { toast.error(apiError(e)); }
     } finally { setBusy(false); }
   };
 
@@ -277,13 +322,33 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       <div className="ml-auto flex flex-wrap gap-2">
         {!rev && <Button size="sm" onClick={startNew} disabled={busy}><Plus className="mr-1 h-4 w-4" />Start measurement</Button>}
         {rev && !editable && <Button size="sm" variant="outline" onClick={cloneRevision} disabled={busy}><GitBranch className="mr-1 h-4 w-4" />New revision</Button>}
-        {rev && editable && dirty && <Button size="sm" onClick={save} disabled={busy}>{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Save</Button>}
+        {rev && editable && dirty && <Button size="sm" onClick={save} disabled={busy || !!needsReview} data-testid="measurement-save-btn">{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Save</Button>}
         {rev?.status === "draft" && !dirty && <Button size="sm" variant="outline" onClick={() => changeStatus("field_complete")} disabled={busy}><Check className="mr-1 h-4 w-4" />Field Complete</Button>}
         {rev?.status === "field_complete" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("office_verified")} disabled={busy}><ShieldCheck className="mr-1 h-4 w-4" />Office Verify</Button>}
         {rev?.status === "office_verified" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("locked")} disabled={busy}><Lock className="mr-1 h-4 w-4" />Lock</Button>}
         {rev && ["field_complete", "office_verified"].includes(rev.status) && isOffice && <Button size="sm" variant="ghost" onClick={() => changeStatus("draft")} disabled={busy}><Undo2 className="mr-1 h-4 w-4" />Return to field</Button>}
       </div>
     </div>
+
+    {needsReview && <div className="rounded-lg border border-amber-300 bg-amber-50 p-3" data-testid="measurement-needs-review">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+        <div className="flex-1 space-y-2">
+          <div className="text-sm font-semibold text-amber-900">Needs review — this measurement changed elsewhere</div>
+          <p className="text-xs text-amber-800">A newer version of this measurement was saved on the server (for example from a Field sync) after you started editing. Saving is paused so nothing is lost. Choose how to resolve it. Both your unsaved edits and the newer server version are preserved until you decide.</p>
+          {!confirmKeep ? <div className="flex flex-wrap gap-2 pt-1">
+            <Button size="sm" variant="outline" onClick={useLatestVersion} disabled={busy} data-testid="conflict-use-latest-btn"><RefreshCw className="mr-1 h-4 w-4" />Use Latest Version</Button>
+            <Button size="sm" onClick={() => setConfirmKeep(true)} disabled={busy} data-testid="conflict-keep-mine-btn"><Save className="mr-1 h-4 w-4" />Keep My Version</Button>
+          </div> : <div className="rounded border border-amber-300 bg-white p-2">
+            <p className="text-xs font-medium text-amber-900">Keep My Version will replace the newer measurement values with your unsaved Office changes. Continue?</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" onClick={keepMyVersion} disabled={busy} data-testid="conflict-keep-mine-confirm-btn">{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}Yes, keep my version</Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmKeep(false)} disabled={busy} data-testid="conflict-keep-mine-cancel-btn">Cancel</Button>
+            </div>
+          </div>}
+        </div>
+      </div>
+    </div>}
 
     {!rev && <div className="rounded border border-dashed border-border p-6 text-center text-sm text-slate-500">No roof measurement yet. Start one to capture structures, facets, edges and penetrations.</div>}
 
