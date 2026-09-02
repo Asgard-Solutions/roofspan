@@ -1552,3 +1552,48 @@ running/seeded server (localhost:8001 / external preview) — not runnable in po
 DEVICE-ONLY validation for the fresh EAS build: background/return with pending work; app restart with
 pending sketch; reconnect+sync; Office locks the revision live -> banner + all edit paths (draw/move/delete/
 facet/manual/feature/calibrate/dimensions/Undo/Redo/Save) disabled; unsynced work preserved after lock.
+
+## PHASE C — Field Roof Sketch Measurement Reconciliation (2026-06) — DONE (client-only, Node-verified)
+Goal: connect Field sketch calculated measurements to the authoritative Measurement Revision safely +
+explicitly (Confirmed vs Proposed, Accept/Keep Current), offline-first, respecting B3D. NO backend change;
+NO duplicate calculation (reuses shared @roofspan/roof-sketch-core deriveProposals verbatim).
+Key architecture finding: the shared core ALREADY had deriveProposals (Confirmed/Proposed/Difference,
+scale-suppression, locked-edge discrepancy), explicit one-to-one mapping (measurement_facet_id/
+measurement_edge_id, never inferred) and decision storage (proposal_decisions). Office already had the
+canonical accept lifecycle (frontend/src/.../proposalLifecycle.js: PENDING->ACCEPTED only after the
+authoritative save matches). Field mirrors the SAME semantics.
+New files:
+- mobile/src/roofProposalReconcile.js (pure): buildFieldProposals (rows w/ Confirmed/Proposed/Difference,
+  status, canAccept/canKeep), relationalIdForRecord, scopedMeasurementIds (structure isolation),
+  isMappingValid, decisionForProposal, persistedMeasurementValue, deriveStatus (Pending sync / Accepted /
+  Synced / Review required / Kept current), acceptProposalDecision (pending_accept on the doc),
+  keepCurrentDecision, detailToUpdateBody + buildAcceptedMeasurementUpdate (SAFEGUARD: newest durable
+  detail, ONLY mapped value changed, all else preserved, If-Match + coalescing reused), finalizeDecisions
+  (pending->accepted only on authoritative match; idempotent; mismatch stays reviewable).
+- mobile/src/components/ProposalPanel.js (RN): roofing-friendly UI (Confirmed/Proposed/Difference/Accept
+  Proposed/Keep Current/Measured & Locked/Calibrate/Review Required), no ids/JSON shown.
+- mobile/src/tests/roof_proposal_reconcile.node.test.js (12 assertions).
+Wiring:
+- RoofSketch.js: loads authoritative measurement detail (cache.measurement) + measurement_update mutation
+  state; renders ProposalPanel; Accept -> buildAcceptedMeasurementUpdate + cacheMeasurementDetail +
+  queueMutation(measurement_update, If-Match, coalesced by measurement-update:<rev>) AND commits durable
+  pending_accept on the sketch; Keep Current -> provenance-only decision (no measurement mutation);
+  refreshMeasurement (event-driven off onSyncChange) finalizes pending->accepted when the revision holds
+  the value; ALL proposal actions gated by editingBlocked (readOnly||conflict||locked) so B3D holds
+  (proposals stay VISIBLE when locked/conflicted, but Accept + Keep are disabled).
+- sync.js: currentMeasurementMutation(revisionId) helper for truthful Accept status.
+Crash-safety: status is DERIVED (never a premature stored "accepted"); promotion only on authoritative
+match => no false Accepted across background/offline/restart. Repeated Accept idempotent (single decision,
+same value). Accept never routes through the sketch PUT (sketch carries only provenance/decisions).
+Tests (all green): mobile full sketch suite incl. Phase C 12/12 (Core26/Topo31/EdgeAuth10/Cache15/
+SyncOrch11/CleanRace8/Viewport13/Editor44/LiveWiring36/B3A16/B3B1-26/B3B2-16/B3C23/B3D13/PhaseC12),
+reconcile15, measurements/edge-identity. Backend hermetic (Postgres started): sketch service/api/
+concurrency + measurements lifecycle + sketch clone = 5 passed (immutability locked->409 intact). Office
+frontend shared-core/proposal tests: proposalLifecycle24/mapping18/commands18/geometryOps39/gestureOps36/
+topologyIntegrity63/sharedDelegation22 (shared engine + Office unaffected). Metro expo export android
+bundles clean (jsc temp, reverted; app.json byte-identical).
+Env limits (unchanged): mobile refresh/sync + backend *_pytest/photos LIVE tests need running/seeded
+server (localhost:8001 / external preview) — not runnable in pod. RN panel = device-validation pending.
+NOT started (explicitly deferred): New-Revision Handoff, Locked Work Tray, EagleView/HOVER/GAF/aerial
+imports. Plan 1 release-ready is NOT declared from Node tests — final closure/device regression is a
+separate step per user.

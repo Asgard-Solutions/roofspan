@@ -229,6 +229,14 @@ export async function currentSketchMutation(revisionId, structureId) {
   return all.find((x) => x.client_id === id) || null;
 }
 
+// Phase C: the durable measurement_update mutation for ONE revision (or null). Drives the truthful
+// Accept-Proposed status (Pending sync vs settled) on the Field Roof Sketch reconciliation panel.
+export async function currentMeasurementMutation(revisionId) {
+  const id = `measurement-update:${String(revisionId)}`;
+  const all = await loadAllMutations();
+  return all.find((x) => x.client_id === id) || null;
+}
+
 // B3C: the CONFLICT (409) Roof Sketch mutation for exactly ONE structure, or null. Never the global queue.
 export async function conflictSketchMutation(revisionId, structureId) {
   const id = sketchUpdateMutationId(revisionId, structureId);
