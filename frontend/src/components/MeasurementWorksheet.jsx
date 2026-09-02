@@ -14,6 +14,7 @@ import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
 import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
 import { finalizeAfterSave, rollbackPlan } from "@/components/roof-sketch/proposalLifecycle";
 import { setDecisions } from "@/components/roof-sketch/commands";
+import { num, buildEditablePayload, buildRebasePayload } from "@/components/measurementRebase";
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main House"], ["attached_garage", "Attached Garage"], ["detached_garage", "Detached Garage"],
@@ -33,7 +34,6 @@ const STATUS_STYLE = {
   office_verified: "bg-emerald-100 text-emerald-800", locked: "bg-slate-800 text-white",
 };
 const uid = () => "r" + Math.random().toString(36).slice(2, 10);
-const num = (value) => value === "" || value == null ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
 
 function penetrationForEdit(row) {
   const ref = row.ref || row.id || row._k || uid();
@@ -138,34 +138,11 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
 
-  // `base` supplies the hidden/system metadata (provider/report_id/notes/source) the Office user does not
-  // edit. Normally that is the loaded revision; for "Keep My Version" it is the newer authoritative server
-  // copy so those hidden values stay current while the user's editable measurement fields win.
-  const buildPayload = (base = rev) => ({
-    lead_id: leadId || null, property_id: propertyId || null, inspection_id: inspectionId || null,
-    source: base?.source || "office", reported_area_sqft: num(ed.reported_area_sqft),
-    provider: base?.provider ?? null, report_id: base?.report_id ?? null, notes: base?.notes ?? null,
-    structures: ed.structures.map((row, i) => ({
-      ref: row.ref, name: row.name || "", structure_type: row.structure_type || "main_house",
-      included_in_scope: row.included_in_scope !== false, stories: num(row.stories), approx_height_ft: num(row.approx_height_ft),
-      attachment: row.attachment || null, notes: row.notes || null, sort: i,
-    })),
-    facets: ed.facets.map((row, i) => ({
-      ref: row.ref, structure_ref: row.structure_ref || null, facet_label: row.facet_label || `F${i + 1}`,
-      pitch_rise: num(row.pitch_rise), area_sqft: parseFloat(row.area_sqft) || 0,
-      width_ft: num(row.width_ft), length_ft: num(row.length_ft), orientation_azimuth: num(row.orientation_azimuth),
-      roof_material: row.roof_material || null, notes: row.notes || null, geometry: row.geometry || null, sort: i,
-    })),
-    edges: ed.edges.map((row, i) => ({
-      ref: row.ref || row.id || row._k, edge_type: row.edge_type, length_ft: parseFloat(row.length_ft) || 0, facet_ref: row.facet_ref || null,
-      facet_ref_secondary: row.facet_ref_secondary || null, label: row.label || null, notes: row.notes || null, sort: i,
-    })),
-    penetrations: ed.penetrations.map((row, i) => ({
-      ref: row.ref || row.id || row._k, pen_type: row.pen_type, quantity: parseInt(row.quantity) || 1, facet_ref: row.facet_ref || null,
-      width_in: num(row.width_in), length_in: num(row.length_in), diameter_in: num(row.diameter_in), notes: row.notes || null, sort: i,
-    })),
-    summary: ed.summary || {},
-  });
+  const scope = { leadId, propertyId, inspectionId };
+  // Normal save: whole document from the local form + `base` top-level metadata (see measurementRebase.js).
+  const buildPayload = (base = rev) => buildEditablePayload(ed, base, scope);
+  // Keep My Version: rebase onto the newer authoritative server copy; only Office-editable values win.
+  const buildRebase = (server) => buildRebasePayload(ed, server, scope);
 
   const finalizePending = async (saved) => {
     if (!saved?.id) return;
@@ -226,16 +203,17 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
-  // Keep My Version: the user's current editable measurement fields intentionally win. We rebase onto the
-  // newer authoritative server revision — preserving ITS hidden/system metadata (provider/report_id/notes)
-  // and using ITS fresh If-Match token — then save. If the server changed AGAIN meanwhile, it 409s again
-  // (never force-writes). Clears Needs Review only after the authoritative save succeeds.
+  // Keep My Version: the user's current editable measurement fields intentionally win, but they are rebased
+  // onto the NEWER authoritative server revision — its hidden/system metadata (top-level report fields,
+  // Roof Plane orientation/geometry, hidden summary keys) is preserved via buildRebasePayload(). We save
+  // using the server's fresh If-Match token; if the server advanced AGAIN it 409s again (never force-writes).
+  // Needs Review clears only after the authoritative save succeeds.
   const keepMyVersion = async () => {
     const server = needsReview?.server;
     if (!server || !rev) return;
     setBusy(true);
     try {
-      const body = buildPayload(server);
+      const body = buildRebase(server);
       const saved = (await api.put(`/measurements/${rev.id}`, body, { headers: server.updated_at ? { "If-Match": server.updated_at } : {} })).data;
       toast.success("Your version saved over the newer copy");
       await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
