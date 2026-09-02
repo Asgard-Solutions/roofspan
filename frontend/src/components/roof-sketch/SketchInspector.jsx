@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { vById, eById, fById, joinEdges, edgeIsProtected } from "./commands";
 
-const EDGE_LABEL = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", valley: "Valley", sidewall: "Sidewall", headwall: "Headwall", transition: "Transition", unclassified: "Unclassified" };
+const EDGE_LABEL = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", valley: "Valley", dead_valley: "Dead Valley", sidewall: "Sidewall (Step Flashing)", headwall: "Headwall (Apron Flashing)", transition: "Transition", unclassified: "Unclassified" };
 
 function JoinControl({ doc, edge, onJoin }) {
   const [neighbor, setNeighbor] = useState("");

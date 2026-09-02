@@ -3,7 +3,7 @@
 
 const SCHEMA_VERSION = 1;
 const EDIT_MODES = ["connected_graph", "manual_polygon"];
-const EDGE_TYPES = ["eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition", "unclassified"];
+const EDGE_TYPES = ["eave", "rake", "ridge", "hip", "valley", "dead_valley", "sidewall", "headwall", "transition", "unclassified"];
 
 function createSketchDocument({ structureId = null, editMode = "connected_graph" } = {}) {
   return {

@@ -5,7 +5,7 @@ totals are derived side-by-side so excluding a structure from pricing never eras
 """
 from __future__ import annotations
 
-EDGE_KEYS = ["eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"]
+EDGE_KEYS = ["eave", "rake", "ridge", "hip", "valley", "dead_valley", "sidewall", "headwall", "transition"]
 
 
 def _get(row, name, default=None):
