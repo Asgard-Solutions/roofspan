@@ -168,7 +168,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   }, [ed]);
 
   const setRow = (key, i, field, value) => {
-    setEd((doc) => { const rows = [...doc[key]]; rows[i] = { ...rows[i], [field]: value }; return { ...doc, [key]: rows }; });
+    setEd((doc) => {
+      const rows = [...doc[key]]; const nx = { ...rows[i], [field]: value };
+      // Square footage is computed for the user: Area (SF) = Width × Length whenever both are present.
+      // Area stays editable so the user can override; changing a dimension recomputes it.
+      if (key === "facets" && (field === "width_ft" || field === "length_ft")) {
+        const w = parseFloat(nx.width_ft), l = parseFloat(nx.length_ft);
+        if (Number.isFinite(w) && Number.isFinite(l)) nx.area_sqft = Math.round(w * l * 100) / 100;
+      }
+      rows[i] = nx; return { ...doc, [key]: rows };
+    });
     setDirty(true);
   };
   const addRow = (key, row) => { setEd((doc) => ({ ...doc, [key]: [...doc[key], row] })); setDirty(true); };
@@ -420,9 +429,9 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             <Field label="Plane" className="w-24"><Input placeholder="F1" value={row.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} /></Field>
             <Field label="Structure" className="w-40"><Select value={row.structure_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("facets", i, "structure_ref", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Structure" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{structOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
             <Field label="Pitch" className="w-28"><PitchSelect value={row.pitch_rise} disabled={!editable} onChange={(v) => setRow("facets", i, "pitch_rise", v)} /></Field>
-            <Field label="Area (SF)" className="w-24"><Input type="number" placeholder="Area SF" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} /></Field>
             <Field label="Width (ft)" className="w-24"><Input type="number" value={row.width_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "width_ft", e.target.value)} /></Field>
             <Field label="Length (ft)" className="w-24"><Input type="number" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "length_ft", e.target.value)} /></Field>
+            <Field label="Area (SF)" className="w-28"><Input type="number" placeholder="= W × L" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} /></Field>
             <Field label="Roof Material" className="min-w-40 flex-1"><Input placeholder="Optional" value={row.roof_material || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "roof_material", e.target.value)} /></Field>
             {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("facets", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>

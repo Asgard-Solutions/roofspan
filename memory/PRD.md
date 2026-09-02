@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Auto-calculate Area (SF) = Width × Length in Roof planes (Office + Field) (2026-06)
+User: for any square-feet value in Roof Measurements, calculate it for the user — order should be Width, Length, then Area, and the user can still override the SF. Scope = the Roof plane Area (SF), the only SF field that has Width & Length inputs (Damaged Deck SF / reported area have no dimensions).
+- **Shared formula** `computeAreaSqft(width,length)` added to `mobile/src/measurementFieldControls.js` — `Math.round(w*l*100)/100` when both dimensions are finite, else `null` (so a partial/blank dimension never clobbers a manually-entered Area).
+- **Field** (`mobile/src/screens/Measurements.js`): `setF` now recomputes `area_sqft` via `computeAreaSqft` whenever `width_ft`/`length_ft` change; Roof-plane fields reordered to Pitch, Plane, Structure, **Width (ft) → Length (ft) → Area (SF)** (Area placeholder "Auto = W × L (editable)"), Material, Notes. Area remains editable (override); changing a dimension recomputes it.
+- **Office** (`frontend/src/components/MeasurementWorksheet.jsx`): `setRow` recomputes `area_sqft` (same formula, inline) when a facet `width_ft`/`length_ft` changes; Roof-plane row reordered to Plane, Structure, Pitch, **Width (ft) → Length (ft) → Area (SF)** (placeholder "= W × L"), Roof Material. `liveTotals`/backend totals already derive from `area_sqft`, so totals stay correct.
+- **Verified:** `test:measurements` green incl. new `computeAreaSqft` unit checks (11 control-logic checks: 20×15=300, "25"×"12.5"=312.5, 10.25×4=41, partial/blank/garbage → null); parity 17/17; babel parse OK. Office live browser verification BLOCKED this session by the tenant's in-app subscription-restricted state (billing dunning gate — unrelated to this change; app loaded fine earlier). Office reorder + calc is identical inline code to the unit-tested Field path; pre-gate screenshots confirmed Office labels render. Mobile RN device acceptance pending.
+
+
+
 ## Office worksheet responsive at all widths + desktop-version gap clarified (2026-06)
 User shared a photo of the packaged desktop app showing Roof planes overflowing horizontally with no field labels, asking the Office UI to look good at any computer-screen size.
 - Verified the LIVE WEB Office worksheet is already responsive: at 1000px viewport `document.scrollWidth == clientWidth` (no horizontal overflow) and the Roof planes row wraps cleanly (Plane/Structure/Pitch/Area/Width on line 1; Length/Roof Material/delete on line 2; notes full width) with all persistent labels visible; also clean at 1920px. Roof lines & Penetrations rows already use the same `flex flex-wrap items-end` pattern; summary sections use responsive `sm:grid-cols-2 lg:grid-cols-4` grids.
