@@ -1694,3 +1694,25 @@ DEVICE-ONLY still required: enter-without-Save → background/restart persistenc
 offline entry→restart→reconnect→sync; full Field↔Office field parity round trip; ft/in round trip;
 primary+secondary plane; Office-changed-while-Field-unsynced conflict; multi-structure isolation; Save &
 Mark Field Complete separate from Save.
+
+## MEASUREMENT FINAL CLOSURE — PARTIAL (2026-09), status BLOCKED (context budget)
+Baseline 44ecfa7. DONE + verified this increment:
+ - #14 optimistic metadata hole FIXED: Field save optimistic detail now carries provider/report_id/
+   reported_area_sqft/notes (+ body-shape facets/edges round-trip preserves orientation/geometry/secondary).
+   Backend test_measurement_cross_app_parity now has test_two_field_saves_before_sync_preserve_hidden_metadata
+   → 3 passed (no-erasure + office-stale 409 + two-saves-metadata).
+ - #11 storage honesty: saveMeasurementWorkingDraft returns bool; UI shows "Saved on device" only on durable
+   success, else "Local save failed — retry" (keeps screen data).
+ - #12 revert: autosave clears stale working draft when edits revert to baseline (no resurrection).
+ - #10 (partial) unmount flush (navigate away/Back) + existing AppState background flush.
+ - #19 (partial) penetration selector "Facet"→"Roof plane".
+ Verified: mobile test:measurements (cache/edge4/persistence9/parity5), backend parity 3, Field Expo export OK.
+REMAINING (NOT done → BLOCKED): #1 full Field structure-type labels + Remove Structure; #2/#4 remove other
+user-facing "Facet" (notes/photos/totals/empty-state) + Remove buttons for Roof Planes & Roof Lines in Field;
+#3 pitch x/12 parity (Field presets→x/12+custom, Office numeric→choices+custom); #6 split summary into 3
+sections (Existing Roof & Deck / Ventilation / Access) in BOTH; #7 Gutter Notes in Office + parity token;
+#8 remove editable Reported Area SF from Office normal form; #9 "Save Measurements" wording both; #13
+deterministic autosave-vs-Save race guard (generation token so a late persist can't recreate a post-Save
+working draft); #16 Office 409 → hard "Needs Review" state that BLOCKS Save until explicit Use-Latest/Keep-Mine;
+#18 strengthened semantic parity test (section contract, no-Facet, pitch x/12, ft/in, primary+secondary,
+gutter_notes, reported-area-not-editable, Save Measurements).
