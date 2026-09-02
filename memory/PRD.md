@@ -1,5 +1,24 @@
 # RoofSpan — Product Requirements & Status
 
+## FINAL Plan 1 Closure Regression (Roof Measurements + Roof Sketch) — (2026-06) — COMPLETE, device acceptance pending. NO code changes required (regression-only).
+Fresh full matrix run against final combined code. All product suites green; only two NON-product environment/config artifacts noted (below). No Plan 2 started.
+- **PASS 1 Measurements:** JS — measurement_cache (all), edge_identity 4, scope 7, persistence+parity 9, field-parity 12, save/autosave race 5; frontend hidden-metadata rebase 7; backend 25 passed (lifecycle + pytest + cross_app_parity 4 + completion_core + validation). Covers cross-app round-trip, hidden-metadata/reported-area/orientation/geometry/secondary-plane/summary survival, Field+Office stale conflict, Needs Review/Save-blocked/Use Latest/Keep My Version rebase, second-conflict, Z vs +00:00 tolerance, genuinely-stale 409.
+- **PASS 2 Shared Sketch Core:** roof-sketch-core EDITOR ENGINE 128 (mutation-validation 3/snap 7/gesture 12/dimension 8/history 7…); test:sketch core — ROOF SKETCH CORE 26, TOPOLOGY HARDENING 31, EDGE AUTHORITY+PROPOSALS 10.
+- **PASS 3 Office Sketch:** frontend node — commands 18, geometryOps 39, gestureOps 36, mapping 18, proposalLifecycle 24, saveCloseLifecycle 29, saveLifecycle pass, sharedDelegation 22, topologyIntegrity 63, measurementRebase 7; backend sketch 7 passed, 1 skipped (live smoke, needs RS_TEST_EMAIL/PW — env-only).
+- **PASS 4 Field Sketch B3A–D:** SKETCH CACHE 15, SYNC ORCHESTRATION 11, CLEAN-TIMESTAMP RACE 8, VIEWPORT 13, FIELD EDITOR 44, LIVE WIRING 36, B3A 16, B3B1 26, B3B2 16, B3C 23, B3D 13, Phase C 12.
+- **PASS 5 Proposal Reconciliation:** roof_proposal_reconcile 12 (Field), proposalLifecycle 24 (Office), backend sketch service/concurrency (in the 7).
+- **PASS 6 Lifecycle:** test_measurements_lifecycle + sketch_clone + sketch_survival (Draft→Field Complete→Verified→Locked, clone remap, locked immutability).
+- **PASS 7 Photos:** test_measurement_photos direct run PASS (upload revision/facet/penetration, aggregate 'measurement photos', per-facet list, locked-revision 409, clone remap, draft-clone delete) + photo_categories 1.
+- **PASS 8 Relay/Offline:** transport 8, pairing 11, sync 10 (with correct backend URL). MAP CONFIG PASS; no external-token tile test in current suite.
+- **PASS 9 Takeoff:** test_takeoff_core 9 passed. **PASS 10 Estimates/Quotes:** 10 passed. **PASS 11 Scope/Authz:** test_measurement_sketch_authz 1 + Field scope.node 7.
+- **PASS 12 Office build:** `yarn build` EXIT 0 (Done in 15.30s), no new errors. **PASS 13 Field export:** `npx expo export --platform android` (JSC) EXIT 0, 1156 modules, ZERO resolution errors. Hermes note: pod is aarch64 but RN ships only x86-64 `hermesc` → default Hermes-bytecode step can't exec in-pod (environment/architecture, NOT a product blocker; real EAS device build pending).
+- **PASS 14 DB:** exactly ONE Alembic head `e0f1a2b3c4d5`; no Plan 2 migration `f1a2b3c4d5e6`. **PASS 15 Plan 2 guard:** no EagleView/HOVER/GAF/import files; no defusedxml/pypdf/ezdxf deps.
+- **Non-product artifacts (not regressions):** (1) `sync.node.test.js` defaults to a stale preview URL when REACT_APP_BACKEND_URL isn't exported to the shell → 404; passes with the correct URL. (2) aarch64 vs x86-64 hermesc.
+- **Regressions fixed:** NONE — no product code changes were required by the final regression.
+- **Status:** Roof Measurement + Roof Sketch Plan 1: COMPLETE — device acceptance pending.
+
+
+
 ## Measurement UI Parity — final cleanup (Measurement Photos heading + last facet text + stronger guard) — (2026-06) — DONE (Node parity 12/12 + regression proof + builds green); STOP before full regression
 Text-only + test-guard cleanup of the two remaining user-facing parity gaps a source review found.
 - **Photo section heading unified to "Measurement Photos" in BOTH:** Office was "All measurement photos" → "Measurement Photos" (`MeasurementWorksheet.jsx`, card testid unchanged `measurement-allphotos-card`). Field was "General measurement photos" → "Measurement Photos" (`Measurements.js`, `<Section title>`).
