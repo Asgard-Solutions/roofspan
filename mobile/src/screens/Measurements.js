@@ -32,6 +32,9 @@ const ATTACH_OPTS = [["", "None"], ["attached", "Attached"], ["detached", "Detac
 const uid = () => "r" + Math.random().toString(36).slice(2, 10);
 const numberOrNull = (v) => (v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 
+// An empty/orphaned working draft must NOT shadow the authoritative Office measurement (see module).
+const { workingDraftHasContent } = require("../measurementDraftPriority");
+
 function initialPenetrations() {
   return PEN_TYPES.map(([t]) => {
     const ref = uid();
@@ -146,7 +149,7 @@ export default function Measurements({ route, navigation }) {
     // Highest priority: the salesperson's in-progress working draft (unsaved edits) always wins so nothing
     // typed before Save is lost across navigate/background/restart.
     const wd = await loadMeasurementWorkingDraft(scope);
-    if (wd && wd.working) {
+    if (wd && wd.working && workingDraftHasContent(wd)) {
       hydrateWorking(wd);
       const pend = wd.base ? await currentMeasurementMutation(wd.base.id) : (wd.local_client_id ? await currentMeasurementCreate(wd.local_client_id) : null);
       const pendingActive = pend && (pend.state === "pending" || pend.state === "failed");
@@ -154,6 +157,9 @@ export default function Measurements({ route, navigation }) {
       setConflict(null);
       return;
     }
+    // An empty/orphaned working draft must never shadow the authoritative Office copy — drop it so the
+    // Field shows exactly what Office has.
+    if (wd && wd.working) { try { await clearMeasurementWorkingDraft(scope); } catch (e) { /* best effort */ } }
     const draft = await loadMeasurementDraft(scope);
     const listResult = await cache.measurements(scope);
     const head = measurementKeys.pickCurrent(listResult.data || []);

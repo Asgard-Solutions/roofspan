@@ -1,0 +1,34 @@
+{
+  "summary": "Validated the Field-shadowing bug fix: (1) Mobile Node test suites are green — npm run test:measurements PASSES all suites including the new regression test src/tests/measurement_draft_priority.node.test.js which locks the fix (empty/orphaned working draft => NOT content => Office wins; a real draft with structures/facets/edges/pen-qty/summary => still wins). (2) New backend pytest suite proves the Office copy is served through the exact endpoints the Field calls — GET /api/mobile/measurements (list, scope by lead_id/property_id/inspection_id), GET /api/mobile/measurements/{id} (detail with structures/facets/edges/penetrations/summary), and PUT /api/measurements/{id} with If-Match (round-trip integrity: Office write -> mobile GET reflects). All 6 pytest cases PASS. (3) Code review of mobile/src/screens/Measurements.js load() (lines 148-212) confirms the guard: `if (wd && wd.working && workingDraftHasContent(wd))` short-circuits ONLY for a working draft with real content (shows 'Saved on device'); otherwise an empty draft is cleared via clearMeasurementWorkingDraft(scope) and execution falls through to the authoritative Office branch (cache.measurements(scope) -> pickCurrent -> cache.measurement(head.id) -> resolveMeasurementView -> hydrate). Fix resolves the user's reported symptom.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_office_to_field_parity_iter60.py",
+    "/app/test_reports/pytest/iter60_results.xml",
+    "/app/mobile/src/tests/measurement_draft_priority.node.test.js"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is correctly scoped: the ONLY short-circuit path for the working draft now requires workingDraftHasContent(wd) to be true (checks structures/facets/edges length, any penetration qty>0, or any non-empty/non-false summary value). Empty drafts are explicitly cleared before falling through — no risk of resurrecting stale empty drafts.",
+    "Real unsaved edits are still preserved: non-empty working drafts still take precedence (verified in measurement_draft_priority.node.test.js second case).",
+    "Backend list endpoint returns the office measurement under both lead_id and property_id scopes (whichever the Field passes based on route params); the current test used property_id scope for the seeded measurement — Field's makeScope in Measurements.js prefers lead_id then property_id then inspection_id, matching backend behavior.",
+    "Env note: supervisor was found not running at start of iteration (public URL returned 502 for ~5 retries); had to run `sudo /usr/bin/supervisord -c /etc/supervisor/supervisord.conf` to bring backend/frontend back. Not related to the fix, but worth flagging so main agent knows the environment recovered cleanly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_office_to_field_parity_iter60.py (new)"
+  ],
+  "success_rate": {"backend": "100% (6/6 iter60 tests + all mobile node test:measurements suites green)", "frontend": "N/A - frontend testing skipped per request; Expo mobile cannot run in this pod"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created one measurement revision on an existing lead's property (source=office) with 1 structure, 2 facets, 2 edges (ridge+eave), 1 penetration, and a summary payload. Then updated it via PUT /api/measurements/{id} with If-Match to set summary.stories=2 and summary.full_redeck=true. Data left in place (harmless; can be cleaned up manually if desired).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fix is validated. If further regression is needed, run: (a) cd /app && pytest backend/tests/test_office_to_field_parity_iter60.py -v -o addopts='' , and (b) cd /app/mobile && npm run test:measurements . Also npm run test:sketch was NOT re-run in this iteration since it is orthogonal to this bug — main agent can invoke if desired.",
+  "rca of the issue": "USER SYMPTOM: Office roof measurements not appearing on Field ('Saved on device' shown instead). ROOT CAUSE: mobile/src/screens/Measurements.js load() had an unconditional short-circuit for any persisted working draft (wd.working=true), including empty/orphaned drafts that carried no real content. The Office-authoritative branch below (cache.measurements -> cache.measurement -> resolveMeasurementView -> hydrate) was never reached, so the Field displayed the empty local snapshot with status 'Saved on device' instead of the Office data. REPRODUCTION: (1) Create a measurement in Office for a lead. (2) Open the same lead in Field with a leftover empty working draft in local storage. Before fix: Field shows empty measurement labeled 'Saved on device'. After fix: empty draft is cleared, Field loads and displays exactly what Office has. MITIGATION/FIX (already applied by main agent): guard the short-circuit with `workingDraftHasContent(wd)` — an empty draft no longer wins; it is cleared via `clearMeasurementWorkingDraft(scope)` and execution falls through to the authoritative Office load. A real non-empty draft still wins (no unsaved edit loss). Locked by the new regression test measurement_draft_priority.node.test.js."
+}
