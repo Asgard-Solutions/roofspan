@@ -105,4 +105,15 @@ const pens = [
   assert.ok(!C.eById(attempt, e2.edgeId).measurement_edge_id); ok("duplicate edge mapping to ME1 refused");
 }
 
+// ---- summarizeScoped: read-only Roof Sketch measurements reference ----
+{
+  const sum = S.summarizeScoped(S.scopeForStructure({ structure: { id: "S1" }, facets, edges, penetrations: pens }));
+  assert.deepStrictEqual(sum.planes.map((p) => p.id), ["MF1", "MF2"]); ok("summary planes scoped to structure");
+  assert.strictEqual(sum.lines.find((l) => l.type === "valley").lf, 12.2); ok("summary groups roof lines by type with LF");
+  assert.ok(!sum.lines.some((l) => l.type === "ridge")); ok("summary excludes other-structure roof lines");
+  assert.strictEqual(sum.pens.find((p) => p.type === "pipe_boot").qty, 1); ok("summary groups penetrations by type × qty");
+  assert.strictEqual(sum.totals.area, 710); ok("summary structure total area = 412 + 298");
+  assert.strictEqual(sum.totals.planeCount, 2); ok("summary structure plane count");
+}
+
 console.log("\nROOF SKETCH MAPPING: all " + n + " assertions passed");

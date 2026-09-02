@@ -527,6 +527,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         structure={{ id: sketchFor.id, name: sketchFor.name || "Structure" }}
         facets={scoped.facets}
         edges={scoped.edges}
+        penetrations={scoped.penetrations}
         onMeasurementChanged={applySketchProposal}
         onDiscardSession={discardEditorSession}
         onClose={() => { setSketchFor(null); if (rev?.id) listSketches(rev.id).then((rows) => setSketchStructIds(new Set(rows.map((r) => r.structure_id)))).catch(() => {}); }}
