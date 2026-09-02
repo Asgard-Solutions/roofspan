@@ -1,149 +1,120 @@
-<analysis>**original_problem_statement**: The user is driving the long-term development of the RoofSpan app. Currently, the focus is on **Plan 1 Task 6: Field/Mobile Roof Sketch Editor**. The immediate next step is **Phase B1A (Build Shared Roof Sketch Editor Engine — ADDITIVE ONLY)**. This requires porting the pure Office editor logic into the shared  so it can be consumed by both Office and Mobile, but strictly in an **additive** manner without modifying the existing Office codebase yet. PRODUCT REQUIREMENTS also dictate strict queue/offline safety which was partially addressed in previous turns.
+<analysis>**original_problem_statement**: Correct Field Roof Measurements UX to Match Office. The Field app currently relies on disappearing placeholders and large chip matrices for inputs. PRODUCT REQUIREMENTS dictate that Field must feel like the responsive mobile version of the RoofSpan Office Measurement Worksheet. Every editable box must have a persistent visible label (), and Office-style selects must use a tap-to-open modal list ().
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
-**what currently exists?**: A full-stack monorepo containing a React SPA Office frontend, FastAPI/PostgreSQL backend, Expo React Native mobile app, Next.js static , and a  Node module containing deterministic geometry/topology. The offline queue supersession logic for mobile has just been stabilized.
+**what currently exists?**: A full-stack monorepo (React Office, Expo React Native Field, Python FastAPI Postgres backend). Plan 1 Roof Sketch and Measurement Persistence / Parity is fully tested and complete (data-safety, conflicts, terminology parity). Field app currently uses placeholder-only inputs and large chip matrices for measurement data, which needs to be completely overhauled for UX parity with Office.
 
 **Last working item**:
-    - Last item agent was working: Plan 1 Task 6 Phase B1A (Shared Engine Creation - Additive). The agent explicitly skipped executing this task due to context window limitations to prevent leaving the codebase in a broken, half-migrated state.
+    - Last item agent was working: Preparing to completely rewrite the UI layer of  to implement Office-UX parity (, ). Explicitly deferred to next agent due to context window limitations to ensure a clean, one-pass rewrite.
     - Status: NOT STARTED
-    - Agent Testing Done: N/A
-    - Which testing method agent to use?: backend testing agent (specifically running deterministic Node test contracts like  and  within the package).
+    - Agent Testing Done: N
+    - Which testing method agent to use? frontend testing agent (for visual populated-field verification) + manual render/component-level Node tests.
     - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  Issue 1: Plan 1 Task 6 Phase B1A: Build Shared Roof Sketch Editor Engine (P0)
-     - Attempted fixes: None. Deliberately deferred to start with a fresh context.
-     - Next debug checklist: Create , , , , and  inside . Port logic exactly from  into these files using CommonJS (/). Update . Write direct test contracts (). DO NOT touch the Office frontend source files during this pass.
-     - Why fix this issue and what will be achieved with the fix?: Ensures mobile/Field editor uses the exact same geometry/topology commands as Office without duplicating code, while protecting Office from regressions.
+  Issue 1: Correct Field Roof Measurements UX to Match Office (P0)
+     - Attempted fixes: None. The previous agent stopped before starting to preserve context.
+     - Next debug checklist: 
+        1. Read  & . 
+        2. Build reusable  (persistent label) and  (tap-to-open modal/bottom-sheet list, no internal state copies). 
+        3. Rewrite Field JSX sections (Structures, Roof Planes, Roof Lines, Penetrations, etc.) to match Office logic and layout.
+        4. Add render/component-level tests to prove labels exist and  hydrates correctly.
+     - Why fix this issue and what will be achieved with the fix?: Ensures Field app usability matches the Office app without confusing chips or disappearing placeholders.
      - Status: NOT STARTED
      - Is recurring issue?: N
-     - Should Test frontend/backend/both after fix?: backend (Node test scripts for shared core, and verify Office build).
+     - Should Test frontend/backend/both after fix?: Frontend (Node tests + testing agent for visual acceptance on mobile viewport)
      - Blocked on other issue: None.
 
-  Issue 2: Mobile Lockfile verification (P2)
-     - Attempted fixes: None.
-     - Next debug checklist: A  was inadvertently generated in an earlier pass. The project uses . Clean up  safely if it exists without breaking mobile dependencies, per user instruction.
-     - Why fix this issue and what will be achieved with the fix?: Repository compliance and avoiding conflicting package managers.
+  Issue 2: Desktop Windows Installer Staging Hash Mismatch (P1)
+     - Attempted fixes: Investigated user report of blank screen on desktop Windows app. Identified 404s for  and  in . 
+     - Next debug checklist: The Windows installer pipeline ( and ) shipped a mismatched  referencing old JS/CSS hashes instead of the newly built  assets. A clean rebuild/staging of the Windows installer is required.
+     - Why fix this issue and what will be achieved with the fix?: Fixes the blank white screen on the packaged desktop application.
      - Status: NOT STARTED
      - Is recurring issue?: N
-     - Should Test frontend/backend/both after fix?: backend ( etc in mobile).
+     - Should Test frontend/backend/both after fix?: Frontend (Desktop app build)
      - Blocked on other issue: None.
 
-**In progress Task List**:
-  Task 1: Plan 1 Task 6 Phase B1A: Shared Engine Promotion
-     - Where to resume: 
-     - What will be achieved with this?: A unified, platform-neutral command engine for both Office and Field.
-     - Status: NOT STARTED
-     - Should Test frontend/backend/both after fix?: backend (Node deterministic scripts).
-     - Blocked on something: Needs full context budget, which the new agent has.
+**In progress Task List**: None
 
-**Upcoming and Future Tasks**
-  - Phase B1B: Office wrapper migration + full parity verification (Switching Office to use the shared core) (P0)
-  - Phase B2: Field live editor UI implementation (P1)
-  - Phase B3: Field durability/conflict/read-only closure (P1)
-  - Phase C: Measurement mapping/proposal reconciliation (P2)
-  - Plan 1 Task 7: Full release regression (P3)
-  - Plan 2: Aerial/report imports (EagleView, HOVER, etc.) (P4)
+**Upcoming and Future Tasks**:
+  - Plan 2: Aerial/report imports (EagleView, HOVER, GAF QuickMeasure) and import reconciliation (P2 - DO NOT START until Plan 1 Field UX and device acceptance is fully complete).
+  - Report Metadata Chip / Locked Work Tray (P3)
 
-**Completed work in this session**
-- Plan 1 Task 4 Phase 3 final topology integrity closure ( loop safety, duplicate edge prevention) (DONE)
-- Next.js SEO enhancements on  (dedicated SEO pages, canonicals, 404, sitemap) (DONE)
-- Plan 1 Task 6 offline queue supersession logic and clean-timestamp race fix in mobile (, , ) (DONE)
+**Completed work in this session**:
+- Office Stale-Measurement Conflict Handling UI (Needs Review, Keep My Version, Use Latest Version) (DONE)
+- Deterministic Field Save/Autosave race tests (DONE)
+- Keep My Version hidden-metadata rebase fix (preserves reported area, orientation, etc.) (DONE)
+- Office/Field Measurement UI Parity phase 1 (Terminology, pitch x/12, removal buttons, Measurement Photos) (DONE)
+- FINAL Roof Measurement + Roof Sketch Closure Regression pass (ALL GREEN, NO CODE CHANGES REQUIRED) (DONE)
 
-**Earlier issues found/mentioned but not fixed**
-   Issue 1: Live Office & Field Walkthrough is not runnable in this environment
-   - Debug checklist: Rely entirely on deterministic Node test contracts instead of browser/device e2e tests for sketch logic.
-   - Why to solve this issue and what will be achieved with this?: Overcomes lack of valid licensed sessions in the pod.
-   - Should Test frontend/backend/both after fix: backend (Node tests)
-   - Is recurring issue?: Y (Environmental limitation)
+**Earlier issues found/mentioned but not fixed**: None inside the repo codebase. The Windows desktop staging pipeline issue was identified but left for support/pipeline fixes.
 
-   Issue 2:  in mobile fails with 404
-   - Debug checklist: Ignore this specific test failure as it requires a live reachable Office backend which is not available in the pod. Do not treat it as a regression.
-   - Why to solve this issue and what will be achieved with this?: Prevents false-negative test reporting.
-   - Should Test frontend/backend/both after fix: N/A
-   - Is recurring issue?: Y
+**Known issue recurrence from previous fork**:
+  - Issue recurrence in previous fork:  dies in the preview pod, causing 502 Bad Gateway / white screens on the frontend.
+  - Recurrence count: 2
+  - Status: RESOLVED (Temporarily resolved via unix:///var/run/supervisor.sock no such file or starting . The next agent should simply restart supervisor if it occurs again).
 
-**Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: None explicitly affecting the current task.
-  - Recurrence count: 0
-  - Status: RESOLVED
-
-**Code Architecture**
+**Code Architecture**:
 - : FastAPI + Postgres (SQLAlchemy).
 - : React SPA (Office application).
 - : Expo React Native app.
-- : Shared Node module geometry engine (CommonJS).
-- : Next.js Static Export website.
+- : Shared Node module geometry engine.
+-  & : Desktop WebView2 Windows application wrappers.
 
-**Key Technical Concepts**
-- Identity-preserving persistence using UUIDs.
-- Deterministic queue coalescing for mobile (offline-first, SQLite,  supersession).
-- Shared, pure Node geometry engine independent of React/DOM.
+**Key Technical Concepts**:
+- Offline-first mutation queue (SQLite) with deterministic coalescing.
+- Optimistic UI, Compare-And-Swap (CAS) rebase,  header concurrency.
+-  and  (to be created as controlled components for mobile UI).
 
-**key DB schema**
-  -  -> 
-  - Mobile SQLite  (uses  and ).
+**key DB schema**:
+  - , ,  (UI calls Roof Plane), , .
 
-**changes in tech stack**
-  - None.
+**changes in tech stack**: None.
 
-**All files of reference**
-  -  (Reference logic to port)
-  -  (Reference logic to port)
-  -  (Reference logic to port)
-  -  (Reference logic to port)
-  -  (Reference logic to port)
-  -  (Needs updating to export new commands)
-  -  (Needs to be created)
-  -  & 
+**All files of reference**:
+  -  (Target for complete UX parity overhaul)
+  -  (Office UI reference)
+  -  (Parity guards to be updated)
 
-**Areas that need refactoring**
-  -  needs to receive all the pure logic currently housed in the Office frontend components.
+**Areas that need refactoring**:
+  -  needs a massive JSX presentation refactor without breaking its underlying data handlers.
 
-**key api endpoints**
+**key api endpoints**:
+  - 
   - 
 
-**Critical Info for New Agent**
-- **CRITICAL**: Phase B1A is an **ADDITIVE ONLY** pass. Do **NOT** modify or replace the existing Office frontend files (, , etc.). You are only copying and adapting their logic into  using CommonJS format.
-- Do NOT convert  to ESM. Use  and .
-- You must create a new test file  that tests these newly shared commands by importing them *only* from the shared package index.
-- Do NOT perform any Git operations (On branch main
-Untracked files:
-  (use "git add <file>..." to include in what will be committed)
-	mobile/yarn.lock
-	roofspan-website/yarn.lock
+**Critical Info for New Agent**:
+- **DO NOT** rewrite the underlying measurement state, offline queue, autosave, hydration, or conflict resolution logic in . The rewrite is strictly for presentation/interaction layer.
+- Ensure  does NOT maintain its own independent copy of state. It must be a controlled component ( in -> user selects -> existing  handler out).
+- Add robust render/component-level tests to prove inputs have labels and that SelectFields hydrate correctly.
+- Test Field Expo export utilizing the JSC path (aarch64 Hermes limitation applies).
+- Do not visually modify the Office app. Do not start Plan 2 features.
 
-nothing added to commit but untracked files present (use "git add" to track), , etc.).
-- Maintain max parallel tool calling where possible.
+**documents and test reports created in this job**:
+  -  through 
+  -  (Updated with Final Closure regression logs)
 
-**documents and test reports created in this job**
-  -  (Updated with completion states for SEO and Task 6 Queue Safety).
+**Last 10 User Messages and any pending HUMAN messages**:
+ - *Latest pending task*: Complete the Field Roof Measurements Office-UX parity conversion in a clean pass.
+ - User requested the UX rewrite.
+ - Agent identified the massive scope of the rewrite and properly requested to defer the work to a fresh context window to prevent leaving the file half-converted. 
+ - User approved deferring the work, mandated the exact SelectField behavior (modal bottom-sheet), and provided strict guardrails against changing underlying state persistence.
 
-**Last 10 User Messages and any pending HUMAN messages** 
- - *Latest*: Plan 1 Task 6 Phase B1A: Build Shared Roof Sketch Editor Engine — ADDITIVE ONLY (Instructs porting Office commands to shared package WITHOUT modifying Office frontend).
- - Plan 1 Task 6 Phase B1: Shared Editor Engine Promotion + Office Parity Gate (Deferred).
- - Plan 1 Task 6 Phase B: Live Field Roof Sketch Editor Core (Agent implemented Part 0 Queue Micro-correction).
- - Plan 1 Task 6: Field/Mobile Roof Sketch Editor + Offline Crash Recovery (Agent implemented offline queue/sync safety).
- - RoofSpan — Plan 1 Task 4 Phase 3 FINAL Topology Integrity Closure (Completed topology fixes).
- - Implement the SEO improvements for the RoofSpan public website (Completed Next.js SEO updates).
- - Handover summary.
+**Project Health Check**:
+Broken (Windows desktop staging shipped stale  asset hashes). Mocked (MapTiler tests).
 
-**Project Health Check:**
-Healthy. All backend/frontend/mobile Node test suites are passing (excluding environmental network 404s). 
-
-**3rd Party Integrations**
+**3rd Party Integrations**:
 - MapTiler / MapLibre (Mapping)
 - Stripe (Payments) — requires User API Key
 
-**Testing status**
-  - Testing agent used after significant changes: YES (using exhaustive  test contracts)
+**Testing status**:
+  - Testing agent used after significant changes: YES
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: , , .
-  - Known regressions: None.
+  - Test files created: , 
+  - Known regressions: None detected in codebase. Desktop installer hash mismatch exists.
 
-**Credentials to test flow:**
-Standard users present in .
+**Credentials to test flow**:
+Standard users present in  ().
 
-**What agent forgot to execute**
-The agent intentionally and safely deferred the execution of Phase B1A (Shared Editor Engine Promotion) because its token window was running out, which would have risked leaving the package in a half-written state. This is exactly what the new agent needs to execute immediately.</analysis>
+**What agent forgot to execute**:
+Nothing was forgotten. The agent explicitly stopped and deferred the  Field UX rewrite to the next agent because executing it on a depleted context budget would have risked leaving the codebase in a broken, half-converted state.</analysis>
