@@ -3,7 +3,8 @@
 Full worksheet CRUD over the snapshot-revision model. Estimating/takeoff is intentionally out of
 scope here (Increment B consumes these revisions as a stable read API).
 """
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,8 +68,14 @@ async def create_revision(payload: MeasurementRevisionIn, request: Request, user
 
 
 @router.put("/{revision_id}", response_model=MeasurementRevisionOut)
-async def replace_revision(revision_id: str, payload: MeasurementRevisionIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+async def replace_revision(revision_id: str, payload: MeasurementRevisionIn, request: Request, if_match: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     rev = await _get_rev_or_404(db, revision_id)
+    # Optimistic concurrency: if the caller's base version differs from the current server version, another
+    # surface (e.g. a synced Field save) already advanced this revision — refuse to silently overwrite it.
+    token = rev.updated_at.isoformat() if rev.updated_at else None
+    if if_match and token and if_match != token:
+        out = await svc.build_out(db, rev)
+        raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": jsonable_encoder(out)})
     await svc.replace_children(db, rev, payload)
     out = await svc.build_out(db, rev)
     await log_action(db, user=user, action="measurement.update", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
