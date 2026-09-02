@@ -45,7 +45,7 @@ const bySortThenId = (a, b) => {
 const SIMPLE_EDGE_TYPES = new Set(["eave", "rake", "ridge"]);
 
 // A needs-review result keeps the foundation's no-XY candidate + adds the blocking diagnostics.
-function _needsReview(base, diags) {
+function _needsReview(base, diags, graph) {
   const diagnostics = base.diagnostics
     .filter((d) => d.code !== "geometry_deferred" && d.code !== "geometry_deferred_complex")
     .concat(diags);
@@ -57,10 +57,11 @@ function _needsReview(base, diags) {
     geometry_status: "needs_review",
     diagnostics,
     unresolved: diagnostics.filter((d) => d.severity === "error"),
+    ...(graph ? { graph } : {}),
   };
 }
 
-function _success(base, doc, mappings, extraDiags) {
+function _success(base, doc, mappings, extraDiags, graph) {
   const diagnostics = base.diagnostics
     .filter((d) => d.code !== "geometry_deferred" && d.code !== "geometry_deferred_complex")
     .concat(extraDiags || []);
@@ -74,6 +75,7 @@ function _success(base, doc, mappings, extraDiags) {
     mappings,
     diagnostics,
     unresolved: [],
+    ...(graph ? { graph } : {}),
   };
 }
 
@@ -282,11 +284,11 @@ function _gableFacet(f, mid, edgeIds) {
 
 // Validate the completed geometry with the canonical validator (never emit an invalid sketch) and
 // rebuild the id mappings from the drawn document.
-function _finalize(base, doc) {
+function _finalize(base, doc, graph) {
   const v = validateSketch(doc);
   if (!v.valid) {
     return _needsReview(base, [{ severity: "error", code: "generated_geometry_invalid", target_type: "structure", target_id: base.structure_id,
-      message: "Generated geometry failed canonical validation: " + (v.errors[0] && v.errors[0].code) }]);
+      message: "Generated geometry failed canonical validation: " + (v.errors[0] && v.errors[0].code) }], graph);
   }
   const mappings = {
     facets: doc.facets.map((f) => ({ sketch_facet_id: f.id, measurement_facet_id: f.measurement_facet_id })),
@@ -294,7 +296,180 @@ function _finalize(base, doc) {
       .map((e) => ({ sketch_edge_id: e.id, measurement_edge_id: e.measurement_edge_id })),
     penetrations: (doc.penetrations || []).map((p) => ({ sketch_penetration_id: p.id, measurement_penetration_id: p.measurement_penetration_id, position_known: false })),
   };
-  return _success(base, doc, mappings, []);
+  return _success(base, doc, mappings, [], graph);
+}
+
+// ---- connected multi-plane: adjacency graph + standard hip ----------------------------------------
+const SHARED_TYPES = new Set(["ridge", "hip", "valley", "dead_valley"]);
+
+// Build the facet adjacency graph from the AUTHORITATIVE Primary/Secondary relationships on shared
+// roof lines (never from matching lengths/labels). Reports shared edges once each + component count.
+function _adjacencyGraph(base) {
+  const nodes = base.constraints.planes.map((p) => String(p.measurement_facet_id));
+  const idset = new Set(nodes);
+  const sharedEdges = base.constraints.adjacency.map((a) => ({
+    measurement_edge_id: String(a.measurement_edge_id), edge_type: a.edge_type, facets: a.facets.map(String),
+  }));
+  const parent = {}; nodes.forEach((nd) => { parent[nd] = nd; });
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { parent[find(a)] = find(b); };
+  sharedEdges.forEach((s) => { if (s.facets.length === 2 && idset.has(s.facets[0]) && idset.has(s.facets[1])) union(s.facets[0], s.facets[1]); });
+  const comps = new Set(nodes.map((nd) => find(nd)));
+  return { nodes, shared_edges: sharedEdges, components: comps.size, node_count: nodes.length };
+}
+
+// A shared-type roof line (Ridge/Hip/Valley/Dead Valley) MUST connect exactly two distinct in-scope
+// planes. Anything else (self-reference, one foreign/missing endpoint) is contradictory adjacency.
+function _contradictoryAdjacency(base, edgesIn) {
+  const idset = new Set(base.constraints.planes.map((p) => String(p.measurement_facet_id)));
+  for (const e of edgesIn) {
+    if (!SHARED_TYPES.has(e.edge_type)) continue;
+    const p = e.facet_id != null ? String(e.facet_id) : null;
+    const s = e.facet_id_secondary != null ? String(e.facet_id_secondary) : null;
+    const pin = p != null && idset.has(p);
+    const sin = s != null && idset.has(s);
+    if (!pin && !sin) continue; // fully foreign — foundation already excluded; not our structure
+    if (!pin || !sin || p === s) {
+      return { severity: "error", code: "contradictory_adjacency", target_type: "edge", target_id: String(e.id),
+        message: `A ${e.edge_type} roof line must connect two distinct roof planes of this structure (Primary/Secondary).` };
+    }
+  }
+  return null;
+}
+
+// Exterior (non-shared) roof lines belonging to a plane, sorted stably.
+function _planeExterior(edgesIn, mid, sharedMids) {
+  return edgesIn.filter((e) => !sharedMids.has(String(e.id)) &&
+    (String(e.facet_id) === String(mid) || String(e.facet_id_secondary) === String(mid))).slice().sort(bySortThenId);
+}
+
+// Recognize a STANDARD hip strictly from the adjacency graph + Roof Line Types (no length/label guessing).
+// Returns { result } (success or a specific needs_review) once the topology is a hip, or { result: null }
+// to DEFER (fall through to unresolved_complex) when it is not a clean standard hip.
+function _tryStandardHip(base, edgesIn) {
+  const planes = base.constraints.planes;
+  if (planes.length !== 4) return { result: null };
+  const adj = base.constraints.adjacency;
+  const ridges = adj.filter((a) => a.edge_type === "ridge");
+  const hips = adj.filter((a) => a.edge_type === "hip");
+  const others = adj.filter((a) => a.edge_type !== "ridge" && a.edge_type !== "hip");
+  if (others.length > 0) return { result: null };            // valley/dead_valley/etc -> next phase
+  if (ridges.length !== 1 || hips.length !== 4) return { result: null };
+  const t1 = String(ridges[0].facets[0]), t2 = String(ridges[0].facets[1]);
+  if (t1 === t2) return { result: null };
+  const triMids = planes.map((p) => String(p.measurement_facet_id)).filter((m) => m !== t1 && m !== t2).sort();
+  if (triMids.length !== 2) return { result: null };
+  const [tri3, tri4] = triMids;
+  const slotByCombo = {};
+  for (const h of hips) {
+    const [a, b] = h.facets.map(String);
+    const trap = (a === t1 || a === t2) ? a : ((b === t1 || b === t2) ? b : null);
+    const tri = (a === tri3 || a === tri4) ? a : ((b === tri3 || b === tri4) ? b : null);
+    if (trap == null || tri == null) return { result: null };  // hip not trapezoid<->triangle
+    const combo = (trap === t1 ? "F" : "B") + "-" + (tri === tri3 ? "L" : "R");
+    if (slotByCombo[combo]) return { result: null };           // duplicate combo -> not a clean hip
+    slotByCombo[combo] = String(h.measurement_edge_id);
+  }
+  if (!["F-L", "F-R", "B-L", "B-R"].every((c) => slotByCombo[c])) return { result: null };
+
+  const sharedMids = new Set(adj.map((a) => String(a.measurement_edge_id)));
+  const planeByMid = {}; planes.forEach((p) => { planeByMid[String(p.measurement_facet_id)] = p; });
+  // exterior lines must be eaves only; a rake/sidewall/headwall/transition means an addition -> defer
+  for (const m of [t1, t2, tri3, tri4]) {
+    const ext = _planeExterior(edgesIn, m, sharedMids);
+    if (ext.some((l) => l.edge_type !== "eave")) return { result: null };
+  }
+  // equal pitch (symmetric hip) — an asymmetric hip is not uniquely determined -> defer to next phase
+  const pitches = [t1, t2, tri3, tri4].map((m) => num(planeByMid[m].pitch_rise));
+  if (pitches.some((p) => p == null) || pitches.some((p) => Math.abs(p - pitches[0]) > 0.01)) return { result: null };
+
+  return { result: _layoutStandardHip(base, edgesIn, { t1, t2, tri3, tri4, ridgeMid: String(ridges[0].measurement_edge_id), slotByCombo, sharedMids }) };
+}
+
+function _layoutStandardHip(base, edgesIn, ctx) {
+  const { t1, t2, tri3, tri4, ridgeMid, slotByCombo, sharedMids } = ctx;
+  const graph = _adjacencyGraph(base);
+  const lineById = {}; edgesIn.forEach((e) => { lineById[String(e.id)] = e; });
+  const planeByMid = {}; base.constraints.planes.forEach((p) => { planeByMid[String(p.measurement_facet_id)] = p; });
+
+  const singleEave = (mid) => {
+    const eaves = _planeExterior(edgesIn, mid, sharedMids).filter((l) => l.edge_type === "eave");
+    return eaves.length === 1 ? eaves[0] : null;
+  };
+  const eT1 = singleEave(t1), eT2 = singleEave(t2), eL = singleEave(tri3), eR = singleEave(tri4);
+  if (!eT1 || !eT2 || !eL || !eR) {
+    return _needsReview(base, [{ severity: "error", code: "insufficient_dimensions", target_type: "structure", target_id: base.structure_id,
+      message: "A standard hip needs exactly one eave per roof plane to establish the footprint." }], graph);
+  }
+  const L1 = num(eT1.length_ft), L2 = num(eT2.length_ft), W3 = num(eL.length_ft), W4 = num(eR.length_ft);
+  const ridgeLine = lineById[ridgeMid];
+  const ridgeLen = ridgeLine ? num(ridgeLine.length_ft) : null;
+  if ([L1, L2, W3, W4, ridgeLen].some((x) => x == null || !(x > 0))) {
+    return _needsReview(base, [{ severity: "error", code: "insufficient_dimensions", target_type: "structure", target_id: base.structure_id,
+      message: "A standard hip needs positive eave lengths on all planes and a positive ridge length." }], graph);
+  }
+  if (!approx(L1, L2, LEN_TOL) || !approx(W3, W4, LEN_TOL)) {
+    return _needsReview(base, [{ severity: "error", code: "contradictory_dimensions", target_type: "structure", target_id: base.structure_id,
+      message: "Opposite hip eaves must be equal; the measured eaves are contradictory." }], graph);
+  }
+  const L = L1, W = W3;
+  if (!(L > W + LEN_TOL)) {
+    return _needsReview(base, [{ severity: "error", code: "contradictory_dimensions", target_type: "structure", target_id: base.structure_id,
+      message: "The long (ridge) eaves must exceed the short (hip-end) eaves for a hip with a ridge." }], graph);
+  }
+  if (!approx(ridgeLen, L - W, LEN_TOL)) {
+    return _needsReview(base, [{ severity: "error", code: "contradictory_dimensions", target_type: "edge", target_id: ridgeMid,
+      message: "Measured ridge length does not match a symmetric hip (expected long eave − short eave)." }], graph);
+  }
+
+  const doc = createSketchDocument({ structureId: base.structure_id });
+  doc.scale = { resolved: true, feetPerUnit: 1, feet_per_unit: 1, method: "measurement_dimensions" };
+  const c00 = { id: "gv_c00", x: 0, y: 0 }, cL0 = { id: "gv_cL0", x: L, y: 0 };
+  const cLW = { id: "gv_cLW", x: L, y: W }, c0W = { id: "gv_c0W", x: 0, y: W };
+  const r1 = { id: "gv_r1", x: W / 2, y: W / 2 }, r2 = { id: "gv_r2", x: L - W / 2, y: W / 2 };
+  doc.vertices = [c00, cL0, cLW, c0W, r1, r2];
+  const hipPlan = Math.round(Math.hypot(W / 2, W / 2) * 100) / 100;
+
+  const ridge = _edge("gen_e_ridge", r1.id, r2.id, "ridge", L - W, ridgeLine);
+  const hipFL = _edge("gen_e_hipFL", c00.id, r1.id, "hip", hipPlan, lineById[slotByCombo["F-L"]]);
+  const hipFR = _edge("gen_e_hipFR", cL0.id, r2.id, "hip", hipPlan, lineById[slotByCombo["F-R"]]);
+  const hipBL = _edge("gen_e_hipBL", c0W.id, r1.id, "hip", hipPlan, lineById[slotByCombo["B-L"]]);
+  const hipBR = _edge("gen_e_hipBR", cLW.id, r2.id, "hip", hipPlan, lineById[slotByCombo["B-R"]]);
+  const eaveFront = _edge("gen_e_eaveFront", c00.id, cL0.id, "eave", L, eT1);
+  const eaveBack = _edge("gen_e_eaveBack", c0W.id, cLW.id, "eave", L, eT2);
+  const eaveLeft = _edge("gen_e_eaveLeft", c00.id, c0W.id, "eave", W, eL);
+  const eaveRight = _edge("gen_e_eaveRight", cL0.id, cLW.id, "eave", W, eR);
+  doc.edges = [ridge, hipFL, hipFR, hipBL, hipBR, eaveFront, eaveBack, eaveLeft, eaveRight];
+
+  const facet = (mid, edgeIds) => {
+    const p = planeByMid[mid];
+    return { id: `msf_${mid}`, measurement_facet_id: mid, relational_facet_id: mid, label: p.label || "F",
+      pitch_rise: num(p.pitch_rise), confirmed_area_sqft: num(p.area_sqft), orientation_azimuth: num(p.orientation_azimuth),
+      roof_material: null, edgeIds, vertexIds: [] };
+  };
+  doc.facets = [
+    facet(t1, [eaveFront.id, hipFR.id, ridge.id, hipFL.id]),
+    facet(t2, [eaveBack.id, hipBR.id, ridge.id, hipBL.id]),
+    facet(tri3, [eaveLeft.id, hipBL.id, hipFL.id]),
+    facet(tri4, [eaveRight.id, hipBR.id, hipFR.id]),
+  ];
+  doc.penetrations = base.document.penetrations;
+  doc.generated = base.document.generated;
+  return _finalize(base, doc, graph);
+}
+
+function _layoutConnected(base, facetsIn, edgesIn) {
+  const graph = _adjacencyGraph(base);
+  const contradiction = _contradictoryAdjacency(base, edgesIn);
+  if (contradiction) return _needsReview(base, [contradiction], graph);
+  if (graph.node_count > 1 && graph.components > 1) {
+    return _needsReview(base, [{ severity: "error", code: "disconnected_planes", target_type: "structure", target_id: base.structure_id,
+      message: "Roof planes are not all connected by shared roof lines; a connected layout is not established." }], graph);
+  }
+  const hip = _tryStandardHip(base, edgesIn);
+  if (hip.result) return hip.result;
+  return _needsReview(base, [{ severity: "error", code: "unresolved_complex_topology", target_type: "structure", target_id: base.structure_id,
+    message: "This connected roof permits multiple materially different arrangements; it is deferred to the next phase." }], graph);
 }
 
 // Public entry: constraint foundation + deterministic geometry for the two supported roof types.
@@ -310,9 +485,8 @@ function generateSketchGeometry(input) {
 
   if (base.archetype === "single_plane") return _layoutSinglePlane(base, facetsIn, edgesIn);
   if (base.archetype === "symmetric_gable") return _layoutGable(base, facetsIn, edgesIn);
-  // >2 planes / no clean shared ridge / unknown -> not a safely solvable simple roof this phase.
-  return _needsReview(base, [{ severity: "error", code: "unsupported_roof_topology", target_type: "structure", target_id: base.structure_id,
-    message: "Only a single simple plane or a simple two-plane gable can be generated at high confidence in this phase." }]);
+  // >2 planes / connected multi-plane: build the adjacency graph and solve only when uniquely determined.
+  return _layoutConnected(base, facetsIn, edgesIn);
 }
 
 module.exports = { generateSketchGeometry, LEN_TOL };

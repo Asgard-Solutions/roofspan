@@ -159,7 +159,7 @@ function noRidge() {
 r = generateSketchGeometry(noRidge());
 assert.strictEqual(r.ok, false); ok("no-ridge: ok = false");
 assert.strictEqual(r.status, "needs_review"); ok("no-ridge: needs_review");
-assert.ok(r.diagnostics.some((d) => d.code === "missing_ridge_relationship" || d.code === "unsupported_roof_topology")); ok("no-ridge: diagnosed (no shared ridge)");
+assert.ok(r.diagnostics.some((d) => d.code === "missing_ridge_relationship" || d.code === "unsupported_roof_topology" || d.code === "contradictory_adjacency" || d.code === "unresolved_complex_topology")); ok("no-ridge: diagnosed (no shared ridge)");
 assert.strictEqual(r.document.vertices.length, 0); ok("no-ridge: NO fabricated geometry");
 
 // -------------------------------------------------------------------------------------------------
