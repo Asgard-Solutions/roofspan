@@ -75,14 +75,21 @@ for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
 }
 ok("both surfaces use full Structure Type labels (Main House / Attached Garage / Detached Garage)");
 
-// No user-facing "Facet" wording anywhere (internal facet_id/facet_ref/measurement_facet/testids allowed).
-const USERFACING_FACET = [/placeholder="[^"]*Facet/, /label="[^"]*Facet/, />\s*Facet/, /Facet notes/, /Facet photos/, /"Facets"/, /label=\{?"Facets"/];
-for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
-  for (const re of USERFACING_FACET) {
-    assert.ok(!re.test(src), `${name} still shows user-facing "Facet" wording matching ${re}`);
-  }
+// No user-facing "facet"/"Facet" wording in DISPLAYED text (headings, JSX/RN text nodes, placeholder/title/
+// label attribute values). Internal identifiers (facet_id, facet_ref, facet_label, facets, measurement_facet,
+// test IDs, API/record types) are allowed because they are NOT user-visible. We build a corpus of only the
+// user-visible strings, then whole-word match facet/facets case-insensitively.
+function userVisibleText(src) {
+  const parts = [];
+  for (const m of src.matchAll(/>([^<>{}]+)</g)) parts.push(m[1]);              // JSX / RN static text nodes
+  for (const m of src.matchAll(/\b(?:placeholder|title|label)="([^"]*)"/g)) parts.push(m[1]);  // user-facing attrs
+  return parts.join("\n");
 }
-ok('no user-facing "Facet" wording remains (internal identifiers preserved)');
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  const hits = [...userVisibleText(src).matchAll(/\bfacets?\b/gi)].map((m) => m[0]);
+  assert.deepStrictEqual(hits, [], `${name} shows user-facing facet wording (must use "Roof plane"): ${hits.join(", ")}`);
+}
+ok('no user-facing "facet"/"Facet" text in displayed strings (internal identifiers preserved)');
 
 // Pitch is presented as x/12 in BOTH.
 for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
@@ -96,8 +103,9 @@ for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
   assert.ok(/Ventilation/.test(src), `${name} needs a separate "Ventilation" section`);
   assert.ok(/Access \/ Conditions/.test(src), `${name} needs a separate "Access / Conditions" section`);
   assert.ok(/Gutters \(Optional\)/.test(src), `${name} needs a "Gutters (Optional)" section`);
+  assert.ok(/Measurement Photos/.test(src), `${name} needs a "Measurement Photos" section`);
 }
-ok('three separate sections (Existing Roof & Deck / Ventilation / Access / Conditions) + Gutters (Optional) in both');
+ok('canonical sections (Existing Roof & Deck / Ventilation / Access / Conditions / Gutters (Optional) / Measurement Photos) present in both');
 
 // Report metadata removed from the normal Office manual entry.
 assert.ok(!/Reported area SF/i.test(OFFICE), "Office must not expose an editable Reported Area SF input");

@@ -565,7 +565,7 @@ export default function Measurements({ route, navigation }) {
         )}
       </Section>
 
-      {existing?.id ? <Section title="General measurement photos"><PhotoSection recordType="measurement_revision" recordId={existing.id} /></Section> : <Text style={[s.small, { marginBottom: 12 }]}>Save and sync the measurement once before attaching roof/facet photos.</Text>}
+      {existing?.id ? <Section title="Measurement Photos"><PhotoSection recordType="measurement_revision" recordId={existing.id} /></Section> : <Text style={[s.small, { marginBottom: 12 }]}>Save and sync the measurement once before attaching measurement photos.</Text>}
 
       {!readonly && <>
         <TouchableOpacity style={s.btn} onPress={() => save(false)} testID="meas-save"><Text style={s.btnText}>Save Measurements</Text></TouchableOpacity>
