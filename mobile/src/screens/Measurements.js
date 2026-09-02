@@ -21,8 +21,8 @@ const STRUCTURE_TYPES = [
 ];
 const PITCHES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const EDGE_TYPES = [
-  ["eave", "Eave"], ["rake", "Rake"], ["ridge", "Ridge"], ["hip", "Hip"], ["valley", "Valley"],
-  ["sidewall", "Sidewall"], ["headwall", "Headwall"], ["transition", "Transition"],
+  ["eave", "Eave"], ["rake", "Rake"], ["ridge", "Ridge"], ["hip", "Hip"], ["valley", "Valley"], ["dead_valley", "Dead Valley"],
+  ["sidewall", "Sidewall (Step Flashing)"], ["headwall", "Headwall (Apron Flashing)"], ["transition", "Transition"],
 ];
 const PEN_TYPES = [
   ["pipe_boot", "Pipe Boot"], ["static_vent", "Static Vent"], ["skylight", "Skylight"], ["turbine", "Turbine"],

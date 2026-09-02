@@ -149,4 +149,17 @@ for (const tid of ["meas-structure-type-", "meas-structure-attachment-", "meas-f
 }
 ok("SelectField wired for Structure Type / Attachment / Plane→Structure / Roof-line Type / Primary + Secondary plane / Penetration plane");
 
+// --- Roof Line Type contract: Office and Field must expose the SAME 9 choices, same order, same labels ---
+const ROOF_LINE_TYPES = [
+  ["eave", "Eave"], ["rake", "Rake"], ["ridge", "Ridge"], ["hip", "Hip"], ["valley", "Valley"],
+  ["dead_valley", "Dead Valley"], ["sidewall", "Sidewall (Step Flashing)"], ["headwall", "Headwall (Apron Flashing)"], ["transition", "Transition"],
+];
+for (const [name, src] of [["Field", MEAS], ["Office", OFFICE]]) {
+  for (const [val, label] of ROOF_LINE_TYPES) {
+    assert.ok(src.includes(`["${val}", "${label}"]`), `${name} roof-line type must be ["${val}", "${label}"]`);
+  }
+  assert.ok(!src.includes('"step_flashing"') && !src.includes('"apron_flashing"'), `${name} must NOT create step_flashing/apron_flashing types`);
+}
+ok("Office + Field expose the identical 9 Roof Line Types (dead_valley added; sidewall/headwall internal values preserved with flashing labels)");
+
 console.log("\nOFFICE/FIELD MEASUREMENT FIELD PARITY: all " + n + " checks passed");

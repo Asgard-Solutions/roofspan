@@ -6,8 +6,9 @@ import * as RS from "@roofspan/roof-sketch-core";
 import * as WIRE from "../roofSketchFieldWiring";
 import { C } from "../theme";
 
-const EDGE_TYPES = ["unclassified", "eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"];
-const CLASSIFIED = ["eave", "rake", "ridge", "hip", "valley", "sidewall", "headwall", "transition"];
+const EDGE_TYPES = ["unclassified", "eave", "rake", "ridge", "hip", "valley", "dead_valley", "sidewall", "headwall", "transition"];
+const CLASSIFIED = ["eave", "rake", "ridge", "hip", "valley", "dead_valley", "sidewall", "headwall", "transition"];
+const EDGE_LABEL = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", valley: "Valley", dead_valley: "Dead Valley", sidewall: "Sidewall (Step Flashing)", headwall: "Headwall (Apron Flashing)", transition: "Transition", unclassified: "Unclassified" };
 const PITCHES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12];
 const PEN_TYPES = ["pipe_boot", "static_vent", "skylight", "turbine", "powered_vent", "exhaust_vent", "chimney", "satellite", "other"];
 
@@ -62,7 +63,7 @@ function EdgeBody({ edge, doc, disabled, onCommit, onError }) {
     <View>
       <Text style={st.small}>Type</Text>
       <View style={st.chips}>{EDGE_TYPES.map((t) => (
-        <Chip key={t} testID={`edge-type-${t}`} label={t} active={edge.type === t} disabled={disabled}
+        <Chip key={t} testID={`edge-type-${t}`} label={EDGE_LABEL[t] || t} active={edge.type === t} disabled={disabled}
           onPress={() => onCommit(RS.setEdgeType(doc, edge.id, t))} />))}</View>
 
       <Text style={st.small}>Geometry LF</Text>
