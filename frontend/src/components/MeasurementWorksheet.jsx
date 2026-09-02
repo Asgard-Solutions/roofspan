@@ -25,9 +25,10 @@ const EDGE_TYPES = [
   ["sidewall", "Sidewall"], ["headwall", "Headwall"], ["transition", "Transition"],
 ];
 const PEN_TYPES = [
-  ["pipe_boot", "Pipe boot"], ["skylight", "Skylight"], ["chimney", "Chimney"], ["static_vent", "Static vent"],
-  ["turbine", "Turbine"], ["powered_vent", "Powered vent"], ["exhaust_vent", "Exhaust vent"], ["satellite", "Satellite"], ["other", "Other"],
+  ["pipe_boot", "Pipe Boot"], ["static_vent", "Static Vent"], ["skylight", "Skylight"], ["turbine", "Turbine"],
+  ["powered_vent", "Powered Vent"], ["exhaust_vent", "Exhaust Vent"], ["chimney", "Chimney"], ["satellite", "Satellite"], ["other", "Other"],
 ];
+const PITCHES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const STATUS_LABEL = { draft: "Draft", field_complete: "Field Complete", office_verified: "Office Verified", locked: "Locked" };
 const STATUS_STYLE = {
   draft: "bg-slate-100 text-slate-700", field_complete: "bg-amber-100 text-amber-800",
@@ -285,7 +286,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   };
 
   const structOptions = (ed?.structures || []).filter((row) => row.ref).map((row) => [row.ref, row.name || STRUCTURE_TYPES.find((t) => t[0] === row.structure_type)?.[1] || "Structure"]);
-  const facetOptions = (ed?.facets || []).filter((row) => row.ref).map((row) => [row.ref, row.facet_label || "Facet"]);
+  const facetOptions = (ed?.facets || []).filter((row) => row.ref).map((row) => [row.ref, row.facet_label || "Roof plane"]);
   const t = liveTotals;
   const hasScopeExclusion = !!(t && Math.abs(t.area - t.takeoffArea) > 0.001);
 
@@ -300,7 +301,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       <div className="ml-auto flex flex-wrap gap-2">
         {!rev && <Button size="sm" onClick={startNew} disabled={busy}><Plus className="mr-1 h-4 w-4" />Start measurement</Button>}
         {rev && !editable && <Button size="sm" variant="outline" onClick={cloneRevision} disabled={busy}><GitBranch className="mr-1 h-4 w-4" />New revision</Button>}
-        {rev && editable && dirty && <Button size="sm" onClick={save} disabled={busy || !!needsReview} data-testid="measurement-save-btn">{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Save</Button>}
+        {rev && editable && dirty && <Button size="sm" onClick={save} disabled={busy || !!needsReview} data-testid="measurement-save-btn">{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Save Measurements</Button>}
         {rev?.status === "draft" && !dirty && <Button size="sm" variant="outline" onClick={() => changeStatus("field_complete")} disabled={busy}><Check className="mr-1 h-4 w-4" />Field Complete</Button>}
         {rev?.status === "field_complete" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("office_verified")} disabled={busy}><ShieldCheck className="mr-1 h-4 w-4" />Office Verify</Button>}
         {rev?.status === "office_verified" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("locked")} disabled={busy}><Lock className="mr-1 h-4 w-4" />Lock</Button>}
@@ -328,18 +329,17 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       </div>
     </div>}
 
-    {!rev && <div className="rounded border border-dashed border-border p-6 text-center text-sm text-slate-500">No roof measurement yet. Start one to capture structures, facets, edges and penetrations.</div>}
+    {!rev && <div className="rounded border border-dashed border-border p-6 text-center text-sm text-slate-500">No roof measurement yet. Start one to capture structures, roof planes, roof lines and penetrations.</div>}
 
     {rev && ed && <>
       <div className="grid grid-cols-2 gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-5" data-testid="measurement-totals">
-        <Totm label="Measured area" value={`${t.area.toFixed(0)} sq ft`} testid="tot-area" />
+        <Totm label="Measured area" value={`${t.area.toFixed(0)} SF`} testid="tot-area" />
         <Totm label="Measured squares" value={t.squares.toFixed(2)} testid="tot-squares" />
         <Totm label="Takeoff squares" value={t.takeoffSquares.toFixed(2)} testid="tot-takeoff-squares" />
-        <Totm label="Facets" value={t.facets} testid="tot-facets" />
+        <Totm label="Roof planes" value={t.facets} testid="tot-facets" />
         <Totm label="Structures" value={t.structures} testid="tot-structures" />
       </div>
       {hasScopeExclusion && <div className="rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">Measured totals retain every structure. Takeoff totals exclude structures marked “Exclude from estimate.”</div>}
-      {totals?.reported_area_sqft != null && <div className="text-xs text-slate-500">Reported report area: {totals.reported_area_sqft} sq ft {totals.reported_area_delta_sqft != null && <span className={Math.abs(totals.reported_area_delta_sqft) > 50 ? "ml-2 font-medium text-amber-700" : "ml-2"}>(entered − reported: {totals.reported_area_delta_sqft} sq ft)</span>}</div>}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">{EDGE_TYPES.map(([k, label]) => t.edge[k] ? <span key={k}>{label}: <b>{t.edge[k].toFixed(0)} LF</b></span> : null)}{t.pen ? <span>Penetrations: <b>{t.pen}</b></span> : null}</div>
 
       <TableCard title="Structures" onAdd={editable ? () => addRow("structures", { ref: uid(), name: "", structure_type: "main_house", included_in_scope: true }) : null} testid="structures">
@@ -367,14 +367,14 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           <div className="grid grid-cols-2 items-center gap-2 lg:grid-cols-[80px_150px_90px_120px_100px_100px_1fr_40px]">
             <Input placeholder="F1" value={row.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} />
             <Select value={row.structure_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("facets", i, "structure_ref", v === "none" ? "" : v)}><SelectTrigger><SelectValue placeholder="Structure" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{structOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-            <Input type="number" step="0.5" placeholder="Pitch" value={row.pitch_rise ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "pitch_rise", e.target.value)} />
+            <PitchSelect value={row.pitch_rise} disabled={!editable} onChange={(v) => setRow("facets", i, "pitch_rise", v)} />
             <Input type="number" placeholder="Area SF" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} />
             <Input type="number" placeholder="Width ft" value={row.width_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "width_ft", e.target.value)} />
             <Input type="number" placeholder="Length ft" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "length_ft", e.target.value)} />
             <Input placeholder="Roof material" value={row.roof_material || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "roof_material", e.target.value)} />
             {editable && <Button size="icon" variant="ghost" onClick={() => delRow("facets", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
-          <Input className="mt-2" placeholder="Facet notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "notes", e.target.value)} />
+          <Input className="mt-2" placeholder="Roof plane notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "notes", e.target.value)} />
           {row.id && <div className="mt-1"><PhotoGallery compact hideWhenEmpty recordType="measurement_facet" recordId={row.id} /></div>}
         </div>)}
       </TableCard>
@@ -398,7 +398,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           <div className="flex flex-wrap items-center gap-2">
             <Select value={row.pen_type} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "pen_type", v)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent>{PEN_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
             <Input className="w-20" type="number" placeholder="Qty" value={row.quantity ?? 1} disabled={!editable} onChange={(e) => setRow("penetrations", i, "quantity", e.target.value)} />
-            <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Facet" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
+            <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Roof plane" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
             <Input className="w-28" type="number" placeholder="Diameter in" value={row.diameter_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "diameter_in", e.target.value)} />
             <Input className="w-24" type="number" placeholder="Width in" value={row.width_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "width_in", e.target.value)} />
             <Input className="w-24" type="number" placeholder="Length in" value={row.length_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "length_in", e.target.value)} />
@@ -409,37 +409,51 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         </div>)}
       </TableCard>
 
-      <div className="rounded-lg border border-border p-3" data-testid="measurement-summary-card">
-        <div className="mb-2 text-sm font-semibold text-slate-700">Existing roof, decking & conditions</div>
+      <div className="rounded-lg border border-border p-3" data-testid="measurement-existing-roof-card">
+        <div className="mb-2 text-sm font-semibold text-slate-700">Existing Roof & Deck</div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Existing covering"><Input value={ed.summary.existing_covering_type || ""} disabled={!editable} onChange={(e) => setSummary("existing_covering_type", e.target.value)} /></Field>
-          <Field label="Existing condition"><Input value={ed.summary.existing_condition || ""} disabled={!editable} onChange={(e) => setSummary("existing_condition", e.target.value)} /></Field>
-          <Field label="Existing underlayment"><Input value={ed.summary.existing_underlayment || ""} disabled={!editable} onChange={(e) => setSummary("existing_underlayment", e.target.value)} /></Field>
-          <Field label="Layers"><Input type="number" value={ed.summary.existing_layers ?? ""} disabled={!editable} onChange={(e) => setSummary("existing_layers", num(e.target.value))} /></Field>
-          <Field label="Deck type"><Input value={ed.summary.deck_type || ""} disabled={!editable} onChange={(e) => setSummary("deck_type", e.target.value)} /></Field>
-          <Field label="Deck thickness in"><Input type="number" value={ed.summary.deck_thickness_in ?? ""} disabled={!editable} onChange={(e) => setSummary("deck_thickness_in", num(e.target.value))} /></Field>
-          <Field label="Damaged deck SF"><Input type="number" value={ed.summary.damaged_deck_sf ?? ""} disabled={!editable} onChange={(e) => setSummary("damaged_deck_sf", num(e.target.value))} /></Field>
-          <Field label="Replacement sheets"><Input type="number" value={ed.summary.replacement_sheets ?? ""} disabled={!editable} onChange={(e) => setSummary("replacement_sheets", num(e.target.value))} /></Field>
-          <Field label="Measured drip edge LF"><Input type="number" value={ed.summary.drip_edge_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("drip_edge_lf", num(e.target.value))} /></Field>
-          <Field label="Ridge vent LF"><Input type="number" value={ed.summary.ridge_vent_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("ridge_vent_lf", num(e.target.value))} /></Field>
-          <Field label="Soffit intake LF"><Input type="number" value={ed.summary.intake_soffit_vent_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("intake_soffit_vent_lf", num(e.target.value))} /></Field>
-          <Field label="Reported area SF"><Input type="number" value={ed.reported_area_sqft ?? ""} disabled={!editable} onChange={(e) => { setEd((doc) => ({ ...doc, reported_area_sqft: e.target.value })); setDirty(true); }} /></Field>
+          <Field label="Existing Covering"><Input value={ed.summary.existing_covering_type || ""} disabled={!editable} onChange={(e) => setSummary("existing_covering_type", e.target.value)} /></Field>
+          <Field label="Existing Condition"><Input value={ed.summary.existing_condition || ""} disabled={!editable} onChange={(e) => setSummary("existing_condition", e.target.value)} /></Field>
+          <Field label="Existing Layers"><Input type="number" value={ed.summary.existing_layers ?? ""} disabled={!editable} onChange={(e) => setSummary("existing_layers", num(e.target.value))} /></Field>
+          <Field label="Existing Underlayment"><Input value={ed.summary.existing_underlayment || ""} disabled={!editable} onChange={(e) => setSummary("existing_underlayment", e.target.value)} /></Field>
+          <Field label="Deck Type"><Input value={ed.summary.deck_type || ""} disabled={!editable} onChange={(e) => setSummary("deck_type", e.target.value)} /></Field>
+          <Field label="Deck Thickness (in)"><Input type="number" value={ed.summary.deck_thickness_in ?? ""} disabled={!editable} onChange={(e) => setSummary("deck_thickness_in", num(e.target.value))} /></Field>
+          <Field label="Damaged Deck (SF)"><Input type="number" value={ed.summary.damaged_deck_sf ?? ""} disabled={!editable} onChange={(e) => setSummary("damaged_deck_sf", num(e.target.value))} /></Field>
+          <Field label="Replacement Sheets"><Input type="number" value={ed.summary.replacement_sheets ?? ""} disabled={!editable} onChange={(e) => setSummary("replacement_sheets", num(e.target.value))} /></Field>
         </div>
-        <details className="mt-3 rounded border border-slate-100 p-2" data-testid="office-gutters">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-600">Gutters (optional)</summary>
+        <label className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={!!ed.summary.full_redeck} disabled={!editable} onChange={(e) => setSummary("full_redeck", e.target.checked)} />Full Re-deck</label>
+      </div>
+
+      <div className="rounded-lg border border-border p-3" data-testid="measurement-ventilation-card">
+        <div className="mb-2 text-sm font-semibold text-slate-700">Ventilation</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label="Drip Edge (LF)"><Input type="number" value={ed.summary.drip_edge_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("drip_edge_lf", num(e.target.value))} /></Field>
+          <Field label="Ridge Vent (LF)"><Input type="number" value={ed.summary.ridge_vent_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("ridge_vent_lf", num(e.target.value))} /></Field>
+          <Field label="Soffit Intake Vent (LF)"><Input type="number" value={ed.summary.intake_soffit_vent_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("intake_soffit_vent_lf", num(e.target.value))} /></Field>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border p-3" data-testid="measurement-access-card">
+        <div className="mb-2 text-sm font-semibold text-slate-700">Access / Conditions</div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          {[["steep_access", "Steep Access"], ["high_access", "High Access"], ["long_carry", "Long Carry"], ["restricted_access", "Restricted Access"], ["landscaping_protection", "Landscaping Protection"]].map(([k, label]) => <label key={k} className="flex items-center gap-1.5 text-slate-600"><input type="checkbox" checked={!!ed.summary[k]} disabled={!editable} onChange={(e) => setSummary(k, e.target.checked)} />{label}</label>)}
+        </div>
+        <Textarea className="mt-3" placeholder="Conditions notes" value={ed.summary.conditions_notes || ""} disabled={!editable} onChange={(e) => setSummary("conditions_notes", e.target.value)} />
+      </div>
+
+      <div className="rounded-lg border border-border p-3" data-testid="measurement-gutters-card">
+        <details data-testid="office-gutters">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-700">Gutters (Optional)</summary>
           <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Gutter LF"><Input type="number" value={ed.summary.gutter_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("gutter_lf", num(e.target.value))} /></Field>
-            <Field label="Gutter size"><Input value={ed.summary.gutter_size || ""} disabled={!editable} onChange={(e) => setSummary("gutter_size", e.target.value)} /></Field>
-            <Field label="Gutter type"><Input value={ed.summary.gutter_type || ""} disabled={!editable} onChange={(e) => setSummary("gutter_type", e.target.value)} /></Field>
-            <Field label="Downspout count"><Input type="number" value={ed.summary.downspout_count ?? ""} disabled={!editable} onChange={(e) => setSummary("downspout_count", num(e.target.value))} /></Field>
+            <Field label="Gutter Size"><Input value={ed.summary.gutter_size || ""} disabled={!editable} onChange={(e) => setSummary("gutter_size", e.target.value)} /></Field>
+            <Field label="Gutter Type"><Input value={ed.summary.gutter_type || ""} disabled={!editable} onChange={(e) => setSummary("gutter_type", e.target.value)} /></Field>
+            <Field label="Downspout Count"><Input type="number" value={ed.summary.downspout_count ?? ""} disabled={!editable} onChange={(e) => setSummary("downspout_count", num(e.target.value))} /></Field>
             <Field label="Downspout LF"><Input type="number" value={ed.summary.downspout_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("downspout_lf", num(e.target.value))} /></Field>
-            <Field label="Gutter guard LF"><Input type="number" value={ed.summary.gutter_guard_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("gutter_guard_lf", num(e.target.value))} /></Field>
+            <Field label="Gutter Guard LF"><Input type="number" value={ed.summary.gutter_guard_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("gutter_guard_lf", num(e.target.value))} /></Field>
           </div>
+          <div className="mt-2"><Field label="Gutter Notes"><Input value={ed.summary.gutter_notes || ""} disabled={!editable} onChange={(e) => setSummary("gutter_notes", e.target.value)} /></Field></div>
         </details>
-        <div className="mt-3 flex flex-wrap gap-4 text-sm">
-          {[["full_redeck", "Full re-deck"], ["steep_access", "Steep access"], ["high_access", "High access"], ["long_carry", "Long carry"], ["restricted_access", "Restricted access"], ["landscaping_protection", "Landscape protection"]].map(([k, label]) => <label key={k} className="flex items-center gap-1.5 text-slate-600"><input type="checkbox" checked={!!ed.summary[k]} disabled={!editable} onChange={(e) => setSummary(k, e.target.checked)} />{label}</label>)}
-        </div>
-        <Textarea className="mt-3" placeholder="Condition / access notes" value={ed.summary.conditions_notes || ""} disabled={!editable} onChange={(e) => setSummary("conditions_notes", e.target.value)} />
       </div>
 
       {rev.status === "locked" && <div className="text-xs text-slate-500"><Lock className="mr-1 inline h-3 w-3" />This revision is locked. Use “New revision” to make changes — history is preserved.</div>}
@@ -458,6 +472,22 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       />;
     })()}
   </div>;
+}
+
+function PitchSelect({ value, disabled, onChange }) {
+  const inCommon = value != null && value !== "" && PITCHES.includes(Number(value));
+  const [custom, setCustom] = useState(value != null && value !== "" && !inCommon);
+  if (custom) {
+    return <div className="flex items-center gap-1" data-testid="pitch-custom">
+      <Input type="number" step="0.5" className="w-16" placeholder="rise" value={value ?? ""} disabled={disabled} onChange={(e) => onChange(num(e.target.value))} />
+      <span className="text-xs text-slate-400">/12</span>
+      <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" disabled={disabled} onClick={() => setCustom(false)} title="Choose a common pitch">↺</Button>
+    </div>;
+  }
+  return <Select value={inCommon ? String(value) : ""} disabled={disabled} onValueChange={(v) => { if (v === "__custom__") setCustom(true); else onChange(Number(v)); }}>
+    <SelectTrigger data-testid="pitch-select"><SelectValue placeholder="Pitch" /></SelectTrigger>
+    <SelectContent>{PITCHES.map((p) => <SelectItem key={p} value={String(p)}>{p}/12</SelectItem>)}<SelectItem value="__custom__">Custom…</SelectItem></SelectContent>
+  </Select>;
 }
 
 function Totm({ label, value, testid }) {
