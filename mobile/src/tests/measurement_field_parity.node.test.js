@@ -28,7 +28,7 @@ const CANON = [
   // Access / conditions
   "steep_access", "high_access", "long_carry", "restricted_access", "landscaping_protection", "conditions_notes",
   // Gutters (optional but supported in both)
-  "gutter_lf", "gutter_size", "gutter_type", "downspout_count", "downspout_lf", "gutter_guard_lf",
+  "gutter_lf", "gutter_size", "gutter_type", "downspout_count", "downspout_lf", "gutter_guard_lf", "gutter_notes",
 ];
 const missingField = CANON.filter((k) => !FIELD.includes(k));
 const missingOffice = CANON.filter((k) => !OFFICE.includes(k));
@@ -63,5 +63,56 @@ for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
   assert.ok(/[Pp]rimary/.test(src), `${name} must label the Primary roof plane association`);
 }
 ok("Primary + Secondary roof-plane associations exposed in both surfaces");
+
+// --- UI-parity increment ---
+
+// Full Structure Type labels in BOTH (Field previously abbreviated Main / Att. Garage / Det. Garage).
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  for (const lbl of ["Main House", "Attached Garage", "Detached Garage"]) {
+    assert.ok(src.includes(lbl), `${name} must use the full Structure Type label "${lbl}"`);
+  }
+  assert.ok(!/"Att\. Garage"|"Det\. Garage"/.test(src), `${name} must not abbreviate Structure Types`);
+}
+ok("both surfaces use full Structure Type labels (Main House / Attached Garage / Detached Garage)");
+
+// No user-facing "Facet" wording anywhere (internal facet_id/facet_ref/measurement_facet/testids allowed).
+const USERFACING_FACET = [/placeholder="[^"]*Facet/, /label="[^"]*Facet/, />\s*Facet/, /Facet notes/, /Facet photos/, /"Facets"/, /label=\{?"Facets"/];
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  for (const re of USERFACING_FACET) {
+    assert.ok(!re.test(src), `${name} still shows user-facing "Facet" wording matching ${re}`);
+  }
+}
+ok('no user-facing "Facet" wording remains (internal identifiers preserved)');
+
+// Pitch is presented as x/12 in BOTH.
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  assert.ok(/\}\/12|p\}\/12/.test(src), `${name} must present pitch as x/12`);
+}
+ok("pitch presented as x/12 in both surfaces");
+
+// Three separate sections + Gutters (Optional) in BOTH.
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  assert.ok(/Existing Roof & Deck/.test(src), `${name} needs a separate "Existing Roof & Deck" section`);
+  assert.ok(/Ventilation/.test(src), `${name} needs a separate "Ventilation" section`);
+  assert.ok(/Access \/ Conditions/.test(src), `${name} needs a separate "Access / Conditions" section`);
+  assert.ok(/Gutters \(Optional\)/.test(src), `${name} needs a "Gutters (Optional)" section`);
+}
+ok('three separate sections (Existing Roof & Deck / Ventilation / Access / Conditions) + Gutters (Optional) in both');
+
+// Report metadata removed from the normal Office manual entry.
+assert.ok(!/Reported area SF/i.test(OFFICE), "Office must not expose an editable Reported Area SF input");
+assert.ok(!/Reported report area/i.test(OFFICE), "Office must not show the report-area comparison in normal manual entry");
+ok("Reported Area SF input + report-area comparison removed from normal Office manual entry");
+
+// Primary Save action says "Save Measurements" in BOTH; Field keeps a separate Field Complete action.
+for (const [name, src] of [["Field", FIELD], ["Office", OFFICE]]) {
+  assert.ok(/Save Measurements/.test(src), `${name} primary action must say "Save Measurements"`);
+}
+assert.ok(/Save & Mark Field Complete/.test(FIELD), "Field must keep a separate Save & Mark Field Complete action");
+ok('primary action is "Save Measurements" in both; Field keeps a separate Field Complete action');
+
+// Field exposes Remove for Structure, Roof Plane and Roof Line.
+assert.ok(/Remove structure/.test(FIELD) && /Remove roof plane/.test(FIELD) && /Remove roof line/.test(FIELD), "Field must expose Remove for Structure, Roof Plane and Roof Line");
+ok("Field exposes Remove Structure / Remove Roof Plane / Remove Roof Line");
 
 console.log("\nOFFICE/FIELD MEASUREMENT FIELD PARITY: all " + n + " checks passed");
