@@ -1,8 +1,8 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
+import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { queueMutation, isSyncing, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate } from "../sync";
-import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft } from "../cache";
+import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
@@ -56,9 +56,42 @@ export default function Measurements({ route, navigation }) {
   const [cachedAt, setCachedAt] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null);   // Saved on device / Waiting to sync / Syncing / Synced / Needs review
   const [conflict, setConflict] = useState(null);       // { serverDetail } when Office changed the same revision
+  const [showGutters, setShowGutters] = useState(false);
+
+  const autosaveTimer = useRef(null);
+  const baselineRef = useRef("");          // JSON of the last hydrated form — autosave only fires on real edits
+  const captureBaseline = useRef(false);   // set on hydrate so the first effect pass captures, never persists
+
+  const formJson = useCallback(
+    () => JSON.stringify({ structures, facets, edges, pens, summary }),
+    [structures, facets, edges, pens, summary],
+  );
+  // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
+  const persistWorking = useCallback(async () => {
+    if (readonly) return;
+    await saveMeasurementWorkingDraft(scope, {
+      working: true, base: existing ? { ...existing } : null,
+      local_client_id: localDraft ? localDraft.client_id : null,
+      structures, facets, edges, pens, summary, updated_at: new Date().toISOString(),
+    });
+  }, [scope, readonly, existing, localDraft, structures, facets, edges, pens, summary]);
+
+  const hydrateWorking = useCallback((wd) => {
+    captureBaseline.current = true;
+    setExisting(wd.base || null);
+    setLocalDraft(wd.base ? null : (wd.local_client_id ? { local_draft: true, client_id: wd.local_client_id } : null));
+    setReadonly(wd.base ? !wd.base.editable : false);
+    setStructures(wd.structures || []);
+    setFacets(wd.facets || []);
+    setEdges((wd.edges || []).map((e) => ({ ...e })));
+    setPens(wd.pens && wd.pens.length ? wd.pens : initialPenetrations());
+    setSummary(wd.summary || {});
+    setUsingCached(false); setCachedAt(null);
+  }, []);
 
   const hydrate = useCallback((full, stale = false, cached = null) => {
     if (!full) return;
+    captureBaseline.current = true;
     if (measurementKeys.isLocalDraft(full)) {
       const body = full.body || {};
       setExisting(null);
@@ -93,6 +126,17 @@ export default function Measurements({ route, navigation }) {
   }, []);
 
   const load = useCallback(async () => {
+    // Highest priority: the salesperson's in-progress working draft (unsaved edits) always wins so nothing
+    // typed before Save is lost across navigate/background/restart.
+    const wd = await loadMeasurementWorkingDraft(scope);
+    if (wd && wd.working) {
+      hydrateWorking(wd);
+      const pend = wd.base ? await currentMeasurementMutation(wd.base.id) : (wd.local_client_id ? await currentMeasurementCreate(wd.local_client_id) : null);
+      const pendingActive = pend && (pend.state === "pending" || pend.state === "failed");
+      setSyncStatus(pendingActive ? (isSyncing() ? "Syncing" : "Waiting to sync") : "Saved on device");
+      setConflict(null);
+      return;
+    }
     const draft = await loadMeasurementDraft(scope);
     const listResult = await cache.measurements(scope);
     const head = measurementKeys.pickCurrent(listResult.data || []);
@@ -143,6 +187,32 @@ export default function Measurements({ route, navigation }) {
     setSyncStatus(null);
     setConflict(null);
   }, [scope, hydrate]);
+
+  // Autosave the working draft as the salesperson edits — debounced, local only (no network per keystroke).
+  useEffect(() => {
+    if (readonly) return;
+    const cur = formJson();
+    if (captureBaseline.current) { baselineRef.current = cur; captureBaseline.current = false; return; }
+    if (cur === baselineRef.current) return;   // no real change since last hydrate/save
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      autosaveTimer.current = null;
+      persistWorking();
+      setSyncStatus((s) => (s === "Waiting to sync" || s === "Syncing" || s === "Needs review") ? s : "Saved on device");
+    }, 700);
+    return () => {};
+  }, [structures, facets, edges, pens, summary, readonly, formJson, persistWorking]);
+
+  // Flush the working draft immediately when RoofSpan backgrounds so nothing in-flight is lost.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "background" || next === "inactive") {
+        if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+        if (!readonly && formJson() !== baselineRef.current) persistWorking();
+      }
+    });
+    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
+  }, [readonly, formJson, persistWorking]);
 
   const onUseOffice = useCallback(async () => {
     if (!conflict) return;
@@ -250,7 +320,10 @@ export default function Measurements({ route, navigation }) {
         label: "Roof measurement", clientId: draft.client_id,
       });
     }
-    Alert.alert("Saved", markComplete ? "Measurement marked Field Complete and queued to sync." : "Measurement saved locally and queued to sync.");
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+    await clearMeasurementWorkingDraft(scope);
+    baselineRef.current = formJson();
+    Alert.alert("Saved", markComplete ? "Measurement marked Field Complete and queued to sync." : "Measurement saved and queued to sync.");
     navigation.goBack();
   };
 
@@ -335,7 +408,10 @@ export default function Measurements({ route, navigation }) {
               <TextInput style={[s.input, { width: 90, marginLeft: 8 }]} keyboardType="numeric" placeholder="in" value={String(e.in ?? "")} editable={!readonly} onChangeText={(v) => setE(i, "in", v)} />
               <Text style={[s.small, { marginLeft: 10, alignSelf: "center" }]}>{(parseFloat(e.length_ft) || 0).toFixed(1)} LF</Text>
             </View>
-            {!!facets.length && <View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Facet"} active={e.facet_ref === f.ref} disabled={readonly} onPress={() => setE(i, "facet_ref", f.ref)} />)}</View>}
+            {!!facets.length && <><Text style={s.small}>Primary roof plane</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={e.facet_ref === f.ref} disabled={readonly} onPress={() => setE(i, "facet_ref", e.facet_ref === f.ref ? "" : f.ref)} />)}</View>
+              <Text style={s.small}>Secondary roof plane (valley/ridge)</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={e.facet_ref_secondary === f.ref} disabled={readonly} onPress={() => setE(i, "facet_ref_secondary", e.facet_ref_secondary === f.ref ? "" : f.ref)} />)}</View></>}
+            <TextInput style={s.input} placeholder="Label (optional)" value={e.label || ""} editable={!readonly} onChangeText={(v) => setE(i, "label", v)} />
+            <TextInput style={s.input} placeholder="Line notes (optional)" value={e.notes || ""} editable={!readonly} onChangeText={(v) => setE(i, "notes", v)} />
           </View>
         ))}
       </Section>
@@ -382,6 +458,10 @@ export default function Measurements({ route, navigation }) {
             <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Measured drip edge LF" value={summary.drip_edge_lf != null ? String(summary.drip_edge_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, drip_edge_lf: numberOrNull(v) }))} />
             <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Ridge vent LF" value={summary.ridge_vent_lf != null ? String(summary.ridge_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, ridge_vent_lf: numberOrNull(v) }))} />
           </View>
+          <View style={s.rowline}>
+            <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Deck thickness in" value={summary.deck_thickness_in != null ? String(summary.deck_thickness_in) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, deck_thickness_in: numberOrNull(v) }))} />
+            <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Soffit intake LF" value={summary.intake_soffit_vent_lf != null ? String(summary.intake_soffit_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, intake_soffit_vent_lf: numberOrNull(v) }))} />
+          </View>
           <View style={s.chips}>
             {[["full_redeck", "Full re-deck"], ["steep_access", "Steep access"], ["high_access", "High access"], ["restricted_access", "Restricted"], ["long_carry", "Long carry"], ["landscaping_protection", "Landscape protection"]].map(([k, l]) => (
               <Chip key={k} label={l} active={!!summary[k]} disabled={readonly} onPress={() => setSummary((x) => ({ ...x, [k]: !x[k] }))} />
@@ -389,6 +469,29 @@ export default function Measurements({ route, navigation }) {
           </View>
           <TextInput style={[s.input, { minHeight: 70 }]} placeholder="Condition / access notes" value={summary.conditions_notes || ""} multiline editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, conditions_notes: v }))} />
         </View>
+      </Section>
+
+      <Section title="Gutters (optional)" onAdd={false}>
+        <TouchableOpacity style={s.disclosure} onPress={() => setShowGutters((v) => !v)} testID="meas-gutters-toggle">
+          <Text style={s.disclosureT}>{showGutters ? "Hide gutter details" : "Add gutter details"}</Text>
+        </TouchableOpacity>
+        {showGutters && (
+          <View style={s.card}>
+            <View style={s.rowline}>
+              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Gutter LF" value={summary.gutter_lf != null ? String(summary.gutter_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_lf: numberOrNull(v) }))} />
+              <TextInput style={[s.input, s.half, s.leftGap]} placeholder="Gutter size" value={summary.gutter_size || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_size: v }))} />
+            </View>
+            <View style={s.rowline}>
+              <TextInput style={[s.input, s.half]} placeholder="Gutter type" value={summary.gutter_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_type: v }))} />
+              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Downspout count" value={summary.downspout_count != null ? String(summary.downspout_count) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_count: numberOrNull(v) }))} />
+            </View>
+            <View style={s.rowline}>
+              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Downspout LF" value={summary.downspout_lf != null ? String(summary.downspout_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_lf: numberOrNull(v) }))} />
+              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Gutter guard LF" value={summary.gutter_guard_lf != null ? String(summary.gutter_guard_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_guard_lf: numberOrNull(v) }))} />
+            </View>
+            <TextInput style={s.input} placeholder="Gutter notes" value={summary.gutter_notes || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_notes: v }))} />
+          </View>
+        )}
       </Section>
 
       {existing?.id ? <Section title="General measurement photos"><PhotoSection recordType="measurement_revision" recordId={existing.id} /></Section> : <Text style={[s.small, { marginBottom: 12 }]}>Save and sync the measurement once before attaching roof/facet photos.</Text>}
@@ -426,6 +529,8 @@ const s = StyleSheet.create({
   conflictBtn: { flex: 1, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 11, alignItems: "center", marginRight: 8 },
   conflictBtnAlt: { backgroundColor: "#fff", borderWidth: 1, borderColor: C.brand, marginRight: 0 },
   conflictBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  disclosure: { paddingVertical: 8 },
+  disclosureT: { color: C.brand, fontWeight: "800", fontSize: 14 },
   offline: { padding: 8, borderRadius: 8, backgroundColor: "#FEF3C7", marginBottom: 10 },
   offlineT: { color: "#92400E", fontWeight: "700", fontSize: 12 },
   totals: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 18, borderWidth: 1, borderColor: C.line },

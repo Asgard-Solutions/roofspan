@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, UploadFile, File, Form
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -277,7 +278,7 @@ async def update_measurement(revision_id: str, payload: MeasurementRevisionIn, r
     token = rev.updated_at.isoformat() if rev.updated_at else None
     if if_match and token and if_match != token:
         out = await meas_svc.build_out(db, rev)
-        raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": out})
+        raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": jsonable_encoder(out)})
     await meas_svc.replace_children(db, rev, payload)
     if payload.mark_field_complete and rev.status == "draft":
         await meas_svc.transition_status(db, rev, "field_complete", user)

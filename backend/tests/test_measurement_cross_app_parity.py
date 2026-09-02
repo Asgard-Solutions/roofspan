@@ -134,6 +134,33 @@ def test_cross_app_no_erasure_round_trip():
     assert after2["provider"] == "eagleview", "clearing one field never erases others"
 
 
+def test_office_stale_cannot_silently_overwrite_newer():
+    """Office worksheet left open at an old version must NOT silently overwrite a newer synced copy."""
+    h = {"Authorization": f"Bearer {_tok()}"}
+    props = requests.get(f"{API}/api/properties", params={"limit": 1}, headers=h, timeout=30).json()
+    pid = props[0]["id"]
+    r = requests.post(f"{API}/api/mobile/measurements", headers=h, json={"property_id": pid, "source": "field",
+        "structures": [{"ref": "s1", "name": "Main", "structure_type": "main_house"}],
+        "facets": [{"ref": "f1", "structure_ref": "s1", "facet_label": "F1", "area_sqft": 100}], "edges": [], "penetrations": [], "summary": {}}, timeout=30)
+    rid = r.json()["id"]
+    v1 = requests.get(f"{API}/api/mobile/measurements/{rid}", headers=h, timeout=30).json()
+    stale_token = v1["updated_at"]
+    # a newer save advances the revision
+    upd = _passthrough_update(v1, lambda b: b["facets"][0].__setitem__("area_sqft", 222))
+    r2 = requests.put(f"{API}/api/measurements/{rid}", headers={**h, "If-Match": stale_token}, json=upd, timeout=30)
+    assert r2.status_code == 200, (r2.status_code, r2.text)
+    v2 = requests.get(f"{API}/api/mobile/measurements/{rid}", headers=h, timeout=30).json()
+    assert v2["updated_at"] != stale_token
+    # Office (office route) now tries to save with the STALE token → must be refused with 409, not overwrite
+    stale_office = _passthrough_update(v1, lambda b: b["facets"][0].__setitem__("area_sqft", 999))
+    r3 = requests.put(f"{API}/api/measurements/{rid}", headers={**h, "If-Match": stale_token}, json=stale_office, timeout=30)
+    assert r3.status_code == 409, (r3.status_code, r3.text)
+    assert "server" in (r3.json().get("detail") or {})
+    after = requests.get(f"{API}/api/mobile/measurements/{rid}", headers=h, timeout=30).json()
+    assert after["facets"][0]["area_sqft"] == 222, "the newer value must survive; stale Office save was refused"
+
+
 if __name__ == "__main__":
     test_cross_app_no_erasure_round_trip()
-    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE: PASS")
+    test_office_stale_cannot_silently_overwrite_newer()
+    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE + OFFICE-STALE-GUARD: PASS")

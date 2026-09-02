@@ -1661,3 +1661,36 @@ DEVICE-ONLY validation still required: enter/save on device, background+restart 
 does-not-overwrite, reconnect sync→Synced, Office-changed→Needs review resolution, full Field↔Office round
 trip. Canonical user-facing fields unchanged (Structure/Roof Planes/Roof Lines/Penetrations/Existing Roof
 & Deck/Ventilation/Access + preserved system fields).
+
+## MEASUREMENT WORKFLOW FINISH — Office/Field parity + in-progress durability + cross-app conflict (2026-09) — DONE
+Prior task left incomplete: (a) Field/Office user-facing forms not actually equivalent (Field lacked edge
+secondary plane + separate label/notes, deck_thickness_in, soffit intake LF, gutters; Office roof lines
+were decimal-LF with combined label/notes, "facets"/"Edges" naming); (b) Field only persisted on Save
+(in-progress entries lived in RAM); (c) Office save could silently overwrite newer synced Field work.
+CHANGES (no new DB/migration; single head e0f1a2b3c4d5):
+ - Field working draft durability: cache.js saveMeasurementWorkingDraft/load/clear; Measurements.js
+   debounced (700ms) autosave of in-progress edits (local only, no per-keystroke network), AppState
+   background flush, load() gives the working draft top precedence, Save clears it. Baseline-diff gate so
+   autosave only fires on real edits (never persists a pristine load).
+ - Field UI parity: roof lines now expose Primary + Secondary plane, separate Label + Notes; added Deck
+   Thickness + Soffit Intake LF; optional collapsible Gutters section; section titles "Roof planes"/"Roof
+   lines". edgeToBody/edgeForEdit carry facet_ref_secondary.
+ - Office parity: MeasurementWorksheet roof lines converted to ft + in + calculated LF; Primary + Secondary
+   plane selects; separate Label + Notes (removed combined row.label||row.notes); "Roof planes" title;
+   added collapsible Gutters block; buildPayload passes provider/report_id/notes.
+ - Cross-app conflict protection: office PUT /api/measurements/{id} now honours If-Match and returns 409
+   {message, server} on a stale base (mirrors mobile). Office save() sends If-Match and surfaces an
+   explicit "changed — refresh/review" on 409 (never silent overwrite). FIXED latent 500: build_out dict
+   held raw datetime → HTTPException detail now jsonable_encoder(out) in BOTH office + mobile measurement
+   conflict paths.
+TESTS (all green): mobile measurement_field_parity 5 checks (45 canonical fields present in BOTH; ft/in;
+separate label/notes; primary+secondary), measurement_persistence 9, edge_identity 4, full sketch suite +
+Phase C 12 + B3A-D, reconcile 15; mobile live sync/refresh PASS. Backend (live localhost:8001 + Postgres):
+18 passed incl. NEW test_measurement_cross_app_parity (no-erasure round trip + office-stale-guard 409),
+sketch service/api/concurrency/clone/survival, measurements_lifecycle, sketch_api_live, measurements_pytest;
+takeoff 11; photos ALL PASSED. Office production build SUCCESS; Field Expo Android export SUCCESS (jsc
+temp reverted, app.json byte-identical). Alembic single head e0f1a2b3c4d5.
+DEVICE-ONLY still required: enter-without-Save → background/restart persistence; Save→Waiting→Synced;
+offline entry→restart→reconnect→sync; full Field↔Office field parity round trip; ft/in round trip;
+primary+secondary plane; Office-changed-while-Field-unsynced conflict; multi-structure isolation; Save &
+Mark Field Complete separate from Save.

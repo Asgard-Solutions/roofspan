@@ -88,6 +88,19 @@ export async function clearMeasurementDraft(scope) {
   try { await putCache(measurementKeys.draftKey(scope), null); } catch (e) { /* best effort */ }
 }
 
+// Working draft = the salesperson's IN-PROGRESS edits, persisted as they type (debounced) so they survive
+// backgrounding/restart BEFORE Save is pressed. Keyed per scope. Cleared once Save stages the mutation.
+function workingKey(scope) { return `measurement_working:${measurementKeys.scopeKey(scope)}`; }
+export async function saveMeasurementWorkingDraft(scope, wd) {
+  try { await putCache(workingKey(scope), wd); } catch (e) { /* best effort */ }
+}
+export async function loadMeasurementWorkingDraft(scope) {
+  try { return await getCache(workingKey(scope)); } catch (e) { return null; }
+}
+export async function clearMeasurementWorkingDraft(scope) {
+  try { await putCacheSerialized(workingKey(scope), null); } catch (e) { /* best effort */ }
+}
+
 // Optimistic local write-through: patch a cached list/detail immediately so the UI reflects a queued
 // offline change before Office acknowledges it. Never throws.
 export async function patchCachedList(name, id, patch) {

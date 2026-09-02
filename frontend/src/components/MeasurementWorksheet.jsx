@@ -50,7 +50,7 @@ function toEditable(rev) {
     reported_area_sqft: rev?.reported_area_sqft ?? null,
     structures: (rev?.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })),
     facets: (rev?.facets || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), structure_ref: row.structure_id || row.structure_ref || "" })),
-    edges: (rev?.edges || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), _k: row.id || row._k || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "" })),
+    edges: (rev?.edges || []).map((row) => { const L = Number(row.length_ft || 0); const ft = Math.floor(L); const inches = Math.round((L - ft) * 12 * 10) / 10; return ({ ...row, ref: row.id || row.ref || uid(), _k: row.id || row._k || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "", ft: String(ft || ""), in: String(inches || "") }); }),
     penetrations: (rev?.penetrations || []).map(penetrationForEdit),
     summary: rev?.summary || {},
   };
@@ -125,6 +125,15 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   };
   const addRow = (key, row) => { setEd((doc) => ({ ...doc, [key]: [...doc[key], row] })); setDirty(true); };
   const delRow = (key, i) => { setEd((doc) => ({ ...doc, [key]: doc[key].filter((_, idx) => idx !== i) })); setDirty(true); };
+  // Roof Line ft/in entry: keep length_ft (decimal) in sync so the salesperson never converts inches.
+  const setEdgePart = (i, field, value) => {
+    setEd((doc) => {
+      const rows = [...doc.edges]; const nx = { ...rows[i], [field]: value };
+      nx.length_ft = (parseFloat(nx.ft) || 0) + (parseFloat(nx.in) || 0) / 12;
+      rows[i] = nx; return { ...doc, edges: rows };
+    });
+    setDirty(true);
+  };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
 
   const buildPayload = () => ({
@@ -177,11 +186,23 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     setBusy(true);
     try {
       const body = buildPayload();
-      const saved = rev ? (await api.put(`/measurements/${rev.id}`, body)).data : (await api.post(`/measurements`, body)).data;
+      // Cross-app concurrency: send our base version so the server refuses to silently overwrite a newer
+      // (e.g. synced Field) copy. On 409 we surface an explicit refresh/review — never destroy newer work.
+      const saved = rev
+        ? (await api.put(`/measurements/${rev.id}`, body, { headers: rev.updated_at ? { "If-Match": rev.updated_at } : {} })).data
+        : (await api.post(`/measurements`, body)).data;
       toast.success("Measurement saved");
       await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
       await finalizePending(saved);
-    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        const server = e.response.data?.detail?.server;
+        toast.error("Measurement changed in Office/Field since you opened it. Your unsaved edits were NOT overwritten — refresh to review the newer version, then re-apply your changes.");
+        if (server) { setRev(server); }   // load the newer authoritative revision for review; editable form keeps the user's edits until they reconcile
+      } else {
+        toast.error(apiError(e));
+      }
+    } finally { setBusy(false); }
   };
 
   const startNew = async () => {
@@ -298,7 +319,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         </div>)}
       </TableCard>
 
-      <TableCard title="Roof facets" onAdd={editable ? () => addRow("facets", { ref: uid(), facet_label: `F${ed.facets.length + 1}`, pitch_rise: "", area_sqft: "" }) : null} testid="facets">
+      <TableCard title="Roof planes" onAdd={editable ? () => addRow("facets", { ref: uid(), facet_label: `F${ed.facets.length + 1}`, pitch_rise: "", area_sqft: "" }) : null} testid="facets">
         {ed.facets.map((row, i) => <div key={row.ref || i} className="rounded border border-slate-100 p-2" data-testid={`facet-block-${i}`}>
           <div className="grid grid-cols-2 items-center gap-2 lg:grid-cols-[80px_150px_90px_120px_100px_100px_1fr_40px]">
             <Input placeholder="F1" value={row.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} />
@@ -315,12 +336,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         </div>)}
       </TableCard>
 
-      <TableCard title="Edges (linear feet)" onAdd={editable ? () => addRow("edges", { _k: uid(), ref: uid(), edge_type: "eave", length_ft: "" }) : null} testid="edges">
-        {ed.edges.map((row, i) => <div key={row._k || i} className="flex flex-wrap items-center gap-2">
+      <TableCard title="Roof lines" onAdd={editable ? () => addRow("edges", { _k: uid(), ref: uid(), edge_type: "eave", ft: "", in: "", length_ft: "", facet_ref: "", facet_ref_secondary: "" }) : null} testid="edges">
+        {ed.edges.map((row, i) => <div key={row._k || i} className="flex flex-wrap items-center gap-2" data-testid={`edge-row-${i}`}>
           <Select value={row.edge_type} disabled={!editable} onValueChange={(v) => setRow("edges", i, "edge_type", v)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent>{EDGE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-          <Input className="w-28" type="number" placeholder="LF" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("edges", i, "length_ft", e.target.value)} />
-          <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Facet" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-          <Input className="min-w-44 flex-1" placeholder="Label / notes" value={row.label || row.notes || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "notes", e.target.value)} />
+          <Input className="w-20" type="number" placeholder="ft" value={row.ft ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "ft", e.target.value)} />
+          <Input className="w-20" type="number" placeholder="in" value={row.in ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "in", e.target.value)} />
+          <span className="text-xs font-medium text-slate-500 w-16">{(parseFloat(row.length_ft) || 0).toFixed(1)} LF</span>
+          <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-36"><SelectValue placeholder="Primary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Primary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
+          <Select value={row.facet_ref_secondary || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref_secondary", v === "none" ? "" : v)}><SelectTrigger className="w-36"><SelectValue placeholder="Secondary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Secondary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
+          <Input className="w-32" placeholder="Label" value={row.label || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "label", e.target.value)} />
+          <Input className="min-w-40 flex-1" placeholder="Notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "notes", e.target.value)} />
           {editable && <Button size="icon" variant="ghost" onClick={() => delRow("edges", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
         </div>)}
       </TableCard>
@@ -357,6 +382,17 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
           <Field label="Soffit intake LF"><Input type="number" value={ed.summary.intake_soffit_vent_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("intake_soffit_vent_lf", num(e.target.value))} /></Field>
           <Field label="Reported area SF"><Input type="number" value={ed.reported_area_sqft ?? ""} disabled={!editable} onChange={(e) => { setEd((doc) => ({ ...doc, reported_area_sqft: e.target.value })); setDirty(true); }} /></Field>
         </div>
+        <details className="mt-3 rounded border border-slate-100 p-2" data-testid="office-gutters">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">Gutters (optional)</summary>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Gutter LF"><Input type="number" value={ed.summary.gutter_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("gutter_lf", num(e.target.value))} /></Field>
+            <Field label="Gutter size"><Input value={ed.summary.gutter_size || ""} disabled={!editable} onChange={(e) => setSummary("gutter_size", e.target.value)} /></Field>
+            <Field label="Gutter type"><Input value={ed.summary.gutter_type || ""} disabled={!editable} onChange={(e) => setSummary("gutter_type", e.target.value)} /></Field>
+            <Field label="Downspout count"><Input type="number" value={ed.summary.downspout_count ?? ""} disabled={!editable} onChange={(e) => setSummary("downspout_count", num(e.target.value))} /></Field>
+            <Field label="Downspout LF"><Input type="number" value={ed.summary.downspout_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("downspout_lf", num(e.target.value))} /></Field>
+            <Field label="Gutter guard LF"><Input type="number" value={ed.summary.gutter_guard_lf ?? ""} disabled={!editable} onChange={(e) => setSummary("gutter_guard_lf", num(e.target.value))} /></Field>
+          </div>
+        </details>
         <div className="mt-3 flex flex-wrap gap-4 text-sm">
           {[["full_redeck", "Full re-deck"], ["steep_access", "Steep access"], ["high_access", "High access"], ["long_carry", "Long carry"], ["restricted_access", "Restricted access"], ["landscaping_protection", "Landscape protection"]].map(([k, label]) => <label key={k} className="flex items-center gap-1.5 text-slate-600"><input type="checkbox" checked={!!ed.summary[k]} disabled={!editable} onChange={(e) => setSummary(k, e.target.checked)} />{label}</label>)}
         </div>
