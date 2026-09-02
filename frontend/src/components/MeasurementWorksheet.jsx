@@ -324,6 +324,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
+  // Unlock a locked revision back to Office Verified (manual locks only; estimate-referenced stay locked).
+  const unlockRevision = async () => {
+    if (!rev?.id) return;
+    setBusy(true);
+    try {
+      const next = (await api.post(`/measurements/${rev.id}/unlock`)).data;
+      await loadList(); setRev(next); setEd(toEditable(next)); setDirty(false); toast.success(`Revision ${next.revision_number} unlocked`);
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+
   if (loading) return <div className="p-3 text-sm text-slate-500" data-testid="measurement-loading"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Loading measurements…</div>;
 
   const applySketchProposal = ({ target_type, target_id, metric, value }) => {
@@ -375,6 +385,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
         {rev?.status === "draft" && !dirty && <Button size="sm" variant="outline" onClick={() => changeStatus("field_complete")} disabled={busy}><Check className="mr-1 h-4 w-4" />Field Complete</Button>}
         {rev?.status === "field_complete" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("office_verified")} disabled={busy}><ShieldCheck className="mr-1 h-4 w-4" />Office Verify</Button>}
         {rev?.status === "office_verified" && isOffice && <Button size="sm" variant="outline" onClick={() => changeStatus("locked")} disabled={busy}><Lock className="mr-1 h-4 w-4" />Lock</Button>}
+        {rev?.status === "locked" && isOffice && <Button size="sm" variant="outline" onClick={unlockRevision} disabled={busy} data-testid="measurement-unlock-btn"><Undo2 className="mr-1 h-4 w-4" />Unlock</Button>}
         {rev && ["field_complete", "office_verified"].includes(rev.status) && isOffice && <Button size="sm" variant="ghost" onClick={() => changeStatus("draft")} disabled={busy}><Undo2 className="mr-1 h-4 w-4" />Return to field</Button>}
         {rev?.status === "draft" && !rev.is_immutable && <Button size="sm" variant="outline" className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => setConfirmDelete(true)} disabled={busy} data-testid="measurement-delete-revision-btn"><Trash2 className="mr-1 h-4 w-4" />Delete revision</Button>}
       </div>

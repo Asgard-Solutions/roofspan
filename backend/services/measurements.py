@@ -16,6 +16,7 @@ from models import (
     MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
 )
 from measurement_extension_models import MeasurementRevisionExtension
+from takeoff_models import EstimateTakeoff
 from services.measurement_core import derive_measurement_totals
 from core import MANAGE_ROLES, FIELD_ROLES
 
@@ -600,7 +601,22 @@ async def transition_status(db: AsyncSession, rev: MeasurementRevision, to: str,
     return rev
 
 
-# ---------------- derived totals + serialization ----------------
+async def unlock_revision(db: AsyncSession, rev: MeasurementRevision, user) -> MeasurementRevision:
+    """Unlock a locked revision back to Office Verified. Only manual locks can be unlocked; a revision
+    referenced by an estimate/quote stays immutable (change it via a new revision, preserving history)."""
+    if rev.status != "locked":
+        raise HTTPException(status_code=409, detail="Only a locked revision can be unlocked")
+    if not _has_role(user, VERIFY_ROLES):
+        raise HTTPException(status_code=403, detail="Only Office/Owner/Admin can unlock a measurement")
+    referenced = (await db.execute(select(EstimateTakeoff.id).where(EstimateTakeoff.measurement_revision_id == rev.id).limit(1))).first()
+    if referenced:
+        raise HTTPException(status_code=409, detail="This measurement is used by an estimate/quote and can't be unlocked. Create a new revision to make changes.")
+    rev.status = "office_verified"
+    rev.is_immutable = False
+    rev.locked_by = None
+    rev.locked_at = None
+    rev.updated_at = _now()
+    return rev
 async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
     s = await db.get(MeasurementSet, rev.set_id)
     structs = (await db.execute(select(MeasurementStructure).where(MeasurementStructure.revision_id == rev.id).order_by(MeasurementStructure.sort))).scalars().all()

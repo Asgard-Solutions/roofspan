@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Office: Unlock a locked Roof Measurement (2026-06)
+User: be able to unlock a Roof Measurement. State machine is draft→field_complete→office_verified→locked; once locked (is_immutable) nothing could reopen it.
+- Backend: NEW `POST /api/measurements/{revision_id}/unlock` (MANAGE_ROLES) → `svc.unlock_revision` (services/measurements.py): 409 if status!='locked'; 403 if not Office/Owner/Admin; 409 if referenced by an estimate/quote (EstimateTakeoff row for the revision) — must create a new revision instead; otherwise status→'office_verified', is_immutable=False, locked_by/locked_at cleared. Audit action 'measurement.unlock'. EstimateTakeoff imported from takeoff_models (not models).
+- Office UI (`MeasurementWorksheet.jsx`): `unlockRevision()` + "Unlock" button (testid `measurement-unlock-btn`) shown when rev.status==='locked' && isOffice.
+- Verified (testing_agent iteration_62.json, 8/8 executed 100%, no issues): manual lock→unlock happy path (locked→office_verified, is_immutable cleared, persisted); post-unlock the revision is editable again (can return to draft); 409 guards for draft/field_complete/office_verified; 404 bogus id; 403 for non-manager (sales) role. Estimate-referenced block SKIPPED (out-of-scope estimate wiring) — logic present but not exercised. Office browser UI not e2e-tested (SPA behind subscription/billing gate); route confirmed serving via API. NEW `backend/tests/test_measurement_unlock_iter62.py`.
+- Files: `backend/services/measurements.py`, `backend/routers/measurements.py`, `frontend/src/components/MeasurementWorksheet.jsx`.
+
+
+
 ## Office: Delete a roof-measurement Revision (2026-06)
 User: in Office, be able to delete a Rev for the roof measurement. Choice: Draft-only (finalized/locked/immutable protected), confirm prompt, auto-select next after delete.
 - Backend `DELETE /api/measurements/{revision_id}` already existed (require_roles FIELD_ROLES; 409 "Only a Draft revision can be deleted" if status!='draft' or is_immutable; writes audit log 'measurement.delete'). No backend change needed.
