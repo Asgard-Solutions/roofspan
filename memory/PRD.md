@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## BUG FIX: Field showed "Saved on device" (empty local draft) instead of Office measurements (2026-06) — VERIFIED
+- Symptom: Office had roof measurements but the Field showed nothing with status "Saved on device"; user expected to see exactly what Office has.
+- Root cause: in `mobile/src/screens/Measurements.js` `load()`, a persisted working draft short-circuited the load UNCONDITIONALLY (showing "Saved on device"), so the authoritative Office branch below was never reached — even when the working draft was empty/orphaned.
+- Fix: the working-draft short-circuit now guards on `workingDraftHasContent(wd)` (new pure module `mobile/src/measurementDraftPriority.js`). An empty/orphaned draft is cleared via `clearMeasurementWorkingDraft(scope)` and execution falls through to the authoritative Office load (`cache.measurements` → `pickCurrent` → `cache.measurement` → `resolveMeasurementView` → `hydrate`). Real (non-empty) drafts still win — no unsaved edits lost.
+- Verified (testing_agent, iteration_60.json): NEW regression `mobile/src/tests/measurement_draft_priority.node.test.js` (empty draft → Office wins; real draft → preserved); full mobile `test:measurements` + `test:sketch` green; NEW backend pytest `backend/tests/test_office_to_field_parity_iter60.py` 6/6 proving the Office copy is served through the exact Field endpoints (GET /api/mobile/measurements list + /{id} detail) and Office→Field round-trip parity (PUT /api/measurements/{id} If-Match). No issues found.
+- Files: NEW `mobile/src/measurementDraftPriority.js`, `mobile/src/tests/measurement_draft_priority.node.test.js`, `backend/tests/test_office_to_field_parity_iter60.py`; MODIFIED `mobile/src/screens/Measurements.js`, `mobile/package.json` (test script).
+
+
+
 ## Roof Line Types: add Dead Valley + flashing labels for Sidewall/Headwall (Office + Field) (2026-06)
 Canonical list now (both apps, identical order + wording): Eave, Rake, Ridge, Hip, Valley, Dead Valley, Sidewall (Step Flashing), Headwall (Apron Flashing), Transition.
 - **Internal values:** eave, rake, ridge, hip, valley, **dead_valley** (new distinct type), sidewall (unchanged — label only), headwall (unchanged — label only), transition. No step_flashing/apron_flashing types created. Parapet intentionally omitted.
