@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend end-to-end verification of the new hidden-metadata rebase behavior for Keep My Version. All three scenarios PASS: (PRIMARY) Office edits a Roof Plane Area SF to 555 on a V1 draft, server is advanced behind-back to V2 (reported_area=3333, facet area=600, orientation=300, geometry {poly:[[9,9]]}, ventilation_notes='V2 vent'), Office save yields 409 + Needs Review banner, Keep My Version -> confirm succeeds with 'Your version saved over the newer copy' toast. GET /api/measurements/{id} verifies: facet.area_sqft=555 (Office won), reported_area_sqft=3333 (V2 preserved), facet.orientation_azimuth=300 (V2 preserved), facet.geometry={poly:[[9,9]]} (V2 preserved), summary.ventilation_notes='V2 vent' (V2 hidden summary preserved), and other hidden summary keys (tearoff_notes, decking_notes, gutter_notes, stories) preserved from prior state. (SECOND CONFLICT) With Needs Review already showing on V2, advanced server to V3 (reported_area=4444, facet area=888, orientation=45, ventilation_notes='V3 vent') before clicking Keep My Version. After confirm, another 409 fired: 'Measurement changed again while saving' toast appeared, Needs Review banner stayed, Save remained blocked, and GET confirmed V3 values are 100% intact on the server (no force-write). (REGRESSION) A fresh single-actor Office save produced 'Measurement saved' toast with NO banner; a subsequent stale save + 'Use Latest Version' cleared the banner and adopted server values (Area SF input reflected 987 from the server latest).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "measurementRebase.js buildRebasePayload correctly: (1) starts from server-authoritative top-level metadata (source/provider/report_id/notes), (2) forces reported_area_sqft ← server, (3) merges summary as {...server.summary, ...editable-only keys}, (4) preserves per-facet orientation_azimuth+geometry from the matching server plane keyed on stable id/ref, (5) leaves locally-created planes (no matching server id) untouched. Verified end-to-end via API GET after Keep My Version.",
+    "MeasurementWorksheet.keepMyVersion uses the fresh server.updated_at from the 409 response as If-Match on the rebased PUT; on a subsequent 409 it re-enters needsReview with the newer server payload and clears confirmKeep, so no force-write can occur.",
+    "Second-conflict path emits a distinct toast ('Measurement changed again while saving. Review the latest version once more.') so the user knows another concurrent change happened."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100%"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (Owner) from problem statement.",
+  "seed_data_creation": "Two new leads + fresh measurement drafts were created in-flight via /api/mobile/leads and /api/measurements (primary+regression). Names 'Rebase Test Lead <ts>' and 'Regression Lead <ts>'. All test data lives on the caller's account; no destructive changes to prior seeds.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Rebase behavior is now fully wired end-to-end. The rebase preserves hidden facet fields (orientation_azimuth, geometry) matched on facet.ref === server.facet.id (string-compared). For future 'behind-back' PUTs to reproduce conflicts, remember: map each existing structures[].id -> ref, facets[].id -> ref (and preserve structure_id -> structure_ref), edges[].id -> ref -- do NOT PUT raw GET output. When making a second concurrent change during Needs Review, use the token from a GET (which now equals V2's) as If-Match to advance to V3; the frontend's saved server token from the 409 will then be stale and trigger the second 409 through keepMyVersion.",
+  "rca of the issue": "N/A -- no defects found. The new hidden-metadata rebase and second-conflict re-entry both work as specified."
+}
