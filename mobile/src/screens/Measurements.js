@@ -7,6 +7,7 @@ import { getCache } from "../storage";
 import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
+import { LabeledField, SelectField, PitchField, ToggleRow } from "../components/MeasurementFields";
 
 const measurementKeys = require("../measurementCache");
 const queueCore = require("../queue");
@@ -26,6 +27,7 @@ const PEN_TYPES = [
   ["pipe_boot", "Pipe Boot"], ["static_vent", "Static Vent"], ["skylight", "Skylight"], ["turbine", "Turbine"],
   ["powered_vent", "Powered Vent"], ["exhaust_vent", "Exhaust Vent"], ["chimney", "Chimney"], ["satellite", "Satellite"], ["other", "Other"],
 ];
+const ATTACH_OPTS = [["", "None"], ["attached", "Attached"], ["detached", "Detached"]];
 const uid = () => "r" + Math.random().toString(36).slice(2, 10);
 const numberOrNull = (v) => (v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 
@@ -369,6 +371,9 @@ export default function Measurements({ route, navigation }) {
     navigation.goBack();
   };
 
+  const structureOptions = useMemo(() => [["", "— None —"], ...structures.map((st) => [st.ref, st.name || (STRUCTURE_TYPES.find((t) => t[0] === st.structure_type)?.[1] || "Structure")])], [structures]);
+  const facetOptions = useMemo(() => [["", "— None —"], ...facets.map((f) => [f.ref, f.facet_label || "Plane"])], [facets]);
+
   return (
     <ScrollView style={s.wrap} contentContainerStyle={{ paddingBottom: 60 }}>
       <Text style={s.h}>Roof measurements</Text>
@@ -388,31 +393,25 @@ export default function Measurements({ route, navigation }) {
       {usingCached && <View style={s.offline}><Text style={s.offlineT}>Offline/cached measurement{cachedAt ? ` · saved ${new Date(cachedAt).toLocaleString()}` : ""}</Text></View>}
 
       <View style={s.totals} testID="meas-totals">
-        <Totm label="Area" value={`${totals.area.toFixed(0)} SF`} />
+        <Totm label="Area (SF)" value={`${totals.area.toFixed(0)}`} />
         <Totm label="Squares" value={totals.squares.toFixed(2)} />
-        <Totm label="Takeoff" value={totals.takeoffSquares.toFixed(2)} />
-        <Totm label="Penetr." value={totals.pen} />
+        <Totm label="Takeoff Squares" value={totals.takeoffSquares.toFixed(2)} />
+        <Totm label="Roof Planes" value={facets.length} />
+        <Totm label="Structures" value={structures.length} />
       </View>
 
       <Section title="Structures" onAdd={!readonly && addStructure} addTestID="meas-add-structure">
         {structures.map((st, i) => (
           <View key={st.ref} style={s.card} testID={`meas-structure-${i}`}>
-            <TextInput style={s.input} placeholder="Name (e.g. Main House)" value={st.name || ""} editable={!readonly} onChangeText={(v) => setS(i, "name", v)} />
-            <View style={s.chips}>{STRUCTURE_TYPES.map(([v, l]) => <Chip key={v} label={l} active={st.structure_type === v} disabled={readonly} onPress={() => setS(i, "structure_type", v)} />)}</View>
-            <View style={s.chips}>
-              <Chip label={st.included_in_scope !== false ? "Included in estimate" : "Excluded from estimate"} active={st.included_in_scope !== false} disabled={readonly} onPress={() => setS(i, "included_in_scope", st.included_in_scope === false)} />
-            </View>
-            <Text style={s.small}>Attachment</Text>
-            <View style={s.chips}>
-              <Chip label="None" active={!st.attachment} disabled={readonly} onPress={() => setS(i, "attachment", null)} />
-              <Chip label="Attached" active={st.attachment === "attached"} disabled={readonly} onPress={() => setS(i, "attachment", "attached")} />
-              <Chip label="Detached" active={st.attachment === "detached"} disabled={readonly} onPress={() => setS(i, "attachment", "detached")} />
-            </View>
+            <LabeledField label="Name" placeholder="e.g. Main House" value={st.name || ""} editable={!readonly} onChangeText={(v) => setS(i, "name", v)} testID={`meas-structure-name-${i}`} />
+            <SelectField label="Structure Type" value={st.structure_type || "main_house"} options={STRUCTURE_TYPES} disabled={readonly} onChange={(v) => setS(i, "structure_type", v)} testID={`meas-structure-type-${i}`} />
+            <ToggleRow label="Include in estimate" value={st.included_in_scope !== false} disabled={readonly} onValueChange={(val) => setS(i, "included_in_scope", val)} testID={`meas-structure-scope-${i}`} />
             <View style={s.rowline}>
-              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Stories" value={st.stories != null ? String(st.stories) : ""} editable={!readonly} onChangeText={(v) => setS(i, "stories", v)} />
-              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Height ft" value={st.approx_height_ft != null ? String(st.approx_height_ft) : ""} editable={!readonly} onChangeText={(v) => setS(i, "approx_height_ft", v)} />
+              <View style={s.half}><LabeledField label="Stories" keyboardType="numeric" value={st.stories != null ? String(st.stories) : ""} editable={!readonly} onChangeText={(v) => setS(i, "stories", v)} testID={`meas-structure-stories-${i}`} /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Approx Height (ft)" keyboardType="numeric" value={st.approx_height_ft != null ? String(st.approx_height_ft) : ""} editable={!readonly} onChangeText={(v) => setS(i, "approx_height_ft", v)} testID={`meas-structure-height-${i}`} /></View>
             </View>
-            <TextInput style={s.input} placeholder="Structure notes" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} />
+            <SelectField label="Attachment" value={st.attachment || ""} options={ATTACH_OPTS} disabled={readonly} onChange={(v) => setS(i, "attachment", v || null)} testID={`meas-structure-attachment-${i}`} />
+            <LabeledField label="Structure Notes" placeholder="Optional" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} testID={`meas-structure-notes-${i}`} />
             {existing?.id && st.id ? (
               <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
                 <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
@@ -429,46 +428,38 @@ export default function Measurements({ route, navigation }) {
         {facets.map((f, i) => (
           <View key={f.ref} style={s.card} testID={`meas-facet-${i}`}>
             <View style={s.rowline}>
-              <TextInput style={[s.input, { width: 70 }]} value={f.facet_label || ""} editable={!readonly} onChangeText={(v) => setF(i, "facet_label", v)} />
-              <TextInput style={[s.input, { flex: 1, marginLeft: 8 }]} keyboardType="numeric" placeholder="Area SF" value={String(f.area_sqft ?? "")} editable={!readonly} onChangeText={(v) => setF(i, "area_sqft", v)} />
+              <View style={{ width: 96 }}><LabeledField label="Plane" value={f.facet_label || ""} editable={!readonly} onChangeText={(v) => setF(i, "facet_label", v)} testID={`meas-facet-label-${i}`} /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Area (SF)" keyboardType="numeric" value={String(f.area_sqft ?? "")} editable={!readonly} onChangeText={(v) => setF(i, "area_sqft", v)} testID={`meas-facet-area-${i}`} /></View>
             </View>
-            <Text style={s.small}>Pitch</Text>
-            <View style={s.chips}>
-              {PITCHES.map((p) => <Chip key={p} label={`${p}/12`} active={Number(f.pitch_rise) === p} disabled={readonly} onPress={() => setF(i, "pitch_rise", p)} />)}
-              <Chip label="Custom" active={f.pitch_rise === "" || (f.pitch_rise != null && f.pitch_rise !== "" && !PITCHES.includes(Number(f.pitch_rise)))} disabled={readonly} onPress={() => setF(i, "pitch_rise", "")} />
-            </View>
-            {(f.pitch_rise === "" || (f.pitch_rise != null && f.pitch_rise !== "" && !PITCHES.includes(Number(f.pitch_rise)))) && (
-              <View style={s.rowline}>
-                <TextInput style={[s.input, { width: 90 }]} keyboardType="numeric" placeholder="rise" value={f.pitch_rise != null ? String(f.pitch_rise) : ""} editable={!readonly} onChangeText={(v) => setF(i, "pitch_rise", numberOrNull(v))} testID={`meas-facet-pitch-custom-${i}`} />
-                <Text style={[s.small, { marginLeft: 8, alignSelf: "center" }]}>/12</Text>
-              </View>
-            )}
-            {!!structures.length && <><Text style={s.small}>Structure</Text><View style={s.chips}>{structures.map((st) => <Chip key={st.ref} label={st.name || "Structure"} active={f.structure_ref === st.ref} disabled={readonly} onPress={() => setF(i, "structure_ref", st.ref)} />)}</View></>}
+            <PitchField value={f.pitch_rise} disabled={readonly} onChange={(v) => setF(i, "pitch_rise", v)} testID={`meas-facet-pitch-${i}`} />
+            {!!structures.length && <SelectField label="Structure" value={f.structure_ref || ""} options={structureOptions} disabled={readonly} onChange={(v) => setF(i, "structure_ref", v)} testID={`meas-facet-structure-${i}`} />}
             <View style={s.rowline}>
-              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Width ft" value={f.width_ft != null ? String(f.width_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "width_ft", v)} />
-              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Length ft" value={f.length_ft != null ? String(f.length_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "length_ft", v)} />
+              <View style={s.half}><LabeledField label="Width (ft)" keyboardType="numeric" value={f.width_ft != null ? String(f.width_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "width_ft", v)} testID={`meas-facet-width-${i}`} /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Length (ft)" keyboardType="numeric" value={f.length_ft != null ? String(f.length_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "length_ft", v)} testID={`meas-facet-length-${i}`} /></View>
             </View>
-            <TextInput style={s.input} placeholder="Roof material" value={f.roof_material || ""} editable={!readonly} onChangeText={(v) => setF(i, "roof_material", v)} />
-            <TextInput style={s.input} placeholder="Roof plane notes" value={f.notes || ""} editable={!readonly} onChangeText={(v) => setF(i, "notes", v)} />
+            <LabeledField label="Roof Material" placeholder="Optional" value={f.roof_material || ""} editable={!readonly} onChangeText={(v) => setF(i, "roof_material", v)} testID={`meas-facet-material-${i}`} />
+            <LabeledField label="Roof Plane Notes" placeholder="Optional" value={f.notes || ""} editable={!readonly} onChangeText={(v) => setF(i, "notes", v)} testID={`meas-facet-notes-${i}`} />
             {f.id ? <View style={s.photoBox}><Text style={s.small}>Roof plane photos</Text><PhotoSection recordType="measurement_facet" recordId={f.id} /></View> : null}
             {!readonly && <TouchableOpacity testID={`meas-remove-facet-${i}`} style={s.removeBtn} onPress={() => removeFacet(i)}><Text style={s.removeBtnT}>Remove roof plane</Text></TouchableOpacity>}
           </View>
         ))}
       </Section>
 
-      <Section title="Roof lines (ft / in)" onAdd={!readonly && addEdge} addTestID="meas-add-edge">
+      <Section title="Roof lines" onAdd={!readonly && addEdge} addTestID="meas-add-edge">
         {edges.map((e, i) => (
           <View key={e._k} style={s.card} testID={`meas-edge-${i}`}>
-            <View style={s.chips}>{EDGE_TYPES.map(([v, l]) => <Chip key={v} label={l} active={e.edge_type === v} disabled={readonly} onPress={() => setE(i, "edge_type", v)} />)}</View>
+            <SelectField label="Type" value={e.edge_type} options={EDGE_TYPES} disabled={readonly} onChange={(v) => setE(i, "edge_type", v)} testID={`meas-edge-type-${i}`} />
             <View style={s.rowline}>
-              <TextInput style={[s.input, { width: 90 }]} keyboardType="numeric" placeholder="ft" value={String(e.ft ?? "")} editable={!readonly} onChangeText={(v) => setE(i, "ft", v)} />
-              <TextInput style={[s.input, { width: 90, marginLeft: 8 }]} keyboardType="numeric" placeholder="in" value={String(e.in ?? "")} editable={!readonly} onChangeText={(v) => setE(i, "in", v)} />
-              <Text style={[s.small, { marginLeft: 10, alignSelf: "center" }]}>{(parseFloat(e.length_ft) || 0).toFixed(1)} LF</Text>
+              <View style={s.half}><LabeledField label="Feet" placeholder="ft" keyboardType="numeric" value={String(e.ft ?? "")} editable={!readonly} onChangeText={(v) => setE(i, "ft", v)} testID={`meas-edge-ft-${i}`} /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Inches" placeholder="in" keyboardType="numeric" value={String(e.in ?? "")} editable={!readonly} onChangeText={(v) => setE(i, "in", v)} testID={`meas-edge-in-${i}`} /></View>
             </View>
-            {!!facets.length && <><Text style={s.small}>Primary roof plane</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={e.facet_ref === f.ref} disabled={readonly} onPress={() => setE(i, "facet_ref", e.facet_ref === f.ref ? "" : f.ref)} />)}</View>
-              <Text style={s.small}>Secondary roof plane (valley/ridge)</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={e.facet_ref_secondary === f.ref} disabled={readonly} onPress={() => setE(i, "facet_ref_secondary", e.facet_ref_secondary === f.ref ? "" : f.ref)} />)}</View></>}
-            <TextInput style={s.input} placeholder="Label (optional)" value={e.label || ""} editable={!readonly} onChangeText={(v) => setE(i, "label", v)} />
-            <TextInput style={s.input} placeholder="Line notes (optional)" value={e.notes || ""} editable={!readonly} onChangeText={(v) => setE(i, "notes", v)} />
+            <Text style={s.lfLine} testID={`meas-edge-lf-${i}`}>Total LF: {(parseFloat(e.length_ft) || 0).toFixed(1)}</Text>
+            {!!facets.length && <>
+              <SelectField label="Primary Roof Plane" value={e.facet_ref || ""} options={facetOptions} disabled={readonly} onChange={(v) => setE(i, "facet_ref", v)} testID={`meas-edge-primary-${i}`} />
+              <SelectField label="Secondary Roof Plane" value={e.facet_ref_secondary || ""} options={facetOptions} disabled={readonly} onChange={(v) => setE(i, "facet_ref_secondary", v)} testID={`meas-edge-secondary-${i}`} />
+            </>}
+            <LabeledField label="Label" placeholder="Optional" value={e.label || ""} editable={!readonly} onChangeText={(v) => setE(i, "label", v)} testID={`meas-edge-labeltext-${i}`} />
+            <LabeledField label="Notes" placeholder="Optional" value={e.notes || ""} editable={!readonly} onChangeText={(v) => setE(i, "notes", v)} testID={`meas-edge-notes-${i}`} />
             {!readonly && <TouchableOpacity testID={`meas-remove-edge-${i}`} style={s.removeBtn} onPress={() => removeEdge(i)}><Text style={s.removeBtnT}>Remove roof line</Text></TouchableOpacity>}
           </View>
         ))}
@@ -486,13 +477,13 @@ export default function Measurements({ route, navigation }) {
               </View>
             </View>
             {(parseInt(p.quantity) || 0) > 0 && <>
-              {!!facets.length && <><Text style={s.small}>Roof plane</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={p.facet_ref === f.ref} disabled={readonly} onPress={() => setP(i, "facet_ref", f.ref)} />)}</View></>}
+              {!!facets.length && <SelectField label="Roof Plane" value={p.facet_ref || ""} options={facetOptions} disabled={readonly} onChange={(v) => setP(i, "facet_ref", v)} testID={`meas-pen-plane-${i}`} />}
               <View style={s.rowline}>
-                <TextInput style={[s.input, { flex: 1 }]} keyboardType="numeric" placeholder="Diameter in" value={p.diameter_in != null ? String(p.diameter_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "diameter_in", v)} />
-                <TextInput style={[s.input, { flex: 1, marginLeft: 6 }]} keyboardType="numeric" placeholder="Width in" value={p.width_in != null ? String(p.width_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "width_in", v)} />
-                <TextInput style={[s.input, { flex: 1, marginLeft: 6 }]} keyboardType="numeric" placeholder="Length in" value={p.length_in != null ? String(p.length_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "length_in", v)} />
+                <View style={s.half}><LabeledField label="Diameter (in)" keyboardType="numeric" value={p.diameter_in != null ? String(p.diameter_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "diameter_in", v)} testID={`meas-pen-dia-${i}`} /></View>
+                <View style={[s.half, s.leftGap]}><LabeledField label="Width (in)" keyboardType="numeric" value={p.width_in != null ? String(p.width_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "width_in", v)} testID={`meas-pen-w-${i}`} /></View>
               </View>
-              <TextInput style={s.input} placeholder="Penetration notes" value={p.notes || ""} editable={!readonly} onChangeText={(v) => setP(i, "notes", v)} />
+              <LabeledField label="Length (in)" keyboardType="numeric" value={p.length_in != null ? String(p.length_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "length_in", v)} testID={`meas-pen-l-${i}`} />
+              <LabeledField label="Penetration Notes" placeholder="Optional" value={p.notes || ""} editable={!readonly} onChangeText={(v) => setP(i, "notes", v)} testID={`meas-pen-notes-${i}`} />
               {p.id ? <PhotoSection recordType="measurement_penetration" recordId={p.id} /> : null}
             </>}
           </View>
@@ -501,44 +492,42 @@ export default function Measurements({ route, navigation }) {
 
       <Section title="Existing Roof & Deck">
         <View style={s.card}>
-          <TextInput style={s.input} placeholder="Existing covering (e.g. architectural shingle)" value={summary.existing_covering_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_covering_type: v }))} />
-          <TextInput style={s.input} placeholder="Existing condition" value={summary.existing_condition || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_condition: v }))} />
+          <LabeledField label="Existing Covering" placeholder="e.g. architectural shingle" value={summary.existing_covering_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_covering_type: v }))} testID="meas-existing-covering" />
+          <LabeledField label="Existing Condition" value={summary.existing_condition || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_condition: v }))} testID="meas-existing-condition" />
           <View style={s.rowline}>
-            <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Existing layers" value={summary.existing_layers != null ? String(summary.existing_layers) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_layers: numberOrNull(v) }))} />
-            <TextInput style={[s.input, s.half, s.leftGap]} placeholder="Existing underlayment" value={summary.existing_underlayment || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_underlayment: v }))} />
-          </View>
-          <View style={s.rowline}>
-            <TextInput style={[s.input, s.half]} placeholder="Deck type" value={summary.deck_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, deck_type: v }))} />
-            <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Deck thickness (in)" value={summary.deck_thickness_in != null ? String(summary.deck_thickness_in) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, deck_thickness_in: numberOrNull(v) }))} />
+            <View style={s.half}><LabeledField label="Existing Layers" keyboardType="numeric" value={summary.existing_layers != null ? String(summary.existing_layers) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_layers: numberOrNull(v) }))} testID="meas-existing-layers" /></View>
+            <View style={[s.half, s.leftGap]}><LabeledField label="Existing Underlayment" value={summary.existing_underlayment || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, existing_underlayment: v }))} testID="meas-existing-underlayment" /></View>
           </View>
           <View style={s.rowline}>
-            <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Damaged deck (SF)" value={summary.damaged_deck_sf != null ? String(summary.damaged_deck_sf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, damaged_deck_sf: numberOrNull(v) }))} />
-            <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Replacement sheets" value={summary.replacement_sheets != null ? String(summary.replacement_sheets) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, replacement_sheets: numberOrNull(v) }))} />
+            <View style={s.half}><LabeledField label="Deck Type" value={summary.deck_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, deck_type: v }))} testID="meas-deck-type" /></View>
+            <View style={[s.half, s.leftGap]}><LabeledField label="Deck Thickness (in)" keyboardType="numeric" value={summary.deck_thickness_in != null ? String(summary.deck_thickness_in) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, deck_thickness_in: numberOrNull(v) }))} testID="meas-deck-thickness" /></View>
           </View>
-          <View style={s.chips}>
-            <Chip label="Full re-deck" active={!!summary.full_redeck} disabled={readonly} onPress={() => setSummary((x) => ({ ...x, full_redeck: !x.full_redeck }))} />
+          <View style={s.rowline}>
+            <View style={s.half}><LabeledField label="Damaged Deck (SF)" keyboardType="numeric" value={summary.damaged_deck_sf != null ? String(summary.damaged_deck_sf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, damaged_deck_sf: numberOrNull(v) }))} testID="meas-damaged-deck" /></View>
+            <View style={[s.half, s.leftGap]}><LabeledField label="Replacement Sheets" keyboardType="numeric" value={summary.replacement_sheets != null ? String(summary.replacement_sheets) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, replacement_sheets: numberOrNull(v) }))} testID="meas-replacement-sheets" /></View>
           </View>
+          <ToggleRow label="Full re-deck" value={!!summary.full_redeck} disabled={readonly} onValueChange={(val) => setSummary((x) => ({ ...x, full_redeck: val }))} testID="meas-full-redeck" />
         </View>
       </Section>
 
       <Section title="Ventilation">
         <View style={s.card}>
           <View style={s.rowline}>
-            <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Drip edge (LF)" value={summary.drip_edge_lf != null ? String(summary.drip_edge_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, drip_edge_lf: numberOrNull(v) }))} />
-            <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Ridge vent (LF)" value={summary.ridge_vent_lf != null ? String(summary.ridge_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, ridge_vent_lf: numberOrNull(v) }))} />
+            <View style={s.half}><LabeledField label="Drip Edge (LF)" keyboardType="numeric" value={summary.drip_edge_lf != null ? String(summary.drip_edge_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, drip_edge_lf: numberOrNull(v) }))} testID="meas-drip-edge" /></View>
+            <View style={[s.half, s.leftGap]}><LabeledField label="Ridge Vent (LF)" keyboardType="numeric" value={summary.ridge_vent_lf != null ? String(summary.ridge_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, ridge_vent_lf: numberOrNull(v) }))} testID="meas-ridge-vent" /></View>
           </View>
-          <TextInput style={s.input} keyboardType="numeric" placeholder="Soffit intake vent (LF)" value={summary.intake_soffit_vent_lf != null ? String(summary.intake_soffit_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, intake_soffit_vent_lf: numberOrNull(v) }))} />
+          <LabeledField label="Soffit Intake Vent (LF)" keyboardType="numeric" value={summary.intake_soffit_vent_lf != null ? String(summary.intake_soffit_vent_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, intake_soffit_vent_lf: numberOrNull(v) }))} testID="meas-soffit-vent" />
         </View>
       </Section>
 
       <Section title="Access / Conditions">
         <View style={s.card}>
-          <View style={s.chips}>
-            {[["steep_access", "Steep access"], ["high_access", "High access"], ["long_carry", "Long carry"], ["restricted_access", "Restricted access"], ["landscaping_protection", "Landscaping protection"]].map(([k, l]) => (
-              <Chip key={k} label={l} active={!!summary[k]} disabled={readonly} onPress={() => setSummary((x) => ({ ...x, [k]: !x[k] }))} />
-            ))}
+          {[["steep_access", "Steep access"], ["high_access", "High access"], ["long_carry", "Long carry"], ["restricted_access", "Restricted access"], ["landscaping_protection", "Landscaping protection"]].map(([k, l]) => (
+            <ToggleRow key={k} label={l} value={!!summary[k]} disabled={readonly} onValueChange={(val) => setSummary((x) => ({ ...x, [k]: val }))} testID={`meas-access-${k}`} />
+          ))}
+          <View style={{ marginTop: 8 }}>
+            <LabeledField label="Conditions Notes" multiline value={summary.conditions_notes || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, conditions_notes: v }))} testID="meas-conditions-notes" />
           </View>
-          <TextInput style={[s.input, { minHeight: 70 }]} placeholder="Conditions notes" value={summary.conditions_notes || ""} multiline editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, conditions_notes: v }))} />
         </View>
       </Section>
 
@@ -549,18 +538,18 @@ export default function Measurements({ route, navigation }) {
         {showGutters && (
           <View style={s.card}>
             <View style={s.rowline}>
-              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Gutter LF" value={summary.gutter_lf != null ? String(summary.gutter_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_lf: numberOrNull(v) }))} />
-              <TextInput style={[s.input, s.half, s.leftGap]} placeholder="Gutter size" value={summary.gutter_size || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_size: v }))} />
+              <View style={s.half}><LabeledField label="Gutter LF" keyboardType="numeric" value={summary.gutter_lf != null ? String(summary.gutter_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_lf: numberOrNull(v) }))} testID="meas-gutter-lf" /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Gutter Size" value={summary.gutter_size || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_size: v }))} testID="meas-gutter-size" /></View>
             </View>
             <View style={s.rowline}>
-              <TextInput style={[s.input, s.half]} placeholder="Gutter type" value={summary.gutter_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_type: v }))} />
-              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Downspout count" value={summary.downspout_count != null ? String(summary.downspout_count) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_count: numberOrNull(v) }))} />
+              <View style={s.half}><LabeledField label="Gutter Type" value={summary.gutter_type || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_type: v }))} testID="meas-gutter-type" /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Downspout Count" keyboardType="numeric" value={summary.downspout_count != null ? String(summary.downspout_count) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_count: numberOrNull(v) }))} testID="meas-downspout-count" /></View>
             </View>
             <View style={s.rowline}>
-              <TextInput style={[s.input, s.half]} keyboardType="numeric" placeholder="Downspout LF" value={summary.downspout_lf != null ? String(summary.downspout_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_lf: numberOrNull(v) }))} />
-              <TextInput style={[s.input, s.half, s.leftGap]} keyboardType="numeric" placeholder="Gutter guard LF" value={summary.gutter_guard_lf != null ? String(summary.gutter_guard_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_guard_lf: numberOrNull(v) }))} />
+              <View style={s.half}><LabeledField label="Downspout LF" keyboardType="numeric" value={summary.downspout_lf != null ? String(summary.downspout_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, downspout_lf: numberOrNull(v) }))} testID="meas-downspout-lf" /></View>
+              <View style={[s.half, s.leftGap]}><LabeledField label="Gutter Guard LF" keyboardType="numeric" value={summary.gutter_guard_lf != null ? String(summary.gutter_guard_lf) : ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_guard_lf: numberOrNull(v) }))} testID="meas-gutter-guard" /></View>
             </View>
-            <TextInput style={s.input} placeholder="Gutter notes" value={summary.gutter_notes || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_notes: v }))} />
+            <LabeledField label="Gutter Notes" value={summary.gutter_notes || ""} editable={!readonly} onChangeText={(v) => setSummary((x) => ({ ...x, gutter_notes: v }))} testID="meas-gutter-notes" />
           </View>
         )}
       </Section>
@@ -576,10 +565,7 @@ export default function Measurements({ route, navigation }) {
 }
 
 function Totm({ label, value }) {
-  return <View style={{ alignItems: "center", flex: 1 }}><Text style={s.totV}>{value}</Text><Text style={s.totL}>{label}</Text></View>;
-}
-function Chip({ label, active, onPress, disabled }) {
-  return <TouchableOpacity style={[s.chip, active && s.chipOn]} disabled={disabled} onPress={onPress}><Text style={[s.chipT, active && s.chipTOn]}>{label}</Text></TouchableOpacity>;
+  return <View style={s.totm}><Text style={s.totV}>{value}</Text><Text style={s.totL}>{label}</Text></View>;
 }
 function Section({ title, onAdd, children, addTestID }) {
   return <View style={{ marginBottom: 18 }}><View style={s.secHead}><Text style={s.secTitle}>{title}</Text>{onAdd ? <TouchableOpacity onPress={onAdd} testID={addTestID}><Text style={s.add}>+ Add</Text></TouchableOpacity> : null}</View>{children}</View>;
@@ -604,9 +590,10 @@ const s = StyleSheet.create({
   disclosureT: { color: C.brand, fontWeight: "800", fontSize: 14 },
   offline: { padding: 8, borderRadius: 8, backgroundColor: "#FEF3C7", marginBottom: 10 },
   offlineT: { color: "#92400E", fontWeight: "700", fontSize: 12 },
-  totals: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 18, borderWidth: 1, borderColor: C.line },
+  totals: { flexDirection: "row", flexWrap: "wrap", backgroundColor: "#fff", borderRadius: 12, paddingVertical: 12, paddingHorizontal: 8, marginBottom: 18, borderWidth: 1, borderColor: C.line },
+  totm: { width: "33.33%", alignItems: "center", paddingVertical: 6 },
   totV: { fontSize: 17, fontWeight: "800", color: C.ink },
-  totL: { fontSize: 10, color: C.sub, textTransform: "uppercase", marginTop: 2 },
+  totL: { fontSize: 10, color: C.sub, textTransform: "uppercase", marginTop: 2, textAlign: "center" },
   secHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   secTitle: { fontSize: 16, fontWeight: "800", color: C.ink },
   add: { color: C.brand, fontWeight: "800", fontSize: 15 },
@@ -616,16 +603,11 @@ const s = StyleSheet.create({
   sketchHint: { marginTop: 10, color: C.sub, fontSize: 12, fontStyle: "italic" },
   removeBtn: { marginTop: 10, alignSelf: "flex-start", paddingVertical: 6, paddingHorizontal: 4 },
   removeBtnT: { color: "#DC2626", fontWeight: "700", fontSize: 13 },
-  input: { backgroundColor: "#fff", borderRadius: 10, padding: 11, fontSize: 15, borderWidth: 1, borderColor: C.line, marginBottom: 8 },
-  rowline: { flexDirection: "row", alignItems: "center" },
+  lfLine: { fontSize: 13, fontWeight: "700", color: C.sub, marginBottom: 12 },
+  rowline: { flexDirection: "row", alignItems: "flex-start" },
   half: { flex: 1 },
-  leftGap: { marginLeft: 8 },
+  leftGap: { marginLeft: 10 },
   small: { fontSize: 12, color: C.sub, marginBottom: 6, fontWeight: "600" },
-  chips: { flexDirection: "row", flexWrap: "wrap", marginBottom: 4 },
-  chip: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: C.line, marginRight: 6, marginBottom: 6, backgroundColor: "#fff" },
-  chipOn: { backgroundColor: C.brand, borderColor: C.brand },
-  chipT: { color: C.sub, fontWeight: "700", fontSize: 12 },
-  chipTOn: { color: "#fff" },
   penTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   penLabel: { fontSize: 15, fontWeight: "700", color: C.ink, flex: 1 },
   counter: { flexDirection: "row", alignItems: "center" },
