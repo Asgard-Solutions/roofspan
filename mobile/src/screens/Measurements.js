@@ -1,8 +1,10 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation } from "../sync";
+import { queueMutation, isSyncing, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft } from "../cache";
+import { getCache } from "../storage";
+import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 
@@ -52,6 +54,8 @@ export default function Measurements({ route, navigation }) {
   const [readonly, setReadonly] = useState(false);
   const [usingCached, setUsingCached] = useState(false);
   const [cachedAt, setCachedAt] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null);   // Saved on device / Waiting to sync / Syncing / Synced / Needs review
+  const [conflict, setConflict] = useState(null);       // { serverDetail } when Office changed the same revision
 
   const hydrate = useCallback((full, stale = false, cached = null) => {
     if (!full) return;
@@ -72,6 +76,8 @@ export default function Measurements({ route, navigation }) {
       setExisting({
         id: full.id, if_match: full.updated_at, status: full.status, editable: full.editable,
         source: full.source || "field", revision_number: full.revision_number,
+        provider: full.provider ?? null, report_id: full.report_id ?? null,
+        reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,
       });
       setReadonly(!full.editable);
       setStructures((full.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })));
@@ -90,16 +96,38 @@ export default function Measurements({ route, navigation }) {
     const draft = await loadMeasurementDraft(scope);
     const listResult = await cache.measurements(scope);
     const head = measurementKeys.pickCurrent(listResult.data || []);
+    const pendingCreate = draft ? await currentMeasurementCreate(draft.client_id) : null;
+
     if (head) {
+      // Capture the durable local optimistic detail BEFORE the read-through can overwrite it.
+      let optimistic = null;
+      try { optimistic = await getCache(measurementKeys.detailKey(head.id)); } catch (e) { /* best effort */ }
+      const pu = await currentMeasurementMutation(head.id);
+      const pendingUpdate = pu && (pu.state === "pending" || pu.state === "failed") ? pu : null;
       const detailResult = await cache.measurement(head.id);
-      if (detailResult.data) {
-        hydrate(detailResult.data, listResult.stale || detailResult.stale, detailResult.cachedAt || listResult.cachedAt);
-        if (!listResult.stale && !detailResult.stale) await clearMeasurementDraft(scope);
+
+      const view = resolveMeasurementView({
+        serverDetail: detailResult.data, serverStale: listResult.stale || detailResult.stale,
+        optimistic, draft: (pendingCreate && draft) ? draft : null,
+        pendingUpdate, pendingCreate, isSyncing: isSyncing(),
+      });
+
+      if (view.detail) {
+        // Local work wins → restore it into the cache the read-through just clobbered (durability).
+        if (view.kind === "local_update" || view.kind === "conflict") await cacheMeasurementDetail(view.detail);
+        hydrate(view.detail, view.kind === "server_cached", detailResult.cachedAt || listResult.cachedAt);
+        setSyncStatus(view.status);
+        setConflict(view.conflict ? { serverDetail: view.serverDetail, revisionId: head.id } : null);
+        // Clear the local draft ONLY when the authoritative server copy is showing and nothing is pending.
+        if (view.kind === "server" && !pendingCreate) await clearMeasurementDraft(scope);
         return;
       }
     }
+
     if (draft) {
       hydrate(draft, true, draft.updated_at);
+      setSyncStatus(isSyncing() ? "Syncing" : "Waiting to sync");
+      setConflict(null);
       return;
     }
     setExisting(null);
@@ -112,7 +140,24 @@ export default function Measurements({ route, navigation }) {
     setReadonly(false);
     setUsingCached(!!listResult.stale);
     setCachedAt(listResult.cachedAt || null);
+    setSyncStatus(null);
+    setConflict(null);
   }, [scope, hydrate]);
+
+  const onUseOffice = useCallback(async () => {
+    if (!conflict) return;
+    await discardMeasurementUpdate(conflict.revisionId);
+    if (conflict.serverDetail) await cacheMeasurementDetail(conflict.serverDetail);
+    setConflict(null);
+    await load();
+  }, [conflict, load]);
+
+  const onKeepMine = useCallback(async () => {
+    if (!conflict || !conflict.serverDetail) return;
+    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at);
+    setConflict(null);
+    await load();
+  }, [conflict, load]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -147,6 +192,12 @@ export default function Measurements({ route, navigation }) {
     ...scope,
     source: existing?.source || "field",
     mark_field_complete: !!markComplete,
+    // Preserve system/import metadata the salesperson doesn't edit — omitting it makes the backend
+    // full-document replace ERASE it (rev.provider/report_id/reported_area_sqft/notes = payload value).
+    provider: existing?.provider ?? (localDraft?.body?.provider ?? null),
+    report_id: existing?.report_id ?? (localDraft?.body?.report_id ?? null),
+    reported_area_sqft: existing?.reported_area_sqft ?? (localDraft?.body?.reported_area_sqft ?? null),
+    notes: existing?.notes ?? (localDraft?.body?.notes ?? null),
     structures: structures.map((st, i) => ({
       ref: st.ref, name: st.name || "", structure_type: st.structure_type || "main_house",
       included_in_scope: st.included_in_scope !== false,
@@ -157,6 +208,9 @@ export default function Measurements({ route, navigation }) {
       ref: f.ref, structure_ref: f.structure_ref || null, facet_label: f.facet_label || `F${i + 1}`,
       pitch_rise: numberOrNull(f.pitch_rise), area_sqft: parseFloat(f.area_sqft) || 0,
       width_ft: numberOrNull(f.width_ft), length_ft: numberOrNull(f.length_ft),
+      // Preserve technical values Field never shows (sketch/office/import geometry) — never erase them.
+      orientation_azimuth: f.orientation_azimuth != null ? f.orientation_azimuth : null,
+      geometry: f.geometry != null ? f.geometry : null,
       roof_material: f.roof_material || null, notes: f.notes || null, sort: i,
     })),
     edges: edges.map(edgeToBody),
@@ -205,6 +259,17 @@ export default function Measurements({ route, navigation }) {
       <Text style={s.h}>Roof measurements</Text>
       {existing && <Text style={s.status} testID="meas-status">Revision {existing.revision_number || ""} · {String(existing.status || "draft").replace("_", " ")}{readonly ? " · locked" : ""}</Text>}
       {!existing && localDraft && <Text style={s.status}>Local draft · waiting to sync</Text>}
+      {syncStatus && <View style={[s.syncPill, syncStatus === "Needs review" ? s.syncWarn : (syncStatus === "Synced" ? s.syncOk : s.syncPend)]}><Text style={s.syncPillT} testID="meas-sync-status">{syncStatus}</Text></View>}
+      {conflict && (
+        <View style={s.conflict} testID="meas-conflict-banner">
+          <Text style={s.conflictT}>Measurement changed in Office</Text>
+          <Text style={s.conflictSub}>Your unsynced changes are safe. Choose which version to keep.</Text>
+          <View style={s.rowline}>
+            <TouchableOpacity style={s.conflictBtn} onPress={onKeepMine} testID="meas-keep-mine"><Text style={s.conflictBtnT}>Keep my changes</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.conflictBtn, s.conflictBtnAlt]} onPress={onUseOffice} testID="meas-use-office"><Text style={[s.conflictBtnT, { color: C.brand }]}>Use Office version</Text></TouchableOpacity>
+          </View>
+        </View>
+      )}
       {usingCached && <View style={s.offline}><Text style={s.offlineT}>Offline/cached measurement{cachedAt ? ` · saved ${new Date(cachedAt).toLocaleString()}` : ""}</Text></View>}
 
       <View style={s.totals} testID="meas-totals">
@@ -240,7 +305,7 @@ export default function Measurements({ route, navigation }) {
         ))}
       </Section>
 
-      <Section title="Roof facets" onAdd={!readonly && addFacet} addTestID="meas-add-facet">
+      <Section title="Roof planes" onAdd={!readonly && addFacet} addTestID="meas-add-facet">
         {facets.map((f, i) => (
           <View key={f.ref} style={s.card} testID={`meas-facet-${i}`}>
             <View style={s.rowline}>
@@ -261,7 +326,7 @@ export default function Measurements({ route, navigation }) {
         ))}
       </Section>
 
-      <Section title="Edges (ft / in)" onAdd={!readonly && addEdge} addTestID="meas-add-edge">
+      <Section title="Roof lines (ft / in)" onAdd={!readonly && addEdge} addTestID="meas-add-edge">
         {edges.map((e, i) => (
           <View key={e._k} style={s.card} testID={`meas-edge-${i}`}>
             <View style={s.chips}>{EDGE_TYPES.map(([v, l]) => <Chip key={v} label={l} active={e.edge_type === v} disabled={readonly} onPress={() => setE(i, "edge_type", v)} />)}</View>
@@ -350,6 +415,17 @@ const s = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#F8FAFC", padding: 16 },
   h: { fontSize: 22, fontWeight: "800", color: C.ink },
   status: { color: C.sub, marginTop: 2, marginBottom: 8, textTransform: "capitalize" },
+  syncPill: { alignSelf: "flex-start", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
+  syncPillT: { fontSize: 12, fontWeight: "800" },
+  syncOk: { backgroundColor: "#DCFCE7" },
+  syncPend: { backgroundColor: "#FEF9C3" },
+  syncWarn: { backgroundColor: "#FEE2E2" },
+  conflict: { backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FECACA", borderRadius: 12, padding: 12, marginBottom: 10 },
+  conflictT: { color: "#991B1B", fontWeight: "800", fontSize: 15 },
+  conflictSub: { color: "#7F1D1D", fontSize: 12, marginTop: 2, marginBottom: 8 },
+  conflictBtn: { flex: 1, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 11, alignItems: "center", marginRight: 8 },
+  conflictBtnAlt: { backgroundColor: "#fff", borderWidth: 1, borderColor: C.brand, marginRight: 0 },
+  conflictBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
   offline: { padding: 8, borderRadius: 8, backgroundColor: "#FEF3C7", marginBottom: 10 },
   offlineT: { color: "#92400E", fontWeight: "700", fontSize: 12 },
   totals: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 18, borderWidth: 1, borderColor: C.line },

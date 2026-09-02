@@ -1625,3 +1625,39 @@ test_tile_bad_user_token_propagates_401 returns 404 tile_unavailable instead of 
 upstream isn't configured in the pod (the tile fetch short-circuits before the token-propagation path).
 Map-tile proxy only; unrelated to Roof Sketch and to offline/queue/sync transport (all green).
 STATUS: Plan 1 automated closure PASS — device acceptance PENDING (RN panel + physical device flows).
+
+## MEASUREMENT PERSISTENCE + CROSS-APP PARITY FIX (2026-09) — DONE (Node + live-server verified)
+ROOT CAUSES (both confirmed at source):
+ #1 Disappearing Field measurements: Measurements.js load() calls cache.measurement() (read-through) which
+    putCache-overwrites the local OPTIMISTIC detail with the OLDER server copy, then hydrates that + clears
+    the draft. For an existing revision the unsynced edit lived only in the optimistic cache + a pending
+    measurement_update, so a reload (online) replaced it with stale server data → work "vanished".
+ #2 Cross-app field erasure: backend replace_children sets rev.provider/report_id/reported_area_sqft/notes
+    and facet orientation_azimuth/geometry and edge facet_id_secondary directly from the payload (whole-doc
+    replace). Field's buildBody/edgeToBody OMITTED these → every Field save ERASED them. (Office also omitted
+    provider/report_id/notes.) Backend cannot distinguish omitted-vs-cleared → fix must be client passthrough.
+FIXES (client-side only; no backend/schema/migration change):
+ - mobile/src/measurementReconcile.js (pure) resolveMeasurementView: newest durable LOCAL unsynced work
+   wins over an older/equal server copy; a fresh server whose updated_at != our base ifMatch = explicit
+   CONFLICT (never silent overwrite); stale/offline read never fabricates a conflict; create → local draft.
+ - Measurements.js load() rewritten to capture optimistic BEFORE read-through, consult pending
+   create/update mutations, pick via resolveMeasurementView, restore optimistic to cache when local wins,
+   set truthful status (Saved on device/Waiting to sync/Syncing/Synced/Needs review), and only clear the
+   draft when authoritative server is shown. Conflict banner "Measurement changed in Office" + explicit
+   Keep my changes (rebaseMeasurementUpdate → new If-Match) / Use Office version (discardMeasurementUpdate).
+ - buildBody passthrough: provider/report_id/reported_area_sqft/notes (rev) + orientation_azimuth/geometry
+   (facet). edgeForEdit/edgeToBody now carry facet_ref_secondary (both plane associations). Section labels
+   → "Roof planes" / "Roof lines (ft / in)".
+ - sync.js: currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate.
+ - frontend MeasurementWorksheet.jsx buildPayload: also pass through provider/report_id/notes (Office had
+   orientation/geometry/secondary/reported_area_sqft already).
+TESTS: mobile measurement_persistence.node.test.js 9/9; edge_identity 4; measurement_cache; full sketch
+suite + Phase C 12 + B3A-D still green; reconcile 15. Backend (live localhost:8001 + Postgres): sketch
+service/api/concurrency/clone/survival + measurements_lifecycle + sketch_api_live + measurements_pytest +
+NEW test_measurement_cross_app_parity = 17 passed; takeoff 11; photos ALL PASSED. Office production build
+SUCCESS; Field Expo Android export SUCCESS (jsc temp reverted, no app.json drift). Alembic single head
+e0f1a2b3c4d5 (unchanged).
+DEVICE-ONLY validation still required: enter/save on device, background+restart persistence, older-server
+does-not-overwrite, reconnect sync→Synced, Office-changed→Needs review resolution, full Field↔Office round
+trip. Canonical user-facing fields unchanged (Structure/Roof Planes/Roof Lines/Penetrations/Existing Roof
+& Deck/Ventilation/Access + preserved system fields).

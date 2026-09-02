@@ -130,6 +130,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
   const buildPayload = () => ({
     lead_id: leadId || null, property_id: propertyId || null, inspection_id: inspectionId || null,
     source: rev?.source || "office", reported_area_sqft: num(ed.reported_area_sqft),
+    provider: rev?.provider ?? null, report_id: rev?.report_id ?? null, notes: rev?.notes ?? null,
     structures: ed.structures.map((row, i) => ({
       ref: row.ref, name: row.name || "", structure_type: row.structure_type || "main_house",
       included_in_scope: row.included_in_scope !== false, stories: num(row.stories), approx_height_ft: num(row.approx_height_ft),

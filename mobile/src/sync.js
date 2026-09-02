@@ -290,6 +290,37 @@ export async function resolveSketchConflictKeepLocal(revisionId, structureId) {
   return decision;
 }
 
+// The pending measurement CREATE mutation for a new (not-yet-acked) revision, matched by its draft
+// client_id (or null). Lets the Field screen keep showing the local draft until Office acknowledges it.
+export async function currentMeasurementCreate(clientId) {
+  if (!clientId) return null;
+  const all = await loadAllMutations();
+  return all.find((x) => x.client_id === clientId && x.kind === "measurement") || null;
+}
+
+// Measurement conflict resolution — USE OFFICE: drop the salesperson's pending measurement_update and
+// its optimistic detail so the authoritative Office revision becomes the working copy. Explicit only.
+export async function discardMeasurementUpdate(revisionId) {
+  const id = `measurement-update:${String(revisionId)}`;
+  await _removeMutation(id);
+  _emit({ type: "queued" });
+  return { action: "use_office" };
+}
+
+// Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer
+// Office version (adopt its updated_at as If-Match) so the local values re-attempt cleanly. Never reports
+// Synced until Office acknowledges; sync is re-triggered only after the durable rebase.
+export async function rebaseMeasurementUpdate(revisionId, newIfMatch) {
+  const id = `measurement-update:${String(revisionId)}`;
+  const all = await loadAllMutations();
+  const m = all.find((x) => x.client_id === id);
+  if (!m) return { action: "noop" };
+  await saveMutation({ ...m, ifMatch: newIfMatch, state: "pending", error: null });
+  _emit({ type: "queued" });
+  runSync().catch(() => {});
+  return { action: "keep_local" };
+}
+
 // Recovery control: remove a single failed mutation (e.g. a photo whose local file is gone). Only the
 // selected item is removed; all other offline work is preserved. Then refresh listeners.
 export async function removeMutation(client_id) {
