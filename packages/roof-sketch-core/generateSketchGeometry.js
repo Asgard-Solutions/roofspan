@@ -44,8 +44,35 @@ const bySortThenId = (a, b) => {
 };
 const SIMPLE_EDGE_TYPES = new Set(["eave", "rake", "ridge"]);
 
+const _INSUFFICIENT_CODES = new Set(["missing_structure", "no_roof_planes", "missing_pitch", "missing_area", "insufficient_dimensions"]);
+function _classifyReadiness(diagnostics) {
+  const errs = diagnostics.filter((d) => d.severity === "error");
+  if (errs.length > 0 && errs.every((d) => _INSUFFICIENT_CODES.has(d.code))) return "insufficient_information";
+  return "needs_review";
+}
+function _allPlaneIds(base) { return base.constraints.planes.map((p) => String(p.measurement_facet_id)); }
+
+// Material-ambiguity records that name the ACTUAL measurement Roof Plane(s) + Roof Line involved.
+function _ambiguityRecords(base, planeIds) {
+  const labelBy = {}; base.constraints.planes.forEach((p) => { labelBy[String(p.measurement_facet_id)] = p.label || String(p.measurement_facet_id); });
+  const set = planeIds ? new Set(planeIds.map(String)) : null;
+  const out = [];
+  base.constraints.adjacency.forEach((a) => {
+    const [p0, p1] = a.facets.map(String);
+    if (set && !(set.has(p0) && set.has(p1))) return;
+    const t = a.edge_type;
+    if (t === "valley" || t === "dead_valley" || t === "hip") {
+      const title = t === "dead_valley" ? "Dead Valley" : t.charAt(0).toUpperCase() + t.slice(1);
+      out.push({ code: "plane_side_ambiguous", plane: p1, related_plane: p0, via_edge: String(a.measurement_edge_id), via_type: t,
+        message: `${labelBy[p1] || p1} placement needs review — measurements establish a ${title} with ${labelBy[p0] || p0} but do not uniquely establish which side of ${labelBy[p0] || p0}.` });
+    }
+  });
+  return out;
+}
+
 // A needs-review result keeps the foundation's no-XY candidate + adds the blocking diagnostics.
-function _needsReview(base, diags, graph) {
+function _needsReview(base, diags, graph, opts) {
+  opts = opts || {};
   const diagnostics = base.diagnostics
     .filter((d) => d.code !== "geometry_deferred" && d.code !== "geometry_deferred_complex")
     .concat(diags);
@@ -55,8 +82,15 @@ function _needsReview(base, diags, graph) {
     status: "needs_review",
     confidence: "none",
     geometry_status: "needs_review",
+    readiness: opts.readiness || _classifyReadiness(diagnostics),
+    partial: false,
+    document: base.document,
     diagnostics,
     unresolved: diagnostics.filter((d) => d.severity === "error"),
+    resolved_planes: [],
+    unresolved_planes: opts.unresolvedPlanes || _allPlaneIds(base),
+    unresolved_lines: opts.unresolvedLines || [],
+    ambiguities: opts.ambiguities || [],
     ...(graph ? { graph } : {}),
   };
 }
@@ -71,11 +105,79 @@ function _success(base, doc, mappings, extraDiags, graph) {
     status: "generated",
     confidence: "high",
     geometry_status: "generated",
+    readiness: "high_confidence",
+    partial: false,
     document: doc,
     mappings,
     diagnostics,
     unresolved: [],
+    resolved_planes: doc.facets.map((f) => f.measurement_facet_id),
+    unresolved_planes: [],
+    unresolved_lines: [],
+    ambiguities: [],
     ...(graph ? { graph } : {}),
+  };
+}
+
+// A PARTIAL proposal: a safe connected section is drawn; the rest is explicitly unresolved.
+function _partial(base, doc, opts) {
+  opts = opts || {};
+  const v = validateSketch(doc);
+  if (!v.valid) {
+    return _needsReview(base, [{ severity: "error", code: "generated_geometry_invalid", target_type: "structure", target_id: base.structure_id,
+      message: "Generated partial geometry failed canonical validation." }], opts.graph);
+  }
+  const diagnostics = base.diagnostics
+    .filter((d) => d.code !== "geometry_deferred" && d.code !== "geometry_deferred_complex")
+    .concat(opts.extraDiags || []);
+  const mappings = {
+    facets: doc.facets.map((f) => ({ sketch_facet_id: f.id, measurement_facet_id: f.measurement_facet_id })),
+    edges: doc.edges.filter((e) => e.measurement_edge_id != null).map((e) => ({ sketch_edge_id: e.id, measurement_edge_id: e.measurement_edge_id })),
+    penetrations: (doc.penetrations || []).map((p) => ({ sketch_penetration_id: p.id, measurement_penetration_id: p.measurement_penetration_id, position_known: false })),
+  };
+  return {
+    ...base,
+    ok: false,
+    status: "needs_review",
+    confidence: "partial",
+    geometry_status: "partial",
+    readiness: "needs_review",
+    partial: true,
+    document: doc,
+    mappings,
+    diagnostics,
+    unresolved: diagnostics.filter((d) => d.severity === "error"),
+    resolved_planes: opts.resolvedPlanes || doc.facets.map((f) => f.measurement_facet_id),
+    unresolved_planes: opts.unresolvedPlanes || [],
+    unresolved_lines: opts.unresolvedLines || [],
+    ambiguities: opts.ambiguities || [],
+    ...(opts.graph ? { graph: opts.graph } : {}),
+  };
+}
+
+// Connected components of the plane adjacency graph (shared roof lines only). Deterministic order.
+function _components(base) {
+  const nodes = _allPlaneIds(base);
+  const idset = new Set(nodes);
+  const parent = {}; nodes.forEach((nd) => { parent[nd] = nd; });
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { parent[find(a)] = find(b); };
+  base.constraints.adjacency.forEach((a) => { const [x, y] = a.facets.map(String); if (idset.has(x) && idset.has(y)) union(x, y); });
+  const groups = {};
+  nodes.forEach((nd) => { const r = find(nd); (groups[r] = groups[r] || []).push(nd); });
+  const comps = Object.values(groups).map((g) => g.slice().sort());
+  comps.sort((a, b) => (b.length - a.length) || (a[0] < b[0] ? -1 : 1));
+  return comps;
+}
+
+// Sub-input for one component (relational scoping only).
+function _subInput(input, compSet) {
+  const inSet = (id) => id != null && compSet.has(String(id));
+  return {
+    structure: input.structure,
+    facets: (input.facets || []).filter((f) => inSet(f && f.id)),
+    edges: (input.edges || []).filter((e) => e && (inSet(e.facet_id) || inSet(e.facet_id_secondary))),
+    penetrations: (input.penetrations || []).filter((p) => p && inSet(p.facet_id)),
   };
 }
 
@@ -458,25 +560,62 @@ function _layoutStandardHip(base, edgesIn, ctx) {
   return _finalize(base, doc, graph);
 }
 
-function _layoutConnected(base, facetsIn, edgesIn) {
+function _layoutConnected(base, facetsIn, edgesIn, input) {
   const graph = _adjacencyGraph(base);
   const contradiction = _contradictoryAdjacency(base, edgesIn);
   if (contradiction) return _needsReview(base, [contradiction], graph);
-  if (graph.node_count > 1 && graph.components > 1) {
-    return _needsReview(base, [{ severity: "error", code: "disconnected_planes", target_type: "structure", target_id: base.structure_id,
-      message: "Roof planes are not all connected by shared roof lines; a connected layout is not established." }], graph);
+
+  const comps = _components(base);
+  if (comps.length === 1) {
+    const hip = _tryStandardHip(base, edgesIn);
+    if (hip.result) return hip.result;
+    return _needsReview(base, [{ severity: "error", code: "unresolved_complex_topology", target_type: "structure", target_id: base.structure_id,
+      message: "This connected roof permits more than one valid arrangement; it is deferred to the next phase." }], graph,
+      { ambiguities: _ambiguityRecords(base, comps[0]), unresolvedPlanes: comps[0], unresolvedLines: graph.shared_edges.map((e) => e.measurement_edge_id) });
   }
-  const hip = _tryStandardHip(base, edgesIn);
-  if (hip.result) return hip.result;
+
+  // Multiple sections: attempt each independently (partial-proposal support).
+  const results = comps.map((comp) => ({ comp, sub: generateSketchGeometry(_subInput(input, new Set(comp))) }));
+  const solved = results.filter((r) => r.sub.ok);
+  const unsolved = results.filter((r) => !r.sub.ok);
+
+  if (solved.length > 0 && unsolved.length > 0) {
+    const drawn = solved[0]; // comps sorted (-size, min-id); solved preserves that order
+    const doc = drawn.sub.document;
+    doc.generated = base.document.generated; // whole-structure provenance/fingerprint
+    const unresolvedPlanes = results.filter((r) => r !== drawn).flatMap((r) => r.comp);
+    const ambiguities = [];
+    unsolved.forEach((r) => {
+      const recs = _ambiguityRecords(base, r.comp);
+      if (recs.length) ambiguities.push(...recs);
+      else ambiguities.push({ code: "section_unresolved", planes: r.comp, message: `Roof section (${r.comp.join(", ")}) could not be uniquely reconstructed and remains unresolved.` });
+    });
+    solved.slice(1).forEach((r) => ambiguities.push({ code: "relative_placement_unknown", planes: r.comp, message: `A separate solvable roof section (${r.comp.join(", ")}) is not linked to the drawn section by a shared roof line; its relative placement is not established.` }));
+    const drawnSet = new Set(drawn.comp.map(String));
+    const unresolvedLines = edgesIn.filter((e) => !(drawnSet.has(String(e.facet_id)) || drawnSet.has(String(e.facet_id_secondary)))).map((e) => String(e.id));
+    return _partial(base, doc, { graph, resolvedPlanes: drawn.comp.slice(), unresolvedPlanes, unresolvedLines, ambiguities,
+      extraDiags: [{ severity: "info", code: "partial_proposal", target_type: "structure", target_id: base.structure_id,
+        message: "Only part of this roof could be uniquely reconstructed; the rest is left explicitly unresolved." }] });
+  }
+
+  if (solved.length > 1) {
+    // Every section is solvable but they are not linked — never force an assembly.
+    const ambiguities = solved.map((r) => ({ code: "relative_placement_unknown", planes: r.comp, message: `Roof section (${r.comp.join(", ")}) is solvable but not linked to the others by a shared roof line; relative placement is not established.` }));
+    return _needsReview(base, [{ severity: "error", code: "disconnected_planes", target_type: "structure", target_id: base.structure_id,
+      message: "Roof planes form multiple sections not linked by shared roof lines; their relative placement is not established." }], graph, { ambiguities });
+  }
+
+  const ambiguities = comps.flatMap((c) => _ambiguityRecords(base, c));
   return _needsReview(base, [{ severity: "error", code: "unresolved_complex_topology", target_type: "structure", target_id: base.structure_id,
-    message: "This connected roof permits multiple materially different arrangements; it is deferred to the next phase." }], graph);
+    message: "This roof could not be uniquely reconstructed from the measurements." }], graph, { ambiguities });
 }
 
 // Public entry: constraint foundation + deterministic geometry for the two supported roof types.
 function generateSketchGeometry(input) {
   const base = generateProposedSketch(input);
   if (base.status !== "generated") {
-    return { ...base, geometry_status: "not_attempted" };
+    return { ...base, geometry_status: "not_attempted", readiness: _classifyReadiness(base.diagnostics), partial: false,
+      resolved_planes: [], unresolved_planes: _allPlaneIds(base), unresolved_lines: [], ambiguities: [] };
   }
   const facetsIn = (Array.isArray(input && input.facets) ? input.facets : [])
     .filter((f) => f && f.id != null && (base.structure_id == null || String(f.structure_id) === String(base.structure_id)))
@@ -486,7 +625,7 @@ function generateSketchGeometry(input) {
   if (base.archetype === "single_plane") return _layoutSinglePlane(base, facetsIn, edgesIn);
   if (base.archetype === "symmetric_gable") return _layoutGable(base, facetsIn, edgesIn);
   // >2 planes / connected multi-plane: build the adjacency graph and solve only when uniquely determined.
-  return _layoutConnected(base, facetsIn, edgesIn);
+  return _layoutConnected(base, facetsIn, edgesIn, input);
 }
 
 module.exports = { generateSketchGeometry, LEN_TOL };

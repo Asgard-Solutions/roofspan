@@ -37,8 +37,24 @@ const bySortThenId = (a, b) => {
   return String((a && a.id) ?? "").localeCompare(String((b && b.id) ?? ""));
 };
 
+// Deterministic FNV-1a hash (32-bit hex) — no randomness, so a proposal can later detect whether the
+// Measurements it was built from have changed.
+function _hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return ("00000000" + (h >>> 0).toString(16)).slice(-8);
+}
+function _fingerprint(inp) {
+  const s = (v) => (v == null ? null : String(v));
+  const facets = (Array.isArray(inp.facets) ? inp.facets : []).map((f) => [s(f.id), s(f.structure_id), f.pitch_rise, f.area_sqft, f.width_ft, f.length_ft, f.orientation_azimuth]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+  const edges = (Array.isArray(inp.edges) ? inp.edges : []).map((e) => [s(e.id), e.edge_type, e.length_ft, s(e.facet_id), s(e.facet_id_secondary)]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+  const pens = (Array.isArray(inp.penetrations) ? inp.penetrations : []).map((p) => [s(p.id), p.pen_type, p.quantity, s(p.facet_id)]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+  return _hash(JSON.stringify({ st: inp.structure && inp.structure.id != null ? String(inp.structure.id) : null, facets, edges, pens }));
+}
+
 function generateProposedSketch(input) {
   const inp = input || {};
+  const source_fingerprint = _fingerprint(inp);
   const structure = inp.structure || null;
   const facetsIn = Array.isArray(inp.facets) ? inp.facets : [];
   const edgesIn = Array.isArray(inp.edges) ? inp.edges : [];
@@ -240,7 +256,7 @@ function generateProposedSketch(input) {
   }
 
   // Provenance so a later persistence layer can enforce "never overwrite an existing sketch".
-  doc.generated = { source: "measurements", structure_id: structureId, generator_version: GENERATOR_VERSION };
+  doc.generated = { source: "measurements", structure_id: structureId, generator_version: GENERATOR_VERSION, source_fingerprint };
 
   // ---- ARCHETYPE (high-level only; NO geometry laid out this phase) ---------------------------
   let archetype = "unknown";
@@ -290,6 +306,7 @@ function generateProposedSketch(input) {
     archetype,
     generator_version: GENERATOR_VERSION,
     structure_id: structureId,
+    source_fingerprint,
     document: doc,
     constraints: {
       structure_id: structureId,
