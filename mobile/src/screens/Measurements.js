@@ -68,13 +68,19 @@ export default function Measurements({ route, navigation }) {
   );
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
-    if (readonly) return;
-    await saveMeasurementWorkingDraft(scope, {
+    if (readonly) return true;
+    return await saveMeasurementWorkingDraft(scope, {
       working: true, base: existing ? { ...existing } : null,
       local_client_id: localDraft ? localDraft.client_id : null,
       structures, facets, edges, pens, summary, updated_at: new Date().toISOString(),
     });
   }, [scope, readonly, existing, localDraft, structures, facets, edges, pens, summary]);
+
+  // Always-latest flush closure; runs on unmount (navigate away / tap Back) so entries never depend on
+  // the 700 ms timer having elapsed.
+  const flushRef = useRef(() => {});
+  flushRef.current = () => { if (!readonly && formJson() !== baselineRef.current) persistWorking(); };
+  useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); flushRef.current(); }, []);
 
   const hydrateWorking = useCallback((wd) => {
     captureBaseline.current = true;
@@ -193,15 +199,22 @@ export default function Measurements({ route, navigation }) {
     if (readonly) return;
     const cur = formJson();
     if (captureBaseline.current) { baselineRef.current = cur; captureBaseline.current = false; return; }
-    if (cur === baselineRef.current) return;   // no real change since last hydrate/save
+    if (cur === baselineRef.current) {
+      // All edits reverted to the authoritative baseline — clear any stale working draft so an older
+      // autosaved value can never resurrect after a restart.
+      if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+      clearMeasurementWorkingDraft(scope);
+      return;
+    }
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(() => {
+    autosaveTimer.current = setTimeout(async () => {
       autosaveTimer.current = null;
-      persistWorking();
-      setSyncStatus((s) => (s === "Waiting to sync" || s === "Syncing" || s === "Needs review") ? s : "Saved on device");
+      const okSave = await persistWorking();
+      // Only claim "Saved on device" after the durable local write actually succeeded.
+      setSyncStatus((s) => (s === "Waiting to sync" || s === "Syncing" || s === "Needs review") ? s : (okSave ? "Saved on device" : "Local save failed — retry"));
     }, 700);
     return () => {};
-  }, [structures, facets, edges, pens, summary, readonly, formJson, persistWorking]);
+  }, [structures, facets, edges, pens, summary, readonly, formJson, persistWorking, scope]);
 
   // Flush the working draft immediately when RoofSpan backgrounds so nothing in-flight is lost.
   useEffect(() => {
@@ -302,6 +315,9 @@ export default function Measurements({ route, navigation }) {
       const optimistic = {
         id: existing.id, updated_at: existing.if_match, status: markComplete ? "field_complete" : existing.status,
         editable: true, source: existing.source, revision_number: existing.revision_number,
+        // Carry ALL preserved revision metadata so a second save-before-sync (which reads this optimistic
+        // copy back through hydrate) never turns hidden/system values into null.
+        provider: body.provider, report_id: body.report_id, reported_area_sqft: body.reported_area_sqft, notes: body.notes,
         structures: body.structures, facets: body.facets, edges: body.edges, penetrations: body.penetrations, summary: body.summary,
       };
       await cacheMeasurementDetail(optimistic);
@@ -428,7 +444,7 @@ export default function Measurements({ route, navigation }) {
               </View>
             </View>
             {(parseInt(p.quantity) || 0) > 0 && <>
-              {!!facets.length && <View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Facet"} active={p.facet_ref === f.ref} disabled={readonly} onPress={() => setP(i, "facet_ref", f.ref)} />)}</View>}
+              {!!facets.length && <><Text style={s.small}>Roof plane</Text><View style={s.chips}>{facets.map((f) => <Chip key={f.ref} label={f.facet_label || "Plane"} active={p.facet_ref === f.ref} disabled={readonly} onPress={() => setP(i, "facet_ref", f.ref)} />)}</View></>}
               <View style={s.rowline}>
                 <TextInput style={[s.input, { flex: 1 }]} keyboardType="numeric" placeholder="Diameter in" value={p.diameter_in != null ? String(p.diameter_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "diameter_in", v)} />
                 <TextInput style={[s.input, { flex: 1, marginLeft: 6 }]} keyboardType="numeric" placeholder="Width in" value={p.width_in != null ? String(p.width_in) : ""} editable={!readonly} onChangeText={(v) => setP(i, "width_in", v)} />

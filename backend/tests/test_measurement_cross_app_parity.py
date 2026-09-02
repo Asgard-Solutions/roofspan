@@ -160,7 +160,49 @@ def test_office_stale_cannot_silently_overwrite_newer():
     assert after["facets"][0]["area_sqft"] == 222, "the newer value must survive; stale Office save was refused"
 
 
+def test_two_field_saves_before_sync_preserve_hidden_metadata():
+    """Second Field save (before the first syncs) must not null preserved metadata. Simulates the mobile
+    optimistic-then-resave path: build the 2nd update from the OPTIMISTIC copy of the 1st save."""
+    h = {"Authorization": f"Bearer {_tok()}"}
+    props = requests.get(f"{API}/api/properties", params={"limit": 1}, headers=h, timeout=30).json()
+    pid = props[0]["id"]
+    tagn = uuid.uuid4().hex[:6]
+    r = requests.post(f"{API}/api/mobile/measurements", headers=h, json={"property_id": pid, "source": "field",
+        "provider": "eagleview", "report_id": f"R-{tagn}", "reported_area_sqft": 2000.0, "notes": f"n{tagn}",
+        "structures": [{"ref": "s1", "name": "Main House", "structure_type": "main_house"}],
+        "facets": [{"ref": "f1", "structure_ref": "s1", "facet_label": "F1", "area_sqft": 100, "orientation_azimuth": 45.0, "geometry": {"p": [[0, 0]]}}],
+        "edges": [{"ref": "e1", "edge_type": "valley", "length_ft": 10, "facet_ref": "f1", "facet_ref_secondary": "f1", "label": "V"}],
+        "penetrations": [], "summary": {"deck_type": "OSB", "gutter_lf": 50}}, timeout=30)
+    rid = r.json()["id"]
+    full = requests.get(f"{API}/api/mobile/measurements/{rid}", headers=h, timeout=30).json()
+
+    # Save #1: change facet area to 111 (whole-document passthrough), build the OPTIMISTIC copy (body shape).
+    upd1 = _passthrough_update(full, lambda b: b["facets"][0].__setitem__("area_sqft", 111))
+    # optimistic that the mobile screen caches: body collections + carried metadata (the fix)
+    optimistic = {"id": rid, "updated_at": full["updated_at"], "source": "field",
+                  "provider": upd1["provider"], "report_id": upd1["report_id"],
+                  "reported_area_sqft": upd1["reported_area_sqft"], "notes": upd1["notes"],
+                  "structures": [{**s, "id": s["ref"], "structure_id": s.get("structure_ref")} for s in upd1["structures"]],
+                  "facets": [{**f, "id": f["ref"], "structure_id": f.get("structure_ref")} for f in upd1["facets"]],
+                  "edges": [{**e, "id": e["ref"], "facet_id": e.get("facet_ref"), "facet_id_secondary": e.get("facet_ref_secondary")} for e in upd1["edges"]],
+                  "penetrations": upd1["penetrations"], "summary": upd1["summary"]}
+    # Save #2 built from the OPTIMISTIC copy (NOT re-fetched) — change edge length; metadata must survive.
+    upd2 = _passthrough_update(optimistic, lambda b: b["edges"][0].__setitem__("length_ft", 20))
+    r2 = requests.put(f"{API}/api/mobile/measurements/{rid}", headers={**h, "If-Match": full["updated_at"]}, json=upd2, timeout=30)
+    assert r2.status_code == 200, (r2.status_code, r2.text)
+    after = requests.get(f"{API}/api/mobile/measurements/{rid}", headers=h, timeout=30).json()
+    assert after["provider"] == "eagleview", "provider survived 2nd save from optimistic"
+    assert after["report_id"] == f"R-{tagn}" and after["reported_area_sqft"] == 2000.0 and after["notes"] == f"n{tagn}"
+    af1 = after["facets"][0]
+    assert af1["orientation_azimuth"] == 45.0 and af1["geometry"] is not None, "facet technical values survived"
+    assert af1["area_sqft"] == 111, "1st save's facet change survived"
+    assert after["edges"][0]["length_ft"] == 20, "2nd save's edge change applied"
+    assert after["edges"][0]["facet_id_secondary"] is not None, "secondary plane survived"
+    assert after["summary"]["gutter_lf"] == 50
+
+
 if __name__ == "__main__":
     test_cross_app_no_erasure_round_trip()
     test_office_stale_cannot_silently_overwrite_newer()
-    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE + OFFICE-STALE-GUARD: PASS")
+    test_two_field_saves_before_sync_preserve_hidden_metadata()
+    print("CROSS-APP MEASUREMENT PARITY / NO-ERASURE + OFFICE-STALE + TWO-SAVES-METADATA: PASS")

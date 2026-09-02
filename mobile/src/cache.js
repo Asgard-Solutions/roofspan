@@ -92,7 +92,7 @@ export async function clearMeasurementDraft(scope) {
 // backgrounding/restart BEFORE Save is pressed. Keyed per scope. Cleared once Save stages the mutation.
 function workingKey(scope) { return `measurement_working:${measurementKeys.scopeKey(scope)}`; }
 export async function saveMeasurementWorkingDraft(scope, wd) {
-  try { await putCache(workingKey(scope), wd); } catch (e) { /* best effort */ }
+  try { await putCacheSerialized(workingKey(scope), wd); return true; } catch (e) { return false; }
 }
 export async function loadMeasurementWorkingDraft(scope) {
   try { return await getCache(workingKey(scope)); } catch (e) { return null; }
