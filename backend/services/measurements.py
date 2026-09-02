@@ -27,6 +27,37 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _parse_token_dt(value):
+    """Normalize an optimistic-concurrency token (datetime or ISO string) to an aware-UTC datetime.
+    Tolerant to the 'Z' suffix (Pydantic response) vs '+00:00' (isoformat) drift and naive datetimes."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def token_conflict(current, if_match) -> bool:
+    """True when the caller's If-Match token does NOT match the current server token (a real conflict).
+    An absent If-Match or absent server token is treated as no conflict (backward compatible)."""
+    if not if_match or current is None:
+        return False
+    incoming = _parse_token_dt(if_match)
+    cur = _parse_token_dt(current)
+    if incoming is None or cur is None:
+        # Unparseable — fall back to a raw string compare against the canonical isoformat.
+        cur_s = current.isoformat() if hasattr(current, "isoformat") else str(current)
+        return str(if_match) != cur_s
+    return incoming != cur
+
+
 def is_editable(rev: MeasurementRevision) -> bool:
     return (rev.status in ("draft", "field_complete")) and not rev.is_immutable
 

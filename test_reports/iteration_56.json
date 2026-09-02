@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend retest of MeasurementWorksheet stale-conflict handling after the backend token_conflict tolerant-compare fix. All primary UI behaviors PASS: (1) Normal single-actor Office save succeeds with 'Measurement saved' toast and NO measurement-needs-review banner; consecutive saves also succeed. (2) Reported Area SF summary-only edit saves without spurious conflict. (3) Genuine concurrent-change scenario: Office save with a stale If-Match returns 409, worksheet shows the Needs Review banner, Save is disabled; 'Use Latest Version' adopts server copy and clears the banner; in a fresh conflict, 'Keep My Version' -> confirm force-saves over and clears the banner (verified with 'Your version saved over the newer copy' toast and server-side name persistence).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Backend routers/measurements.py PUT correctly uses svc.token_conflict tolerant compare (verified in isolation: '...Z' vs '...+00:00' resolve equal). Also verified curl PUT with '+00:00' If-Match against a '...Z' server value returns 200.",
+    "Frontend MeasurementWorksheet keepMyVersion uses the fresh server.updated_at from the 409 response as If-Match, and rebases user edits onto the newer server system fields (provider/report_id/notes). Save is properly gated by needsReview and only cleared after a successful save or Use Latest.",
+    "Note (test-authoring gotcha, not an app bug): To force a genuine conflict with 'change a field' via PUT, the test payload MUST include structures/facets/edges/penetrations with `ref` = current server ids (as the frontend does in buildPayload). If you send raw GET output (which carries `id` fields but no `ref`), the server treats each item as a new insert and DELETEs the old rows, which then makes the UI's local refs stale so any subsequent Keep My Version returns a legitimate 409 (with the DIFFERENT '_stale_reference' 409 message, not the token-conflict message). This confused the initial run; the fix in the test harness was to build a proper payload with `ref: existing.id`. Once the test PUT preserved refs (as any real Field-app save would), Keep My Version worked end-to-end."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only retest)", "frontend": "100%"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (Owner) — from problem statement.",
+  "seed_data_creation": "Reused existing lead f46c468d-8085-4672-b8ad-dd7a44e21d37 (Refresh Flow Lead) and its existing measurement draft 626396e3-1cd6-42f4-955e-46f18b1167f2. No new seed data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend token_conflict tolerant compare is verified working both via unit-style Python call and via curl PUTs against production URL. Frontend needsReview + Use Latest + Keep My Version all functional. If future testing wants to reproduce a 'behind-back' PUT, build the payload from the GET response by mapping each structure/facet/edge/penetration id -> ref (preserving structure_id -> structure_ref, facet_id -> facet_ref, etc.). Do NOT PUT raw GET output — you will inadvertently trigger the stale-reference 409 (different code path).",
+  "rca of the issue": "N/A — no bug found in this retest. All Office worksheet save paths behave correctly with the tolerant token compare in place."
+}

@@ -72,8 +72,8 @@ async def replace_revision(revision_id: str, payload: MeasurementRevisionIn, req
     rev = await _get_rev_or_404(db, revision_id)
     # Optimistic concurrency: if the caller's base version differs from the current server version, another
     # surface (e.g. a synced Field save) already advanced this revision — refuse to silently overwrite it.
-    token = rev.updated_at.isoformat() if rev.updated_at else None
-    if if_match and token and if_match != token:
+    # Tolerant compare: the response serializes updated_at as '...Z' while isoformat() yields '...+00:00'.
+    if svc.token_conflict(rev.updated_at, if_match):
         out = await svc.build_out(db, rev)
         raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": jsonable_encoder(out)})
     await svc.replace_children(db, rev, payload)

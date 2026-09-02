@@ -11,6 +11,7 @@ import PhotoSection from "../components/PhotoSection";
 const measurementKeys = require("../measurementCache");
 const queueCore = require("../queue");
 const { edgeForEdit, newEdge, edgeToBody } = require("../measurementEdges");
+const { createMeasurementWorkingDraftStore } = require("../measurementWorkingDraft");
 
 const STRUCTURE_TYPES = [
   ["main_house", "Main"], ["attached_garage", "Att. Garage"], ["detached_garage", "Det. Garage"],
@@ -59,7 +60,14 @@ export default function Measurements({ route, navigation }) {
   const [showGutters, setShowGutters] = useState(false);
 
   const autosaveTimer = useRef(null);
-  const savedGuard = useRef(false);        // #13: set at Save so a late autosave can't resurrect a stale draft
+  // #13/#2: serialized working-draft store with a Save seal — a late/in-flight autosave can never
+  // resurrect the working draft once Save has staged the mutation and cleared the draft.
+  const wdStore = useMemo(() => createMeasurementWorkingDraftStore({
+    put: (v) => saveMeasurementWorkingDraft(scope, v),
+    clear: () => clearMeasurementWorkingDraft(scope),
+  }), [scope]);
+  const wdStoreRef = useRef(wdStore);
+  wdStoreRef.current = wdStore;
   const baselineRef = useRef("");          // JSON of the last hydrated form — autosave only fires on real edits
   const captureBaseline = useRef(false);   // set on hydrate so the first effect pass captures, never persists
 
@@ -69,8 +77,8 @@ export default function Measurements({ route, navigation }) {
   );
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
-    if (readonly || savedGuard.current) return true;   // #13: never re-create a working draft after Save
-    return await saveMeasurementWorkingDraft(scope, {
+    if (readonly) return true;
+    return await wdStoreRef.current.persist({
       working: true, base: existing ? { ...existing } : null,
       local_client_id: localDraft ? localDraft.client_id : null,
       structures, facets, edges, pens, summary, updated_at: new Date().toISOString(),
@@ -204,7 +212,7 @@ export default function Measurements({ route, navigation }) {
       // All edits reverted to the authoritative baseline — clear any stale working draft so an older
       // autosaved value can never resurrect after a restart.
       if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
-      clearMeasurementWorkingDraft(scope);
+      wdStoreRef.current.clearUnsealed();
       return;
     }
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
@@ -338,8 +346,8 @@ export default function Measurements({ route, navigation }) {
       });
     }
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
-    savedGuard.current = true;   // #13: block any in-flight/late autosave from recreating the working draft
-    await clearMeasurementWorkingDraft(scope);
+    // #13/#2: seal FIRST so any concurrent/late autosave is a no-op, then clear the working draft.
+    await wdStoreRef.current.sealAndClear();
     baselineRef.current = formJson();
     Alert.alert("Saved", markComplete ? "Measurement marked Field Complete and queued to sync." : "Measurement saved and queued to sync.");
     navigation.goBack();
