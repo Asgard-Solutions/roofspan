@@ -396,66 +396,66 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
 
       <TableCard title="Structures" onAdd={editable ? () => addRow("structures", { ref: uid(), name: "", structure_type: "main_house", included_in_scope: true }) : null} testid="structures">
         {ed.structures.map((row, i) => <div key={row.ref || i} className="rounded border border-slate-100 p-2" data-testid={`structure-row-${i}`}>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input className="w-40" placeholder="Name" value={row.name || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "name", e.target.value)} />
-            <Select value={row.structure_type} disabled={!editable} onValueChange={(v) => setRow("structures", i, "structure_type", v)}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent>{STRUCTURE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-            <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={row.included_in_scope !== false} disabled={!editable} onChange={(e) => setRow("structures", i, "included_in_scope", e.target.checked)} />Include in estimate</label>
-            <Input className="w-24" type="number" placeholder="Stories" value={row.stories ?? ""} disabled={!editable} onChange={(e) => setRow("structures", i, "stories", e.target.value)} />
-            <Input className="w-28" type="number" placeholder="Height ft" value={row.approx_height_ft ?? ""} disabled={!editable} onChange={(e) => setRow("structures", i, "approx_height_ft", e.target.value)} />
-            <Select value={row.attachment || "none"} disabled={!editable} onValueChange={(v) => setRow("structures", i, "attachment", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Attachment" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem><SelectItem value="attached">Attached</SelectItem><SelectItem value="detached">Detached</SelectItem></SelectContent></Select>
-            {editable && <Button size="icon" variant="ghost" onClick={() => delRow("structures", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Name" className="w-40"><Input placeholder="e.g. Main House" value={row.name || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "name", e.target.value)} /></Field>
+            <Field label="Structure Type" className="w-44"><Select value={row.structure_type} disabled={!editable} onValueChange={(v) => setRow("structures", i, "structure_type", v)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{STRUCTURE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+            <label className="flex items-center gap-1 pb-2 text-sm"><input type="checkbox" checked={row.included_in_scope !== false} disabled={!editable} onChange={(e) => setRow("structures", i, "included_in_scope", e.target.checked)} />Include in estimate</label>
+            <Field label="Stories" className="w-24"><Input type="number" value={row.stories ?? ""} disabled={!editable} onChange={(e) => setRow("structures", i, "stories", e.target.value)} /></Field>
+            <Field label="Approx Height (ft)" className="w-28"><Input type="number" value={row.approx_height_ft ?? ""} disabled={!editable} onChange={(e) => setRow("structures", i, "approx_height_ft", e.target.value)} /></Field>
+            <Field label="Attachment" className="w-32"><Select value={row.attachment || "none"} disabled={!editable} onValueChange={(v) => setRow("structures", i, "attachment", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Attachment" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem><SelectItem value="attached">Attached</SelectItem><SelectItem value="detached">Detached</SelectItem></SelectContent></Select></Field>
+            {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("structures", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
           <div className="mt-2 flex items-center gap-2">
             {row.id
               ? <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
               : <span className="text-xs text-slate-400">Save the worksheet to sketch this structure's roof.</span>}
           </div>
-          <Input className="mt-2" placeholder="Structure notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "notes", e.target.value)} />
+          <div className="mt-2"><Field label="Structure Notes"><Input placeholder="Optional" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "notes", e.target.value)} /></Field></div>
         </div>)}
       </TableCard>
 
       <TableCard title="Roof planes" onAdd={editable ? () => addRow("facets", { ref: uid(), facet_label: `F${ed.facets.length + 1}`, pitch_rise: "", area_sqft: "" }) : null} testid="facets">
         {ed.facets.map((row, i) => <div key={row.ref || i} className="rounded border border-slate-100 p-2" data-testid={`facet-block-${i}`}>
-          <div className="grid grid-cols-2 items-center gap-2 lg:grid-cols-[80px_150px_90px_120px_100px_100px_1fr_40px]">
-            <Input placeholder="F1" value={row.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} />
-            <Select value={row.structure_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("facets", i, "structure_ref", v === "none" ? "" : v)}><SelectTrigger><SelectValue placeholder="Structure" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{structOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-            <PitchSelect value={row.pitch_rise} disabled={!editable} onChange={(v) => setRow("facets", i, "pitch_rise", v)} />
-            <Input type="number" placeholder="Area SF" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} />
-            <Input type="number" placeholder="Width ft" value={row.width_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "width_ft", e.target.value)} />
-            <Input type="number" placeholder="Length ft" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "length_ft", e.target.value)} />
-            <Input placeholder="Roof material" value={row.roof_material || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "roof_material", e.target.value)} />
-            {editable && <Button size="icon" variant="ghost" onClick={() => delRow("facets", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Plane" className="w-24"><Input placeholder="F1" value={row.facet_label || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "facet_label", e.target.value)} /></Field>
+            <Field label="Structure" className="w-40"><Select value={row.structure_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("facets", i, "structure_ref", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Structure" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{structOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+            <Field label="Pitch" className="w-28"><PitchSelect value={row.pitch_rise} disabled={!editable} onChange={(v) => setRow("facets", i, "pitch_rise", v)} /></Field>
+            <Field label="Area (SF)" className="w-24"><Input type="number" placeholder="Area SF" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} /></Field>
+            <Field label="Width (ft)" className="w-24"><Input type="number" value={row.width_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "width_ft", e.target.value)} /></Field>
+            <Field label="Length (ft)" className="w-24"><Input type="number" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "length_ft", e.target.value)} /></Field>
+            <Field label="Roof Material" className="min-w-40 flex-1"><Input placeholder="Optional" value={row.roof_material || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "roof_material", e.target.value)} /></Field>
+            {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("facets", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
-          <Input className="mt-2" placeholder="Roof plane notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "notes", e.target.value)} />
+          <div className="mt-2"><Field label="Roof Plane Notes"><Input placeholder="Optional" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "notes", e.target.value)} /></Field></div>
           {row.id && <div className="mt-1"><PhotoGallery compact hideWhenEmpty recordType="measurement_facet" recordId={row.id} /></div>}
         </div>)}
       </TableCard>
 
       <TableCard title="Roof lines" onAdd={editable ? () => addRow("edges", { _k: uid(), ref: uid(), edge_type: "eave", ft: "", in: "", length_ft: "", facet_ref: "", facet_ref_secondary: "" }) : null} testid="edges">
-        {ed.edges.map((row, i) => <div key={row._k || i} className="flex flex-wrap items-center gap-2" data-testid={`edge-row-${i}`}>
-          <Select value={row.edge_type} disabled={!editable} onValueChange={(v) => setRow("edges", i, "edge_type", v)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent>{EDGE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-          <Input className="w-20" type="number" placeholder="ft" value={row.ft ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "ft", e.target.value)} />
-          <Input className="w-20" type="number" placeholder="in" value={row.in ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "in", e.target.value)} />
-          <span className="text-xs font-medium text-slate-500 w-16">{(parseFloat(row.length_ft) || 0).toFixed(1)} LF</span>
-          <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-36"><SelectValue placeholder="Primary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Primary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-          <Select value={row.facet_ref_secondary || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref_secondary", v === "none" ? "" : v)}><SelectTrigger className="w-36"><SelectValue placeholder="Secondary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Secondary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-          <Input className="w-32" placeholder="Label" value={row.label || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "label", e.target.value)} />
-          <Input className="min-w-40 flex-1" placeholder="Notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "notes", e.target.value)} />
-          {editable && <Button size="icon" variant="ghost" onClick={() => delRow("edges", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+        {ed.edges.map((row, i) => <div key={row._k || i} className="flex flex-wrap items-end gap-2" data-testid={`edge-row-${i}`}>
+          <Field label="Type" className="w-36"><Select value={row.edge_type} disabled={!editable} onValueChange={(v) => setRow("edges", i, "edge_type", v)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{EDGE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+          <Field label="Feet" className="w-20"><Input type="number" placeholder="ft" value={row.ft ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "ft", e.target.value)} /></Field>
+          <Field label="Inches" className="w-20"><Input type="number" placeholder="in" value={row.in ?? ""} disabled={!editable} onChange={(e) => setEdgePart(i, "in", e.target.value)} /></Field>
+          <Field label="Total LF" className="w-16"><span className="block pb-2 text-xs font-medium text-slate-500">{(parseFloat(row.length_ft) || 0).toFixed(1)} LF</span></Field>
+          <Field label="Primary Roof Plane" className="w-40"><Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Primary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Primary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+          <Field label="Secondary Roof Plane" className="w-40"><Select value={row.facet_ref_secondary || "none"} disabled={!editable} onValueChange={(v) => setRow("edges", i, "facet_ref_secondary", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Secondary plane" /></SelectTrigger><SelectContent><SelectItem value="none">Secondary plane —</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+          <Field label="Label" className="w-32"><Input value={row.label || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "label", e.target.value)} /></Field>
+          <Field label="Notes" className="min-w-40 flex-1"><Input value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("edges", i, "notes", e.target.value)} /></Field>
+          {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("edges", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
         </div>)}
       </TableCard>
 
       <TableCard title="Penetrations" onAdd={editable ? () => addRow("penetrations", newPenetration()) : null} testid="penetrations">
         {ed.penetrations.map((row, i) => <div key={row._k || i} className="rounded border border-slate-100 p-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={row.pen_type} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "pen_type", v)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent>{PEN_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-            <Input className="w-20" type="number" placeholder="Qty" value={row.quantity ?? 1} disabled={!editable} onChange={(e) => setRow("penetrations", i, "quantity", e.target.value)} />
-            <Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-32"><SelectValue placeholder="Roof plane" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select>
-            <Input className="w-28" type="number" placeholder="Diameter in" value={row.diameter_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "diameter_in", e.target.value)} />
-            <Input className="w-24" type="number" placeholder="Width in" value={row.width_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "width_in", e.target.value)} />
-            <Input className="w-24" type="number" placeholder="Length in" value={row.length_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "length_in", e.target.value)} />
-            <Input className="min-w-44 flex-1" placeholder="Notes" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "notes", e.target.value)} />
-            {editable && <Button size="icon" variant="ghost" onClick={() => delRow("penetrations", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Type" className="w-40"><Select value={row.pen_type} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "pen_type", v)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{PEN_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+            <Field label="Qty" className="w-20"><Input type="number" value={row.quantity ?? 1} disabled={!editable} onChange={(e) => setRow("penetrations", i, "quantity", e.target.value)} /></Field>
+            <Field label="Roof Plane" className="w-36"><Select value={row.facet_ref || "none"} disabled={!editable} onValueChange={(v) => setRow("penetrations", i, "facet_ref", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Roof plane" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem>{facetOptions.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></Field>
+            <Field label="Diameter (in)" className="w-28"><Input type="number" value={row.diameter_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "diameter_in", e.target.value)} /></Field>
+            <Field label="Width (in)" className="w-24"><Input type="number" value={row.width_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "width_in", e.target.value)} /></Field>
+            <Field label="Length (in)" className="w-24"><Input type="number" value={row.length_in ?? ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "length_in", e.target.value)} /></Field>
+            <Field label="Notes" className="min-w-44 flex-1"><Input value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("penetrations", i, "notes", e.target.value)} /></Field>
+            {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("penetrations", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
           {row.id && <div className="mt-1"><PhotoGallery compact hideWhenEmpty recordType="measurement_penetration" recordId={row.id} /></div>}
         </div>)}
@@ -545,7 +545,7 @@ function PitchSelect({ value, disabled, onChange }) {
 function Totm({ label, value, testid }) {
   return <div data-testid={testid}><div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div><div className="text-lg font-bold text-slate-800">{value}</div></div>;
 }
-function Field({ label, children }) { return <div className="space-y-1"><div className="text-[11px] font-medium uppercase text-slate-400">{label}</div>{children}</div>; }
+function Field({ label, children, className }) { return <div className={`space-y-1 ${className || ""}`}><div className="text-[11px] font-medium uppercase text-slate-400">{label}</div>{children}</div>; }
 function TableCard({ title, onAdd, children, testid }) {
   return <div className="rounded-lg border border-border p-3" data-testid={`measurement-${testid}-card`}><div className="mb-2 flex items-center justify-between"><div className="text-sm font-semibold text-slate-700">{title}</div>{onAdd && <Button size="sm" variant="outline" onClick={onAdd}><Plus className="mr-1 h-4 w-4" />Add</Button>}</div><div className="space-y-2">{children}</div></div>;
 }
