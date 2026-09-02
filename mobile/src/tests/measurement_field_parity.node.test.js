@@ -52,7 +52,7 @@ ok("both surfaces enter roof lines as ft + in with a calculated LF (Field uses F
 
 // Label and Notes must be SEPARATE roof-line inputs.
 assert.ok(!/row\.label \|\| row\.notes/.test(OFFICE), "Office must not combine Label and Notes into one field");
-assert.ok(OFFICE.includes('placeholder="Label"') && OFFICE.includes('placeholder="Notes"'), "Office roof line must expose separate Label and Notes");
+assert.ok(/label="Label"/.test(OFFICE) && /label="Notes"/.test(OFFICE), "Office roof line must expose separate Label and Notes");
 assert.ok(/label="Label"/.test(FIELD) && /meas-edge-labeltext/.test(FIELD) && /meas-edge-notes/.test(FIELD), "Field roof line must expose separate labeled Label and Notes");
 ok("Label and Notes are separate roof-line inputs in both surfaces");
 

@@ -8,6 +8,7 @@ import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import { LabeledField, SelectField, PitchField, ToggleRow } from "../components/MeasurementFields";
+import { computeAreaSqft } from "../measurementFieldControls";
 
 const measurementKeys = require("../measurementCache");
 const queueCore = require("../queue");
@@ -287,7 +288,17 @@ export default function Measurements({ route, navigation }) {
   const addFacet = () => setFacets((a) => [...a, { ref: uid(), facet_label: `F${a.length + 1}`, pitch_rise: 6, area_sqft: "", structure_ref: "" }]);
   const addEdge = () => setEdges((a) => [...a, newEdge()]);
   const setS = (i, k, v) => setStructures((a) => a.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
-  const setF = (i, k, v) => setFacets((a) => a.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+  const setF = (i, k, v) => setFacets((a) => a.map((x, idx) => {
+    if (idx !== i) return x;
+    const nx = { ...x, [k]: v };
+    // Square footage is computed for the user: Area (SF) = Width × Length whenever both are present.
+    // Area stays editable, so the user can override; changing a dimension recomputes it.
+    if (k === "width_ft" || k === "length_ft") {
+      const area = computeAreaSqft(nx.width_ft, nx.length_ft);
+      if (area != null) nx.area_sqft = area;
+    }
+    return nx;
+  }));
   const setE = (i, k, v) => setEdges((a) => a.map((x, idx) => {
     if (idx !== i) return x;
     const nx = { ...x, [k]: v };
@@ -443,16 +454,14 @@ export default function Measurements({ route, navigation }) {
       <Section title="Roof planes" onAdd={!readonly && addFacet} addTestID="meas-add-facet">
         {facets.map((f, i) => (
           <View key={f.ref} style={s.card} testID={`meas-facet-${i}`}>
-            <View style={s.rowline}>
-              <View style={{ width: 96 }}><LabeledField label="Plane" value={f.facet_label || ""} editable={!readonly} onChangeText={(v) => setF(i, "facet_label", v)} testID={`meas-facet-label-${i}`} /></View>
-              <View style={[s.half, s.leftGap]}><LabeledField label="Area (SF)" keyboardType="numeric" value={String(f.area_sqft ?? "")} editable={!readonly} onChangeText={(v) => setF(i, "area_sqft", v)} testID={`meas-facet-area-${i}`} /></View>
-            </View>
             <PitchField value={f.pitch_rise} disabled={readonly} onChange={(v) => setF(i, "pitch_rise", v)} testID={`meas-facet-pitch-${i}`} />
+            <LabeledField label="Plane" value={f.facet_label || ""} editable={!readonly} onChangeText={(v) => setF(i, "facet_label", v)} testID={`meas-facet-label-${i}`} />
             {!!structures.length && <SelectField label="Structure" value={f.structure_ref || ""} options={structureOptions} disabled={readonly} onChange={(v) => setF(i, "structure_ref", v)} testID={`meas-facet-structure-${i}`} />}
             <View style={s.rowline}>
               <View style={s.half}><LabeledField label="Width (ft)" keyboardType="numeric" value={f.width_ft != null ? String(f.width_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "width_ft", v)} testID={`meas-facet-width-${i}`} /></View>
               <View style={[s.half, s.leftGap]}><LabeledField label="Length (ft)" keyboardType="numeric" value={f.length_ft != null ? String(f.length_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "length_ft", v)} testID={`meas-facet-length-${i}`} /></View>
             </View>
+            <LabeledField label="Area (SF)" placeholder="Auto = W × L (editable)" keyboardType="numeric" value={String(f.area_sqft ?? "")} editable={!readonly} onChangeText={(v) => setF(i, "area_sqft", v)} testID={`meas-facet-area-${i}`} />
             <LabeledField label="Roof Material" placeholder="Optional" value={f.roof_material || ""} editable={!readonly} onChangeText={(v) => setF(i, "roof_material", v)} testID={`meas-facet-material-${i}`} />
             <LabeledField label="Roof Plane Notes" placeholder="Optional" value={f.notes || ""} editable={!readonly} onChangeText={(v) => setF(i, "notes", v)} testID={`meas-facet-notes-${i}`} />
             {f.id ? <View style={s.photoBox}><Text style={s.small}>Roof plane photos</Text><PhotoSection recordType="measurement_facet" recordId={f.id} /></View> : null}

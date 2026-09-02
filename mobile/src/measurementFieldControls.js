@@ -49,6 +49,14 @@ function customRiseValue(text) {
   return Number.isFinite(Number(text)) ? Number(text) : "";
 }
 
+// Compute square footage for the user: Area (SF) = Width × Length (both in feet), rounded to 2 dp.
+// Returns null when either dimension is missing/non-numeric so a manual Area is never clobbered.
+function computeAreaSqft(width, length) {
+  const w = parseFloat(width), l = parseFloat(length);
+  if (!Number.isFinite(w) || !Number.isFinite(l)) return null;
+  return Math.round(w * l * 100) / 100;
+}
+
 module.exports = {
   PITCHES,
   CUSTOM_PITCH,
@@ -59,4 +67,5 @@ module.exports = {
   pitchSelectValue,
   pitchFromSelection,
   customRiseValue,
+  computeAreaSqft,
 };

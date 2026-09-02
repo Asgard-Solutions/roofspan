@@ -7,6 +7,7 @@ import { MousePointer2, PenLine, Square, Dot, Undo2, Redo2, Save, X, Loader2 } f
 import RoofSketchCanvas from "./RoofSketchCanvas";
 import SketchInspector from "./SketchInspector";
 import ProposalPanel from "./ProposalPanel";
+import { summarizeScoped } from "./scopeMeasurements";
 import { useSketchHistory } from "./history";
 import { getSketch, saveSketch } from "./sketchApi";
 import * as C from "./commands";
@@ -20,7 +21,11 @@ const SAVE_BADGE = {
   conflict: ["Conflict", "bg-rose-100 text-rose-800"], validation: ["Rejected", "bg-rose-100 text-rose-800"],
 };
 
-export default function RoofSketchEditor({ revision, structure, facets = [], edges = [], onMeasurementChanged, onDiscardSession, onClose }) {
+const RS_EDGE_LABELS = { eave: "Eave", rake: "Rake", ridge: "Ridge", hip: "Hip", valley: "Valley", sidewall: "Sidewall", headwall: "Headwall", transition: "Transition", other: "Other" };
+const RS_PEN_LABELS = { pipe_boot: "Pipe Boot", static_vent: "Static Vent", skylight: "Skylight", turbine: "Turbine", powered_vent: "Powered Vent", exhaust_vent: "Exhaust Vent", chimney: "Chimney", satellite: "Satellite", other: "Other" };
+const rsPitch = (p) => (p === "" || p == null ? "—" : `${p}/12`);
+
+export default function RoofSketchEditor({ revision, structure, facets = [], edges = [], penetrations = [], onMeasurementChanged, onDiscardSession, onClose }) {
   const readOnly = revision?.editable === false;
   const hist = useSketchHistory(createSketchDocument({ structureId: structure?.id }));
   const docRef = useRef(hist.doc);
@@ -44,6 +49,8 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const [conflict, setConflict] = useState(null);
   const [validationMsg, setValidationMsg] = useState(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
+  const [showMeas, setShowMeas] = useState(true);
+  const measRef = useMemo(() => summarizeScoped({ facets, edges, penetrations }), [facets, edges, penetrations]);
   const [closing, setClosing] = useState(false);       // Save & Close request in progress
   const closeConfirmRef = useRef(false);
   const closingRef = useRef(false);
@@ -265,6 +272,27 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
           <RoofSketchCanvas doc={doc} editMode={doc.edit_mode} mode={mode} selection={selection} onSelect={setSelection} readOnly={readOnly} ctl={ctl} />
         </div>
         <div className="flex flex-col overflow-y-auto border-l border-slate-200 p-3">
+          <div className="mb-3" data-testid="sketch-measurements-ref">
+            <button type="button" onClick={() => setShowMeas((v) => !v)} className="flex w-full items-center justify-between rounded bg-slate-100 px-2 py-1 text-left" data-testid="sketch-measurements-toggle">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{showMeas ? "▾" : "▸"} Measurements</span>
+              <span className="text-[11px] text-slate-500">{measRef.totals.area.toFixed(0)} SF · {measRef.totals.squares.toFixed(2)} sq · {measRef.totals.planeCount} planes</span>
+            </button>
+            {showMeas && <div className="mt-2 space-y-2 rounded border border-slate-200 p-2 text-xs" data-testid="sketch-measurements-panel">
+              {measRef.planes.length === 0 && measRef.lines.length === 0 && measRef.pens.length === 0 && <div className="text-slate-400">No measurements entered for this structure yet.</div>}
+              {measRef.planes.length > 0 && <div>
+                <div className="mb-1 font-semibold text-slate-600">Roof planes</div>
+                {measRef.planes.map((p) => <div key={String(p.id)} className="flex justify-between text-slate-700" data-testid={`sketch-meas-plane-${p.id}`}><span>{p.label}</span><span>{rsPitch(p.pitch_rise)} · {p.area.toFixed(0)} SF{p.width != null && p.length != null ? ` (${p.width}×${p.length})` : ""}</span></div>)}
+              </div>}
+              {measRef.lines.length > 0 && <div>
+                <div className="mb-1 font-semibold text-slate-600">Roof lines</div>
+                {measRef.lines.map((l) => <div key={l.type} className="flex justify-between text-slate-700" data-testid={`sketch-meas-line-${l.type}`}><span>{RS_EDGE_LABELS[l.type] || l.type}</span><span>{l.lf.toFixed(1)} LF</span></div>)}
+              </div>}
+              {measRef.pens.length > 0 && <div>
+                <div className="mb-1 font-semibold text-slate-600">Penetrations</div>
+                {measRef.pens.map((p) => <div key={p.type} className="flex justify-between text-slate-700" data-testid={`sketch-meas-pen-${p.type}`}><span>{RS_PEN_LABELS[p.type] || p.type}</span><span>× {p.qty}</span></div>)}
+              </div>}
+            </div>}
+          </div>
           <SketchInspector doc={doc} selection={selection} cmd={cmd} readOnly={readOnly} relFacets={relFacets} relEdges={relEdges} />
           <div className="mt-3">
             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Validation</div>

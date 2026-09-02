@@ -7,7 +7,7 @@ const assert = require("assert");
 const {
   PITCHES, CUSTOM_PITCH,
   selectedOptionLabel, hasSelection, isCustomPitch,
-  pitchOptions, pitchSelectValue, pitchFromSelection, customRiseValue,
+  pitchOptions, pitchSelectValue, pitchFromSelection, customRiseValue, computeAreaSqft,
 } = require("../measurementFieldControls");
 
 let n = 0; const ok = (m) => { n++; console.log("  \u2713 " + m); };
@@ -87,5 +87,15 @@ ok("custom rise entry normalizes to canonical value (blank stays open, number pe
 assert.strictEqual(isCustomPitch(null), false);
 assert.strictEqual(selectedOptionLabel(popts, pitchSelectValue(null), "Pitch"), "Pitch");
 ok("un-set pitch shows the placeholder and is not treated as custom");
+
+// --- Area (SF) auto-calculation: Area = Width × Length, overridable ---
+assert.strictEqual(computeAreaSqft(20, 15), 300);
+assert.strictEqual(computeAreaSqft("25", "12.5"), 312.5);
+assert.strictEqual(computeAreaSqft(10.25, 4), 41);
+assert.strictEqual(computeAreaSqft(20, ""), null);   // partial dimension never clobbers a manual Area
+assert.strictEqual(computeAreaSqft("", 15), null);
+assert.strictEqual(computeAreaSqft(null, null), null);
+assert.strictEqual(computeAreaSqft("abc", 10), null);
+ok("Area (SF) auto-computes as Width × Length and stays null when a dimension is missing");
 
 console.log("\nFIELD MEASUREMENT CONTROL LOGIC: all " + n + " checks passed");

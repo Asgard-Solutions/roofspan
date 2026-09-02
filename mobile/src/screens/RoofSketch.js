@@ -14,6 +14,7 @@ import * as RECON from "../roofProposalReconcile";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
 import SketchConflictReview from "../components/SketchConflictReview";
+import SketchMeasurementsPanel from "../components/SketchMeasurementsPanel";
 import ProposalPanel from "../components/ProposalPanel";
 import { C } from "../theme";
 
@@ -355,6 +356,8 @@ export default function RoofSketch({ route }) {
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
       {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
+
+      <SketchMeasurementsPanel measDetail={measDetail} structureId={structure_id} />
 
       <ProposalPanel rows={proposals} onAccept={onAcceptProposal} onKeep={onKeepCurrent} />
 
