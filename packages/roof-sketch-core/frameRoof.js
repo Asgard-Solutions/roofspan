@@ -283,6 +283,11 @@ function tryLRoof(base, edgesIn) {
   const Lx = LxE != null && LxE > 0 ? LxE : (num(planeByMid[H.hip].length_ft));
   const Ly = LyE != null && LyE > 0 ? LyE : (num(planeByMid[V.hip].length_ft));
   if (Lx == null || !(Lx > W) || Ly == null || !(Ly > W)) return null; // arms must exceed the shared width
+  // This construction is for EQUAL-width arms (ridges meet at one point). An unequal-width L needs true
+  // 3D ridge-height reconciliation (the narrow ridge dies into the wide slope) -> defer to the resolver.
+  const rV = runOf(V.hip);
+  if (rV != null && rV > 0 && Math.abs(rnd(rV * 2) - W) > 1) return null;
+  if (VrightE != null && LyE != null && Math.abs((LyE - VrightE) - W) > 1) return null;
   if (rH == null) approximations.push({ severity: "warning", code: "approx_plane_depth", target_type: "structure", target_id: base.structure_id, message: "L-roof width approximated from eaves (no sloped Width + pitch)." });
 
   const half = rnd(W / 2);

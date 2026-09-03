@@ -334,4 +334,20 @@ const wingPeak = tc.doc.vertices.filter((v) => v.id.startsWith("dv_")).map((v) =
 assert.ok(wingPeak.some((y) => y < 20 && y > 0), "t-cross: wing peak seats inside the back slope (0 < y < W)");
 ok("Cross-Gable/T: a perpendicular gable wing seats on the host back slope with two real valleys");
 
+// ---- Stage 6: penetrations carried (position unknown -> manual) + unequal-width L safely defers ------
+const LROOF_PEN = { ...LROOF, penetrations: [
+  { id: "PEN1", pen_type: "pipe_boot", quantity: 2, facet_id: "F1" },
+  { id: "PEN2", pen_type: "skylight", quantity: 1, facet_id: "F2" },
+] };
+const lp = build(LROOF_PEN);
+assertValidRoof(lp, "l-roof+pens");
+assert.ok(Array.isArray(lp.doc.penetrations) && lp.doc.penetrations.length === 2, "Stage 6: both penetrations carried onto the sketch");
+assert.ok(lp.doc.penetrations.every((p) => p.position_known === false && (p.x == null && p.y == null)), "Stage 6: penetration positions are never fabricated (manual placement)");
+ok("Stage 6: penetrations are carried with their facet link but no fabricated position (manual placement)");
+
+// Unequal-width L (V arm wider) is NOT drawn wrong — it defers (build returns null -> resolver fallback).
+const UNEQUAL_L = { ...LROOF, facets: LROOF.facets.map((f) => (f.id === "F3" || f.id === "F4") ? { ...f, width_ft: 16 } : f) };
+assert.strictEqual(build(UNEQUAL_L), null, "Stage 6: unequal-width L defers (no wrong geometry) -> falls back to the resolver");
+ok("Stage 6: unequal-width L safely defers instead of drawing incorrect geometry");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
