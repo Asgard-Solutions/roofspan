@@ -85,18 +85,18 @@ assert.strictEqual(res.ok, true, "combine: produced a plan");
 assert.strictEqual(res.placed_count, 2, "combine: exactly the two in-scope structures placed (shed excluded)");
 assert.strictEqual(res.placements[0].label, "House", "combine: largest structure (House) placed first");
 assert.strictEqual(res.placements[1].label, "Garage", "combine: garage placed second");
-// Structures do not overlap: garage starts to the right of the house + gap.
+// Attached structures snap flush (garage type = attached_garage) and share a common bottom baseline.
 const h = res.placements[0], g = res.placements[1];
-assert.ok(g.bbox.x >= h.bbox.x + h.bbox.width + 12 - 0.01, `combine: garage sits right of house with the gap (h.right=${h.bbox.x + h.bbox.width}, g.x=${g.bbox.x})`);
+assert.ok(g.attached === true, "combine: garage recognised as an attached structure");
+assert.ok(Math.abs(g.bbox.x - (h.bbox.x + h.bbox.width)) < 0.5, `combine: attached garage sits FLUSH against the house wall (h.right=${h.bbox.x + h.bbox.width}, g.x=${g.bbox.x})`);
+assert.ok(Math.abs((h.bbox.y + h.bbox.height) - (g.bbox.y + g.bbox.height)) < 0.5, "combine: structures share a common bottom/eave baseline");
 // Every combined facet carries its structure id; no out-of-scope structure appears.
 assert.ok(res.document.facets.every((f) => f.structure_id === "H" || f.structure_id === "G"), "combine: every facet tagged to an in-scope structure");
 assert.ok(!res.document.facets.some((f) => f.structure_id === "X"), "combine: out-of-scope shed excluded");
 // Vertex ids are globally unique across the merged structures.
 const vids = res.document.vertices.map((v) => v.id);
 assert.strictEqual(new Set(vids).size, vids.length, "combine: vertex ids are unique across structures");
-// Aligned to a common top (min y == 0).
-assert.ok(Math.abs(Math.min(...res.document.vertices.map((v) => v.y))) < 0.01, "combine: structures aligned to a common top edge");
-ok("combineStructuresSitePlan lays in-scope structures side-by-side, largest first, non-overlapping, uniquely-ided");
+ok("combineStructuresSitePlan lays in-scope structures largest-first, attached ones flush + bottom-aligned, uniquely-ided");
 
 // Deterministic: same input => byte-identical placements.
 assert.deepStrictEqual(combineStructuresSitePlan(combineInput()).placements, res.placements, "combine: deterministic placements");
@@ -109,3 +109,35 @@ assert.ok(Math.abs((g2.ty - g.ty) - (-3)) < 0.01, "combine: dy offset shifts the
 ok("combineStructuresSitePlan honours per-structure drag offsets deterministically");
 
 console.log(`\nCOMBINE + OFFSET: ${n} assertions passed.`);
+
+// ---- (3) topology inference: a structure with planes but NO roof lines still auto-draws -----------
+const { inferTopologyEdges } = require("../inferTopology");
+const { generateSketchGeometry } = require("../generateSketchGeometry");
+console.log("TOPOLOGY INFERENCE:");
+// Real garage from lead d0df5baa: G1/G2 = 20x21 gable pair, G3 = 14x16 (hip end). No edges entered.
+const garage = [
+  { id: "G1", structure_id: "GR", label: "G1", pitch_rise: 6, area_sqft: 420, width_ft: 20, length_ft: 21, sort: 0 },
+  { id: "G2", structure_id: "GR", label: "G2", pitch_rise: 6, area_sqft: 420, width_ft: 20, length_ft: 21, sort: 1 },
+  { id: "G3", structure_id: "GR", label: "G3", pitch_rise: 6, area_sqft: 224, width_ft: 14, length_ft: 16, sort: 2 },
+];
+const inf = inferTopologyEdges(garage);
+assert.ok(inf.inferred, "infer: produced a topology for the edgeless garage");
+assert.deepStrictEqual(inf.mains.slice().sort(), ["G1", "G2"], "infer: G1/G2 chosen as the main gable pair");
+assert.deepStrictEqual(inf.ends, ["G3"], "infer: G3 chosen as the hip end");
+assert.ok(inf.edges.some((e) => e.edge_type === "ridge"), "infer: a ridge was synthesized");
+assert.strictEqual(inf.edges.filter((e) => e.edge_type === "hip").length, 2, "infer: two hips synthesized for the hip end");
+const gr = generateSketchGeometry({ structure: { id: "GR" }, facets: garage, edges: [], penetrations: [] });
+assert.strictEqual(gr.ok, true, "infer: edgeless garage now solves");
+assert.ok((gr.document.vertices || []).length >= 6, "infer: garage produced geometry");
+assert.strictEqual(gr.document.facets.length, 3, "infer: all three garage planes drawn (gable + hip end)");
+assert.ok(gr.inferred_topology === true, "infer: result flagged as auto-inferred (refine hint)");
+assert.ok((gr.diagnostics || []).some((d) => d.code === "inferred_topology"), "infer: a refine-hint diagnostic is present");
+n++; console.log("  ok - edgeless 3-plane garage auto-infers a gable-with-hip-end and draws (flagged for refine)");
+
+// Real edges must DISABLE inference (measured roof lines always win).
+const withEdge = generateSketchGeometry({ structure: { id: "GR" }, facets: garage.slice(0, 2), edges: [{ id: "R", structure_id: "GR", edge_type: "ridge", length_ft: 21, facet_id: "G1", facet_id_secondary: "G2", sort: 1 }], penetrations: [] });
+assert.ok(!withEdge.inferred_topology, "infer: inference disabled when real edges exist");
+n++; console.log("  ok - real edges disable inference");
+
+console.log(`\nTOTAL: ${n} assertions passed.`);
+

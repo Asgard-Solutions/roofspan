@@ -181,6 +181,15 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
     return res.points.length >= 3 ? { f, pts: res.points, bad: errorFacetIds.has(f.id) } : null;
   }).filter(Boolean);
 
+  // Offset guides: vertical reference lines at model-x = a plane's "Offset from left (ft)" — shows where
+  // a pinned dormer/wing sits along the wall. Presentational only.
+  const verts = doc.vertices || [];
+  const yLo = verts.length ? Math.min(...verts.map((v) => v.y)) : 0;
+  const yHi = verts.length ? Math.max(...verts.map((v) => v.y)) : 0;
+  const offsetGuides = (doc.facets || [])
+    .map((f) => ({ label: f.label || f.id, off: Number(f.position_offset_ft) }))
+    .filter((g) => Number.isFinite(g.off) && g.off > 0);
+
   const showCommit = (mode === "facet" && !readOnly) || (mode === "draw" && editMode === "manual_polygon" && !readOnly);
   const canCommit = editMode === "manual_polygon" ? pendingVerts.length >= 3 : pendingEdges.length >= 3;
 
@@ -194,6 +203,12 @@ export default function RoofSketchCanvas({ doc, editMode, mode, selection, onSel
       </defs>
       <rect x="0" y="0" width="100%" height="100%" fill="url(#rsgrid)" />
       <g transform={`translate(${view.tx},${view.ty}) scale(${view.k})`}>
+        {offsetGuides.map((g, i) => (
+          <g key={`og${i}`} data-testid={`canvas-offset-guide-${g.label}`} style={{ pointerEvents: "none" }}>
+            <line x1={g.off} y1={yLo - 4} x2={g.off} y2={yHi + 4} stroke="#d97706" strokeWidth={1.5} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" />
+            <text x={g.off} y={yLo - 5} textAnchor="middle" fill="#b45309" style={{ fontSize: 10 / view.k, fontWeight: 700 }}>{g.label} · {g.off}′</text>
+          </g>
+        ))}
         {facetPolys.map(({ f, pts, bad }) => {
           const centroid = pts.reduce((a, p) => [a[0] + p[0], a[1] + p[1]], [0, 0]).map((c) => c / pts.length);
           const selected = selection?.type === "facet" && selection.id === f.id;

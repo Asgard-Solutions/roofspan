@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Garage Solve + Site Plan Fidelity + Offset Guides — DONE & VERIFIED (2026-06)
+Three follow-ups on the roof-sketch system (all core logic unit-tested; testing_agent iteration_76 = 5/5 frontend flows pass).
+- **Garage Solve (topology inference)** — `packages/roof-sketch-core/inferTopology.js` `inferEdgesFromFacets`: when a structure has roof PLANES but ZERO roof-line edges, synthesize a minimal deterministic topology (largest equal plane pair => main gable ridge+eaves; 1-2 leftover planes => hipped END(s) via 2 hips + short eave; extras reported as `ignored`). Wired into `generateSketchGeometry` entry (only when `edges.length===0 && facets>=2`; ANY real edge disables it — measured lines always win). Result flagged `inferred_topology:true` + a `inferred_topology` warning diagnostic ("auto-inferred — add roof lines to refine"). The real d0df5baa Attached Garage (G1/G2 20×21 gable pair + G3 14×16) now auto-draws as a gable-with-one-hip-end (was "needs review"). `frameRoof.facetRecord` now also carries `position_offset_ft`.
+- **Site Plan Fidelity** — `combineStructures.js`: attached structures (`attached_garage`, `porch`, `carport`, `breezeway`, `addition`, `lean_to`, anything containing "attach") snap FLUSH (0 gap) against the previous structure's wall; detached keep the 12 ft gap. All structures now share a common BOTTOM/eave baseline (was top-aligned). Per-structure drag offsets still applied on top; `placements[].attached` exposed.
+- **Offset Guides** — `RoofThumbnail.jsx`: enlarged to 148×108, draws an amber dashed vertical guide + "{n}′" label at world-x = each plane's `position_offset_ft`, plus a bottom foot-ruler (ticks every 5/10/20 ft by span). testid `roof-offset-guide-{facetLabel}`. `RoofSketchCanvas.jsx`: amber dashed offset guide at model-x = `position_offset_ft` for facets carrying it (rides the existing 1-ft grid + pan/zoom). testid `canvas-offset-guide-{facetLabel}` (code in place; not visually confirmed for d0df5baa since it had no saved sketch — low priority).
+- **Tests:** `test/combineStructures.node.test.js` extended (garage auto-infers + draws + flagged; real edges disable inference; attached flush + bottom-aligned). Full core `npm test` green. Mobile suites green.
+
+
 ## Roof Plane "Offset from left (ft)" + Combined multi-structure Site Plan — DONE & VERIFIED (2026-06)
 Two user-approved features on top of the roof-framing solver.
 - **`position_offset_ft` on each Roof Plane (facet)** — optional distance (ft) from the host slope's start to PIN a dormer/wing exactly instead of auto-centering. Full stack:

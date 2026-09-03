@@ -35,6 +35,7 @@ const { validateSketch } = require("./topology");
 const { planRunFromSlope } = require("./geometry");
 const { planPlacement, layoutFromResolutions } = require("./resolvePlacement");
 const { frameRoof } = require("./frameRoof");
+const { inferTopologyEdges } = require("./inferTopology");
 
 const LEN_TOL = 0.5; // ft tolerance for confirmed-edge vs drawn-side and ridge-match consistency
 
@@ -660,6 +661,16 @@ function _layoutConnected(base, facetsIn, edgesIn, input) {
 
 // Public entry: constraint foundation + deterministic geometry for the two supported roof types.
 function generateSketchGeometry(input) {
+  // When a structure has planes but NO roof lines, synthesize a minimal deterministic topology so it
+  // still draws a best-effort shape (flagged "auto-inferred"). Any real edge disables this entirely.
+  let inferred = null;
+  const rawEdges = (Array.isArray(input && input.edges) ? input.edges : []).filter((e) => e && e.id != null);
+  const rawFacets = (Array.isArray(input && input.facets) ? input.facets : []).filter((f) => f && f.id != null);
+  if (rawEdges.length === 0 && rawFacets.length >= 2) {
+    const inf = inferTopologyEdges(rawFacets);
+    if (inf.inferred && inf.edges.length) { inferred = inf; input = { ...input, edges: inf.edges }; }
+  }
+
   const base = generateProposedSketch(input);
   if (base.status !== "generated") {
     return { ...base, geometry_status: "not_attempted", readiness: _classifyReadiness(base.diagnostics), partial: false,
@@ -670,10 +681,19 @@ function generateSketchGeometry(input) {
     .slice().sort(bySortThenId);
   const edgesIn = (Array.isArray(input && input.edges) ? input.edges : []).filter((e) => e && e.id != null);
 
-  if (base.archetype === "single_plane") return _layoutSinglePlane(base, facetsIn, edgesIn);
-  if (base.archetype === "symmetric_gable") return _layoutGable(base, facetsIn, edgesIn);
+  let result;
+  if (base.archetype === "single_plane") result = _layoutSinglePlane(base, facetsIn, edgesIn);
+  else if (base.archetype === "symmetric_gable") result = _layoutGable(base, facetsIn, edgesIn);
   // >2 planes / connected multi-plane: build the adjacency graph and solve only when uniquely determined.
-  return _layoutConnected(base, facetsIn, edgesIn, input);
+  else result = _layoutConnected(base, facetsIn, edgesIn, input);
+
+  if (inferred && result && typeof result === "object") {
+    result.inferred_topology = true;
+    result.inferred_ignored = inferred.ignored || [];
+    const msg = `Roof auto-inferred from plane sizes (no roof lines entered)${(inferred.ignored || []).length ? `; ${inferred.ignored.length} plane(s) could not be placed` : ""}. Add ridge/eave/hip lines to refine.`;
+    result.diagnostics = (result.diagnostics || []).concat([{ severity: "warning", code: "inferred_topology", target_type: "structure", target_id: base.structure_id, message: msg }]);
+  }
+  return result;
 }
 
 module.exports = { generateSketchGeometry, LEN_TOL };

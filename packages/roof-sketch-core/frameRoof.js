@@ -63,6 +63,7 @@ function facetRecord(plane, mid, edgeIds) {
   return {
     id: "ff_" + mid, measurement_facet_id: mid, relational_facet_id: mid, label: (plane && plane.label) || "F",
     pitch_rise: num(plane && plane.pitch_rise), confirmed_area_sqft: num(plane && plane.area_sqft),
+    position_offset_ft: num(plane && plane.position_offset_ft),
     orientation_azimuth: num(plane && plane.orientation_azimuth), roof_material: null, edgeIds, vertexIds: [],
   };
 }

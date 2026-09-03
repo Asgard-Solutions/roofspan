@@ -67,14 +67,20 @@ function combineStructuresSitePlan(input) {
 
   const combined = { schema_version: 1, edit_mode: "manual_polygon", scale: { resolved: true, feetPerUnit: 1, feet_per_unit: 1, method: "combined_site_plan" }, vertices: [], edges: [], facets: [], penetrations: [] };
   const placements = [];
+  // Attached structures snap FLUSH (no gap) against the previous structure's wall; detached keep a gap.
+  // Everything is aligned along a common bottom/eave baseline so the site plan reads like ground level.
+  const isAttached = (t) => { const s = String(t || "").toLowerCase(); return s.includes("attach") || s === "porch" || s === "carport" || s === "breezeway" || s === "addition" || s === "lean_to" || s === "lean-to"; };
+  const baseline = placedRaw.length ? placedRaw[0].bbox.height : 0; // main structure's bottom sits at y = height (top at 0)
   let cursorX = 0;
   placedRaw.forEach((p, idx) => {
     const off = offsets[p.sid] || {};
     const dx = num(off.dx) || 0, dy = num(off.dy) || 0;
-    // Auto: sit at the running cursor, aligned to a common top (y=0). User offset nudges from there.
+    const attached = idx > 0 && isAttached(p.structure.structure_type);
+    if (idx > 0) cursorX += (attached ? 0 : GAP_FT);
+    // x: sit at the running cursor. y: bottom-align to the main baseline. User offset nudges from there.
     const tx = rnd(cursorX - p.bbox.minX + dx);
-    const ty = rnd(-p.bbox.minY + dy);
-    cursorX = cursorX + p.bbox.width + GAP_FT;
+    const ty = rnd((baseline - p.bbox.maxY) + dy);
+    cursorX = cursorX + p.bbox.width;
 
     const pfx = `s${idx}_`;
     const vid = (id) => pfx + id;
@@ -91,7 +97,7 @@ function combineStructuresSitePlan(input) {
     }));
     placements.push({
       structure_id: p.sid, label: p.structure.name || p.sid, structure_type: p.structure.structure_type || null,
-      tx, ty, dx, dy, readiness: p.readiness,
+      attached, tx, ty, dx, dy, readiness: p.readiness,
       bbox: { x: rnd(p.bbox.minX + tx), y: rnd(p.bbox.minY + ty), width: rnd(p.bbox.width), height: rnd(p.bbox.height) },
     });
   });
