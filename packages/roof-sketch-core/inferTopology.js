@@ -14,6 +14,8 @@
 //   - Any further leftover planes are reported as `ignored` (cannot be placed without roof lines).
 //   - If no equal pair exists, fall back to a ridge between the two largest planes.
 
+const { planRunFromSlope } = require("./geometry");
+
 const num = (v) => { if (v === "" || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 const sig = (f) => {
   const p = num(f.pitch_rise), w = num(f.width_ft), l = num(f.length_ft);
@@ -43,24 +45,39 @@ function inferTopologyEdges(facetsIn) {
   if (!a || !bb) return { inferred: false, edges: [], ignored: [] };
 
   const La = num(a.length_ft), Lb = num(bb.length_ft);
-  let ridgeLen = null;
-  if (La != null && La > 0 && Lb != null && Lb > 0) ridgeLen = Math.min(La, Lb);
-  else ridgeLen = (La != null && La > 0) ? La : Lb;
-  if (ridgeLen == null || !(ridgeLen > 0)) return { inferred: false, edges: [], ignored: [] };
+  let L = null;
+  if (La != null && La > 0 && Lb != null && Lb > 0) L = Math.min(La, Lb);
+  else L = (La != null && La > 0) ? La : Lb;
+  if (L == null || !(L > 0)) return { inferred: false, edges: [], ignored: [] };
 
   let n = 0;
   const mk = (edge_type, f1, f2, length_ft) => ({ id: `inf_${edge_type}_${n++}`, structure_id: sid, edge_type, length_ft: length_ft != null ? length_ft : null, facet_id: f1, facet_id_secondary: f2 != null ? f2 : null, sort: n, inferred: true });
 
-  const edges = [mk("ridge", a.id, bb.id, ridgeLen), mk("eave", a.id, null, ridgeLen), mk("eave", bb.id, null, ridgeLen)];
-
+  // Main gable slopes: a ridge along the plane LENGTH + a long eave (= L) on each. The roof depth W is
+  // NOT synthesized here — the solver derives it from the two main slopes' own widths (planRun), so the
+  // drawn depth matches the measured slope planes exactly.
   const leftovers = sorted.filter((f) => f !== a && f !== bb);
   const ends = leftovers.slice(0, 2);
   const ignored = leftovers.slice(2).map((f) => String(f.id));
+
+  // Each hip END insets the ridge by the end plane's own plan run (planRun(end.width, end.pitch)), so the
+  // hip triangle's footprint matches the measured end plane; unknown => fall back to a fraction of L.
+  const insetOf = (e) => {
+    const r = planRunFromSlope(num(e.width_ft), num(e.pitch_rise));
+    if (r != null && r > 0) return r;
+    const w = num(e.width_ft); return (w != null && w > 0) ? w : L * 0.3;
+  };
+  const insets = ends.map(insetOf);
+  const totalInset = insets.reduce((s, v) => s + v, 0);
+  let ridgeLen = L - totalInset;
+  if (!(ridgeLen > 0)) { ridgeLen = null; }  // let the solver approximate if insets would swallow the ridge
+
+  const edges = [mk("ridge", a.id, bb.id, ridgeLen), mk("eave", a.id, null, L), mk("eave", bb.id, null, L)];
+  // Hip ends: two hips (end<->each main). No synthesized end eave, so the depth stays governed by the
+  // main slopes. The hip length carries the measured end-plane width for provenance.
   ends.forEach((e) => {
-    const endEave = num(e.length_ft) || num(e.width_ft) || null;
     edges.push(mk("hip", e.id, a.id, num(e.width_ft) || null));
     edges.push(mk("hip", e.id, bb.id, num(e.width_ft) || null));
-    edges.push(mk("eave", e.id, null, endEave));
   });
 
   return { inferred: true, edges, ignored, mains: [String(a.id), String(bb.id)], ends: ends.map((f) => String(f.id)) };

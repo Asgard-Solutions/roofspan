@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Smarter Garage + Site Plan Labels + Editor Offset Guide — DONE & VERIFIED (2026-06)
+Three refinements (all unit-tested; testing_agent iteration_77 = 3/3 frontend green).
+- **Smarter Garage (inference proportions)** — `inferTopology.js` now derives the roof DEPTH from the two main slope planes' own widths (`planRun(width,pitch)` per slope, summed) instead of a synthesized end eave, and insets each hip END by that end plane's plan run (`planRun(end.width,pitch)`) so the ridge length + hip triangle match the measured planes. The d0df5baa garage now draws 21′(ridge)×~36′(depth); its hip-end plan footprint ≈ 224 SF = G3's measured area (was a wrong ~16 ft depth). Locked by a test asserting depth≈35.8 and end-area≈224.
+- **Site Plan Labels** — `CombinedSitePlan.jsx` renders a `width′ × depth′` dimension tag under each structure (`site-plan-dim-{structureId}`) from `placement.bbox`. Verified: House 50×40, Garage 21×36, Porch 20×8.
+- **Editor Canvas Offset Guide (verified)** — `RoofSketchCanvas.jsx` draws an amber dashed guide `canvas-offset-guide-{label}` at model-x = a facet's `position_offset_ft`; `frameRoof.facetRecord` carries the offset so generated+saved sketches expose it. Verified E2E: set offset on House F1 → Save → Sketch Roof → Generate → Use Proposed → Save → `canvas-offset-guide-F1` rendered on the canvas.
+
+
 ## Garage Solve + Site Plan Fidelity + Offset Guides — DONE & VERIFIED (2026-06)
 Three follow-ups on the roof-sketch system (all core logic unit-tested; testing_agent iteration_76 = 5/5 frontend flows pass).
 - **Garage Solve (topology inference)** — `packages/roof-sketch-core/inferTopology.js` `inferEdgesFromFacets`: when a structure has roof PLANES but ZERO roof-line edges, synthesize a minimal deterministic topology (largest equal plane pair => main gable ridge+eaves; 1-2 leftover planes => hipped END(s) via 2 hips + short eave; extras reported as `ignored`). Wired into `generateSketchGeometry` entry (only when `edges.length===0 && facets>=2`; ANY real edge disables it — measured lines always win). Result flagged `inferred_topology:true` + a `inferred_topology` warning diagnostic ("auto-inferred — add roof lines to refine"). The real d0df5baa Attached Garage (G1/G2 20×21 gable pair + G3 14×16) now auto-draws as a gable-with-one-hip-end (was "needs review"). `frameRoof.facetRecord` now also carries `position_offset_ft`.

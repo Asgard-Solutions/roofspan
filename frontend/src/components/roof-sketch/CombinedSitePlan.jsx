@@ -44,11 +44,15 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       const a = vById[e.v1], b = vById[e.v2];
       if (a && b) byStruct[sid].lines.push({ a, b, type: e.type });
     });
-    // label anchor = centroid of the structure's mapped vertices
+    // label anchor = centroid of the structure's mapped vertices; keep bottom + measured dims for tags
+    const dimBySid = {}; (combined.placements || []).forEach((p) => { dimBySid[p.structure_id] = p.bbox; });
     Object.values(byStruct).forEach((g) => {
       const gv = doc.vertices.filter((v) => v.structure_id === g.sid).map((v) => map(v.x, v.y));
       g.cx = gv.reduce((s, p) => s + p.x, 0) / (gv.length || 1);
       g.top = Math.min(...gv.map((p) => p.y));
+      g.bottom = Math.max(...gv.map((p) => p.y));
+      const bb = dimBySid[g.sid];
+      g.dims = bb ? `${Math.round(bb.width)}′ × ${Math.round(bb.height)}′` : null;
     });
     return { scale, groups: Object.values(byStruct) };
   }, [combined]);
@@ -113,6 +117,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
                   stroke={EDGE_COLOR[l.type] || "#94a3b8"} strokeWidth={1.6} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
               ))}
               <text x={g.cx} y={Math.max(g.top - 6, 10)} textAnchor="middle" className="fill-slate-600" style={{ fontSize: 11, fontWeight: 600 }}>{g.label}</text>
+              {g.dims && <text x={g.cx} y={Math.min(g.bottom + 13, VB_H - 3)} textAnchor="middle" className="fill-slate-400" data-testid={`site-plan-dim-${g.sid}`} style={{ fontSize: 9.5 }}>{g.dims}</text>}
             </g>
           );
         })}

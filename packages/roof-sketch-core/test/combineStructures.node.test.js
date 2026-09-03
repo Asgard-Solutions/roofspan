@@ -130,6 +130,18 @@ const gr = generateSketchGeometry({ structure: { id: "GR" }, facets: garage, edg
 assert.strictEqual(gr.ok, true, "infer: edgeless garage now solves");
 assert.ok((gr.document.vertices || []).length >= 6, "infer: garage produced geometry");
 assert.strictEqual(gr.document.facets.length, 3, "infer: all three garage planes drawn (gable + hip end)");
+// Smarter garage: depth comes from the two main 20-ft slopes (2*planRun(20,6)=35.8), the hip-end
+// footprint matches G3's measured area (224), NOT a wrong depth from the end eave.
+{
+  const { resolveFacetBoundary } = require("../index");
+  const { polygonArea } = require("../geometry");
+  const xs = gr.document.vertices.map((v) => v.x), ys = gr.document.vertices.map((v) => v.y);
+  const depth = Math.max(...ys) - Math.min(...ys);
+  assert.ok(Math.abs(depth - 35.8) < 1.5, `infer: roof depth from the main slopes (~35.8, got ${depth.toFixed(1)})`);
+  const endFacet = gr.document.facets.find((f) => f.measurement_facet_id === "G3");
+  const endArea = Math.abs(polygonArea(resolveFacetBoundary(gr.document, endFacet).points));
+  assert.ok(Math.abs(endArea - 224) < 8, `infer: hip-end plan footprint matches G3's measured area 224 (got ${endArea.toFixed(0)})`);
+}
 assert.ok(gr.inferred_topology === true, "infer: result flagged as auto-inferred (refine hint)");
 assert.ok((gr.diagnostics || []).some((d) => d.code === "inferred_topology"), "infer: a refine-hint diagnostic is present");
 n++; console.log("  ok - edgeless 3-plane garage auto-infers a gable-with-hip-end and draws (flagged for refine)");
