@@ -16,7 +16,7 @@
 // deprojected via planRunFromSlope(width_ft, pitch) to a plan run; length_ft / eaves are plan dimensions.
 
 const { createSketchDocument } = require("./schema");
-const { validateSketch } = require("./topology");
+const { validateSketch, edgeLoopVertices, edgeMap } = require("./topology");
 const { planRunFromSlope } = require("./geometry");
 
 const num = (v) => { if (v === "" || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -206,11 +206,12 @@ function trySingleCore(base, edgesIn) {
   if (runFront == null || runBack == null) approximations.push({ severity: "warning", code: "approx_plane_depth", target_type: "structure", target_id: base.structure_id, message: "Slope depth approximated (missing sloped Width + pitch)." });
 
   const resolvedOrder = [frontMid, backMid, ...endMids];
-  return finalize(base, b, facets, resolvedOrder, approximations, "single_core");
+  const frame = { L, W, ridgeY, frontMid, backMid, loMid, hiMid };
+  return finalize(base, b, facets, resolvedOrder, approximations, "single_core", frame);
 }
 
 // ---- finalize: assemble the canonical document + validate --------------------------------------------
-function finalize(base, b, facets, resolvedOrder, approximations, method) {
+function finalize(base, b, facets, resolvedOrder, approximations, method, frame) {
   const doc = createSketchDocument({ structureId: base.structure_id });
   doc.scale = { resolved: true, feetPerUnit: 1, feet_per_unit: 1, method: "roof_framing_solver" };
   doc.vertices = b.verts;
@@ -219,7 +220,7 @@ function finalize(base, b, facets, resolvedOrder, approximations, method) {
   doc.penetrations = base.document.penetrations;
   doc.generated = base.document.generated;
   const v = validateSketch(doc);
-  return { doc, resolved: resolvedOrder, unresolved: [], approximations: approximations || [], valid: v.valid, validation: v, method };
+  return { doc, resolved: resolvedOrder, unresolved: [], approximations: approximations || [], valid: v.valid, validation: v, method, frame };
 }
 
 // ---- two-core L-roof (equal pitch, equal width): real convex HIP + real concave VALLEY -------------
@@ -318,10 +319,139 @@ function tryLRoof(base, edgesIn) {
   return finalize(base, b, facets, resolvedOrder, approximations, "l_roof");
 }
 
+// ---- Stage 5: gable dormers seated on a host slope (real valleys; overlaps host in plan) ------------
+// A gable dormer = a pair of planes sharing a ridge, each joined to a COMMON host core plane by a valley
+// (and no hip). In plan it is drawn as two triangles meeting at the dormer ridge, with the two valleys
+// converging where the dormer dies into the host slope. Physically the dormer sits ON the host, so its
+// plan polygons OVERLAP the host (a validator WARNING, not an error) — the document is emitted in
+// manual_polygon mode so overlapping/independent polygons are allowed.
+function classifyDormers(base) {
+  const adj = base.constraints.adjacency;
+  const ridges = adj.filter((a) => a.edge_type === "ridge");
+  const valleys = adj.filter((a) => a.edge_type === "valley" || a.edge_type === "dead_valley");
+  const hips = adj.filter((a) => a.edge_type === "hip");
+  const dormers = []; const used = new Set();
+  const other = (a, x) => a.facets.map(String).find((f) => f !== x);
+  for (const r of ridges) {
+    const [a, b] = r.facets.map(String);
+    if (used.has(a) || used.has(b)) continue;
+    if (hips.some((h) => { const s = new Set(h.facets.map(String)); return s.has(a) || s.has(b); })) continue; // dormers have no hips
+    const hostsA = new Set(valleys.filter((v) => v.facets.map(String).includes(a)).map((v) => other(v, a)));
+    const hostsB = new Set(valleys.filter((v) => v.facets.map(String).includes(b)).map((v) => other(v, b)));
+    const common = [...hostsA].filter((h) => hostsB.has(h) && h !== a && h !== b);
+    if (common.length !== 1) continue;
+    const host = common[0];
+    const vA = valleys.find((v) => { const s = new Set(v.facets.map(String)); return s.has(a) && s.has(host); });
+    const vB = valleys.find((v) => { const s = new Set(v.facets.map(String)); return s.has(b) && s.has(host); });
+    if (!vA || !vB) continue;
+    const [left, right] = [a, b].sort();
+    dormers.push({ planes: [left, right], host, ridge: r, valleyByPlane: { [a]: vA, [b]: vB } });
+    used.add(a); used.add(b);
+  }
+  if (!dormers.length) return null;
+  if (dormers.some((d) => used.has(d.host))) return null; // a dormer hosting another dormer -> too complex
+  const coreMids = base.constraints.planes.map((p) => String(p.measurement_facet_id)).filter((m) => !used.has(m));
+  return { dormers, coreMids, dormerMids: used };
+}
+
+// Restrict `base` (foundation result) to a subset of plane ids for solving the core alone.
+function scopeBase(base, coreSet) {
+  return {
+    ...base,
+    constraints: {
+      ...base.constraints,
+      planes: base.constraints.planes.filter((p) => coreSet.has(String(p.measurement_facet_id))),
+      adjacency: base.constraints.adjacency.filter((a) => a.facets.map(String).every((f) => coreSet.has(f))),
+    },
+  };
+}
+
+// Append a dormer's two triangular planes onto an existing doc, seated on the host slope frame.
+function seatDormer(doc, ids, dormer, planeByMid, lineById, host, approximations) {
+  const [leftMid, rightMid] = dormer.planes;
+  const p0 = planeByMid[leftMid];
+  const hw = planRunFromSlope(num(p0.width_ft), p0.pitch_rise) || host.L / (host.count + 1) * 0.25 || 3;
+  let dd = num(p0.length_ft);
+  if (dd == null || !(dd > 0)) dd = host.depth * 0.5;
+  const margin = Math.max(host.depth * 0.15, 1);
+  dd = Math.min(dd, host.depth - margin * 1.2);
+  if (!(dd > 0)) { dd = host.depth * 0.5; }
+  const cx = rnd(host.L * (host.index + 1) / (host.count + 1));
+  const yf = rnd(host.eaveY + host.up * margin);
+  const yb = rnd(yf + host.up * dd);
+  const P = (x, y) => ({ x: rnd(x), y: rnd(y) });
+  const A = P(cx, yf), FL = P(cx - hw, yf), FR = P(cx + hw, yf), PK = P(cx, yb);
+
+  const vid = (pt) => { const id = `dv_${ids.v++}`; doc.vertices.push({ id, x: pt.x, y: pt.y }); return id; };
+  const idA = vid(A), idFL = vid(FL), idFR = vid(FR), idPK = vid(PK);
+  const edge = (v1, v2, type, line, a, b) => {
+    const drawn = rnd(Math.hypot(b.x - a.x, b.y - a.y));
+    const e = line
+      ? { id: `mse_${line.id}`, measurement_edge_id: String(line.id), relational_edge_id: String(line.id), v1, v2, type: line.edge_type, confirmed_length_ft: num(line.length_ft), locked: num(line.length_ft) != null, drawn_length_ft: drawn }
+      : { id: `de_${ids.e++}`, measurement_edge_id: null, v1, v2, type, confirmed_length_ft: null, locked: false, drawn_length_ft: drawn };
+    doc.edges.push(e); return e;
+  };
+  const ridgeLine = lineById[String(dormer.ridge.measurement_edge_id)];
+  const valLeft = lineById[String(dormer.valleyByPlane[leftMid].measurement_edge_id)];
+  const valRight = lineById[String(dormer.valleyByPlane[rightMid].measurement_edge_id)];
+  const eRidge = edge(idA, idPK, "ridge", ridgeLine, A, PK);
+  const eEaveL = edge(idA, idFL, "eave", null, A, FL);
+  const eValL = edge(idFL, idPK, "valley", valLeft, FL, PK);
+  const eEaveR = edge(idA, idFR, "eave", null, A, FR);
+  const eValR = edge(idFR, idPK, "valley", valRight, FR, PK);
+  doc.facets.push({ ...facetRecord(planeByMid[leftMid], leftMid, [eEaveL.id, eValL.id, eRidge.id]), vertexIds: [idA, idFL, idPK] });
+  doc.facets.push({ ...facetRecord(planeByMid[rightMid], rightMid, [eEaveR.id, eValR.id, eRidge.id]), vertexIds: [idA, idFR, idPK] });
+  approximations.push({ severity: "warning", code: "approx_dormer_position", target_type: "facet", target_id: leftMid,
+    message: `Dormer ${(planeByMid[leftMid] && planeByMid[leftMid].label) || leftMid}/${(planeByMid[rightMid] && planeByMid[rightMid].label) || rightMid} seated on ${(planeByMid[host] && planeByMid[host].label) || host}; exact position along the slope is approximate.` });
+}
+
+function frameWithDormers(base, edgesIn, cls) {
+  const coreSet = new Set(cls.coreMids);
+  const coreBase = scopeBase(base, coreSet);
+  const coreEdges = edgesIn.filter((e) => coreSet.has(String(e.facet_id)) && (e.facet_id_secondary == null || coreSet.has(String(e.facet_id_secondary))));
+  const core = trySingleCore(coreBase, coreEdges); // dormers currently seat only on a single-core host
+  if (!core || !core.frame) return null;
+  const frame = core.frame;
+  const planeByMid = {}; base.constraints.planes.forEach((p) => { planeByMid[String(p.measurement_facet_id)] = p; });
+  const lineById = {}; edgesIn.forEach((e) => { lineById[String(e.id)] = e; });
+  const doc = core.doc;
+  const approximations = (core.approximations || []).slice();
+
+  // Group dormers by host; seat each, spread along the host eave.
+  const byHost = {}; cls.dormers.forEach((d) => (byHost[d.host] = byHost[d.host] || []).push(d));
+  const ids = { v: 0, e: 0 };
+  let unresolved = [];
+  Object.keys(byHost).sort().forEach((hostMid) => {
+    let eaveY, up, depth;
+    if (hostMid === frame.frontMid) { eaveY = 0; up = 1; depth = frame.ridgeY; }
+    else if (hostMid === frame.backMid) { eaveY = frame.W; up = -1; depth = frame.W - frame.ridgeY; }
+    else { unresolved = unresolved.concat(byHost[hostMid].flatMap((d) => d.planes)); return; } // host is a hip end -> defer these
+    const list = byHost[hostMid].slice().sort((a, b) => (a.planes[0] < b.planes[0] ? -1 : 1));
+    list.forEach((d, i) => seatDormer(doc, ids, d, planeByMid, lineById, { L: frame.L, eaveY, up, depth, index: i, count: list.length }, approximations));
+  });
+
+  // Overlapping dormers-on-host are honest overlapping polygons -> manual_polygon mode. Populate vertexIds
+  // on every facet (core facets from their edge loop) so the manual-polygon boundary resolver has them.
+  const emap = edgeMap(doc);
+  doc.facets.forEach((f) => {
+    if (!f.vertexIds || !f.vertexIds.length) {
+      const seq = edgeLoopVertices((f.edgeIds || []).map((id) => emap[id]).filter(Boolean));
+      if (seq) f.vertexIds = seq;
+    }
+  });
+  doc.edit_mode = "manual_polygon";
+
+  const v = validateSketch(doc);
+  const resolved = core.resolved.concat(cls.dormers.flatMap((d) => d.planes).filter((m) => !unresolved.includes(m)));
+  return { doc, resolved, unresolved, approximations, valid: v.valid, validation: v, method: "single_core_with_dormers", frame };
+}
+
 // Public entry. Returns null to DEFER (caller falls back) when the topology is not yet solved.
 function frameRoof(base, edgesIn, resolutions) {
   if (!base || !base.constraints || !Array.isArray(base.constraints.planes)) return null;
   const edges = (edgesIn || []).filter((e) => e && e.id != null);
+  const cls = classifyDormers(base);
+  if (cls) { const withDormers = frameWithDormers(base, edges, cls); if (withDormers && withDormers.valid) return withDormers; }
   const single = trySingleCore(base, edges);
   if (single) return single;
   const l = tryLRoof(base, edges);

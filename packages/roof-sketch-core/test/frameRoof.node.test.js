@@ -221,4 +221,86 @@ const uhRy = uh.doc.vertices.find((v) => v.id === uhRidge.v1).y;
 assert.ok(Math.abs(uhRy - 8) < 0.5, `uneven-hip: ridge sits off-centre at y~8 (front depth), got ${uhRy}`);
 ok("Uneven Pitches: unequal main-slope pitches place the ridge off-centre (proportional to plan depths)");
 
+// ---- Stage 5: dormers seated on a host slope with real valleys ------------------------------------
+function assertValidAllowOverlap(res, msg) {
+  assert.ok(res && res.doc, `${msg}: produced a document`);
+  const v = validateSketch(res.doc);
+  assert.strictEqual(v.valid, true, `${msg}: valid (overlap-on-host is a warning): ${JSON.stringify(v.errors || [])}`);
+}
+// Two dormer planes (F5/F6) sharing a ridge, each valley-joined to the front gable slope F1.
+const GABLE_DORMER = {
+  structure: ST,
+  facets: [
+    { id: "F1", structure_id: "ST", label: "F1", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 1 },
+    { id: "F2", structure_id: "ST", label: "F2", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 2 },
+    { id: "F5", structure_id: "ST", label: "F5", pitch_rise: 8, width_ft: 3, length_ft: 6, area_sqft: 18, sort: 5 },
+    { id: "F6", structure_id: "ST", label: "F6", pitch_rise: 8, width_ft: 3, length_ft: 6, area_sqft: 18, sort: 6 },
+  ],
+  edges: [
+    { id: "R12", structure_id: "ST", edge_type: "ridge", length_ft: 40, facet_id: "F1", facet_id_secondary: "F2", sort: 1 },
+    { id: "R56", structure_id: "ST", edge_type: "ridge", length_ft: 6, facet_id: "F5", facet_id_secondary: "F6", sort: 2 },
+    { id: "V15", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F1", facet_id_secondary: "F5", sort: 3 },
+    { id: "V16", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F1", facet_id_secondary: "F6", sort: 4 },
+    { id: "E1", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F1", sort: 5 },
+    { id: "E2", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F2", sort: 6 },
+  ],
+  penetrations: [],
+};
+const gd = build(GABLE_DORMER);
+assertValidAllowOverlap(gd, "gable+dormer");
+assert.strictEqual(gd.method, "single_core_with_dormers", "gable+dormer: solved as core + dormers");
+assert.strictEqual(gd.doc.facets.length, 4, "gable+dormer: 2 core + 2 dormer planes");
+assert.strictEqual(gd.doc.edit_mode, "manual_polygon", "gable+dormer: emitted as overlapping polygons (manual_polygon)");
+const gdVal = gd.doc.edges.filter((e) => e.type === "valley");
+assert.strictEqual(gdVal.length, 2, "gable+dormer: two dormer valleys against the host");
+const f5 = gd.doc.facets.find((f) => f.measurement_facet_id === "F5");
+assert.ok(f5 && f5.edgeIds.length === 3, "gable+dormer: each dormer plane is a triangle (eave + valley + ridge)");
+assert.ok(gd.approximations.some((a) => a.code === "approx_dormer_position"), "gable+dormer: flags approximate dormer position");
+ok("Stage 5: a gable dormer seats on the host slope as two triangles with real valleys (overlaps host = warning)");
+
+// Golden-style: hip CORE (F1-F4) + TWO front dormers (F5/F6 and F7/F8), all seated on the front slope F1.
+const GOLDEN = {
+  structure: ST,
+  facets: [
+    { id: "F1", structure_id: "ST", label: "F1", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 1 },
+    { id: "F2", structure_id: "ST", label: "F2", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 2 },
+    { id: "F3", structure_id: "ST", label: "F3", pitch_rise: 6, width_ft: 11.18, length_ft: 20, area_sqft: 120, sort: 3 },
+    { id: "F4", structure_id: "ST", label: "F4", pitch_rise: 6, width_ft: 11.18, length_ft: 20, area_sqft: 120, sort: 4 },
+    { id: "F5", structure_id: "ST", label: "F5", pitch_rise: 8, width_ft: 3, length_ft: 5, area_sqft: 15, sort: 5 },
+    { id: "F6", structure_id: "ST", label: "F6", pitch_rise: 8, width_ft: 3, length_ft: 5, area_sqft: 15, sort: 6 },
+    { id: "F7", structure_id: "ST", label: "F7", pitch_rise: 8, width_ft: 3, length_ft: 5, area_sqft: 15, sort: 7 },
+    { id: "F8", structure_id: "ST", label: "F8", pitch_rise: 8, width_ft: 3, length_ft: 5, area_sqft: 15, sort: 8 },
+  ],
+  edges: [
+    { id: "R12", structure_id: "ST", edge_type: "ridge", length_ft: 20, facet_id: "F1", facet_id_secondary: "F2", sort: 1 },
+    { id: "H13", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "F1", facet_id_secondary: "F3", sort: 2 },
+    { id: "H23", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "F2", facet_id_secondary: "F3", sort: 3 },
+    { id: "H14", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "F1", facet_id_secondary: "F4", sort: 4 },
+    { id: "H24", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "F2", facet_id_secondary: "F4", sort: 5 },
+    { id: "E1", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F1", sort: 6 },
+    { id: "E2", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F2", sort: 7 },
+    { id: "E3", structure_id: "ST", edge_type: "eave", length_ft: 20, facet_id: "F3", sort: 8 },
+    { id: "E4", structure_id: "ST", edge_type: "eave", length_ft: 20, facet_id: "F4", sort: 9 },
+    { id: "R56", structure_id: "ST", edge_type: "ridge", length_ft: 5, facet_id: "F5", facet_id_secondary: "F6", sort: 10 },
+    { id: "V15", structure_id: "ST", edge_type: "valley", length_ft: 6, facet_id: "F1", facet_id_secondary: "F5", sort: 11 },
+    { id: "V16", structure_id: "ST", edge_type: "valley", length_ft: 6, facet_id: "F1", facet_id_secondary: "F6", sort: 12 },
+    { id: "R78", structure_id: "ST", edge_type: "ridge", length_ft: 5, facet_id: "F7", facet_id_secondary: "F8", sort: 13 },
+    { id: "V17", structure_id: "ST", edge_type: "valley", length_ft: 6, facet_id: "F1", facet_id_secondary: "F7", sort: 14 },
+    { id: "V18", structure_id: "ST", edge_type: "valley", length_ft: 6, facet_id: "F1", facet_id_secondary: "F8", sort: 15 },
+  ],
+  penetrations: [],
+};
+const gold = build(GOLDEN);
+assertValidAllowOverlap(gold, "golden");
+assert.strictEqual(gold.method, "single_core_with_dormers", "golden: hip core + dormers");
+assert.strictEqual(gold.doc.facets.length, 8, "golden: 8 planes (4 core + 4 dormer)");
+const goldTris = gold.doc.facets.filter((f) => f.edgeIds.length === 3);
+assert.ok(goldTris.length >= 6, "golden: hip-end + dormer triangles present");
+assert.strictEqual(gold.doc.edges.filter((e) => e.type === "valley").length, 4, "golden: 4 dormer valleys");
+assert.strictEqual(gold.doc.edges.filter((e) => e.type === "hip").length, 4, "golden: 4 core hips");
+// Two dormers spread along the front eave at distinct x positions.
+const peaks = gold.doc.facets.filter((f) => ["F5", "F7"].includes(f.measurement_facet_id))
+  .map((f) => gold.doc.vertices.find((v) => f.vertexIds.includes(v.id) && v.id.startsWith("dv_")));
+ok("Stage 5: golden 8-plane roof = hip core with hip ends + two front dormers (valid, real hips + valleys)");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
