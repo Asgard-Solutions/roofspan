@@ -7,9 +7,14 @@
 //   2. a simple two-plane gable (two rectangles sharing one Ridge; adjacency from the Ridge roof line's
 //      Primary/Secondary Roof Plane relationship)
 //
-// Semantics (confirmed by the audit): a Roof Plane's area_sqft == width_ft * length_ft (the plane's own
-// SURFACE rectangle as measured — NOT pitch-adjusted). So the flat surface rectangles are laid out
-// directly from Width/Length; pitch is carried as an attribute (it is not needed to place a flat plane).
+// LOCKED dimensional semantics (see PRD "DIMENSIONAL SEMANTICS CORRECTION"):
+//   - length_ft = the ridge/eave-PARALLEL plan dimension. Used directly for plan-view X. For a gable it
+//     MUST match the shared Ridge length (no Width/Length axis swapping is permitted).
+//   - width_ft  = the SLOPED eave->ridge distance. It is deprojected to the horizontal plan run via
+//     planRunFromSlope(width_ft, pitch_rise) before being used as plan-view Y (never used raw as depth).
+//   - area_sqft = the sloped SURFACE area (~= width_ft * length_ft). It is preserved as a confirmed
+//     attribute and NEVER rewritten; an Area override (area_sqft != width*length) does not block layout.
+//   Pitch is required to deproject the sloped Width; a missing pitch is Needs Review, never assumed.
 //
 // HARD RULES:
 //   - Deterministic geometry, never AI/random. Identical input -> identical layout (up to an irrelevant
@@ -305,23 +310,23 @@ function _layoutGable(base, facetsIn, edgesIn) {
   const facetByMid = {};
   facetsIn.forEach((f) => { facetByMid[String(f.id)] = f; });
 
-  // For each plane: one dimension must match the ridge (ridge-parallel); the other is the plane depth.
+  // For each plane: Length is the ridge-parallel dimension and MUST match the shared Ridge length;
+  // Width is strictly the sloped eave->ridge depth (deprojected downstream). No axis swapping.
   function planeDepth(mid) {
     const f = facetByMid[mid];
-    const W = num(f.width_ft), L = num(f.length_ft), A = num(f.area_sqft);
+    const W = num(f.width_ft), L = num(f.length_ft);
     if (W == null || !(W > 0) || L == null || !(L > 0)) {
       return { error: { severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
         message: "Each gable plane needs both Width and Length." } };
     }
-    // Area override allowed/preserved (see single-plane note) — do not block gable generation on it.
-    const wMatch = approx(W, R, LEN_TOL), lMatch = approx(L, R, LEN_TOL);
-    if (!wMatch && !lMatch) {
+    // Length is the ridge/eave-parallel dimension: it must equal the shared Ridge length.
+    if (!approx(L, R, LEN_TOL)) {
       return { error: { severity: "error", code: "contradictory_dimensions", target_type: "facet", target_id: mid,
-        message: "Neither plane dimension matches the shared Ridge length; the gable cannot be laid out." } };
+        message: "Plane Length must match the shared Ridge length (Length is the ridge/eave-parallel dimension; Width is the sloped depth)." } };
     }
-    // both match => square-ish; depth = W deterministically (shape is identical either way).
-    const depth = wMatch && !lMatch ? L : (lMatch && !wMatch ? W : W);
-    return { depth };
+    // Area override allowed/preserved (see single-plane note) — do not block gable generation on it.
+    // Width is the sloped eave->ridge depth; it is deprojected with the plane's pitch downstream.
+    return { depth: W };
   }
   const dA = planeDepth(pAmid); if (dA.error) return _needsReview(base, [dA.error]);
   const dB = planeDepth(pBmid); if (dB.error) return _needsReview(base, [dB.error]);

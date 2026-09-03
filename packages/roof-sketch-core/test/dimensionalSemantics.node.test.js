@@ -139,6 +139,38 @@ const ov = generateSketchGeometry({
 });
 // 20*40=800 slope area, but user overrode to 850; area override is within tolerance-of-difference handling:
 // generation should NOT rewrite the Area and should still produce geometry (dims themselves are valid).
+assert.strictEqual(ov.ok, true); ok("area override: generation still succeeds (override does not block)");
 assert.strictEqual(ov.document.facets[0].confirmed_area_sqft, 850); ok("area override: confirmed Area preserved (850, not rewritten)");
+
+// ---- gable axis-semantics guard: Length is ridge-parallel, Width is the sloped depth ----
+// valid: Ridge 40 / Length 40 / Width 20 @ 6/12 still generates correctly.
+const validGable = generateSketchGeometry({
+  structure: { id: "GV" },
+  facets: [
+    { id: "FA", structure_id: "GV", pitch_rise: 6, area_sqft: 800, width_ft: 20, length_ft: 40, facet_label: "FA", sort: 0 },
+    { id: "FB", structure_id: "GV", pitch_rise: 6, area_sqft: 800, width_ft: 20, length_ft: 40, facet_label: "FB", sort: 1 },
+  ],
+  edges: [{ id: "RIDGE", edge_type: "ridge", length_ft: 40, facet_id: "FA", facet_id_secondary: "FB", sort: 0 }],
+  penetrations: [],
+});
+assert.strictEqual(validGable.ok, true); ok("axis guard: valid Ridge40/Length40/Width20 gable generates");
+validGable.document.facets.forEach((ff) => assert.ok(Math.abs(pitchAdjustedArea(facetPlanArea(validGable.document, ff), 6) - 800) < 1));
+ok("axis guard: valid gable planes round-trip to sloped Area 800");
+
+// swapped axes: Width matches the Ridge (40) and Length is the sloped depth (20) — no longer allowed to
+// silently swap. Must be Needs Review / contradictory_dimensions, never a generated geometry.
+const swappedGable = generateSketchGeometry({
+  structure: { id: "GS" },
+  facets: [
+    { id: "FA", structure_id: "GS", pitch_rise: 6, area_sqft: 800, width_ft: 40, length_ft: 20, facet_label: "FA", sort: 0 },
+    { id: "FB", structure_id: "GS", pitch_rise: 6, area_sqft: 800, width_ft: 40, length_ft: 20, facet_label: "FB", sort: 1 },
+  ],
+  edges: [{ id: "RIDGE", edge_type: "ridge", length_ft: 40, facet_id: "FA", facet_id_secondary: "FB", sort: 0 }],
+  penetrations: [],
+});
+assert.strictEqual(swappedGable.ok, false); ok("axis guard: swapped Width40/Length20 gable is NOT generated");
+assert.strictEqual(swappedGable.status, "needs_review"); ok("axis guard: swapped-axis gable -> needs_review");
+assert.ok(swappedGable.diagnostics.some((d) => d.code === "contradictory_dimensions"));
+ok("axis guard: swapped-axis gable reports contradictory_dimensions (no silent axis swap)");
 
 console.log("\nDIMENSIONAL SEMANTICS: all " + n + " assertions passed");
