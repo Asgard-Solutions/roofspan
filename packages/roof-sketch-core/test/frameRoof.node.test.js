@@ -189,4 +189,36 @@ const orchHip = generateSketchGeometry(HIP);
 assert.strictEqual(orchHip.ok, true, "orchestrator still solves the standard hip");
 ok("Stage 7: generateSketchGeometry routes complex roofs to the framing solver (L-roof solved end-to-end)");
 
+// ---- Uneven Pitches: a hip whose two MAIN slopes have different pitches -> ridge sits OFF-CENTRE -----
+// Front pitch 12/12 (plan depth 8), back pitch 4/12 (plan depth 12) => W=20, ridge at y=8 (not 10).
+// front sloped width = 8*sqrt(1+(12/12)^2)=11.314; back = 12*sqrt(1+(4/12)^2)=12.649.
+const UNEVEN_HIP = {
+  structure: ST,
+  facets: [
+    { id: "M1", structure_id: "ST", label: "M1", pitch_rise: 12, width_ft: 11.314, length_ft: 40, area_sqft: 400, sort: 1 }, // front main
+    { id: "M2", structure_id: "ST", label: "M2", pitch_rise: 4, width_ft: 12.649, length_ft: 40, area_sqft: 400, sort: 2 },  // back main
+    { id: "P3", structure_id: "ST", label: "P3", pitch_rise: 8, width_ft: 11.18, length_ft: 20, area_sqft: 120, sort: 3 },
+    { id: "P4", structure_id: "ST", label: "P4", pitch_rise: 8, width_ft: 11.18, length_ft: 20, area_sqft: 120, sort: 4 },
+  ],
+  edges: [
+    { id: "RG", structure_id: "ST", edge_type: "ridge", length_ft: 16, facet_id: "M1", facet_id_secondary: "M2", sort: 1 },
+    { id: "h13", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "M1", facet_id_secondary: "P3", sort: 2 },
+    { id: "h23", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "M2", facet_id_secondary: "P3", sort: 3 },
+    { id: "h14", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "M1", facet_id_secondary: "P4", sort: 4 },
+    { id: "h24", structure_id: "ST", edge_type: "hip", length_ft: 15, facet_id: "M2", facet_id_secondary: "P4", sort: 5 },
+    { id: "eM1", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "M1", sort: 6 },
+    { id: "eM2", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "M2", sort: 7 },
+    { id: "eP3", structure_id: "ST", edge_type: "eave", length_ft: 20, facet_id: "P3", sort: 8 },
+    { id: "eP4", structure_id: "ST", edge_type: "eave", length_ft: 20, facet_id: "P4", sort: 9 },
+  ],
+  penetrations: [],
+};
+const uh = build(UNEVEN_HIP);
+assertValidRoof(uh, "uneven-hip");
+assert.strictEqual(uh.doc.facets.length, 4, "uneven-hip: 4 planes");
+const uhRidge = uh.doc.edges.find((e) => e.type === "ridge");
+const uhRy = uh.doc.vertices.find((v) => v.id === uhRidge.v1).y;
+assert.ok(Math.abs(uhRy - 8) < 0.5, `uneven-hip: ridge sits off-centre at y~8 (front depth), got ${uhRy}`);
+ok("Uneven Pitches: unequal main-slope pitches place the ridge off-centre (proportional to plan depths)");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);

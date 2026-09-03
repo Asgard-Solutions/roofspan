@@ -99,11 +99,11 @@ function trySingleCore(base, edgesIn) {
   const accounted = new Set([mainA, mainB, ...endMids]);
   if (planes.some((p) => !accounted.has(String(p.measurement_facet_id)))) return null;
 
-  // Symmetric core: equal pitch across all planes (the ridge sits at mid-depth). An unequal-pitch core
-  // is not uniquely determined by this construction -> defer to a later phase.
+  // Every plane must carry a pitch (needed to deproject the sloped Width). Unequal pitches ARE supported:
+  // the ridge sits proportionally between the two eaves by each main slope's plan depth (not mid-depth).
   const allMids = [mainA, mainB, ...endMids];
   const pitchList = allMids.map((m) => num(planeByMid[m].pitch_rise));
-  if (pitchList.some((p) => p == null) || pitchList.some((p) => Math.abs(p - pitchList[0]) > 0.01)) return null;
+  if (pitchList.some((p) => p == null)) return null;
 
   const sharedMids = new Set(adj.map((a) => String(a.measurement_edge_id)));
   const lineById = {}; edgesIn.forEach((e) => { lineById[String(e.id)] = e; });
@@ -144,7 +144,17 @@ function trySingleCore(base, edgesIn) {
     else if (loMid) { insetLo = totalInset; } else { insetHi = totalInset; }
   }
   if (insetLo + insetHi >= L) return null; // ridge would vanish/invert -> not a clean core
-  const ridgeY = rnd(W / 2);
+  // Ridge Y: proportional to each main slope's plan depth (unequal pitch -> off-centre ridge). Equal
+  // pitch collapses to mid-depth (W/2). Falls back to mid-depth when a slope depth is unknown.
+  let ridgeY;
+  if (runFront != null && runFront > 0 && runBack != null && runBack > 0) {
+    ridgeY = rnd(W * (runFront / (runFront + runBack)));
+  } else {
+    ridgeY = rnd(W / 2);
+    if (pitchList[0] != null && !pitchList.every((p) => Math.abs(p - pitchList[0]) < 0.01)) {
+      approximations.push({ severity: "warning", code: "approx_ridge_position", target_type: "structure", target_id: base.structure_id, message: "Unequal pitch but ridge centred (missing sloped Width to place it exactly)." });
+    }
+  }
 
   const b = makeBuilder();
   const P = (x, y) => ({ x: rnd(x), y: rnd(y) });
