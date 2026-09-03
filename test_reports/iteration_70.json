@@ -1,0 +1,49 @@
+{
+  "summary": "Verified the NEW deterministic ridge-based Roof-Framing Solver (frameRoof.js) renders the seeded L-roof revision correctly in the Office Roof Sketch editor. All 4 test criteria met.",
+  "test_criteria_results": {
+    "1_navigate_to_l_roof_sketch": "PASS. Logged in as pjacobsen@asgardsolution.io, navigated to lead e7b41ad7-cc50-4a56-ae70-30558c974c4a. Roof measurements auto-loaded Rev 4 (Draft, 9 sq, 4 planes) whose GET /api/measurements/b5a05924-6028-4421-bc22-09c88d944790/sketches/<sid> returned 404 (confirming the target revision id and that it has no saved sketch). Structure 'L-Roof House' visible; clicked 'Sketch Roof' button. Roof Sketch editor opened with empty canvas and generate-proposed-btn visible (regenerate-proposed-btn absent).",
+    "2_generate_high_confidence": "PASS. Clicked [data-testid='generate-proposed-btn']. [data-testid='generate-proposal-panel'] appeared with header 'PROPOSED SKETCH (UNSAVED)' and [data-testid='generate-readiness'] = 'High confidence' (NOT 'Needs review', NOT empty). No placement-resolver panel rendered (correct — deterministic solver bypasses resolver).",
+    "3_four_planes_l_shape_hip_valley": "PASS. Canvas SVG rendered exactly 4 polygons forming a real L outline: F1 (0,0)-(40,0)-(40,10)-(10,10) [40x10 top wing], F2 (10,10)-(40,10)-(40,20)-(20,20) [30x10 hip triangle-ish plane], F3 (0,0)-(10,10)-(10,30)-(0,30) [tall left plane], F4 (10,10)-(20,20)-(20,30)-(10,30) [bottom-middle plane]. Diagonal edge from (10,10)->(20,20) is the ridge/hip/valley junction (14.1 LF drawn ≈ 14 LF confirmed). 12 line elements with 4 distinct stroke colors (red #dc2626 = ridge x2, orange #ea580c = valley x1, cyan #0891b2 = hip x1, blue+purple = eaves/rakes). Edge labels visible: 40.0 LF, 30.0 LF, 20.0 LF x2, 10.0 LF x4, 14.0 LF x2 (both showing 'Confirmed: 14 LF / Drawn geometry: 14.1 LF / Difference: +0.1 LF' locked). No overlapping pinwheel triangles. VALIDATION panel shows 'No issues.'",
+    "4_use_proposed_adopts_without_error": "PASS. [data-testid='generate-use-btn'] enabled; clicked. Toast 'Proposed sketch adopted. Review and Save when ready.' appeared. Proposal panel closed. Canvas retained the same 4-plane L-shape as an unsaved working edit (12 lines, 16 texts, 4 polygons persist). Toolbar returned 'Generate Proposed Sketch' to inactive state. No console/page runtime errors (only pre-existing unrelated /api/mobile/photos and empty-sketch 404 GETs before proposal, which are expected)."
+  },
+  "geometry_captured": {
+    "polygons": [
+      "0,0 40,0 40,10 10,10",
+      "10,10 40,10 40,19.999 19.999,19.999",
+      "0,0 10,10 10,30 0,30",
+      "10,10 19.999,19.999 19.999,30 10,30"
+    ],
+    "line_stroke_histogram": {"#dc2626 (ridge)": 2, "#ea580c (valley)": 1, "#0891b2 (hip)": 1, "eaves/rakes (blue/purple)": 8},
+    "edge_labels": ["F1 · 6/12", "F2 · 6/12", "F3 · 6/12", "F4 · 6/12", "40.0 LF", "30.0 LF x2", "20.0 LF x2", "14.0 LF x2 (Confirmed 14 / Drawn 14.1)", "10.0 LF x4"]
+  },
+  "network_calls_captured": [
+    "GET /api/measurements?lead_id=e7b41ad7... -> 200",
+    "GET /api/measurements/b5a05924-6028-4421-bc22-09c88d944790 -> 200",
+    "GET /api/measurements/b5a05924.../sketches -> 200 (empty)",
+    "GET /api/measurements/b5a05924.../sketches/205cd743-bef3-467a-8adc-f774f309d3bc -> 404 (expected — no saved sketch on fresh draft)"
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "RoofSketchEditor Proposals panel (L-Roof, high-confidence solver output)", "issues": [
+        "Even though readiness = 'High confidence' and Validation = 'No issues', per-facet SF proposals show non-trivial deltas from measured (F1 300->391 +91, F2 200->279 +79, F3 250->280 +30, F4 150->168 +18). These are 30%+ overstatements on F1/F2 driven by the solver's chosen plate depth (10 ft) vs. the measured width (11.18 ft from 6/12 pitch on the depth-of-40 ridge). This is a solver approximation ambiguity, not a runtime error, but users may find it confusing that a 'High confidence' proposal still needs 'Accept Proposed / Keep Current' on every facet. Consider auto-scaling depth from measured width or surfacing a subtle 'Approximated plate depth' note when SF diff > 20%."
+      ]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "frameRoof solver appears to output geometry in unit-square coordinates (widths of 10 or 30 ft) rather than scaling to measured facet widths. The proposal panel already flags the per-facet SF diff, but the discrepancy vs. measured (11.18 ft width for a 40-ft-ridge / 300 SF plane) suggests the solver should scale by measured area or width. Since test passes for readiness/geometry structure, this is a follow-up refinement, not a blocker.",
+    "The empty-sketch backend call GET /api/measurements/{revId}/sketches/{sid} returns 404 and logs a console error; consider swallowing this expected 404 or returning an empty 200 body to avoid noisy console errors on every fresh sketch open."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only per request)", "frontend": "100% (4/4 criteria)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "None. Used the pre-seeded L-Roof House structure on revision b5a05924-6028-4421-bc22-09c88d944790 of lead e7b41ad7. Left in an unsaved 'Proposed adopted' state (not persisted — no Save Sketch clicked, per test spec which only required adoption).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Navigation path: Login -> /leads/e7b41ad7-cc50-4a56-ae70-30558c974c4a auto-loads Rev 4 (L-Roof House, 4 planes, revision id b5a05924...). Click 'Sketch Roof' button in Structures section. generate-proposed-btn is visible because no saved sketch exists. Clicking it renders the L-shape directly (no placement-resolver — the new frameRoof solver is deterministic). The generate-use-btn adopts without error. NOTE: Since I did NOT save the sketch, the revision remains a fresh DRAFT with no saved sketch — the test is re-runnable end-to-end.",
+  "rca of the issue": "N/A — verification passed. New frameRoof solver correctly emits an L-roof with 4 planes, 2 ridges, 1 hip, 1 valley, 4 eaves; renders as a proper L outline (no pinwheel), readiness=High confidence, adoption via Use Proposed works without runtime error."
+}
