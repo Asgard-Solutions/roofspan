@@ -430,4 +430,50 @@ assert.ok(new Set(apexYs.map((y) => Math.round(y))).size >= 2, "multi-wing: the 
 assert.ok(mw.doc.vertices.filter((v) => v.y < -1).length >= 4, "multi-wing: both wings project beyond the host eave");
 ok("Multi-Wing Homes: a main gable with two different-width wings auto-draws in one pass (each notches the host, no overlap)");
 
+// ---- Real-data hip core + SHED dormers (no dormer ridges, shared long/short eaves) --------------------
+// Mirrors a real 8-plane roof: hip core (F1/F2 mains + F3/F4 hip ends) whose long/short eaves are recorded
+// as shared facet-to-facet eaves, plus FOUR single-plane (shed) dormers valley-joined to the mains with no
+// ridge between them, plus stray facet-to-facet eaves. Must auto-draw (not defer to needs-review).
+const HIP_SHED = {
+  structure: ST,
+  facets: [
+    { id: "F1", structure_id: "ST", label: "F1", pitch_rise: 8, width_ft: 25, length_ft: 25, area_sqft: 625, sort: 1 },
+    { id: "F2", structure_id: "ST", label: "F2", pitch_rise: 8, width_ft: 25, length_ft: 25, area_sqft: 625, sort: 2 },
+    { id: "F3", structure_id: "ST", label: "F3", pitch_rise: 8, width_ft: 15.5, length_ft: 20, area_sqft: 310, sort: 3 },
+    { id: "F4", structure_id: "ST", label: "F4", pitch_rise: 8, width_ft: 15.5, length_ft: 20, area_sqft: 310, sort: 4 },
+    { id: "F5", structure_id: "ST", label: "F5", pitch_rise: 10, width_ft: 9, length_ft: 6, area_sqft: 54, sort: 5 },
+    { id: "F6", structure_id: "ST", label: "F6", pitch_rise: 10, width_ft: 9, length_ft: 6, area_sqft: 54, sort: 6 },
+    { id: "F7", structure_id: "ST", label: "F7", pitch_rise: 10, width_ft: 9, length_ft: 6, area_sqft: 54, sort: 7 },
+    { id: "F8", structure_id: "ST", label: "F8", pitch_rise: 10, width_ft: 9, length_ft: 6, area_sqft: 54, sort: 8 },
+  ],
+  edges: [
+    { id: "RG", structure_id: "ST", edge_type: "ridge", length_ft: 34, facet_id: "F1", facet_id_secondary: "F2", sort: 1 },
+    { id: "H13", structure_id: "ST", edge_type: "hip", length_ft: 28, facet_id: "F1", facet_id_secondary: "F3", sort: 2 },
+    { id: "H14", structure_id: "ST", edge_type: "hip", length_ft: 28, facet_id: "F1", facet_id_secondary: "F4", sort: 3 },
+    { id: "H23", structure_id: "ST", edge_type: "hip", length_ft: 24, facet_id: "F2", facet_id_secondary: "F3", sort: 4 },
+    { id: "H24", structure_id: "ST", edge_type: "hip", length_ft: 24, facet_id: "F2", facet_id_secondary: "F4", sort: 5 },
+    { id: "EL", structure_id: "ST", edge_type: "eave", length_ft: 50, facet_id: "F1", facet_id_secondary: "F2", sort: 6 }, // shared long eave
+    { id: "ES", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F3", facet_id_secondary: "F4", sort: 7 }, // shared short eave
+    { id: "V15", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F1", facet_id_secondary: "F5", sort: 8 },
+    { id: "V16", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F1", facet_id_secondary: "F6", sort: 9 },
+    { id: "V27", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F2", facet_id_secondary: "F7", sort: 10 },
+    { id: "V28", structure_id: "ST", edge_type: "valley", length_ft: 7, facet_id: "F2", facet_id_secondary: "F8", sort: 11 },
+    { id: "RK5", structure_id: "ST", edge_type: "rake", length_ft: 8, facet_id: "F5", sort: 12 },
+    { id: "RK6", structure_id: "ST", edge_type: "rake", length_ft: 8, facet_id: "F6", sort: 13 },
+    { id: "RK7", structure_id: "ST", edge_type: "rake", length_ft: 8, facet_id: "F7", sort: 14 },
+    { id: "RK8", structure_id: "ST", edge_type: "rake", length_ft: 8, facet_id: "F8", sort: 15 },
+  ],
+  penetrations: [],
+};
+const hs = build(HIP_SHED);
+assertValidAllowOverlap(hs, "hip+shed-dormers");
+assert.strictEqual(hs.method, "single_core_with_dormers", "real-data hip core + shed dormers auto-solves (not needs-review)");
+assert.strictEqual(hs.doc.facets.length, 8, "hip+shed: 8 planes (hip core + 4 shed dormers)");
+assert.strictEqual(hs.doc.edges.filter((e) => e.type === "hip").length, 4, "hip+shed: 4 core hips");
+assert.strictEqual(hs.doc.edges.filter((e) => e.type === "valley").length, 4, "hip+shed: 4 dormer valleys");
+// The core footprint uses the real shared eaves (long 50 / short 40), not the length_ft fallback.
+const xs = hs.doc.vertices.filter((v) => v.id.startsWith("fv_")).map((v) => v.x);
+assert.ok(Math.max(...xs) - Math.min(...xs) > 45, "hip+shed: core uses the real 50 ft long eave, not the 25 ft length fallback");
+ok("Real-data: a hip core with shared eaves + four SHED dormers (no dormer ridges) auto-draws instead of Needs review");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
