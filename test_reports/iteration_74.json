@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only verification of the 8-plane HIP CORE + 4 single-plane DORMER auto-draft on the real user lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086 / structure 'House'. All 4 review-request checks PASSED. The framing solver now correctly detects the hip core via component analysis, handles shared eaves, and draws the four single-plane shed dormers — no more 'Needs review'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verification_details": {
+    "test_1_thumbnail": "data-testid='structure-roof-thumbnail-0' on the 'House' structure row is a real SVG with 8 <polygon> facets and 21 <line> segments (hip core with two triangular hip-end facets + four dormer facets on the main slopes). NOT the 'needs review' placeholder. Visible in the worksheet screenshot as a hip-with-dormers shape.",
+    "test_2_generate_proposed": "Clicked data-testid='sketch-roof-btn-0' to open Roof Sketch editor for 'House', then data-testid='generate-proposed-btn'. Panel header 'PROPOSED SKETCH (UNSAVED)' with data-testid='generate-readiness' = 'High confidence'. Canvas rendered a REAL 8-facet hip roof: F1/F2 = 8/12 · 625 SF (25x25 main slopes meeting at a ridge = 34.0 LF), F3/F4 = 8/12 · 310 SF (15.5x20 triangular hip ends), F5/F6 = 10/12 · 126 SF (9x14 dormers), F7 = 6/12 · 126 SF, F8 = 6/12 · 250 SF (12.5x20) dormers seated on the main slopes. Roof lines summary: Eave 90.0 LF, Ridge 34.0 LF, Hip 104.0 LF, Valley 80.0 LF, Rake 36.0 LF, Sidewall 32.0 LF. Hip lines (orange) and valley lines (cyan) clearly visible connecting the dormers to the main slopes. Panel shows '2498 SF · 24.98 sq · 8 planes'. NOT 'Needs review', NOT an empty canvas, NOT the old 'resolve placement' scaffold.",
+    "test_3_use_proposed": "data-testid='generate-use-btn' present and enabled. Click triggered success toast 'Proposed sketch adopted. Review and Save when ready.' Header state changed to 'Saved'. Save Sketch button available. No runtime error, no red error banners.",
+    "console_errors": "Only 2 unrelated 404s for static resources. No frameRoof / generateSketchGeometry / RoofThumbnail errors."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Validation panel shows 5 'Facet interiors overlap' warnings on the adopted sketch — likely dormers slightly clipping into their host main-slope facets or two dormers on the same slope being coincident at their bases. Not blocking (Use Proposed still adopts and saves), but worth reviewing dormer footprint carving on main slopes so the adopted sketch is clean.",
+    "'Measurements used: 0 planes · 0 roof lines' wording still appears in the proposal panel even though 8 planes/edges are being solver-generated. Same cosmetic wording issue flagged in iteration_73."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None — used the real user lead as provided.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Hip-core-with-4-dormers auto-draft verified end-to-end on the real user lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086 / structure 'House' (rev 422ea69c-f870-4c5c-877f-706ce9b632bd). Method single_core_with_dormers produces 8 facets + 4 hips + 4 valleys at High confidence. Two follow-ups if polishing: (1) 5 'Facet interiors overlap' warnings on the generated dormer geometry — investigate dormer footprint carving; (2) cosmetic 'Measurements used: 0 planes · 0 roof lines' wording."
+}
