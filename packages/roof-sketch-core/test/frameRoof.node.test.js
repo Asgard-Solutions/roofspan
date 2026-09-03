@@ -389,4 +389,45 @@ const apexShared = vEdges[0].v1 === vEdges[1].v1 || vEdges[0].v1 === vEdges[1].v
 assert.ok(apexShared, "cross-gable: the two valleys meet at the wing-ridge apex");
 ok("Unequal-Width Wings: a projecting cross-gable wing notches the host slope with two true concave valleys (no overlap)");
 
+// ---- Multi-Wing Homes: a main gable with TWO wings of DIFFERENT widths, each notching the host slope ---
+// Wing A (wide, Wg~18) on the left; Wing B (narrower, Wg~12) on the right. Both project past the front eave.
+const MULTI_WING = {
+  structure: ST,
+  facets: [
+    { id: "M1", structure_id: "ST", label: "M1", pitch_rise: 6, width_ft: 11.18, length_ft: 60, area_sqft: 700, sort: 1 }, // host front
+    { id: "M2", structure_id: "ST", label: "M2", pitch_rise: 6, width_ft: 11.18, length_ft: 60, area_sqft: 700, sort: 2 }, // back
+    { id: "A1", structure_id: "ST", label: "A1", pitch_rise: 6, width_ft: 10.06, length_ft: 18, area_sqft: 180, sort: 3 }, // wing A (Wg~18)
+    { id: "A2", structure_id: "ST", label: "A2", pitch_rise: 6, width_ft: 10.06, length_ft: 18, area_sqft: 180, sort: 4 },
+    { id: "B1", structure_id: "ST", label: "B1", pitch_rise: 6, width_ft: 6.7, length_ft: 14, area_sqft: 95, sort: 5 },   // wing B (Wg~12)
+    { id: "B2", structure_id: "ST", label: "B2", pitch_rise: 6, width_ft: 6.7, length_ft: 14, area_sqft: 95, sort: 6 },
+  ],
+  edges: [
+    { id: "RM", structure_id: "ST", edge_type: "ridge", length_ft: 60, facet_id: "M1", facet_id_secondary: "M2", sort: 1 },
+    { id: "RA", structure_id: "ST", edge_type: "ridge", length_ft: 18, facet_id: "A1", facet_id_secondary: "A2", sort: 2 },
+    { id: "RB", structure_id: "ST", edge_type: "ridge", length_ft: 14, facet_id: "B1", facet_id_secondary: "B2", sort: 3 },
+    { id: "VA1", structure_id: "ST", edge_type: "valley", length_ft: 13, facet_id: "M1", facet_id_secondary: "A1", sort: 4 },
+    { id: "VA2", structure_id: "ST", edge_type: "valley", length_ft: 13, facet_id: "M1", facet_id_secondary: "A2", sort: 5 },
+    { id: "VB1", structure_id: "ST", edge_type: "valley", length_ft: 9, facet_id: "M1", facet_id_secondary: "B1", sort: 6 },
+    { id: "VB2", structure_id: "ST", edge_type: "valley", length_ft: 9, facet_id: "M1", facet_id_secondary: "B2", sort: 7 },
+    { id: "EM1", structure_id: "ST", edge_type: "eave", length_ft: 60, facet_id: "M1", sort: 8 },
+    { id: "EM2", structure_id: "ST", edge_type: "eave", length_ft: 60, facet_id: "M2", sort: 9 },
+    { id: "EA1", structure_id: "ST", edge_type: "eave", length_ft: 18, facet_id: "A1", sort: 10 },
+    { id: "EA2", structure_id: "ST", edge_type: "eave", length_ft: 18, facet_id: "A2", sort: 11 },
+    { id: "EB1", structure_id: "ST", edge_type: "eave", length_ft: 14, facet_id: "B1", sort: 12 },
+    { id: "EB2", structure_id: "ST", edge_type: "eave", length_ft: 14, facet_id: "B2", sort: 13 },
+  ],
+  penetrations: [],
+};
+const mw = build(MULTI_WING);
+assertValidRoof(mw, "multi-wing"); // NO overlap: two independent notches in the host slope
+assert.strictEqual(mw.method, "cross_gable_multi", "multi-wing: solved as a multi-wing cross-gable");
+assert.strictEqual(mw.doc.facets.length, 6, "multi-wing: 6 planes (main + 2 wings)");
+assert.strictEqual(mw.doc.edges.filter((e) => e.type === "valley").length, 4, "multi-wing: four valleys (two per wing)");
+assert.strictEqual(mw.doc.edges.filter((e) => e.type === "ridge").length, 3, "multi-wing: three ridges (main + two wings)");
+// Two wings of DIFFERENT widths => two distinct notch widths on the host slope.
+const apexYs = mw.doc.vertices.filter((v) => v.y > 0 && v.y < 11).map((v) => v.y);
+assert.ok(new Set(apexYs.map((y) => Math.round(y))).size >= 2, "multi-wing: the two wings have different widths (distinct valley apex heights)");
+assert.ok(mw.doc.vertices.filter((v) => v.y < -1).length >= 4, "multi-wing: both wings project beyond the host eave");
+ok("Multi-Wing Homes: a main gable with two different-width wings auto-draws in one pass (each notches the host, no overlap)");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
