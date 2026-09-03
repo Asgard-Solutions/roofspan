@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## North Arrow + Scale Bar + Export + Overlap Guard — DONE & VERIFIED (2026-06)
+Combined Site Plan polish (core unit-tested; testing_agent iterations 78-79 = 100% frontend).
+- **North arrow & scale bar** — `CombinedSitePlan.jsx`: north arrow (top-right, `site-plan-north`) + a "nice"-rounded foot scale bar (bottom-left, `site-plan-scalebar`, via `niceScaleFeet`) with a semi-white backing.
+- **Export** — `PNG` (`site-plan-export-png`) and `PDF` (`site-plan-export-pdf`) buttons rasterize the SVG client-side (SVG→Image→2x canvas→white bg) → PNG blob download, or embed into a labeled landscape letter PDF via `jspdf` (added `jspdf@^4.2.1`, `--ignore-engines`). Text fills switched to inline `fill=` so rasterization keeps colors; failures now surface a sonner toast. Verified real `site-plan.png` / `site-plan.pdf` downloads.
+- **Overlap guard** — `combineStructures.js` Phase 2: after applying user drag offsets, deterministically nudges any interior-overlapping structure apart. Only the higher-indexed (later/smaller) structure moves, by the **minimal translation to the nearest side** (candidates right/left/down/up → smallest), which fully clears even a small structure dragged INSIDE a large one. Flush attached structures only touch (no interior overlap) so they're untouched. Locked by 2 tests (colliding side-drag; small-inside-large).
+- **INFRA:** `yarn add jspdf` clobbered the `@roofspan/roof-sketch-core` symlink into a stale COPY (see `/app/memory/roof_sketch_core_symlink_gotcha.md`). Restored the symlink; frontend now reliably loads source.
+
+
 ## Smarter Garage + Site Plan Labels + Editor Offset Guide — DONE & VERIFIED (2026-06)
 Three refinements (all unit-tested; testing_agent iteration_77 = 3/3 frontend green).
 - **Smarter Garage (inference proportions)** — `inferTopology.js` now derives the roof DEPTH from the two main slope planes' own widths (`planRun(width,pitch)` per slope, summed) instead of a synthesized end eave, and insets each hip END by that end plane's plan run (`planRun(end.width,pitch)`) so the ridge length + hip triangle match the measured planes. The d0df5baa garage now draws 21′(ridge)×~36′(depth); its hip-end plan footprint ≈ 224 SF = G3's measured area (was a wrong ~16 ft depth). Locked by a test asserting depth≈35.8 and end-area≈224.

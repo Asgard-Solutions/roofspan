@@ -110,6 +110,46 @@ ok("combineStructuresSitePlan honours per-structure drag offsets deterministical
 
 console.log(`\nCOMBINE + OFFSET: ${n} assertions passed.`);
 
+// ---- (2b) overlap guard: a big drag that would overlap a neighbour gets nudged apart --------------
+const overlapInput = {
+  structures: [
+    { id: "H", name: "House", structure_type: "main_house", included_in_scope: true, sort: 0 },
+    { id: "D", name: "Detached Shop", structure_type: "detached_garage", included_in_scope: true, sort: 1 },
+  ],
+  facets: [...HOUSE_F, ...GAR_F.map((f) => ({ ...f, structure_id: "D" }))],
+  edges: [...HOUSE_E, ...GAR_E.map((e) => ({ ...e, structure_id: "D" }))],
+  penetrations: [],
+  // Drag the shop far LEFT so it would sit on top of the house.
+  offsets: { D: { dx: -60, dy: 0 } },
+};
+const guarded = combineStructuresSitePlan(overlapInput);
+const H = guarded.placements.find((p) => p.label === "House");
+const D = guarded.placements.find((p) => p.label === "Detached Shop");
+const overlapX = Math.min(H.bbox.x + H.bbox.width, D.bbox.x + D.bbox.width) - Math.max(H.bbox.x, D.bbox.x);
+const overlapY = Math.min(H.bbox.y + H.bbox.height, D.bbox.y + D.bbox.height) - Math.max(H.bbox.y, D.bbox.y);
+assert.ok(!(overlapX > 0.1 && overlapY > 0.1), `guard: structures do not interior-overlap after a colliding drag (ox=${overlapX.toFixed(1)}, oy=${overlapY.toFixed(1)})`);
+assert.deepStrictEqual(combineStructuresSitePlan(overlapInput).placements, guarded.placements, "guard: overlap resolution is deterministic");
+n++; console.log("  ok - overlap guard nudges a colliding structure apart (deterministically)");
+
+// A SMALL structure dragged fully INSIDE a large one must be pushed completely clear (not just by the
+// overlap width). Porch (20x8) dragged onto the middle of the House (50x40).
+const insideInput = {
+  structures: [
+    { id: "H", name: "House", structure_type: "main_house", included_in_scope: true, sort: 0 },
+    { id: "P", name: "Porch", structure_type: "detached_garage", included_in_scope: true, sort: 1 },
+  ],
+  facets: [...HOUSE_F, { id: "P1", structure_id: "P", label: "P1", pitch_rise: 4, area_sqft: 160, width_ft: 8, length_ft: 20, sort: 0 }],
+  edges: [...HOUSE_E, { id: "EP", structure_id: "P", edge_type: "eave", length_ft: 20, facet_id: "P1", sort: 1 }],
+  penetrations: [],
+  offsets: { P: { dx: -40, dy: -18 } }, // shove the small porch deep into the house
+};
+const ig = combineStructuresSitePlan(insideInput);
+const IH = ig.placements.find((p) => p.label === "House"), IP = ig.placements.find((p) => p.label === "Porch");
+const ox2 = Math.min(IH.bbox.x + IH.bbox.width, IP.bbox.x + IP.bbox.width) - Math.max(IH.bbox.x, IP.bbox.x);
+const oy2 = Math.min(IH.bbox.y + IH.bbox.height, IP.bbox.y + IP.bbox.height) - Math.max(IH.bbox.y, IP.bbox.y);
+assert.ok(!(ox2 > 0.1 && oy2 > 0.1), `guard: a small structure dragged INSIDE a large one is pushed fully clear (ox=${ox2.toFixed(1)}, oy=${oy2.toFixed(1)})`);
+n++; console.log("  ok - overlap guard fully clears a small structure dragged inside a large one");
+
 // ---- (3) topology inference: a structure with planes but NO roof lines still auto-draws -----------
 const { inferTopologyEdges } = require("../inferTopology");
 const { generateSketchGeometry } = require("../generateSketchGeometry");
