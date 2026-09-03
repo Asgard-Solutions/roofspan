@@ -350,4 +350,43 @@ const UNEQUAL_L = { ...LROOF, facets: LROOF.facets.map((f) => (f.id === "F3" || 
 assert.strictEqual(build(UNEQUAL_L), null, "Stage 6: unequal-width L defers (no wrong geometry) -> falls back to the resolver");
 ok("Stage 6: unequal-width L safely defers instead of drawing incorrect geometry");
 
+// ---- Unequal-Width Wings: a projecting cross-gable wing notches the host slope with two true valleys --
+// Main gable (M1 front / M2 back), width Wm=20. A wing (G1/G2, width Wg~18) projects past the front eave.
+// front slope depth Wm/2=10 -> main width_ft=11.18; wing half-width Wg/2=9 -> wing width_ft=9*sqrt(1.25)=10.06.
+const CROSS_GABLE = {
+  structure: ST,
+  facets: [
+    { id: "M1", structure_id: "ST", label: "M1", pitch_rise: 6, width_ft: 11.18, length_ft: 48, area_sqft: 500, sort: 1 }, // host front
+    { id: "M2", structure_id: "ST", label: "M2", pitch_rise: 6, width_ft: 11.18, length_ft: 48, area_sqft: 500, sort: 2 }, // back
+    { id: "G1", structure_id: "ST", label: "G1", pitch_rise: 6, width_ft: 10.06, length_ft: 16, area_sqft: 160, sort: 3 }, // wing left
+    { id: "G2", structure_id: "ST", label: "G2", pitch_rise: 6, width_ft: 10.06, length_ft: 16, area_sqft: 160, sort: 4 }, // wing right
+  ],
+  edges: [
+    { id: "RM", structure_id: "ST", edge_type: "ridge", length_ft: 48, facet_id: "M1", facet_id_secondary: "M2", sort: 1 },
+    { id: "RG", structure_id: "ST", edge_type: "ridge", length_ft: 16, facet_id: "G1", facet_id_secondary: "G2", sort: 2 },
+    { id: "VL", structure_id: "ST", edge_type: "valley", length_ft: 13, facet_id: "M1", facet_id_secondary: "G1", sort: 3 },
+    { id: "VR", structure_id: "ST", edge_type: "valley", length_ft: 13, facet_id: "M1", facet_id_secondary: "G2", sort: 4 },
+    { id: "EM1", structure_id: "ST", edge_type: "eave", length_ft: 48, facet_id: "M1", sort: 5 },
+    { id: "EM2", structure_id: "ST", edge_type: "eave", length_ft: 48, facet_id: "M2", sort: 6 },
+    { id: "EG1", structure_id: "ST", edge_type: "eave", length_ft: 16, facet_id: "G1", sort: 7 },
+    { id: "EG2", structure_id: "ST", edge_type: "eave", length_ft: 16, facet_id: "G2", sort: 8 },
+  ],
+  penetrations: [],
+};
+const cg = build(CROSS_GABLE);
+assertValidRoof(cg, "cross-gable"); // NO overlap: the host slope is notched, not overlaid
+assert.strictEqual(cg.method, "cross_gable", "cross-gable: solved as a projecting cross-gable");
+assert.strictEqual(cg.doc.facets.length, 4, "cross-gable: 4 planes");
+assert.strictEqual(cg.doc.edges.filter((e) => e.type === "valley").length, 2, "cross-gable: two true valleys");
+// The host front slope is NOTCHED: it has 7 boundary edges (eave split by the valley notch to the apex).
+const front = cg.doc.facets.find((f) => f.measurement_facet_id === "M1");
+assert.strictEqual(front.edgeIds.length, 7, "cross-gable: host slope is notched (eave split + two valleys + ridge + rakes)");
+// The wing projects PAST the host eave (some vertices sit outside the main footprint, y < 0).
+assert.ok(cg.doc.vertices.some((v) => v.y < -1), "cross-gable: wing projects beyond the host eave");
+// The two valleys converge at the wing-ridge apex on the host slope (both share one apex vertex).
+const vEdges = cg.doc.edges.filter((e) => e.type === "valley");
+const apexShared = vEdges[0].v1 === vEdges[1].v1 || vEdges[0].v1 === vEdges[1].v2 || vEdges[0].v2 === vEdges[1].v1 || vEdges[0].v2 === vEdges[1].v2;
+assert.ok(apexShared, "cross-gable: the two valleys meet at the wing-ridge apex");
+ok("Unequal-Width Wings: a projecting cross-gable wing notches the host slope with two true concave valleys (no overlap)");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);

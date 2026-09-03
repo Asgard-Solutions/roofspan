@@ -7,6 +7,7 @@ import { getCache } from "../storage";
 import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
+import RoofThumbnail from "../components/RoofThumbnail";
 import { LabeledField, SelectField, PitchField, ToggleRow } from "../components/MeasurementFields";
 import { computeAreaSqft } from "../measurementFieldControls";
 
@@ -446,9 +447,12 @@ export default function Measurements({ route, navigation }) {
             <SelectField label="Attachment" value={st.attachment || ""} options={ATTACH_OPTS} disabled={readonly} onChange={(v) => setS(i, "attachment", v || null)} testID={`meas-structure-attachment-${i}`} />
             <LabeledField label="Structure Notes" placeholder="Optional" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} testID={`meas-structure-notes-${i}`} />
             {existing?.id && st.id ? (
-              <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
-                <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
-              </TouchableOpacity>
+              <>
+                <RoofThumbnail structure={st} facets={facets} edges={edges} testID={`meas-structure-thumbnail-${i}`} />
+                <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
+                  <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
+                </TouchableOpacity>
+              </>
             ) : (
               <Text style={s.sketchHint} testID={`sketch-roof-disabled-${i}`}>Save the measurement first to create this structure before sketching the roof.</Text>
             )}

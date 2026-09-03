@@ -27,12 +27,13 @@ const LEN_TOL = 0.5;
 // ---- geometry document builder (vertex/edge dedup + measurement-line mapping) ---------------------
 function makeBuilder() {
   const verts = []; const vidByKey = {};
-  const edges = []; let ei = 0;
+  const edges = []; let ei = 0; const usedIds = {};
   const vget = (x, y) => {
     const xr = rnd(x), yr = rnd(y); const key = xr + "|" + yr;
     if (vidByKey[key] != null) return vidByKey[key];
     const id = "fv_" + verts.length; verts.push({ id, x: xr, y: yr }); vidByKey[key] = id; return id;
   };
+  const uniq = (base) => { if (usedIds[base] == null) { usedIds[base] = 0; return base; } return `${base}_${++usedIds[base]}`; };
   // Add an edge between two plan points. `line` (a measurement roof line) maps the drawn edge to its
   // authoritative Roof Line; otherwise a derived boundary edge of the given `type` is created.
   const edge = (aPt, bPt, type, line) => {
@@ -41,9 +42,9 @@ function makeBuilder() {
     if (existing) return existing;
     const drawn = rnd(Math.hypot(bPt.x - aPt.x, bPt.y - aPt.y));
     const e = line
-      ? { id: "mse_" + line.id, measurement_edge_id: String(line.id), relational_edge_id: String(line.id),
+      ? { id: uniq("mse_" + line.id), measurement_edge_id: String(line.id), relational_edge_id: String(line.id),
           v1, v2, type: line.edge_type, confirmed_length_ft: num(line.length_ft), locked: num(line.length_ft) != null, drawn_length_ft: drawn }
-      : { id: "fe_" + (ei++), measurement_edge_id: null, v1, v2, type, confirmed_length_ft: null, locked: false, drawn_length_ft: drawn };
+      : { id: uniq("fe_" + (ei++)), measurement_edge_id: null, v1, v2, type, confirmed_length_ft: null, locked: false, drawn_length_ft: drawn };
     edges.push(e); return e;
   };
   return { verts, edges, vget, edge };
@@ -350,6 +351,93 @@ function tryLRoof(base, edgesIn) {
   return finalize(base, b, facets, resolvedOrder, approximations, "l_roof");
 }
 
+// ---- Unequal-width projecting cross-gable wing: a real notched host slope + two true valleys ---------
+// A main GABLE (2 planes) with one perpendicular gable WING that PROJECTS past the host slope's eave. The
+// host slope is NOTCHED and shares two real concave VALLEYS with the wing (a clean, connected, non-
+// overlapping planar subdivision — unlike a small dormer, which overlays the slope). Equal pitch; the wing
+// must be a genuine wing (>= half the main width) that fits (<= the main width). Position along the wall is
+// not measured, so the wing is centred (flagged approximate). Returns null to defer everything else.
+function tryCrossGable(base, edgesIn) {
+  const planes = base.constraints.planes;
+  if (planes.length !== 4) return null;
+  const adj = base.constraints.adjacency;
+  const ridges = adj.filter((a) => a.edge_type === "ridge");
+  const valleys = adj.filter((a) => a.edge_type === "valley" || a.edge_type === "dead_valley");
+  const hips = adj.filter((a) => a.edge_type === "hip");
+  const other = adj.filter((a) => !["ridge", "valley", "dead_valley"].includes(a.edge_type));
+  if (ridges.length !== 2 || valleys.length !== 2 || hips.length || other.length) return null;
+
+  const planeByMid = {}; planes.forEach((p) => { planeByMid[String(p.measurement_facet_id)] = p; });
+  const vcount = {}; valleys.forEach((v) => v.facets.map(String).forEach((f) => { vcount[f] = (vcount[f] || 0) + 1; }));
+  const hostCands = Object.keys(vcount).filter((f) => vcount[f] === 2);
+  if (hostCands.length !== 1) return null;
+  const host = hostCands[0];
+  const wings = [...new Set(valleys.flatMap((v) => v.facets.map(String)))].filter((f) => f !== host).sort();
+  if (wings.length !== 2) return null;
+  const mainRidge = ridges.find((r) => r.facets.map(String).includes(host));
+  if (!mainRidge) return null;
+  const mback = mainRidge.facets.map(String).find((f) => f !== host);
+  if (!mback || wings.includes(mback)) return null;
+  const wingRidge = ridges.find((r) => { const s = new Set(r.facets.map(String)); return s.has(wings[0]) && s.has(wings[1]); });
+  if (!wingRidge) return null;
+  if (!wings.every((w) => valleys.some((v) => { const s = new Set(v.facets.map(String)); return s.has(w) && s.has(host); }))) return null;
+
+  const mids = [host, mback, ...wings];
+  const pit = mids.map((m) => num(planeByMid[m].pitch_rise));
+  if (pit.some((p) => p == null) || pit.some((p) => Math.abs(p - pit[0]) > 0.01)) return null;
+
+  const sharedMids = new Set(adj.map((a) => String(a.measurement_edge_id)));
+  const lineById = {}; edgesIn.forEach((e) => { lineById[String(e.id)] = e; });
+  const singleEave = (mid) => { const es = planeLinesOfType(edgesIn, mid, "eave", sharedMids); return es.length === 1 ? es[0] : null; };
+  const runOf = (mid) => planRunFromSlope(num(planeByMid[mid].width_ft), planeByMid[mid].pitch_rise);
+
+  const rHost = runOf(host); if (rHost == null || !(rHost > 0)) return null;
+  const Wm = rnd(rHost * 2);
+  const rWing = runOf(wings[0]); if (rWing == null || !(rWing > 0)) return null;
+  const Wg = rnd(rWing * 2);
+  if (Wg < 0.5 * Wm || Wg > Wm + 0.5) return null; // real wing that fits the host slope, else defer
+  const hostEave = singleEave(host);
+  const L = hostEave && num(hostEave.length_ft) > 0 ? num(hostEave.length_ft) : num(planeByMid[host].length_ft);
+  if (L == null || !(L > Wg)) return null;
+  let Lg = num(planeByMid[wings[0]].length_ft); if (Lg == null || !(Lg > 0)) Lg = rnd(Wg);
+
+  const approximations = [{ severity: "warning", code: "approx_wing_position", target_type: "facet", target_id: wings[0],
+    message: `Cross-gable wing centred on ${(planeByMid[host] && planeByMid[host].label) || host}; exact position along the wall is approximate.` }];
+  const yM = rnd(Wm / 2), hg = rnd(Wg / 2), cx = rnd(L / 2);
+  const b = makeBuilder();
+  const P = (x, y) => ({ x: rnd(x), y: rnd(y) });
+  const flo = P(0, 0), fnl = P(cx - hg, 0), Tp = P(cx, hg), fnr = P(cx + hg, 0), fhi = P(L, 0);
+  const rTL = P(0, yM), rTR = P(L, yM), bBL = P(0, Wm), bBR = P(L, Wm);
+  const wOutL = P(cx - hg, -Lg), wOutR = P(cx + hg, -Lg), wApex = P(cx, -Lg);
+
+  const vLeftAdj = valleys.find((v) => { const s = new Set(v.facets.map(String)); return s.has(host) && s.has(wings[0]); });
+  const vRightAdj = valleys.find((v) => { const s = new Set(v.facets.map(String)); return s.has(host) && s.has(wings[1]); });
+
+  const mRidge = b.edge(rTL, rTR, "ridge", lineById[String(mainRidge.measurement_edge_id)]);
+  const eF1 = b.edge(flo, fnl, "eave", hostEave);
+  const vL = b.edge(fnl, Tp, "valley", lineById[String(vLeftAdj.measurement_edge_id)]);
+  const vR = b.edge(Tp, fnr, "valley", lineById[String(vRightAdj.measurement_edge_id)]);
+  const eF2 = b.edge(fnr, fhi, "eave", hostEave);
+  const rakeFR = b.edge(fhi, rTR, "rake", null);
+  const rakeFL = b.edge(flo, rTL, "rake", null);
+  const fFront = facetRecord(planeByMid[host], host, [eF1.id, vL.id, vR.id, eF2.id, rakeFR.id, mRidge.id, rakeFL.id]);
+
+  const rakeBR = b.edge(rTR, bBR, "rake", null);
+  const eBack = b.edge(bBR, bBL, "eave", singleEave(mback));
+  const rakeBL = b.edge(bBL, rTL, "rake", null);
+  const fBack = facetRecord(planeByMid[mback], mback, [mRidge.id, rakeBR.id, eBack.id, rakeBL.id]);
+
+  const wRidge = b.edge(Tp, wApex, "ridge", lineById[String(wingRidge.measurement_edge_id)]);
+  const wEaveL = b.edge(wOutL, fnl, "eave", singleEave(wings[0]));
+  const gRakeL = b.edge(wApex, wOutL, "rake", null);
+  const fWL = facetRecord(planeByMid[wings[0]], wings[0], [wEaveL.id, vL.id, wRidge.id, gRakeL.id]);
+  const wEaveR = b.edge(fnr, wOutR, "eave", singleEave(wings[1]));
+  const gRakeR = b.edge(wOutR, wApex, "rake", null);
+  const fWR = facetRecord(planeByMid[wings[1]], wings[1], [vR.id, wEaveR.id, gRakeR.id, wRidge.id]);
+
+  return finalize(base, b, [fFront, fBack, fWL, fWR], mids, approximations, "cross_gable");
+}
+
 // ---- Stage 5: gable dormers seated on a host slope (real valleys; overlaps host in plan) ------------
 // A gable dormer = a pair of planes sharing a ridge, each joined to a COMMON host core plane by a valley
 // (and no hip). In plan it is drawn as two triangles meeting at the dormer ridge, with the two valleys
@@ -482,6 +570,8 @@ function frameWithDormers(base, edgesIn, cls) {
 function frameRoof(base, edgesIn, resolutions) {
   if (!base || !base.constraints || !Array.isArray(base.constraints.planes)) return null;
   const edges = (edgesIn || []).filter((e) => e && e.id != null);
+  const cross = tryCrossGable(base, edges);
+  if (cross && cross.valid) return cross;
   const cls = classifyDormers(base);
   if (cls) { const withDormers = frameWithDormers(base, edges, cls); if (withDormers && withDormers.valid) return withDormers; }
   const single = trySingleCore(base, edges);
