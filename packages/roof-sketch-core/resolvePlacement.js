@@ -69,21 +69,25 @@ function planPlacement(base) {
   return { anchor_id: anchor ? anchor.id : null, steps, requests, plane_ids: planes.map((p) => p.id) };
 }
 
-// Rectangle from a base segment a->b, outward normal n (unit), extending by depth. Returns corner coords
-// and its four named sides (each with segment endpoints + outward unit normal) for further attachment.
-function rectFromBase(a, b, n, depth) {
-  const ux = b.x - a.x, uy = b.y - a.y; const ul = Math.hypot(ux, uy) || 1; const u = { x: ux / ul, y: uy / ul };
-  const c2 = { x: rnd(b.x + n.x * depth), y: rnd(b.y + n.y * depth) };
-  const c3 = { x: rnd(a.x + n.x * depth), y: rnd(a.y + n.y * depth) };
+// Cardinal sides of an AXIS-ALIGNED rectangle, keyed to the SCREEN compass. The canvas is SVG (y grows
+// DOWN), so North = top = min y. This keeps the user's N/E/S/W choice matching what they see drawn.
+function cardinalSides(corners) {
+  const xs = corners.map((c) => c.x), ys = corners.map((c) => c.y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const at = (x, y) => corners.find((c) => Math.abs(c.x - x) < 1e-6 && Math.abs(c.y - y) < 1e-6) || { x, y };
+  const NW = at(minx, miny), NE = at(maxx, miny), SW = at(minx, maxy), SE = at(maxx, maxy);
   return {
-    corners: { c0: a, c1: b, c2, c3 },
-    sides: {
-      S: { a: a, b: b, n: { x: -n.x, y: -n.y } },      // base (shared with parent)
-      N: { a: c3, b: c2, n: { x: n.x, y: n.y } },       // far side
-      E: { a: b, b: c2, n: { x: u.x, y: u.y } },        // right
-      W: { a: a, b: c3, n: { x: -u.x, y: -u.y } },      // left
-    },
+    N: { a: NW, b: NE, n: { x: 0, y: -1 } },
+    S: { a: SW, b: SE, n: { x: 0, y: 1 } },
+    E: { a: NE, b: SE, n: { x: 1, y: 0 } },
+    W: { a: NW, b: SW, n: { x: -1, y: 0 } },
   };
+}
+// Place an axis-aligned rectangle from base segment a->b, extending by depth along outward normal n.
+function placeRect(a, b, n, depth) {
+  const fb = { x: rnd(b.x + n.x * depth), y: rnd(b.y + n.y * depth) };
+  const fa = { x: rnd(a.x + n.x * depth), y: rnd(a.y + n.y * depth) };
+  return cardinalSides([a, b, fb, fa]);
 }
 
 // Lay the roof out from explicit side resolutions. resolutions: array/map of { plane -> side key N/E/S/W }.
@@ -118,25 +122,28 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
       : { id: "re_" + (ei++), measurement_edge_id: null, v1, v2, type, confirmed_length_ft: null, locked: false, drawn_length_ft: drawn };
     edges.push(e); return e;
   };
-  const addFacet = (mid, sideMap, sharedEdge) => {
+  const addFacet = (mid, sideMap, sharedKey, sharedEdge) => {
     const p = planeById[mid];
-    const eN = pushEdge(sideMap.N.a, sideMap.N.b, "eave", null);
-    const eE = pushEdge(sideMap.E.a, sideMap.E.b, "rake", null);
-    const eW = pushEdge(sideMap.W.a, sideMap.W.b, "rake", null);
+    const ids = [];
+    for (const k of ["N", "E", "S", "W"]) {
+      if (k === sharedKey && sharedEdge) { ids.push(sharedEdge.id); continue; }
+      const type = (k === "E" || k === "W") ? "rake" : "eave";
+      ids.push(pushEdge(sideMap[k].a, sideMap[k].b, type, null).id);
+    }
     facets.push({ id: "rf_" + mid, measurement_facet_id: mid, relational_facet_id: mid, label: (p && p.label) || "F",
       pitch_rise: num(p && p.pitch_rise), confirmed_area_sqft: num(p && p.area_sqft), orientation_azimuth: num(p && p.orientation_azimuth),
-      roof_material: null, edgeIds: [sharedEdge ? sharedEdge.id : pushEdge(sideMap.S.a, sideMap.S.b, "eave", null).id, eE.id, eN.id, eW.id], vertexIds: [] });
+      roof_material: null, edgeIds: ids, vertexIds: [] });
   };
 
-  // Anchor.
+  // Anchor placed as an axis-aligned rectangle: x in [0, along], y in [0, depth] (North = top).
   const anchorId = scaffold.anchor_id;
   if (!anchorId) return { error: "no_anchor" };
   const af = planeById[anchorId];
   const aLong = planeAlong(af); const aDepthInfo = planeDepth(af); const aDepth = aDepthInfo.v;
   if (aLong == null || aDepth == null) return { error: "anchor_underconstrained", anchor: anchorId };
-  const aRect = rectFromBase(vc({ x: 0, y: 0 }), vc({ x: aLong, y: 0 }), { x: 0, y: 1 }, aDepth);
-  placed[anchorId] = { sides: aRect.sides };
-  addFacet(anchorId, aRect.sides, null);
+  const aSides = cardinalSides([{ x: 0, y: 0 }, { x: aLong, y: 0 }, { x: aLong, y: aDepth }, { x: 0, y: aDepth }]);
+  placed[anchorId] = { sides: aSides };
+  addFacet(anchorId, aSides, null, null);
   resolved.push(anchorId);
   if (aDepthInfo.approx) approximations.push({ severity: "warning", code: "approx_plane_depth", target_type: "facet", target_id: anchorId,
     message: `${(af && af.label) || anchorId}: depth approximated from Length (no sloped Width + pitch).` });
@@ -150,11 +157,12 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
     if (depth == null) { unresolved.push(mid); approximations.push({ severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
       message: `${(f && f.label) || mid}: needs a sloped Width + pitch (or a Length) to size its depth.` }); continue; }
     const seg = par.sides[side];
-    const rect = rectFromBase({ x: seg.a.x, y: seg.a.y }, { x: seg.b.x, y: seg.b.y }, seg.n, depth);
-    // shared base edge carries the measured junction (Hip/Valley/Ridge) from the adjacency.
-    const shared = pushEdge(rect.sides.S.a, rect.sides.S.b, step.viaType, lineById[step.viaEdge] || null);
-    placed[mid] = { sides: rect.sides };
-    addFacet(mid, rect.sides, shared);
+    const rect = placeRect({ x: seg.a.x, y: seg.a.y }, { x: seg.b.x, y: seg.b.y }, seg.n, depth);
+    // Child's side facing the parent (outward normal opposes the parent side's) carries the shared junction.
+    const oppKey = (seg.n.y < 0) ? "S" : (seg.n.y > 0) ? "N" : (seg.n.x > 0) ? "W" : "E";
+    const shared = pushEdge(rect[oppKey].a, rect[oppKey].b, step.viaType, lineById[step.viaEdge] || null);
+    placed[mid] = { sides: rect };
+    addFacet(mid, rect, oppKey, shared);
     resolved.push(mid);
     if (dInfo.approx) approximations.push({ severity: "warning", code: "approx_plane_depth", target_type: "facet", target_id: mid,
       message: `${(f && f.label) || mid}: depth approximated from Length (no sloped Width + pitch).` });
