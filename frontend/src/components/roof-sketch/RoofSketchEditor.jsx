@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createSketchDocument, deriveProposals, validateSketch, generateSketchGeometry } from "@roofspan/roof-sketch-core";
+import { createSketchDocument, deriveProposals, validateSketch, generateSketchGeometry, compareSketchProposal } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MousePointer2, PenLine, Square, Dot, Undo2, Redo2, Save, X, Loader2 } from "lucide-react";
@@ -51,6 +51,8 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const [closeConfirm, setCloseConfirm] = useState(false);
   const [showMeas, setShowMeas] = useState(true);
   const [proposal, setProposal] = useState(null);   // local Generate-Proposed preview (unsaved, not persisted)
+  const [regen, setRegen] = useState(null);          // existing-sketch: {result, comparison} review (no auto-replace)
+  const [regenConfirm, setRegenConfirm] = useState(false); // explicit replace confirmation gate
   const preGenRef = useRef(null);                    // exact pre-generation snapshot for Cancel
   const measRef = useMemo(() => summarizeScoped({ facets, edges, penetrations }), [facets, edges, penetrations]);
   const [closing, setClosing] = useState(false);       // Save & Close request in progress
@@ -122,6 +124,28 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     setProposal(null); setSelection(null);
   }, [hist, commitSaveState]);
   const proposalPenPlacements = proposal ? (proposal.document?.penetrations || []).filter((p) => p.position_known === false) : [];
+
+  // --- Existing sketch: Generate New Proposal + safe review (Office) ------------------------------
+  // Offered when a saved sketch exists and the canvas is non-empty. The proposal stays a SEPARATE
+  // candidate — the current sketch is never auto-replaced and Measurements are never touched. No graph
+  // auto-merge. "Use Proposed" replaces the editor geometry only after an explicit confirm, and remains
+  // an UNSAVED edit until the normal Save (with its existing CAS/conflict rules) succeeds.
+  const hasExistingSketch = save.serverVersion != null && !isEmptyDoc;
+  const canRegenerate = !readOnly && hasExistingSketch && !regen && !proposal;
+  const regenerateProposed = useCallback(() => {
+    if (readOnly || saveRef.current.serverVersion == null) return;
+    const result = generateSketchGeometry({ structure, facets, edges, penetrations });
+    const comparison = compareSketchProposal(docRef.current, result);
+    setRegen({ result, comparison }); setRegenConfirm(false);
+  }, [readOnly, structure, facets, edges, penetrations]);
+  const regenKeepCurrent = useCallback(() => { setRegen(null); setRegenConfirm(false); }, []);
+  const regenUseProposed = useCallback(() => {
+    if (readOnly || !regen || !regen.comparison.proposal_has_geometry) return;
+    if (!regenConfirm) { setRegenConfirm(true); return; }          // require explicit confirmation first
+    hist.reset(regen.result.document); docRef.current = regen.result.document; bumpEdit();
+    setRegen(null); setRegenConfirm(false); setSelection(null);
+    toast.success("Proposed sketch replaced the current geometry — review and Save to keep it.");
+  }, [readOnly, regen, regenConfirm, hist, bumpEdit]);
 
   const cmd = useMemo(() => ({
     setEdgeType: (id, t) => ctl.run((d) => ({ doc: C.setEdgeType(d, id, t) })),
@@ -277,6 +301,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
         <ToolBtn id="penetration" icon={Dot} label="Penetration" />
       </div>}
       {canGenerate && <Button size="sm" variant="secondary" onClick={generateProposed} data-testid="generate-proposed-btn"><Square className="mr-1 h-4 w-4" />Generate Proposed Sketch</Button>}
+      {canRegenerate && <Button size="sm" variant="secondary" onClick={regenerateProposed} data-testid="regenerate-proposed-btn"><Square className="mr-1 h-4 w-4" />Generate New Proposal from Measurements</Button>}
       {!readOnly && <div className="ml-2 flex gap-1">
         <Button size="sm" variant={doc.edit_mode === "connected_graph" ? "secondary" : "ghost"} onClick={() => switchMode("connected_graph")} data-testid="mode-connected">Connected</Button>
         <Button size="sm" variant={doc.edit_mode === "manual_polygon" ? "secondary" : "ghost"} onClick={() => switchMode("manual_polygon")} data-testid="mode-manual">Manual</Button>
@@ -302,6 +327,33 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
           <RoofSketchCanvas doc={doc} editMode={doc.edit_mode} mode={mode} selection={selection} onSelect={setSelection} readOnly={readOnly} ctl={ctl} />
         </div>
         <div className="flex flex-col overflow-y-auto border-l border-slate-200 p-3">
+          {regen && <div className="mb-3 rounded border border-indigo-200 bg-indigo-50 p-2" data-testid="regen-review-panel">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-indigo-700">New proposal vs current sketch</span>
+              <Badge data-testid="regen-readiness" className={regen.comparison.readiness === "high_confidence" ? "bg-emerald-100 text-emerald-800" : regen.comparison.readiness === "needs_review" ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-800"}>
+                {regen.comparison.readiness === "high_confidence" ? "High confidence" : regen.comparison.readiness === "needs_review" ? "Needs review" : "Insufficient information"}
+              </Badge>
+            </div>
+            {regen.comparison.identical
+              ? <div className="mt-1 text-[11px] text-slate-600" data-testid="regen-identical">No meaningful differences — the proposal matches your current sketch.</div>
+              : <div className="mt-1 text-[11px] text-slate-700" data-testid="regen-diff-summary">
+                  {regen.comparison.added_planes.length > 0 && <div data-testid="regen-added-planes">Added roof planes: {regen.comparison.added_planes.join(", ")}</div>}
+                  {regen.comparison.removed_planes.length > 0 && <div data-testid="regen-removed-planes">Removed roof planes: {regen.comparison.removed_planes.join(", ")}</div>}
+                  {regen.comparison.changed_planes.map((p) => <div key={p.measurement_facet_id} data-testid="regen-changed-plane">Plane {p.measurement_facet_id} changed: {p.changes.join(", ")}</div>)}
+                  {regen.comparison.added_lines.length > 0 && <div data-testid="regen-added-lines">Added roof lines: {regen.comparison.added_lines.join(", ")}</div>}
+                  {regen.comparison.removed_lines.length > 0 && <div data-testid="regen-removed-lines">Removed roof lines: {regen.comparison.removed_lines.join(", ")}</div>}
+                  {regen.comparison.changed_lines.map((l) => <div key={l.measurement_edge_id} data-testid="regen-changed-line">Roof line {l.measurement_edge_id} changed: {l.changes.join(", ")}</div>)}
+                </div>}
+            {regen.comparison.unmapped_current_facets > 0 && <div className="mt-1 rounded bg-rose-100 px-2 py-1 text-[11px] text-rose-800" data-testid="regen-manual-warning">Warning: {regen.comparison.unmapped_current_facets} manual facet(s) not linked to Measurements would be lost if replaced.</div>}
+            {regen.comparison.ambiguities.map((a, i) => <div key={i} className="mt-1 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900" data-testid="regen-ambiguity">{a.message}</div>)}
+            {!regen.comparison.proposal_has_geometry && <div className="mt-1 text-[11px] text-rose-700" data-testid="regen-no-geometry">The new proposal has no drawable geometry — keep your current sketch.</div>}
+            {regenConfirm && <div className="mt-2 rounded bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-800" data-testid="regen-confirm-warning">This will REPLACE your current sketch geometry in the editor. It stays unsaved until you Save.</div>}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" variant={regenConfirm ? "destructive" : "default"} disabled={!regen.comparison.proposal_has_geometry} onClick={regenUseProposed} data-testid={regenConfirm ? "regen-confirm-btn" : "regen-use-btn"}>{regenConfirm ? "Confirm Replace" : "Use Proposed Sketch"}</Button>
+              <Button size="sm" variant="outline" onClick={regenKeepCurrent} data-testid="regen-keep-btn">Keep Current Sketch</Button>
+              {regenConfirm && <Button size="sm" variant="ghost" onClick={() => setRegenConfirm(false)} data-testid="regen-cancel-confirm-btn">Cancel</Button>}
+            </div>
+          </div>}
           {proposal && <div className="mb-3 rounded border border-sky-200 bg-sky-50 p-2" data-testid="generate-proposal-panel">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wide text-sky-700">Proposed sketch (unsaved)</span>

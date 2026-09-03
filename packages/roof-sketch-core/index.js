@@ -8,6 +8,7 @@ const proposals = require("./proposals");
 const editorCommands = require("./editorCommands");
 const generateSketch = require("./generateSketch");
 const generateSketchGeometry = require("./generateSketchGeometry");
+const compareSketchProposal = require("./compareSketchProposal");
 const snapping = require("./snapping");
 const edgeDimensions = require("./edgeDimensions");
 const gestures = require("./gestures");
@@ -48,6 +49,8 @@ module.exports = {
   GENERATOR_VERSION: generateSketch.GENERATOR_VERSION,
   // ---- measurements -> proposed sketch GEOMETRY (single plane + simple gable) ----
   generateSketchGeometry: generateSketchGeometry.generateSketchGeometry,
+  // ---- existing sketch vs new proposal comparison (Office review) ----
+  compareSketchProposal: compareSketchProposal.compareSketchProposal,
 
   // ---- shared editor engine (Phase B1A: additive; Office not yet migrated) ----
   // editor commands (pure; each returns the next canonical document)
