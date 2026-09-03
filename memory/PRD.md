@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## NEXT MAJOR EFFORT — Deterministic Roof-Framing Solver (planned; start fresh on fork)
+The heuristic complex-roof auto-layout (`resolvePlacement.js` fan-out) is NOT faithful for hip-roofs-with-dormers — it produces overlapping pinwheel geometry (user-confirmed via screenshots). User approved a dedicated, staged rebuild: a real roof-framing solver that reconstructs the hip/gable core from the ridge + eaves, seats dormers on host planes, and cuts real concave valleys. FULL PLAN + golden fixture + stages + invariants + logistics in **`/app/memory/ROOF_FRAMING_SOLVER_PLAN.md`** — read it first on the fork. Simple archetypes (single/gable/standard-hip) already work and must not regress. Per-line LF labels + measurements panel already work (accurate manual drawing).
+
+
+
 ## Roof Sketch — Resolution-driven placement for COMPLEX connected roofs (2026-06) — Office + Field, VERIFIED
 User need: complex roofs (multi-plane hip/valley, e.g. the 8-plane cross-gable) return "Needs review" with an empty canvas because measurements establish adjacency but not WHICH SIDE each plane sits on. User chose: (a) pick the parent's side, (a) persist on the sketch, (a) full complex roof, (a) draw + flag approximations. Must work in BOTH Office and Field via the shared engine.
 Shared engine `packages/roof-sketch-core/resolvePlacement.js` (+ hooked into `generateSketchGeometry._layoutConnected`, exported via index.js):
