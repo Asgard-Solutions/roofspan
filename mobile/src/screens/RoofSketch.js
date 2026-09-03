@@ -236,6 +236,12 @@ export default function RoofSketch({ route }) {
     } catch (e) { /* offline/cache miss — keep current review */ }
   }, [measDetail, regen, regenStale, structure_id]);
 
+  // Placement resolutions (per-plane side choices) for connected complex roofs. Shared engine + persisted
+  // on the sketch document so they survive offline and match Office exactly.
+  const [resolutions, setResolutions] = useState([]);
+  useEffect(() => { const pr = editorRef.current?.document?.placement_resolutions; if (Array.isArray(pr) && pr.length) setResolutions(pr.map((r) => ({ plane: String(r.plane), side: r.side }))); }, [ready]);
+  const setSide = useCallback((plane, side) => setResolutions((prev) => { const rest = prev.filter((r) => String(r.plane) !== String(plane)); return side ? [...rest, { plane: String(plane), side }] : rest; }), []);
+
   // Accept Proposed: route the value through the EXISTING Field measurement_update workflow (newest
   // durable revision detail, ONLY the mapped value changed, all else preserved, coalescing + If-Match),
   // AND record a durable pending_accept provenance decision on the sketch. Never reports Accepted here —
@@ -328,7 +334,7 @@ export default function RoofSketch({ route }) {
       if (!measDetail) Alert.alert("Measurements unavailable", "Roof measurements for this structure aren't available on this device yet.");
       return;
     }
-    const res = RS.generateSketchGeometry(scopeStructureForGenerator(measDetail, structure_id));
+    const res = RS.generateSketchGeometry({ ...scopeStructureForGenerator(measDetail, structure_id), resolutions });
     setProposal(res);
     if (res.document && (res.document.vertices?.length || 0) > 0) { editor.preview(res.document); }
     setSelection(null); setResetToken((x) => x + 1); rerender();
@@ -355,7 +361,7 @@ export default function RoofSketch({ route }) {
       if (!measDetail) Alert.alert("Measurements unavailable", "Roof measurements for this structure aren't available on this device yet.");
       return;
     }
-    const result = RS.generateSketchGeometry(scopeStructureForGenerator(measDetail, structure_id));
+    const result = RS.generateSketchGeometry({ ...scopeStructureForGenerator(measDetail, structure_id), resolutions });
     const comparison = RS.compareSketchProposal(editor.document, result);
     setRegen({ result, comparison, fingerprint: result.source_fingerprint }); setRegenConfirm(false); setRegenStale(false);
   };
@@ -368,6 +374,37 @@ export default function RoofSketch({ route }) {
     settle();                                                    // autosave + stage via existing queue/CAS
   };
   const regenCan = regen && regen.comparison.proposal_has_geometry && !regenStale;
+
+  // Touch side-picker for connected complex roofs — shown when the engine returns placement_requests.
+  const renderPlacementResolver = (requests, onApply) => (requests && requests.length > 0) ? (
+    <View style={{ marginTop: 8, borderWidth: 1, borderColor: "#c4b5fd", backgroundColor: "#f5f3ff", borderRadius: 6, padding: 8 }} testID="field-placement-resolver">
+      <Text style={{ fontSize: 11, fontWeight: "700", color: "#6d28d9" }}>RESOLVE PLACEMENT</Text>
+      <Text style={{ fontSize: 11, color: "#5b21b6", marginTop: 2 }}>Pick where each plane attaches, then generate the roof.</Text>
+      {requests.map((r) => {
+        const cur = resolutions.find((x) => String(x.plane) === String(r.plane));
+        return (
+          <View key={r.plane} style={{ marginTop: 8 }} testID={`field-placement-req-${r.plane}`}>
+            <Text style={{ fontSize: 11, color: "#334155" }}>{r.prompt}</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 4 }}>
+              {r.options.map((o) => {
+                const on = cur && cur.side === o.key;
+                return (
+                  <TouchableOpacity key={o.key} testID={`field-placement-side-${r.plane}-${o.key}`} onPress={() => setSide(r.plane, o.key)}
+                    style={{ paddingHorizontal: 8, paddingVertical: 4, marginRight: 6, marginBottom: 6, borderRadius: 4, borderWidth: 1, borderColor: on ? "#6d28d9" : "#cbd5e1", backgroundColor: on ? "#6d28d9" : "#fff" }}>
+                    <Text style={{ fontSize: 11, color: on ? "#fff" : "#334155" }}>{o.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        );
+      })}
+      <TouchableOpacity testID="field-placement-apply-btn" disabled={resolutions.length === 0 || editingBlocked} onPress={onApply}
+        style={[sx.primary, { marginTop: 8 }, (resolutions.length === 0 || editingBlocked) && sx.disabled]}>
+        <Text style={sx.primaryText}>Generate with these placements</Text>
+      </TouchableOpacity>
+    </View>
+  ) : null;
 
   return (
     <View style={sx.container} testID="roof-sketch-screen">
@@ -445,6 +482,7 @@ export default function RoofSketch({ route }) {
           {(proposal.unresolved_planes?.length || 0) > 0 ? <Text style={sx.genWarn} testID="field-generate-unresolved">Unresolved roof planes: {proposal.unresolved_planes.join(", ")}</Text> : null}
           {(proposal.ambiguities || []).map((a, i) => <Text key={i} style={sx.genAmb} testID="field-generate-ambiguity">{a.message}</Text>)}
           {(proposal.document?.penetrations || []).filter((p) => p.position_known === false).map((p) => <Text key={p.id} style={sx.genMeta} testID="field-generate-pen-placement">Penetration {p.measurement_penetration_id} needs manual placement.</Text>)}
+          {renderPlacementResolver(proposal.placement_requests, generateProposed)}
           <View style={sx.genRow}>
             <TouchableOpacity testID="field-generate-use-btn" disabled={!proposalHasGeometry} onPress={useProposed} style={[sx.primary, !proposalHasGeometry && sx.disabled]}><Text style={sx.primaryText}>Use Proposed Sketch</Text></TouchableOpacity>
             <TouchableOpacity testID="field-generate-cancel-btn" onPress={cancelProposed} style={sx.ghost}><Text style={sx.ghostText}>Cancel / Draw Manually</Text></TouchableOpacity>
@@ -478,6 +516,7 @@ export default function RoofSketch({ route }) {
           {regen.comparison.unmapped_current_facets > 0 ? <Text style={sx.genAmb} testID="field-regen-manual-warning">Warning: {regen.comparison.unmapped_current_facets} manual facet(s) not linked to Measurements would be lost if replaced.</Text> : null}
           {regen.comparison.ambiguities.map((a, i) => <Text key={i} style={sx.genAmb} testID="field-regen-ambiguity">{a.message}</Text>)}
           {!regen.comparison.proposal_has_geometry ? <Text style={sx.genIns} testID="field-regen-no-geometry">The new proposal has no drawable geometry — keep your current sketch.</Text> : null}
+          {renderPlacementResolver(regen.result.placement_requests, regenerate)}
           {regenConfirm ? <Text style={sx.genAmb} testID="field-regen-confirm-warning">This will REPLACE your current sketch. It stays unsaved until you Save Sketch.</Text> : null}
           <View style={sx.genRow}>
             <TouchableOpacity testID={regenConfirm ? "field-regen-confirm-btn" : "field-regen-use-btn"} disabled={!regenCan} onPress={regenUse} style={[sx.primary, !regenCan && sx.disabled]}><Text style={sx.primaryText}>{regenConfirm ? "Confirm Replace" : "Use Proposed Sketch"}</Text></TouchableOpacity>

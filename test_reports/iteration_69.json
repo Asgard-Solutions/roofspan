@@ -1,0 +1,42 @@
+{
+  "summary": "Verified the NEW 'Resolve placement' feature end-to-end for complex connected roofs. Set up a 4-plane connected roof (F1..F4 with Ridge/Valley/Hip + Eaves) as new 'GenComplex' structure on existing draft revision 8fa662ee (lead e7b41ad7). generate-proposed-btn on the empty sketch yielded readiness=Needs review AND placement-resolver panel with 3 side-choosers (one per non-anchor plane: F2 Ridge, F3 Valley, F4 Hip — anchor is F1, the largest area). Chose F2=N, F3=E, F4=W, clicked placement-apply-btn: readiness improved to High confidence, canvas drew the multi-plane roof (F1 center + F2 attached, F3 & F4 attached), generate-use-btn became enabled. Clicked generate-use-btn -> geometry became working edit ('Proposed sketch adopted' toast). Clicked save-sketch-btn -> PUT /api/measurements/8fa662ee.../sketches/e744a8f0... returned 200 (Saved). Regression on SIMPLE case (GenRectHC single-plane) confirmed: regenerate-proposed-btn (existing saved sketch) shows readiness=High confidence with NO placement-resolver panel. All required data-testids present (placement-resolver, placement-side-<planeId>, placement-apply-btn, generate-use-btn, save-sketch-btn).",
+  "verifications": {
+    "complex_roof_setup": "Added structure GenComplex (id e744a8f0-5ea1-4689-9830-2d93128f850b) to rev 8fa662ee via PUT /api/measurements. Facets F1 (800sf 20x40 6/12), F2 (800sf 20x40 6/12), F3 (200sf 12x16 6/12), F4 (200sf 12x16 6/12). Edges: Ridge 40 LF F1&F2, Valley 17 LF F1&F3, Hip 17 LF F1&F4, Eave 40 F1, Eave 40 F2, Eave 16 F3, Eave 16 F4.",
+    "placement_resolver_appearance": "generate-proposed-btn on empty GenComplex sketch -> generate-proposal-panel opened with generate-readiness='Needs review', placement-resolver panel present with 3 side-choosers. Anchor F1 correctly excluded. Prompts: 'Which side of F1 does F3 sit on? (Valley junction)', 'Which side of F1 does F2 sit on? (Ridge junction)', 'Which side of F1 does F4 sit on? (Hip junction)'. Each chooser offers 4 options: 'F1 — North side', 'F1 — East side', 'F1 — South side', 'F1 — West side'. placement-apply-btn disabled until at least one side chosen.",
+    "apply_placements_drawn": "Set F2=N, F3=E, F4=W then clicked placement-apply-btn. Result: readiness -> 'High confidence', SVG canvas rendered geometry for all 4 planes (vertices, edges with dimensions 40.0 LF eaves, 17.9 LF rakes, 10.7 LF depths for F3/F4, F1 center label + F2 attached). Proposals panel populated with per-facet SF diffs (F1/F2 ~0 SF diff, F3/F4 +14.67 SF approximation). generate-use-btn enabled.",
+    "use_proposed_and_save": "Clicked generate-use-btn -> toast 'Proposed sketch adopted. Review and Save when ready.' Clicked save-sketch-btn -> PUT /api/measurements/8fa662ee-cc1b-4472-8002-dfa33ed8abdc/sketches/e744a8f0-5ea1-4689-9830-2d93128f850b returned 200.",
+    "simple_regression": "Opened GenRectHC (single-plane, already-saved) -> regenerate-proposed-btn present (generate-proposed-btn hidden as designed). Clicked regenerate-proposed-btn -> regen-review-panel opened with regen-readiness='High confidence' and NO placement-resolver panel (correctly absent for simple roof). Confirms simple/gable path still auto-draws / auto-compares with no resolver.",
+    "console_errors": "Only pre-existing unrelated 404s for /api/mobile/photos lookups. No errors from placement resolver flow."
+  },
+  "network_calls_captured": [
+    "PUT /api/measurements/8fa662ee-cc1b-4472-8002-dfa33ed8abdc/sketches/e744a8f0-5ea1-4689-9830-2d93128f850b -> 200 (save proposed complex sketch)",
+    "GET /api/measurements/8fa662ee.../sketches -> 200",
+    "GET /api/measurements/8fa662ee.../sketches/e744a8f0... -> 404 initially (no saved sketch yet), 200 after save"
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "RoofSketchEditor placement-resolver (complex path)", "issues": [
+        "The applied layout renders F2 visually BELOW F1 despite the user selecting 'F1 — North side' for F2. This is because the canvas uses SVG y-axis (grows down) but the side labels are cardinal (N/E/S/W in plan-space); this is likely intentional (engine layout is deterministic and correct) but potentially confusing to users. Consider a canvas note or a legend clarifying that N is 'up in plan' regardless of screen orientation.",
+        "Approximation note surfaces as small per-facet SF diffs in the Proposals panel (F3 +14.67 SF etc.) but no dedicated approximation banner in the proposed-sketch panel calls attention to this. Ok since readiness=High confidence, but a subtle info line 'Approximations applied: 2 planes' would improve transparency."
+      ]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "resolvePlacement.js planPlacement chooses anchor as max-area plane (tie-broken by id lex order). With F1 and F2 both at 800 SF, F1 wins by id ordering — dependent on database UUIDs. Consider tiebreaking by 'most adjacencies' or by facet_label for more predictable UX.",
+    "data-testid uses full plane UUID (placement-side-<uuid>) rather than a human-facing label (placement-side-F2). This makes automated tests brittle. Task spec suggested F2/F3/F4 but code uses UUIDs. Consider adding a secondary data-testid with the facet label (e.g., placement-side-label-F2) to simplify test authoring.",
+    "RoofSketchEditor.jsx is now 438+ lines with the resolver UI baked in. Consider extracting <PlacementResolver /> component to keep the editor focused."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Added structure GenComplex (e744a8f0-5ea1-4689-9830-2d93128f850b) with 4 facets (F1 800sf, F2 800sf, F3 200sf, F4 200sf, all 6/12) and 7 edges (Ridge 40 F1&F2, Valley 17 F1&F3, Hip 17 F1&F4, Eaves 40/40/16/16) to draft revision 8fa662ee. Also saved a proposed sketch (from placement resolver flow) for this structure via PUT sketches -> 200. Persists in DB. F1 facet id 21fa3222..., F2 8f6e6e1a..., F3 5cde871b..., F4 adc8dbc2...",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "GenComplex structure on rev 8fa662ee is now the canonical complex-connected roof for exercising placement-resolver. To retest: navigate lead e7b41ad7 -> Rev 2 -> sketch-roof-btn-3 (GenComplex). Since a proposed sketch was saved, opening now shows regenerate-proposed-btn (not generate-proposed-btn). Clicking regenerate will now open regen-review-panel WITH placement-resolver (the complex path always goes through resolver). If you need the empty-canvas + generate-proposed-btn flow again, delete the saved sketch via DELETE /api/measurements/8fa662ee.../sketches/e744a8f0... or use a different fresh structure.",
+  "rca of the issue": "N/A - new feature verification. Feature works as designed: engine emits placement_requests (parent+viaType+4 side options), UI renders a select per non-anchor plane, on apply the engine returns laid-out geometry with approximations flagged, adopted geometry can be saved (PUT 200), and simple single-plane roofs skip the resolver entirely."
+}

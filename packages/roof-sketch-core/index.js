@@ -50,6 +50,9 @@ module.exports = {
   GENERATOR_VERSION: generateSketch.GENERATOR_VERSION,
   // ---- measurements -> proposed sketch GEOMETRY (single plane + simple gable) ----
   generateSketchGeometry: generateSketchGeometry.generateSketchGeometry,
+  // ---- resolution-driven placement for connected complex roofs (side choices -> deterministic layout) ----
+  planPlacement: require("./resolvePlacement").planPlacement,
+  layoutFromResolutions: require("./resolvePlacement").layoutFromResolutions,
   // ---- existing sketch vs new proposal comparison (Office review) ----
   compareSketchProposal: compareSketchProposal.compareSketchProposal,
 

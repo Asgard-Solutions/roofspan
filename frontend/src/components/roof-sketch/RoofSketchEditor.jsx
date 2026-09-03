@@ -106,13 +106,19 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   // Generation runs the shared core locally — it never saves, never touches Measurements.
   const isEmptyDoc = (doc.facets?.length || 0) === 0 && (doc.edges?.length || 0) === 0 && (doc.vertices?.length || 0) === 0;
   const canGenerate = !readOnly && save.serverVersion == null && isEmptyDoc && !proposal;
+  // Placement resolutions (the user's per-plane side choices) for connected complex roofs. Persisted on
+  // the sketch document so they travel with it (offline-safe, Office<->Field parity).
+  const [resolutions, setResolutions] = useState([]);
+  useEffect(() => { const pr = docRef.current?.placement_resolutions; if (Array.isArray(pr) && pr.length) setResolutions(pr.map((r) => ({ plane: String(r.plane), side: r.side }))); }, []);
+  const setSide = useCallback((plane, side) => setResolutions((prev) => { const rest = prev.filter((r) => String(r.plane) !== String(plane)); return side ? [...rest, { plane: String(plane), side }] : rest; }), []);
+
   const generateProposed = useCallback(() => {
     if (readOnly || saveRef.current.serverVersion != null) return;
     preGenRef.current = { doc: docRef.current, save: saveRef.current };
-    const res = generateSketchGeometry({ structure, facets, edges, penetrations });
+    const res = generateSketchGeometry({ structure, facets, edges, penetrations, resolutions });
     setProposal(res); setSelection(null);
     if (res.document && (res.document.vertices?.length || 0) > 0) { docRef.current = res.document; hist.setDocDirect(res.document); }
-  }, [readOnly, structure, facets, edges, penetrations, hist]);
+  }, [readOnly, structure, facets, edges, penetrations, hist, resolutions]);
   const useProposed = useCallback(() => {
     if (readOnly || !proposal || !proposal.document || (proposal.document.vertices?.length || 0) === 0) return;
     hist.reset(proposal.document); docRef.current = proposal.document; bumpEdit();
@@ -137,7 +143,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const canRegenerate = !readOnly && hasExistingSketch && !regen && !proposal;
   const regenerateProposed = useCallback(() => {
     if (readOnly || saveRef.current.serverVersion == null) return;
-    const result = generateSketchGeometry({ structure, facets, edges, penetrations });
+    const result = generateSketchGeometry({ structure, facets, edges, penetrations, resolutions });
     const comparison = compareSketchProposal(docRef.current, result);
     setRegen({ result, comparison }); setRegenConfirm(false);
     // Immediate, unmissable feedback — the existing-sketch flow opens a review panel (it never auto-replaces
@@ -149,7 +155,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     } else {
       toast.warning("The current measurements don’t support a proposed roof sketch yet — your current sketch is kept.");
     }
-  }, [readOnly, structure, facets, edges, penetrations]);
+  }, [readOnly, structure, facets, edges, penetrations, resolutions]);
   const regenKeepCurrent = useCallback(() => { setRegen(null); setRegenConfirm(false); }, []);
   const regenUseProposed = useCallback(() => {
     if (readOnly || !regen || !regen.comparison.proposal_has_geometry) return;
@@ -302,6 +308,25 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     <Button size="sm" variant={mode === id ? "default" : "outline"} disabled={readOnly && id !== "select"} onClick={() => setMode(id)} data-testid={`tool-${id}`}><Icon className="mr-1 h-4 w-4" />{label}</Button>
   );
 
+  // Side-choice resolver for connected complex roofs — shown when the engine returns placement_requests.
+  const renderPlacementResolver = (requests, onApply) => (requests && requests.length > 0) ? (
+    <div className="mt-2 rounded border border-violet-300 bg-violet-50 p-2" data-testid="placement-resolver">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-violet-700">Resolve placement</div>
+      <div className="mt-1 text-[11px] text-violet-800">These planes can sit on more than one side. Pick where each attaches, then generate the roof.</div>
+      {requests.map((r) => {
+        const cur = resolutions.find((x) => String(x.plane) === String(r.plane));
+        return <div key={r.plane} className="mt-2" data-testid={`placement-req-${r.plane}`}>
+          <div className="text-[11px] text-slate-700">{r.prompt}</div>
+          <select className="mt-1 w-full rounded border border-slate-300 bg-white px-1 py-1 text-[11px]" value={cur ? cur.side : ""} onChange={(e) => setSide(r.plane, e.target.value)} data-testid={`placement-side-${r.plane}`}>
+            <option value="">Choose a side…</option>
+            {r.options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        </div>;
+      })}
+      {!readOnly && <Button size="sm" className="mt-2" disabled={resolutions.length === 0} onClick={onApply} data-testid="placement-apply-btn">Generate with these placements</Button>}
+    </div>
+  ) : null;
+
   return <div className="fixed inset-0 z-50 flex flex-col bg-white" data-testid="roof-sketch-editor">
     <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2">
       <div className="mr-2 text-sm font-semibold text-slate-800">Roof Sketch — {structure?.name || "Structure"}</div>
@@ -359,6 +384,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
             {regen.comparison.unmapped_current_facets > 0 && <div className="mt-1 rounded bg-rose-100 px-2 py-1 text-[11px] text-rose-800" data-testid="regen-manual-warning">Warning: {regen.comparison.unmapped_current_facets} manual facet(s) not linked to Measurements would be lost if replaced.</div>}
             {regen.comparison.ambiguities.map((a, i) => <div key={i} className="mt-1 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900" data-testid="regen-ambiguity">{a.message}</div>)}
             {!regen.comparison.proposal_has_geometry && <div className="mt-1 text-[11px] text-rose-700" data-testid="regen-no-geometry">The new proposal has no drawable geometry — keep your current sketch.</div>}
+            {renderPlacementResolver(regen.result.placement_requests, regenerateProposed)}
             {regenConfirm && <div className="mt-2 rounded bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-800" data-testid="regen-confirm-warning">This will REPLACE your current sketch geometry in the editor. It stays unsaved until you Save.</div>}
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" variant={regenConfirm ? "destructive" : "default"} disabled={!regen.comparison.proposal_has_geometry || regen.comparison.identical} onClick={regenUseProposed} data-testid={regenConfirm ? "regen-confirm-btn" : "regen-use-btn"}>{regenConfirm ? "Confirm Replace" : "Use Proposed Sketch"}</Button>
@@ -378,6 +404,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
             {(proposal.unresolved_planes?.length || 0) > 0 && <div className="mt-1 text-[11px] text-amber-800" data-testid="generate-unresolved">Unresolved roof planes: {proposal.unresolved_planes.join(", ")}</div>}
             {(proposal.ambiguities || []).map((a, i) => <div key={i} className="mt-1 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900" data-testid="generate-ambiguity">{a.message}</div>)}
             {proposalPenPlacements.map((p) => <div key={p.id} className="mt-1 text-[11px] text-slate-600" data-testid="generate-pen-placement">Penetration {p.measurement_penetration_id} needs manual placement (no position in measurements).</div>)}
+            {renderPlacementResolver(proposal.placement_requests, generateProposed)}
             {!readOnly && <div className="mt-2 flex gap-2">
               <Button size="sm" disabled={(proposal.document?.vertices?.length || 0) === 0} onClick={useProposed} data-testid="generate-use-btn">Use Proposed Sketch</Button>
               <Button size="sm" variant="outline" onClick={cancelProposed} data-testid="generate-cancel-btn">Cancel / Draw Manually</Button>

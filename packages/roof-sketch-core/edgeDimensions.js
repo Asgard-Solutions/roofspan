@@ -17,6 +17,9 @@ function edgeDimension(doc, edge) {
     return { valueFeet, source: "confirmed_locked", locked: true, geometryFeet, discrepancy };
   }
   if (geometryFeet != null) return { valueFeet: geometryFeet, source: "geometry_scaled", locked: false, geometryFeet, discrepancy: null };
+  // Fallbacks so a length still shows while drawing (scale not yet calibrated) or on generated edges.
+  if (edge && edge.confirmed_length_ft != null) return { valueFeet: round1(Number(edge.confirmed_length_ft)), source: "confirmed", locked: false, geometryFeet: null, discrepancy: null };
+  if (edge && edge.drawn_length_ft != null) return { valueFeet: round1(Number(edge.drawn_length_ft)), source: "drawn", locked: false, geometryFeet: round1(Number(edge.drawn_length_ft)), discrepancy: null };
   return { valueFeet: null, source: "unavailable", locked: false, geometryFeet: null, discrepancy: null };
 }
 
