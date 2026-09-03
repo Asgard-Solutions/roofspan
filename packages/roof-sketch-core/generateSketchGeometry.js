@@ -33,6 +33,7 @@ const { generateProposedSketch, AREA_DIM_TOL } = require("./generateSketch");
 const { createSketchDocument } = require("./schema");
 const { validateSketch } = require("./topology");
 const { planRunFromSlope } = require("./geometry");
+const { planPlacement, layoutFromResolutions } = require("./resolvePlacement");
 
 const LEN_TOL = 0.5; // ft tolerance for confirmed-edge vs drawn-side and ridge-match consistency
 
@@ -583,9 +584,30 @@ function _layoutConnected(base, facetsIn, edgesIn, input) {
   if (comps.length === 1) {
     const hip = _tryStandardHip(base, edgesIn);
     if (hip.result) return hip.result;
-    return _needsReview(base, [{ severity: "error", code: "unresolved_complex_topology", target_type: "structure", target_id: base.structure_id,
-      message: "This connected roof permits more than one valid arrangement; it is deferred to the next phase." }], graph,
-      { ambiguities: _ambiguityRecords(base, comps[0]), unresolvedPlanes: comps[0], unresolvedLines: graph.shared_edges.map((e) => e.measurement_edge_id) });
+    // Complex connected roof: the arrangement is not unique. Emit a placement scaffold so the user can
+    // resolve each plane's side; if resolutions are supplied, lay it out deterministically from them.
+    const scaffold = planPlacement(base);
+    const hasRes = input && (Array.isArray(input.resolutions) ? input.resolutions.length : (input.resolutions && Object.keys(input.resolutions).length));
+    if (hasRes) {
+      const laid = layoutFromResolutions(base, edgesIn, input.resolutions);
+      if (laid && laid.doc && laid.resolved && laid.resolved.length) {
+        const v = validateSketch(laid.doc);
+        if (v.valid) {
+          const warnDiags = (laid.approximations || []).concat([{ severity: "info", code: "resolved_placement", target_type: "structure", target_id: base.structure_id,
+            message: "Roof laid out from your side choices — positions follow those choices; some junction geometry is approximate." }]);
+          const attach = (res) => ({ ...res, placement_requests: scaffold.requests, approximations: laid.approximations });
+          if (laid.unresolved.length === 0 && (laid.approximations || []).every((d) => d.severity !== "error")) {
+            return attach(_success(base, laid.doc, undefined, warnDiags, graph));
+          }
+          return attach(_partial(base, laid.doc, { graph, resolvedPlanes: laid.resolved, unresolvedPlanes: laid.unresolved,
+            ambiguities: _ambiguityRecords(base, laid.unresolved), extraDiags: warnDiags }));
+        }
+      }
+    }
+    return { ..._needsReview(base, [{ severity: "error", code: "unresolved_complex_topology", target_type: "structure", target_id: base.structure_id,
+      message: "This connected roof permits more than one valid arrangement — resolve each plane's side to generate it." }], graph,
+      { ambiguities: _ambiguityRecords(base, comps[0]), unresolvedPlanes: comps[0], unresolvedLines: graph.shared_edges.map((e) => e.measurement_edge_id) }),
+      placement_requests: scaffold.requests };
   }
 
   // Multiple sections: attempt each independently (partial-proposal support).

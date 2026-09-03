@@ -16,6 +16,7 @@ function createSketchDocument({ structureId = null, editMode = "connected_graph"
     penetrations: [],
     scale: { resolved: false, feetPerUnit: null, feet_per_unit: null, method: null },
     proposal_decisions: [],
+    placement_resolutions: [],
     validation: { valid: true, errors: [], warnings: [] },
   };
 }
@@ -44,6 +45,7 @@ function normalizeSketchDocument(doc) {
       method: scale.method || null,
     },
     proposal_decisions: Array.isArray(d.proposal_decisions) ? d.proposal_decisions : [],
+    placement_resolutions: Array.isArray(d.placement_resolutions) ? d.placement_resolutions : [],
     validation: d.validation && typeof d.validation === "object" ? d.validation : { valid: true, errors: [], warnings: [] },
   };
 }
