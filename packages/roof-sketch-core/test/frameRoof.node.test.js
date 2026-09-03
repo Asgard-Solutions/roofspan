@@ -125,4 +125,57 @@ assert.ok(Object.values(shared).some((c) => c === 2), "hip: ridge/hips are share
 assert.strictEqual(ridgeEdge.measurement_edge_id, "R12", "hip: ridge edge maps to the measured Ridge line");
 ok("Stage 1: shared roof lines are canonical single edges mapped to their measurement lines");
 
+// ---- Stage 2 + 4: two-core L-roof (equal pitch/width) — real convex hip + real concave valley -------
+// Arms: H (x, length 40) and V (y, length 30), common width 20. Ridges meet at J=(10,10); reentrant (20,20).
+// front-slope plan depth = W/2 = 10 => sloped width_ft = 10*sqrt(1+(6/12)^2) = 11.18.
+const LROOF = {
+  structure: ST,
+  facets: [
+    { id: "F1", structure_id: "ST", label: "F1", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 300, sort: 1 }, // H hip-side
+    { id: "F2", structure_id: "ST", label: "F2", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 200, sort: 2 }, // H valley-side
+    { id: "F3", structure_id: "ST", label: "F3", pitch_rise: 6, width_ft: 11.18, length_ft: 30, area_sqft: 250, sort: 3 }, // V hip-side
+    { id: "F4", structure_id: "ST", label: "F4", pitch_rise: 6, width_ft: 11.18, length_ft: 30, area_sqft: 150, sort: 4 }, // V valley-side
+  ],
+  edges: [
+    { id: "RH", structure_id: "ST", edge_type: "ridge", length_ft: 30, facet_id: "F1", facet_id_secondary: "F2", sort: 1 },
+    { id: "RV", structure_id: "ST", edge_type: "ridge", length_ft: 20, facet_id: "F3", facet_id_secondary: "F4", sort: 2 },
+    { id: "HIP", structure_id: "ST", edge_type: "hip", length_ft: 14, facet_id: "F1", facet_id_secondary: "F3", sort: 3 },
+    { id: "VAL", structure_id: "ST", edge_type: "valley", length_ft: 14, facet_id: "F2", facet_id_secondary: "F4", sort: 4 },
+    { id: "E1", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "F1", sort: 5 },
+    { id: "E2", structure_id: "ST", edge_type: "eave", length_ft: 20, facet_id: "F2", sort: 6 },
+    { id: "E3", structure_id: "ST", edge_type: "eave", length_ft: 30, facet_id: "F3", sort: 7 },
+    { id: "E4", structure_id: "ST", edge_type: "eave", length_ft: 10, facet_id: "F4", sort: 8 },
+  ],
+  penetrations: [],
+};
+
+const lr = build(LROOF);
+assertValidRoof(lr, "l-roof");
+assert.strictEqual(lr.method, "l_roof", "L-roof solved as a two-core L");
+assert.strictEqual(lr.doc.facets.length, 4, "l-roof: 4 slope planes");
+assert.strictEqual(lr.doc.edges.filter((e) => e.type === "ridge").length, 2, "l-roof: two ridges (one per arm)");
+const hipEdge = lr.doc.edges.filter((e) => e.type === "hip");
+const valEdge = lr.doc.edges.filter((e) => e.type === "valley");
+assert.strictEqual(hipEdge.length, 1, "l-roof: exactly one hip (outer convex corner)");
+assert.strictEqual(valEdge.length, 1, "l-roof: exactly one valley (reentrant concave corner)");
+ok("Stage 2/4: L-roof renders 4 planes with two ridges, one hip and one valley (no overlap, validates)");
+
+// The hip runs from the outer corner (0,0) to the ridge junction (10,10); the valley runs from the
+// reentrant corner (20,20) INWARD to the same junction (concave, not an outward spike).
+const vp = [hipEdge[0].v1, hipEdge[0].v2].map((id) => lr.doc.vertices.find((v) => v.id === id));
+assert.ok(vp.some((v) => Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5), "l-roof: hip touches the outer corner (0,0)");
+assert.ok(vp.some((v) => Math.abs(v.x - 10) < 0.5 && Math.abs(v.y - 10) < 0.5), "l-roof: hip reaches the ridge junction (10,10)");
+const valPts = [valEdge[0].v1, valEdge[0].v2].map((id) => lr.doc.vertices.find((v) => v.id === id));
+assert.ok(valPts.some((v) => Math.abs(v.x - 20) < 0.5 && Math.abs(v.y - 20) < 0.5), "l-roof: valley starts at the reentrant corner (20,20)");
+assert.ok(valPts.some((v) => Math.abs(v.x - 10) < 0.5 && Math.abs(v.y - 10) < 0.5), "l-roof: valley reaches the ridge junction (10,10)");
+// The valley edge is shared by exactly the two valley-side planes (concave shared edge, miter reconciled).
+const valFacets = lr.doc.facets.filter((f) => f.edgeIds.includes(valEdge[0].id));
+assert.strictEqual(valFacets.length, 2, "l-roof: valley is a single shared edge between the two inner planes");
+ok("Stage 2/4: hip is convex at the outer corner and the valley is a shared concave edge to the ridge junction");
+
+// Determinism.
+const lr2 = build(LROOF);
+assert.deepStrictEqual(lr2.doc.vertices, lr.doc.vertices, "l-roof: deterministic vertices");
+ok("Stage 2/4: L-roof solver is deterministic");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
