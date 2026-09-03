@@ -12,6 +12,7 @@ import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch
 import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
 import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
 import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
+import RoofThumbnail from "@/components/roof-sketch/RoofThumbnail";
 import { finalizeAfterSave, rollbackPlan } from "@/components/roof-sketch/proposalLifecycle";
 import { setDecisions } from "@/components/roof-sketch/commands";
 import { num, buildEditablePayload, buildRebasePayload } from "@/components/measurementRebase";
@@ -456,9 +457,12 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             <Field label="Attachment" className="w-32"><Select value={row.attachment || "none"} disabled={!editable} onValueChange={(v) => setRow("structures", i, "attachment", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Attachment" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem><SelectItem value="attached">Attached</SelectItem><SelectItem value="detached">Detached</SelectItem></SelectContent></Select></Field>
             {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("structures", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-3">
             {row.id
-              ? <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+              ? <>
+                  <RoofThumbnail structure={{ id: row.id }} facets={ed?.facets || []} edges={ed?.edges || []} penetrations={ed?.penetrations || []} testid={`structure-roof-thumbnail-${i}`} />
+                  <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+                </>
               : <span className="text-xs text-slate-400">Save the worksheet to sketch this structure's roof.</span>}
           </div>
           <div className="mt-2"><Field label="Structure Notes"><Input placeholder="Optional" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "notes", e.target.value)} /></Field></div>
