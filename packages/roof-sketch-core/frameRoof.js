@@ -455,7 +455,7 @@ function frameRoof(base, edgesIn, resolutions) {
   const single = trySingleCore(base, edges);
   if (single) return single;
   const l = tryLRoof(base, edges);
-  if (l) return l;
+  if (l && l.valid) return l;
   return null;
 }
 

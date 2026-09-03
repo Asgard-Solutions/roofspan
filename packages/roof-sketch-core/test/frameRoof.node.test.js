@@ -303,4 +303,35 @@ const peaks = gold.doc.facets.filter((f) => ["F5", "F7"].includes(f.measurement_
   .map((f) => gold.doc.vertices.find((v) => f.vertexIds.includes(v.id) && v.id.startsWith("dv_")));
 ok("Stage 5: golden 8-plane roof = hip core with hip ends + two front dormers (valid, real hips + valleys)");
 
+// ---- Cross-Gable / T: a perpendicular gable wing abutting the BACK slope of a main gable -----------
+// The wing (W1/W2) shares a ridge and joins the host back slope by two valleys -> two-valley cross-gable
+// (topologically a wing/dormer on the back slope). Exercises the back-slope (up = -1) seating path.
+const T_CROSS = {
+  structure: ST,
+  facets: [
+    { id: "M1", structure_id: "ST", label: "M1", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 1 },
+    { id: "M2", structure_id: "ST", label: "M2", pitch_rise: 6, width_ft: 11.18, length_ft: 40, area_sqft: 400, sort: 2 },
+    { id: "W1", structure_id: "ST", label: "W1", pitch_rise: 6, width_ft: 4, length_ft: 8, area_sqft: 32, sort: 3 },
+    { id: "W2", structure_id: "ST", label: "W2", pitch_rise: 6, width_ft: 4, length_ft: 8, area_sqft: 32, sort: 4 },
+  ],
+  edges: [
+    { id: "RM", structure_id: "ST", edge_type: "ridge", length_ft: 40, facet_id: "M1", facet_id_secondary: "M2", sort: 1 },
+    { id: "RW", structure_id: "ST", edge_type: "ridge", length_ft: 8, facet_id: "W1", facet_id_secondary: "W2", sort: 2 },
+    { id: "VW1", structure_id: "ST", edge_type: "valley", length_ft: 9, facet_id: "M2", facet_id_secondary: "W1", sort: 3 },
+    { id: "VW2", structure_id: "ST", edge_type: "valley", length_ft: 9, facet_id: "M2", facet_id_secondary: "W2", sort: 4 },
+    { id: "EM1", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "M1", sort: 5 },
+    { id: "EM2", structure_id: "ST", edge_type: "eave", length_ft: 40, facet_id: "M2", sort: 6 },
+  ],
+  penetrations: [],
+};
+const tc = build(T_CROSS);
+assertValidAllowOverlap(tc, "t-cross");
+assert.strictEqual(tc.method, "single_core_with_dormers", "t-cross: main core + perpendicular wing");
+assert.strictEqual(tc.doc.facets.length, 4, "t-cross: 4 planes");
+assert.strictEqual(tc.doc.edges.filter((e) => e.type === "valley").length, 2, "t-cross: two valleys against the back slope");
+// The wing seats on the BACK slope: its peak sits at y < W (up = -1 from the y=W eave).
+const wingPeak = tc.doc.vertices.filter((v) => v.id.startsWith("dv_")).map((v) => v.y);
+assert.ok(wingPeak.some((y) => y < 20 && y > 0), "t-cross: wing peak seats inside the back slope (0 < y < W)");
+ok("Cross-Gable/T: a perpendicular gable wing seats on the host back slope with two real valleys");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
