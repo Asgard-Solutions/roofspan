@@ -120,7 +120,8 @@ export default function More({ navigation }) {
   const reviewConflict = (m) => {
     const r = routeFor(m);
     if (!r || !navigation) { Alert.alert("Review update", "Open the affected Lead, Job or Property to review the latest details, then re-apply your change."); return; }
-    navigation.navigate(r.tab, { screen: r.screen, params: r.params });
+    // RN7: { pop: true } keeps the RN6 "return to the existing record screen" behavior instead of pushing a duplicate.
+    navigation.navigate(r.tab, { screen: r.screen, params: r.params }, { pop: true });
   };
   const isAdmin = user?.role === "owner" || user?.role === "administrator";
   const openBillingWeb = () => Linking.openURL(WEB_APP_URL).catch(() => {});

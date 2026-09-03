@@ -35,10 +35,13 @@ export default function Home({ navigation }) {
   const today = new Date().toDateString();
   const todayJobs = jobs.filter((j) => j.scheduled_start && new Date(j.scheduled_start).toDateString() === today);
   const hasIssues = (summary.counts.conflict || 0) > 0 || (summary.counts.failed || 0) > 0;
-  const goLeads = () => navigation.navigate("LeadsTab", { screen: "Leads" });
-  const goNewLead = () => navigation.navigate("LeadsTab", { screen: "NewLead", params: {} });
+  // RN7: navigate() no longer goes back to an existing screen (it pushes). Pass { pop: true } to
+  // preserve the RN6 behavior for these tab shortcuts so they return to the target's root/instance
+  // instead of stacking a duplicate on top of a deep nested stack.
+  const goLeads = () => navigation.navigate("LeadsTab", { screen: "Leads" }, { pop: true });
+  const goNewLead = () => navigation.navigate("LeadsTab", { screen: "NewLead", params: {} }, { pop: true });
   const goMap = () => navigation.navigate("Map");
-  const goJobs = () => navigation.navigate("JobsTab", { screen: "Jobs" });
+  const goJobs = () => navigation.navigate("JobsTab", { screen: "Jobs" }, { pop: true });
 
   return (
     <ScrollView style={s.wrap} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}>
@@ -75,7 +78,7 @@ export default function Home({ navigation }) {
 
       <Text style={s.h2}>Leads needing action</Text>
       {needAction.slice(0, 6).map((l) => (
-        <TouchableOpacity key={l.id} style={s.card} onPress={() => navigation.navigate("LeadsTab", { screen: "LeadDetail", params: { id: l.id } })} testID={`home-lead-${l.id}`}>
+        <TouchableOpacity key={l.id} style={s.card} onPress={() => navigation.navigate("LeadsTab", { screen: "LeadDetail", params: { id: l.id } }, { pop: true })} testID={`home-lead-${l.id}`}>
           <Text style={s.cardTitle}>{l.name}</Text>
           <Text style={s.cardSub}>{l.property_address || l.address || "—"} · {l.status}</Text>
         </TouchableOpacity>

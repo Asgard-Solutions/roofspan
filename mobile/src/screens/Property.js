@@ -111,7 +111,7 @@ export default function Property({ route, navigation }) {
   };
 
   const createLead = () => {
-    if (leadId) return navigation.getParent()?.navigate("LeadsTab", { screen: "LeadDetail", params: { id: leadId } });
+    if (leadId) return navigation.getParent()?.navigate("LeadsTab", { screen: "LeadDetail", params: { id: leadId } }, { pop: true });
     navigation.navigate("NewLead", { property_id: id, name: (owner && owner.name) || "", address: prop.formatted_address });
   };
 
@@ -223,7 +223,7 @@ export default function Property({ route, navigation }) {
         <Text style={s.btnText}>Save visit</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={s.btnOutline} onPress={() => navigation.getParent()?.navigate("LeadsTab", { screen: "Inspection", params: { property_id: id } })} testID="property-inspection">
+      <TouchableOpacity style={s.btnOutline} onPress={() => navigation.getParent()?.navigate("LeadsTab", { screen: "Inspection", params: { property_id: id } }, { pop: true })} testID="property-inspection">
         <Text style={s.btnOutlineText}>Inspection</Text>
       </TouchableOpacity>
 
