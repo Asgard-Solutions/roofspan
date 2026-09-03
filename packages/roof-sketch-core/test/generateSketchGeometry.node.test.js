@@ -1,6 +1,6 @@
 "use strict";
 const assert = require("assert");
-const { generateSketchGeometry, validateSketch, polygonArea } = require("..");
+const { generateSketchGeometry, validateSketch, polygonArea, pitchAdjustedArea } = require("..");
 
 let n = 0;
 function ok(name) { n++; console.log("  \u2713 " + name); }
@@ -52,7 +52,8 @@ assert.strictEqual(r.document.scale.feetPerUnit, 1); ok("single: feetPerUnit = 1
 // canonical validator must accept the generated topology
 assert.strictEqual(validateSketch(r.document).valid, true); ok("single: passes canonical validator");
 // drawn plan area == width * length
-assert.strictEqual(Math.round(polygonArea(facetPoints(r.document, r.document.facets[0]))), 960); ok("single: drawn area = 960 (W*L)");
+// drawn PLAN area = length x plan_run (deprojected Width); round-trips to the sloped Measurement Area 960
+assert.ok(Math.abs(pitchAdjustedArea(polygonArea(facetPoints(r.document, r.document.facets[0])), 4) - 960) < 1); ok("single: plan area round-trips to sloped Area 960");
 // facet -> measurement plane mapping (relational)
 assert.strictEqual(r.document.facets[0].measurement_facet_id, "F1"); ok("single: facet mapped to F1");
 assert.strictEqual(r.document.facets[0].pitch_rise, 4); ok("single: pitch carried");
@@ -112,9 +113,10 @@ const ridge = r.document.edges.find((e) => e.measurement_edge_id === "RIDGE");
 assert.ok(ridge && r.document.facets.every((f) => f.edgeIds.includes(ridge.id))); ok("gable: ridge shared by both facets");
 assert.strictEqual(ridge.confirmed_length_ft, 40); ok("gable: ridge confirmed length preserved");
 // each drawn plane area = 720 (40 x 18)
+// each drawn plane PLAN area round-trips (pitch 6) to its sloped Measurement Area 720
 r.document.facets.forEach((f) => {
-  assert.strictEqual(Math.round(polygonArea(facetPoints(r.document, f))), 720);
-}); ok("gable: each plane drawn area = 720");
+  assert.ok(Math.abs(pitchAdjustedArea(polygonArea(facetPoints(r.document, f)), 6) - 720) < 1);
+}); ok("gable: each plane plan area round-trips to sloped Area 720");
 // facet mappings by relational id
 assert.deepStrictEqual(r.mappings.facets.map((m) => m.measurement_facet_id).sort(), ["FA", "FB"]); ok("gable: facets mapped FA/FB");
 // all 7 roof lines mapped
@@ -145,8 +147,8 @@ assert.strictEqual(r.confidence, "high"); ok("asym gable: high confidence");
 assert.strictEqual(validateSketch(r.document).valid, true); ok("asym gable: passes validator");
 const fa = r.document.facets.find((f) => f.measurement_facet_id === "FA");
 const fb = r.document.facets.find((f) => f.measurement_facet_id === "FB");
-assert.strictEqual(Math.round(polygonArea(facetPoints(r.document, fa))), 720); ok("asym gable: front area 720");
-assert.strictEqual(Math.round(polygonArea(facetPoints(r.document, fb))), 1000); ok("asym gable: back area 1000 (different depth)");
+assert.ok(Math.abs(pitchAdjustedArea(polygonArea(facetPoints(r.document, fa)), 6) - 720) < 1); ok("asym gable: front plan area round-trips to 720 @6/12");
+assert.ok(Math.abs(pitchAdjustedArea(polygonArea(facetPoints(r.document, fb)), 9) - 1000) < 1); ok("asym gable: back plan area round-trips to 1000 @9/12 (own pitch)");
 
 // -------------------------------------------------------------------------------------------------
 // FIXTURE 4 — missing Ridge relationship (two planes, no shared ridge) -> Needs Review.
@@ -171,10 +173,8 @@ function contradictory() {
   return s;
 }
 r = generateSketchGeometry(contradictory());
-assert.strictEqual(r.ok, false); ok("contradictory: ok = false");
-assert.strictEqual(r.status, "needs_review"); ok("contradictory: needs_review");
-assert.ok(r.diagnostics.some((d) => d.code === "contradictory_dimensions")); ok("contradictory: diagnosed");
-assert.strictEqual(r.document.vertices.length, 0); ok("contradictory: NO geometry emitted");
+assert.strictEqual(r.ok, true); ok("area override: generates (Area override not treated as contradiction)");
+assert.strictEqual(r.document.facets[0].confirmed_area_sqft, 1500); ok("area override: confirmed Area preserved (1500, not rewritten)");
 
 // contradiction via edge length (rake != width) also blocks
 function contradictoryEdge() {

@@ -88,10 +88,10 @@ assert.deepStrictEqual(r.unresolved_planes.slice().sort(), ["FC", "FD"]); ok("pa
 assert.ok(r.ambiguities.some((a) => a.via_type === "valley" && a.plane === "FD")); ok("partial: unresolved valley section named in ambiguities");
 assert.ok(r.diagnostics.some((d) => d.code === "partial_proposal")); ok("partial: partial_proposal diagnostic present");
 
-// ---- CONTRADICTORY MEASUREMENTS ------------------------------------------------------------------
+// ---- CONTRADICTORY MEASUREMENTS (genuine geometric contradiction, not an Area override) --------
 function contradictory() {
   const g = gable();
-  g.facets[0].area_sqft = 5000; // 18*40 = 720, not 5000
+  g.edges[0].length_ft = 99; // ridge 99 while both planes are 18x40 -> neither dim matches the ridge
   return g;
 }
 r = generateSketchGeometry(contradictory());

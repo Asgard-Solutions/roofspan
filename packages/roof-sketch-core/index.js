@@ -25,6 +25,7 @@ module.exports = {
   distance: geometry.distance,
   polygonArea: geometry.polygonArea,
   pitchAdjustedArea: geometry.pitchAdjustedArea,
+  planRunFromSlope: geometry.planRunFromSlope,
   calibrateScale: geometry.calibrateScale,
   segmentsCross: geometry.segmentsCross,
   projectPointToSegment: geometry.projectPointToSegment,
