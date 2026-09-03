@@ -16,7 +16,7 @@
 // deprojected via planRunFromSlope(width_ft, pitch) to a plan run; length_ft / eaves are plan dimensions.
 
 const { createSketchDocument } = require("./schema");
-const { validateSketch, edgeLoopVertices, edgeMap } = require("./topology");
+const { validateSketch, edgeLoopVertices, edgeMap, resolveFacetBoundary } = require("./topology");
 const { planRunFromSlope } = require("./geometry");
 
 const num = (v) => { if (v === "" || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -64,6 +64,31 @@ function facetRecord(plane, mid, edgeIds) {
     pitch_rise: num(plane && plane.pitch_rise), confirmed_area_sqft: num(plane && plane.area_sqft),
     orientation_azimuth: num(plane && plane.orientation_azimuth), roof_material: null, edgeIds, vertexIds: [],
   };
+}
+
+// Auto-place each measurement penetration at its assigned facet's centroid as a SUGGESTED starting spot
+// (reps only nudge it). position_known stays false + auto_placed:true so it is never treated as an
+// authoritative measured position; unassigned/off-plane penetrations keep x/y null (manual).
+function autoPlacePenetrations(doc) {
+  const centroidByMid = {}; const countByMid = {};
+  (doc.facets || []).forEach((f) => {
+    const r = resolveFacetBoundary(doc, f);
+    const pts = r && r.points;
+    if (pts && pts.length >= 3) {
+      const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+      const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+      centroidByMid[String(f.measurement_facet_id)] = { x: cx, y: cy };
+    }
+  });
+  doc.penetrations = (doc.penetrations || []).map((p) => {
+    const c = centroidByMid[String(p.measurement_facet_id)];
+    if (!c) return p;
+    const n = (countByMid[p.measurement_facet_id] = (countByMid[p.measurement_facet_id] || 0) + 1) - 1;
+    // Spread multiple penetrations on one facet in a small deterministic row so they do not stack.
+    const off = n === 0 ? 0 : ((n % 2 ? 1 : -1) * Math.ceil(n / 2) * 1.5);
+    return { ...p, x: rnd(c.x + off), y: rnd(c.y), position_known: false, auto_placed: true };
+  });
+  return doc;
 }
 
 // ---- single-core layout (gable / standard hip / half-hip), built from the ridge outward -----------
@@ -219,6 +244,7 @@ function finalize(base, b, facets, resolvedOrder, approximations, method, frame)
   doc.facets = facets;
   doc.penetrations = base.document.penetrations;
   doc.generated = base.document.generated;
+  autoPlacePenetrations(doc);
   const v = validateSketch(doc);
   return { doc, resolved: resolvedOrder, unresolved: [], approximations: approximations || [], valid: v.valid, validation: v, method, frame };
 }
@@ -446,6 +472,7 @@ function frameWithDormers(base, edgesIn, cls) {
   });
   doc.edit_mode = "manual_polygon";
 
+  autoPlacePenetrations(doc);
   const v = validateSketch(doc);
   const resolved = core.resolved.concat(cls.dormers.flatMap((d) => d.planes).filter((m) => !unresolved.includes(m)));
   return { doc, resolved, unresolved, approximations, valid: v.valid, validation: v, method: "single_core_with_dormers", frame };

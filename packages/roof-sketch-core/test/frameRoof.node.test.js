@@ -342,8 +342,8 @@ const LROOF_PEN = { ...LROOF, penetrations: [
 const lp = build(LROOF_PEN);
 assertValidRoof(lp, "l-roof+pens");
 assert.ok(Array.isArray(lp.doc.penetrations) && lp.doc.penetrations.length === 2, "Stage 6: both penetrations carried onto the sketch");
-assert.ok(lp.doc.penetrations.every((p) => p.position_known === false && (p.x == null && p.y == null)), "Stage 6: penetration positions are never fabricated (manual placement)");
-ok("Stage 6: penetrations are carried with their facet link but no fabricated position (manual placement)");
+assert.ok(lp.doc.penetrations.every((p) => p.position_known === false && p.auto_placed === true && Number.isFinite(p.x) && Number.isFinite(p.y)), "Stage 6: penetrations auto-placed at a suggested spot (position_known stays false)");
+ok("Stage 6: penetrations auto-placed on their facet as a suggested starting spot (not authoritative)");
 
 // Unequal-width L (V arm wider) is NOT drawn wrong — it defers (build returns null -> resolver fallback).
 const UNEQUAL_L = { ...LROOF, facets: LROOF.facets.map((f) => (f.id === "F3" || f.id === "F4") ? { ...f, width_ft: 16 } : f) };
