@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Proposed Roof Sketch — FINAL GABLE AXIS-SEMANTICS GUARD (2026-06) — COMPLETE (device acceptance pending). Focused shared-core fix; no UI/persistence/archetype/Plan-2 change.
+Enforces the locked dimensional semantics on the gable path in `packages/roof-sketch-core/generateSketchGeometry.js`: removed the legacy Width/Length axis-swapping fallback in `planeDepth`.
+- **New `planeDepth`:** `length_ft` MUST equal the shared Ridge length within `LEN_TOL` (ridge/eave-parallel) — otherwise `contradictory_dimensions` (Needs Review), no silent swap. `width_ft` is ALWAYS the sloped eave→ridge depth (deprojected downstream via `planRunFromSlope(width_ft, pitch_rise)`). Area override (area_sqft ≠ width×length) still preserved and non-blocking.
+- **Comments updated:** the stale header block (formerly "area = width×length, NOT pitch-adjusted / carry pitch") replaced with the locked semantics (length = ridge/eave-parallel plan dim; width = sloped depth deprojected; area = sloped surface area, preserved/never rewritten; pitch required to deproject).
+- **Tests:** `test/dimensionalSemantics.node.test.js` now 32/32 — added: valid Ridge40/Length40/Width20 @6/12 gable still generates + round-trips to 800; swapped Width40/Length20 gable → `ok:false`, `status:needs_review`, `contradictory_dimensions`; strengthened area-override to assert `ok:true` and confirmed Area (850) preserved. Shared-core `npm test` all green (geometry 55, foundation 63, connected 41, confidence 35, compare 14, editor 128, topology 31 …). Mobile `test:sketch` all suites green.
+- **E2E regression (testing_agent iteration_66.json, frontend 100%, retest_needed:false):** Office "Generate Proposed Sketch" surface unaffected by the engine change — GenRectHC high_confidence generate/cancel/use flow clean (no runtime error); GenNeedsReview valley case still surfaces needs_review + F2/F1 ambiguity with Use disabled. (Testing agent had to delete 2 persisted `measurement_sketch_documents` rows to restore the empty+unsaved generate path; GenRectHC now holds an unsaved in-editor proposal.)
+- STATUS: **Final Gable Axis-Semantics Guard: COMPLETE — physical-device acceptance pending.** No Office/Field UX, persistence, offline/CAS, archetype, or Plan-2/report-import changes.
+
+
+
 ## Proposed Roof Sketch — DIMENSIONAL SEMANTICS CORRECTION (2026-06) — CORRECTED (physical-device acceptance pending). Focused fix; no redesign, no new archetypes, no Plan 2.
 Root cause: the generator used slope `width_ft` directly as the plan-view Y depth, so the sketch engine's `pitchAdjustedArea` double-pitched an already-sloped dimension (40×20@6/12 → false ~894 SF).
 - **Locked semantics applied:** `length_ft` = ridge/eave-parallel plan dimension (used directly); `width_ft` = SLOPED eave→ridge distance → deprojected to plan run before XY; `area_sqft` = sloped surface area (≈ width×length), preserved, never rewritten.
