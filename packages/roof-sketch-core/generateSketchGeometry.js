@@ -34,6 +34,7 @@ const { createSketchDocument } = require("./schema");
 const { validateSketch } = require("./topology");
 const { planRunFromSlope } = require("./geometry");
 const { planPlacement, layoutFromResolutions } = require("./resolvePlacement");
+const { frameRoof } = require("./frameRoof");
 
 const LEN_TOL = 0.5; // ft tolerance for confirmed-edge vs drawn-side and ridge-match consistency
 
@@ -584,7 +585,18 @@ function _layoutConnected(base, facetsIn, edgesIn, input) {
   if (comps.length === 1) {
     const hip = _tryStandardHip(base, edgesIn);
     if (hip.result) return hip.result;
-    // Complex connected roof: the arrangement is not unique. Emit a placement scaffold so the user can
+    // Deterministic ridge-based FRAMING SOLVER: solves the topologies it can uniquely reconstruct
+    // (single-core gable/hip/half-hip, two-core L-roof with real hip + concave valley). Replaces the
+    // old fan-out heuristic for these cases; returns null to defer everything else to the scaffold below.
+    const framed = frameRoof(base, edgesIn);
+    if (framed && framed.doc && framed.valid) {
+      const extra = (framed.approximations || []).concat([{ severity: "info", code: "roof_framing_solved", target_type: "structure", target_id: base.structure_id,
+        message: "Roof reconstructed by the ridge-based framing solver (ridges, eaves, hips and valleys)." }]);
+      if ((framed.unresolved || []).length === 0) return _success(base, framed.doc, undefined, extra, graph);
+      return _partial(base, framed.doc, { graph, resolvedPlanes: framed.resolved, unresolvedPlanes: framed.unresolved,
+        ambiguities: _ambiguityRecords(base, framed.unresolved), extraDiags: extra });
+    }
+    // Complex connected roof the solver cannot uniquely reconstruct: emit a placement scaffold so the user
     // resolve each plane's side; if resolutions are supplied, lay it out deterministically from them.
     const scaffold = planPlacement(base);
     const hasRes = input && (Array.isArray(input.resolutions) ? input.resolutions.length : (input.resolutions && Object.keys(input.resolutions).length));

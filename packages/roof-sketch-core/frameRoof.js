@@ -99,6 +99,12 @@ function trySingleCore(base, edgesIn) {
   const accounted = new Set([mainA, mainB, ...endMids]);
   if (planes.some((p) => !accounted.has(String(p.measurement_facet_id)))) return null;
 
+  // Symmetric core: equal pitch across all planes (the ridge sits at mid-depth). An unequal-pitch core
+  // is not uniquely determined by this construction -> defer to a later phase.
+  const allMids = [mainA, mainB, ...endMids];
+  const pitchList = allMids.map((m) => num(planeByMid[m].pitch_rise));
+  if (pitchList.some((p) => p == null) || pitchList.some((p) => Math.abs(p - pitchList[0]) > 0.01)) return null;
+
   const sharedMids = new Set(adj.map((a) => String(a.measurement_edge_id)));
   const lineById = {}; edgesIn.forEach((e) => { lineById[String(e.id)] = e; });
   const ridgeLine = lineById[String(ridges[0].measurement_edge_id)];

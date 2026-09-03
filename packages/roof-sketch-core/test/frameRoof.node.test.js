@@ -178,4 +178,15 @@ const lr2 = build(LROOF);
 assert.deepStrictEqual(lr2.doc.vertices, lr.doc.vertices, "l-roof: deterministic vertices");
 ok("Stage 2/4: L-roof solver is deterministic");
 
+// Stage 7 wiring — the public orchestrator now routes complex connected roofs through the framing solver.
+const { generateSketchGeometry } = require("../generateSketchGeometry");
+const orch = generateSketchGeometry(LROOF);
+assert.strictEqual(orch.ok, true, "orchestrator solves the L-roof via the framing solver");
+assert.strictEqual(orch.document.facets.length, 4, "orchestrator L-roof: 4 planes");
+assert.ok(orch.document.edges.some((e) => e.type === "valley"), "orchestrator L-roof: has a real valley");
+assert.ok(orch.diagnostics.some((d) => d.code === "roof_framing_solved"), "orchestrator tags the framing-solver result");
+const orchHip = generateSketchGeometry(HIP);
+assert.strictEqual(orchHip.ok, true, "orchestrator still solves the standard hip");
+ok("Stage 7: generateSketchGeometry routes complex roofs to the framing solver (L-roof solved end-to-end)");
+
 console.log(`\nframeRoof: ${n} assertions passed.`);
