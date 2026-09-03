@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend E2E tested the Office existing-sketch safe proposal review flow for GenRectHC on Rev 2 Draft. Initially discovered that compareSketchProposal was NOT bundled by webpack (stale babel-loader cache) — clicking regenerate-proposed-btn threw an uncaught runtime TypeError ('compareSketchProposal is not a function'). Cleared /app/frontend/node_modules/.cache and restarted the frontend; the bundle then included compareSketchProposal.js and all 8 review-flow steps passed cleanly, with only the final Save Sketch firing a network mutation (PUT sketches/... -> 200).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Regenerate proposal (Office)", "issue": "Uncaught runtime TypeError 'compareSketchProposal is not a function' when clicking regenerate-proposed-btn. Root cause: stale webpack babel-loader cache (node_modules/.cache) did not include the newly added compareSketchProposal export from @roofspan/roof-sketch-core. Bundle contained only 1 occurrence of the identifier (the JSX import site) and none of the module implementation. Resolved by clearing /app/frontend/node_modules/.cache and restarting frontend supervisor. Main agent should ensure future package additions trigger a cache-invalidating rebuild (or document that clearing .cache is required after adding new exports).", "affected_selectors": ["[data-testid='regenerate-proposed-btn']", "[data-testid='regen-review-panel']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Verify why webpack/babel-loader cache retained a stale barrel without compareSketchProposal. Consider bumping the package version or clearing .cache on package export additions to prevent similar bundling regressions."
+  ],
+  "critical_code_review_comments": [
+    "RoofSketchEditor.jsx: canRegenerate/regenerateProposed/regenUseProposed logic correctly gates the two-step confirm and never triggers a network mutation; verified no /api/measurement mutations fired between regen click and the explicit Save Sketch.",
+    "@roofspan/roof-sketch-core is symlinked from /app/packages/roof-sketch-core; adding new named exports to index.js requires clearing frontend's webpack .cache to force re-transpilation of the barrel (encountered in this iteration)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% (8/8 flow steps)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Reused existing GenRectHC/Rev2 Draft seed. Test script seeds the saved sketch via Generate Proposed -> Use Proposed -> Save Sketch if not already present (idempotent).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Rev 2 Draft on lead e7b41ad7-cc50-4a56-ae70-30558c974c4a has GenRectHC (id 93da54e6...) with a persisted high-confidence saved sketch (rectangle 20x40, 4/12 pitch). To open the correct structure, walk the DOM after input[value='GenRectHC'] and click the next button whose text starts with 'Sketch Roof' or 'Edit Roof Sketch' (multiple sibling structures share the same button text). Regenerate flow verified end-to-end: regen-review-panel shows 'High confidence' + regen-identical; Keep Current dismisses cleanly and leaves badge Saved; Use Proposed -> regen-confirm-btn + regen-confirm-warning + regen-cancel-confirm-btn gate; cancel returns to review; Confirm Replace marks editor Unsaved without firing any network call; only the explicit save-sketch-btn PUT /api/measurements/{revId}/sketches/{structId} -> 200 persists; measurements panel unchanged before/after (no PUT/POST hits any measurement resource during regen/compare/replace).",
+  "rca of the issue": "compareSketchProposal was added to /app/packages/roof-sketch-core/index.js exports and is required by RoofSketchEditor.jsx, but the webpack-dev-server babel-loader cache under /app/frontend/node_modules/.cache retained the pre-export barrel. Only the import identifier survived tree-shaking, so at runtime the named import resolved to undefined and the click handler threw. Mitigation: `rm -rf /app/frontend/node_modules/.cache && sudo supervisorctl restart frontend`. After the rebuild, the bundle contained 11 references to compareSketchProposal and the flow passed."
+}

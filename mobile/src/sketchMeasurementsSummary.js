@@ -42,4 +42,21 @@ function summarizeStructureMeasurements(detail, structureId) {
   return summarizeScoped({ facets, edges, penetrations });
 }
 
-module.exports = { summarizeScoped, summarizeStructureMeasurements };
+// Scope a full Measurement Revision detail to ONE structure and shape it as the shared generator's
+// input ({structure, facets, edges, penetrations}) — relational ownership only. Pure/offline; the raw
+// records already carry the fields the generator needs (ids, types, pitch, dims, lengths, links).
+function scopeStructureForGenerator(detail, structureId) {
+  const facetsAll = (detail && detail.facets) || [];
+  const edgesAll = (detail && detail.edges) || [];
+  const pensAll = (detail && detail.penetrations) || [];
+  const facets = facetsAll.filter((f) => sameId(f.structure_id, structureId));
+  const idset = new Set(facets.map((f) => String(f.id)));
+  const edges = edgesAll.filter((e) =>
+    (e.facet_id != null && idset.has(String(e.facet_id))) ||
+    (e.facet_id_secondary != null && idset.has(String(e.facet_id_secondary))));
+  const penetrations = pensAll.filter((p) => p.facet_id != null && idset.has(String(p.facet_id)));
+  const structure = ((detail && detail.structures) || []).find((s) => sameId(s.id, structureId)) || {};
+  return { structure: { ...structure, id: structureId }, facets, edges, penetrations };
+}
+
+module.exports = { summarizeScoped, summarizeStructureMeasurements, scopeStructureForGenerator };

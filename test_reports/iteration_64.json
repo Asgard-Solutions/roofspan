@@ -1,0 +1,61 @@
+{
+  "summary": "Retested the 3 scenarios not covered in iteration_63 (Needs Review, Insufficient Information, Locked/read-only) plus the packaging-regression check for High Confidence generation. All 4 scenarios PASSED on the live preview URL. The generateSketchGeometry stale-package bundling issue is confirmed permanently fixed (0 pageerrors, 0 'generateSketchGeometry is not a function' errors; HC scenario renders geometry).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "scenario_results": {
+    "needs_review": {
+      "status": "PASS",
+      "editor_opened": true,
+      "generate_proposed_btn_visible": true,
+      "generate_readiness_text": "Needs review",
+      "ambiguity_count": 1,
+      "ambiguity_text_sample": "F2 placement needs review — measurements establish a Valley with F1 but do not uniquely establish which side of F1.",
+      "unresolved_count": 1,
+      "unresolved_text_sample": "Unresolved roof planes: 02f30545-2acf-4a47-be94-b1b5b75d5403, a1428741-9d5d-4112-ad26-c7609042fa25",
+      "use_btn_disabled": true,
+      "cancel_closes_panel": true
+    },
+    "insufficient_information": {
+      "status": "PASS",
+      "editor_opened": true,
+      "generate_proposed_btn_visible": true,
+      "generate_readiness_text": "Insufficient information",
+      "generate_insufficient_text": "Not enough measurement detail to propose geometry. Draw manually.",
+      "use_btn_disabled": true,
+      "cancel_closes_panel": true
+    },
+    "locked_readonly": {
+      "status": "PASS",
+      "editor_opened": true,
+      "sketch_readonly_badge_visible": true,
+      "sketch_readonly_badge_text": "Read-only revision",
+      "generate_proposed_btn_count": 0
+    },
+    "regression_high_confidence": {
+      "status": "PASS",
+      "editor_opened": true,
+      "generate_readiness_text": "High confidence",
+      "use_btn_disabled": false,
+      "geometry_rendered": true,
+      "generateSketchGeometry_runtime_errors": 0,
+      "total_pageerrors": 0,
+      "note": "Not saved, as instructed."
+    }
+  },
+  "navigation_notes": "Structures are reached via /leads/{leadId} -> section-measurements. Revision is selected using [data-testid='measurement-revision-select'] (Radix Select). The DRAFT revision 8fa662ee corresponds to 'Rev 2 · Draft · 16 sq' (3 structures) and the LOCKED revision d89e4ab4 to 'Rev 3 · Locked · 4 sq'. Sketch editor opens via [data-testid='sketch-roof-btn-{i}'] on the matching structure row.",
+  "console_notes": "Two 404s observed on non-critical resources during editor open on all 4 flows (likely non-blocking asset/prefetch); no runtime JS errors and no pageerrors. Reported for awareness only.",
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "None; used seed data on lead e7b41ad7-... (revisions 8fa662ee draft and d89e4ab4 locked).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Generate-Proposed-Sketch feature is fully verified across all readiness states (high_confidence, needs_review, insufficient_information) and the read-only/locked-revision guard. Stale @roofspan/roof-sketch-core bundling has been permanently fixed via symlink; production build now includes generateSketchGeometry. No open bugs on this feature."
+}
