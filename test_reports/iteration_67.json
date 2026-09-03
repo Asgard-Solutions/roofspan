@@ -1,0 +1,56 @@
+{
+  "summary": "Reproduction attempt for user bug 'Generate New Proposal from Measurements does nothing'. Result: the regenerate-proposed-btn is fully functional; the review panel opens with readiness badge, diff summary, Use Proposed / Keep Current buttons. The user's 'does nothing' perception is a UX/discoverability issue, not a functional break. Tested on lead e7b41ad7-cc50-4a56-ae70-30558c974c4a, draft revision 8fa662ee, structure GenRectHC (single-facet 20x40 rectangle, pitch 4/12, eave 40 LF) which is the only seed structure whose geometry the engine can resolve to high_confidence.",
+  "reproduction_details": {
+    "empty-sketch_button (generate-proposed-btn)": {
+      "GenRectHC (single facet, resolvable)": "Clicked generate-proposed-btn -> generate-proposal-panel opened. generate-readiness=High confidence. Canvas AUTO-DRAWN with the 20x40 rectangle (visible eaves 40 LF, rakes 19 LF, FR label). generate-use-btn enabled. Save via save-sketch-btn issued PUT /api/measurements/.../sketches/... -> 200. Badge became 'Saved'.",
+      "GenNeedsReview (2 facets sharing a valley, no ridge, no rakes)": "Panel opens with generate-readiness=Needs review, unresolved planes listed, ambiguity 'F2 placement needs review — measurements establish a Valley with F1 but do not uniquely establish which side of F1.' Canvas remains EMPTY ('Empty sketch. Pick the Draw tool...'). generate-use-btn is DISABLED. No geometry auto-drawn.",
+      "GenInsufficient (bare facet, no pitch/area/dims)": "Panel opens with generate-readiness=Insufficient information, message 'Not enough measurement detail to propose geometry. Draw manually.' generate-use-btn DISABLED. Canvas empty."
+    },
+    "existing-sketch_button (regenerate-proposed-btn)": {
+      "GenRectHC after saving the proposed sketch": "Reopened editor -> save-state-badge='Saved', regenerate-proposed-btn shown, generate-proposed-btn hidden (as designed). Clicked regenerate-proposed-btn (NO network call, this is pure client-side). regen-review-panel appeared with regen-readiness=High confidence, regen-identical text 'No meaningful differences — the proposal matches your current sketch.' regen-use-btn present and ENABLED. regen-keep-btn present. Clicked regen-use-btn -> regen-confirm-warning appeared ('This will REPLACE your current sketch geometry in the editor. It stays unsaved until you Save.'), regen-confirm-btn enabled. Clicked regen-confirm-btn -> panel closed, toast 'Proposed sketch replaced the current geometry — review and Save to keep it.', canvas still displays the 20x40 rectangle (unchanged because proposal was identical), save-state-badge='Unsaved changes'."
+    },
+    "scoped_measurements_reaching_generator": "Confirmed non-empty and correctly scoped by structure_id. For GenRectHC (structure_id 93da54e6...): summarizeScoped returned 1 plane (800 SF), 1 roof line (Eave 40 LF). scopeForStructure filters facets by structure_id and pulls edges via facet_id/facet_id_secondary correctly."
+  },
+  "root_cause_analysis": {
+    "verdict": "NOT A CODE BUG. The regenerate-proposed-btn wiring is correct: onClick -> generateSketchGeometry(scoped) -> compareSketchProposal(currentDoc, result) -> setRegen({result, comparison}). The review panel renders unconditionally when `regen` state is set (RoofSketchEditor.jsx L330-356).",
+    "why_user_perceives_does_nothing": [
+      "1) The review panel renders in the RIGHT SIDEBAR (grid-cols-[1fr_360px]). On small viewports or when the user's attention is on the canvas, the panel is easy to miss.",
+      "2) Even when the panel is seen, replacing geometry requires TWO further clicks (regen-use-btn -> regen-confirm-btn). On a first single click of regen-use-btn nothing visibly changes on the canvas — only the button relabels to 'Confirm Replace' and a small warning line appears in the panel. Users testing quickly will report 'nothing happened'.",
+      "3) When the proposal is IDENTICAL to the current sketch (very common if the sketch was originally created via Generate Proposed), even completing the Confirm Replace flow does not visibly alter the canvas — the toast 'Proposed sketch replaced the current geometry' is the only feedback, and it disappears quickly.",
+      "4) There is no auto-scroll / no visual highlight bringing the newly-opened regen-review-panel into view; if the sidebar is scrolled elsewhere (e.g. Proposals expanded), the panel appears above the current scroll position and can be off-screen."
+    ]
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "RoofSketchEditor regen review", "issues": [
+        "regen-review-panel opens in the right sidebar with no scroll-into-view or visual attention cue; users can miss it entirely and think the button did nothing.",
+        "When comparison.identical=true (proposal matches current sketch), the flow still requires Use Proposed + Confirm Replace which visually does nothing to the canvas. Consider disabling regen-use-btn (or auto-closing the panel) when identical=true, and surfacing an explicit toast 'No changes — proposal matches your current sketch.'",
+        "The two-click confirm gate for Use Proposed Sketch (regen-use-btn -> regen-confirm-btn) is discoverable only via a small red warning line in the panel. First click provides no toast/animation, giving the impression the button is broken.",
+        "generate-proposed-btn (empty case) has an inconsistent UX vs regenerate-proposed-btn: the empty variant AUTO-DRAWS on the canvas, while the existing variant requires a modal/panel confirm. This asymmetry is likely what confuses the user reporting 'it should be creating the roof image like it should be' — they expected the same auto-draw behavior."
+      ]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Main agent: Address UX for regenerate-proposed-btn. Options (any of): (a) show a floating toast/toaster confirmation when the review panel opens (e.g. 'New proposal ready — review in the sidebar'); (b) auto-scroll the sidebar so regen-review-panel is in view when it opens; (c) when comparison.identical=true, do not require the two-click Use Proposed + Confirm Replace — either disable regen-use-btn or show 'No changes'; (d) after regen-confirm-btn is clicked and geometry is identical, show a stronger visual cue that geometry was 'replaced' (or short-circuit to just close the panel). ",
+    "Consider adding a subtle canvas flash or 'proposal applied' overlay when Confirm Replace succeeds so the user knows the action landed.",
+    "Consider aligning empty-sketch and existing-sketch flows: either both auto-draw with an inline Cancel affordance, or both use the review panel — the current asymmetry is the primary source of user confusion.",
+    "Optional: expose backend-side 'regen preview' via an endpoint so QA/support can confirm the generator's output for reported cases without needing to reproduce in-app."
+  ],
+  "critical_code_review_comments": [
+    "RoofSketchEditor.jsx is 438 lines and mixes editor UI, save lifecycle, proposal lifecycle, generate/regen flows, and validation panel. Consider splitting the two proposal flows (empty vs existing) into their own components/hooks for readability and future-proofing.",
+    "regenerateProposed callback dependency array (L140) does not include hist/docRef even though it reads docRef.current in compareSketchProposal — safe today because docRef is a ref, but explicit is better.",
+    "No console error or thrown exception observed anywhere in the regen flow — engine and comparison are null-safe as claimed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100% (feature works as designed; UX only)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Saved a sketch for GenRectHC (structure 93da54e6-c8f7-4c8b-91ce-decb035c41d4) on revision 8fa662ee-cc1b-4472-8002-dfa33ed8abdc using Generate Proposed + Use Proposed + Save Sketch. This sketch persists in the DB and can be used by subsequent testers to exercise the regenerate flow directly (no setup needed). PUT /api/measurements/8fa662ee.../sketches/93da54e6... returned 200.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Bug is not functional. UX changes (any of the action_items) should be verified by opening lead e7b41ad7-cc50-4a56-ae70-30558c974c4a -> draft revision -> Edit Roof Sketch on GenRectHC -> click regenerate-proposed-btn. The regen-review-panel currently opens in the right sidebar. Also verify GenNeedsReview (2 facets valley) — empty generate-proposed-btn opens panel with disabled generate-use-btn and no canvas drawing, which is another likely source of user 'does nothing'.",
+  "rca of the issue": "The regenerate-proposed-btn opens regen-review-panel and runs the engine + compare correctly (200 PUT confirmed for save; no errors thrown; readiness/diff correctly displayed). Users report 'does nothing' because: (1) the review panel is in the right sidebar and easy to miss, (2) applying requires two extra clicks (Use Proposed -> Confirm Replace) with no toast on the first click, (3) when the proposal is identical to the current sketch, even a successful Confirm Replace produces no visible canvas change, and (4) the empty-sketch button auto-draws while the existing-sketch button opens a review panel — this asymmetry violates the user's mental model that both should 'create the roof image'. Recommended mitigation: align UX (either both auto-draw with cancel, or both use panel with toast+scroll-into-view), short-circuit the identical case, and add clearer post-Confirm feedback."
+}

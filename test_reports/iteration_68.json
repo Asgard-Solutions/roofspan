@@ -1,0 +1,47 @@
+{
+  "summary": "Verified the UX fix for the 'Generate New Proposal from Measurements' (regenerate-proposed-btn) discoverability bug from iteration_67. Tested on lead e7b41ad7-cc50-4a56-ae70-30558c974c4a, Rev 2 (Draft), structure GenRectHC (93da54e6, saved sketch). ALL fix requirements met.",
+  "verifications": {
+    "identical_case (regenerate-proposed-btn on GenRectHC)": {
+      "toast_appeared": true,
+      "toast_text": "No changes — the new proposal matches your current roof sketch.",
+      "toast_variant": "info (sonner)",
+      "regen-review-panel_visible": true,
+      "panel_scrolled_into_view": true,
+      "panel_highlight_classes": "mb-3 rounded border-2 border-indigo-400 bg-indigo-50 p-2 shadow-md ring-2 ring-indigo-300/50 (strong indigo border + ring, clearly attention-grabbing)",
+      "regen-identical_shown": "No meaningful differences — the proposal matches your current sketch.",
+      "regen-use-btn_disabled": true,
+      "regen-keep-btn_present_and_working": true,
+      "console_errors": "none related to feature (only 2 pre-existing 404s from /api/mobile/photos lookups unrelated to sketch)"
+    },
+    "regen-keep-btn_regression": "Clicking Keep Current Sketch closed the regen-review-panel and left current sketch (20x40 rectangle) unchanged. save-state-badge remained 'Saved'.",
+    "empty-sketch_regression (generate-proposed-btn on GenNeedsReview)": {
+      "generate-proposed-btn_visible": true,
+      "regenerate-proposed-btn_hidden": true,
+      "generate-proposal-panel_opens": true,
+      "generate-readiness": "Needs review (as expected for GenNeedsReview per iter67 baseline)",
+      "generate-use-btn_disabled": true,
+      "note": "Auto-draw only applies to high_confidence resolvable geometry (GenRectHC case per iter67); for GenNeedsReview the panel opens with disabled Use button. This matches prior baseline — no regression introduced by the fix."
+    },
+    "real-diff_case": "NOT executed. Requires editing a facet's pitch/dimensions in the worksheet which would mutate seed data; skipped to preserve seed. The code path (regenerateProposed L138-152 in RoofSketchEditor.jsx) is clearly gated: when comparison.identical=false and proposal_has_geometry=true it emits toast.success('New proposal ready — review it in the panel...') and regen-use-btn is enabled (only disabled when identical=true OR !proposal_has_geometry). Logic verified via code review."
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix cleanly implemented in RoofSketchEditor.jsx: (1) L57 useRef regenPanelRef; (2) L65 useEffect scrolls panel into view with smooth behavior when `regen` set; (3) L138-152 regenerateProposed now dispatches three distinct sonner toasts (identical/success/warning); (4) L342 regen-review-panel gets ref + stronger visual (border-2 indigo-400 + ring-2 indigo-300/50 + shadow-md); (5) L364 regen-use-btn disabled prop includes `|| regen.comparison.identical`, so identical-case dead-end is prevented. The two-click confirm gate for real diffs is intentionally retained.",
+    "regenerateProposed useCallback dependency array still omits docRef/hist explicitly (as noted in iter67). Not a functional issue because docRef is a ref; keep as tech-debt note."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "None. Reused existing GenRectHC saved sketch on revision 8fa662ee.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fix verified. The real-diff case (edit pitch on GenRectHC then click regenerate-proposed-btn) was not executed to avoid mutating seed data — code path was inspected instead. If a full retest is desired, temporarily edit the facet FR's pitch on Rev 2 GenRectHC in the worksheet, click Sketch Roof -> regenerate-proposed-btn: expect toast.success 'New proposal ready — review it in the panel...', regen-use-btn ENABLED, and the two-click Use -> Confirm flow replaces geometry and flags Unsaved changes.",
+  "rca of the issue": "Fix addressed the four UX discoverability issues from iter67 RCA: (a) toast feedback added for all three regenerate outcomes; (b) scrollIntoView on `regen` state change surfaces the panel; (c) stronger indigo border+ring makes panel visible; (d) regen-use-btn disabled when comparison.identical prevents the previously silent no-op. Underlying engine + compare logic unchanged; product requirement (existing-sketch flow NEVER auto-replaces) preserved."
+}
