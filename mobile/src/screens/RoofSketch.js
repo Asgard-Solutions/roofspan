@@ -16,6 +16,7 @@ import SketchInspector from "../components/SketchInspector";
 import SketchConflictReview from "../components/SketchConflictReview";
 import SketchMeasurementsPanel from "../components/SketchMeasurementsPanel";
 import ProposalPanel from "../components/ProposalPanel";
+import { scopeStructureForGenerator } from "../sketchMeasurementsSummary";
 import { C } from "../theme";
 
 const TOOLS = [["select", "Select"], ["draw", "Draw"], ["facet", "Facet"], ["penetration", "Roof feature"], ["pan", "Pan"]];
@@ -34,6 +35,7 @@ export default function RoofSketch({ route }) {
   const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
   const [measDetail, setMeasDetail] = useState(null);   // Phase C: authoritative measurement revision detail
   const [measMutState, setMeasMutState] = useState(null); // Phase C: measurement_update mutation state
+  const [proposal, setProposal] = useState(null);          // Generate-Proposed preview (unsaved), or null
   const [, bump] = useState(0);
   const rerender = useCallback(() => bump((x) => x + 1), []);
   const editorRef = useRef(null);
@@ -300,6 +302,35 @@ export default function RoofSketch({ route }) {
     editingBlocked, measurementMutationState: measMutState,
   });
 
+  // --- Generate Proposed Sketch (Field, empty-sketch only) ----------------------------------------
+  // Offered ONLY when: editable/unlocked, a brand-new sketch (no saved server sketch, no local draft),
+  // and the canvas is empty. Runs the SAME shared generator locally from the offline-cached measurement
+  // detail — no network, no Measurement mutation, no server save. Preview is visual-only.
+  const genDoc = editor.document;
+  const isEmptyDoc = (genDoc.facets?.length || 0) === 0 && (genDoc.edges?.length || 0) === 0 && (genDoc.vertices?.length || 0) === 0;
+  const canGenerate = !editingBlocked && editor.source === "new" && isEmptyDoc && !proposal;
+  const generateProposed = () => {
+    if (editingBlockedRef.current || !measDetail) {
+      if (!measDetail) Alert.alert("Measurements unavailable", "Roof measurements for this structure aren't available on this device yet.");
+      return;
+    }
+    const res = RS.generateSketchGeometry(scopeStructureForGenerator(measDetail, structure_id));
+    setProposal(res);
+    if (res.document && (res.document.vertices?.length || 0) > 0) { editor.preview(res.document); }
+    setSelection(null); setResetToken((x) => x + 1); rerender();
+  };
+  const useProposed = () => {
+    if (editingBlockedRef.current || !proposal || !proposal.document || (proposal.document.vertices?.length || 0) === 0) return;
+    editor.commit(proposal.document);   // becomes the working draft via the existing durable pipeline
+    setProposal(null); setSelection(null); setResetToken((x) => x + 1);
+    settle();                            // autosave (SQLite) + debounce-stage into the offline queue
+  };
+  const cancelProposed = () => {
+    editor.restore();                    // exact pre-generation state (preview never committed)
+    setProposal(null); setSelection(null); setResetToken((x) => x + 1); rerender();
+  };
+  const proposalHasGeometry = !!(proposal && proposal.document && (proposal.document.vertices?.length || 0) > 0);
+
   return (
     <View style={sx.container} testID="roof-sketch-screen">
       <View style={sx.statusBar}>
@@ -356,6 +387,32 @@ export default function RoofSketch({ route }) {
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
       {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
+
+      {canGenerate ? (
+        <TouchableOpacity testID="field-generate-btn" onPress={generateProposed} style={sx.genCta}>
+          <Text style={sx.genCtaText}>Generate Proposed Sketch</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {proposal ? (
+        <View style={sx.genPanel} testID="field-generate-panel">
+          <View style={sx.genHead}>
+            <Text style={sx.genTitle}>Proposed sketch (unsaved)</Text>
+            <Text style={[sx.genBadge, proposal.readiness === "high_confidence" ? sx.genBadgeHi : proposal.readiness === "needs_review" ? sx.genBadgeRev : sx.genBadgeIns]} testID="field-generate-readiness">
+              {proposal.readiness === "high_confidence" ? "High confidence" : proposal.readiness === "needs_review" ? "Needs review" : "Insufficient information"}
+            </Text>
+          </View>
+          <Text style={sx.genMeta} testID="field-generate-meas-used">Measurements used: {proposal.mappings?.facets?.length || 0} planes · {proposal.mappings?.edges?.length || 0} roof lines</Text>
+          {proposal.readiness === "insufficient_information" ? <Text style={sx.genIns} testID="field-generate-insufficient">Not enough measurement detail to propose geometry. Draw manually.</Text> : null}
+          {(proposal.unresolved_planes?.length || 0) > 0 ? <Text style={sx.genWarn} testID="field-generate-unresolved">Unresolved roof planes: {proposal.unresolved_planes.join(", ")}</Text> : null}
+          {(proposal.ambiguities || []).map((a, i) => <Text key={i} style={sx.genAmb} testID="field-generate-ambiguity">{a.message}</Text>)}
+          {(proposal.document?.penetrations || []).filter((p) => p.position_known === false).map((p) => <Text key={p.id} style={sx.genMeta} testID="field-generate-pen-placement">Penetration {p.measurement_penetration_id} needs manual placement.</Text>)}
+          <View style={sx.genRow}>
+            <TouchableOpacity testID="field-generate-use-btn" disabled={!proposalHasGeometry} onPress={useProposed} style={[sx.primary, !proposalHasGeometry && sx.disabled]}><Text style={sx.primaryText}>Use Proposed Sketch</Text></TouchableOpacity>
+            <TouchableOpacity testID="field-generate-cancel-btn" onPress={cancelProposed} style={sx.ghost}><Text style={sx.ghostText}>Cancel / Draw Manually</Text></TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       <SketchMeasurementsPanel measDetail={measDetail} structureId={structure_id} />
 
@@ -453,4 +510,18 @@ const sx = StyleSheet.create({
   toolOn: { backgroundColor: C.brand },
   toolText: { color: "#CBD5E1", fontWeight: "700", fontSize: 13 },
   toolTextOn: { color: "#fff" },
+  genCta: { backgroundColor: C.brand, marginHorizontal: 12, marginTop: 6, paddingVertical: 12, borderRadius: 10, alignItems: "center" },
+  genCtaText: { color: "#fff", fontWeight: "800", fontSize: 14 },
+  genPanel: { marginHorizontal: 12, marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: "#0E2A3B", borderWidth: 1, borderColor: "#164E63" },
+  genHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  genTitle: { color: "#7DD3FC", fontWeight: "800", fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 },
+  genBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, overflow: "hidden" },
+  genBadgeHi: { color: "#052E1B", backgroundColor: "#6EE7B7" },
+  genBadgeRev: { color: "#3B2A05", backgroundColor: "#FCD34D" },
+  genBadgeIns: { color: "#3B0A0A", backgroundColor: "#FCA5A5" },
+  genMeta: { color: "#94A3B8", fontSize: 11, marginTop: 4 },
+  genIns: { color: "#FCA5A5", fontSize: 11, marginTop: 4 },
+  genWarn: { color: "#FDE68A", fontSize: 11, marginTop: 4 },
+  genAmb: { color: "#FDE68A", backgroundColor: "rgba(180,83,9,0.25)", fontSize: 11, marginTop: 4, padding: 6, borderRadius: 6 },
+  genRow: { flexDirection: "row", gap: 10, marginTop: 8 },
 });
