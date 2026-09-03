@@ -61,6 +61,13 @@ assert.ok(laid.document.vertices.length >= 8, "geometry has real vertices");
 assert.ok((laid.resolved_planes || []).length === 4 || laid.ok, "all planes resolved");
 ok("supplying side choices lays out all 4 planes into valid geometry");
 
+// 3b. Hip junction -> the hip-end plane is drawn as a TRIANGLE (3 edges), not a rectangle.
+const f4 = laid.document.facets.find((f) => f.measurement_facet_id === "F4");
+assert.ok(f4 && f4.edgeIds.length === 3, "F4 (joined by a Hip) is a hip-end triangle (3 edges)");
+const f4hips = laid.document.edges.filter((e) => f4.edgeIds.includes(e.id) && e.type === "hip");
+assert.ok(f4hips.length >= 2, "the two hip edges rise to the apex");
+ok("a Hip junction draws a true hip-end triangle (base + two hips to an apex)");
+
 // 4. Determinism: identical input -> identical geometry.
 const laid2 = RS.generateSketchGeometry({ structure, facets, edges, penetrations: [], resolutions });
 assert.deepStrictEqual(laid2.document.vertices, laid.document.vertices, "deterministic vertices");

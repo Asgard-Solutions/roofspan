@@ -11,6 +11,9 @@ Office `RoofSketchEditor.jsx` + Field `RoofSketch.js`: `resolutions` state (seed
 Verified: Node `test/resolvePlacement.node.test.js` 6/6 (scaffold, deterministic layout, persistence, partial); sketch regression intact; Office E2E testing_agent iteration_69 (frontend 100% — resolver appears for a 4-plane complex roof, side choices draw the multi-plane roof, adopt + Save PUT 200, simple roofs skip the resolver). Fixed a cardinal/SVG y-axis inversion so N/E/S/W match the screen (deterministically confirmed North places above). Field shares the identical engine + parallel UI (cannot run natively in this env; covered by core tests).
 NOTE (Phase 1 scope): planes are placed as rectangles attached to the chosen side with approximation flags; exotic miter/triangle-hip fidelity is a follow-up. Physical-device acceptance pending.
 
+## Roof Sketch placement — geometry tightening (2026-06, follow-up to Phase 1)
+- HIP junctions now draw a true hip-end TRIANGLE (base along the shared hip, apex at the outward midpoint, two hips rising to the apex) instead of a rectangle. Valley/ridge junctions remain rectangular wings. Deterministic; passes canonical validation. Node test `resolvePlacement.node.test.js` now 7/7 (adds the hip-triangle assertion). Valley-miter reconciliation is the next fidelity step.
+
 
 
 ## Office — "Generate New Proposal from Measurements" UX fix (2026-06) — VERIFIED

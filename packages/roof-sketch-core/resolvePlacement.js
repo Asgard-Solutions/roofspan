@@ -135,6 +135,21 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
       roof_material: null, edgeIds: ids, vertexIds: [] });
   };
 
+  // A hip-end plane is a TRIANGLE: base along the shared hip, apex at the outward midpoint (two hips rise
+  // to the apex). Returns bbox cardinal sides so a (rare) further plane can still attach off a triangle.
+  const placeTriangleFacet = (mid, seg, depth, viaEdge, viaType) => {
+    const a = { x: seg.a.x, y: seg.a.y }, b = { x: seg.b.x, y: seg.b.y }, n = seg.n;
+    const apex = { x: rnd((a.x + b.x) / 2 + n.x * depth), y: rnd((a.y + b.y) / 2 + n.y * depth) };
+    const base = pushEdge(a, b, viaType, lineById[viaEdge] || null);
+    const eR = pushEdge(b, apex, "hip", null);
+    const eL = pushEdge(a, apex, "hip", null);
+    const p = planeById[mid];
+    facets.push({ id: "rf_" + mid, measurement_facet_id: mid, relational_facet_id: mid, label: (p && p.label) || "F",
+      pitch_rise: num(p && p.pitch_rise), confirmed_area_sqft: num(p && p.area_sqft), orientation_azimuth: num(p && p.orientation_azimuth),
+      roof_material: null, edgeIds: [base.id, eR.id, eL.id], vertexIds: [] });
+    return cardinalSides([a, b, apex]);
+  };
+
   // Anchor placed as an axis-aligned rectangle: x in [0, along], y in [0, depth] (North = top).
   const anchorId = scaffold.anchor_id;
   if (!anchorId) return { error: "no_anchor" };
@@ -157,12 +172,18 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
     if (depth == null) { unresolved.push(mid); approximations.push({ severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
       message: `${(f && f.label) || mid}: needs a sloped Width + pitch (or a Length) to size its depth.` }); continue; }
     const seg = par.sides[side];
-    const rect = placeRect({ x: seg.a.x, y: seg.a.y }, { x: seg.b.x, y: seg.b.y }, seg.n, depth);
-    // Child's side facing the parent (outward normal opposes the parent side's) carries the shared junction.
-    const oppKey = (seg.n.y < 0) ? "S" : (seg.n.y > 0) ? "N" : (seg.n.x > 0) ? "W" : "E";
-    const shared = pushEdge(rect[oppKey].a, rect[oppKey].b, step.viaType, lineById[step.viaEdge] || null);
-    placed[mid] = { sides: rect };
-    addFacet(mid, rect, oppKey, shared);
+    if (step.viaType === "hip") {
+      // Hip junction -> draw a true hip-end triangle (base = shared hip, apex outward).
+      const sides = placeTriangleFacet(mid, seg, depth, step.viaEdge, step.viaType);
+      placed[mid] = { sides };
+    } else {
+      const rect = placeRect({ x: seg.a.x, y: seg.a.y }, { x: seg.b.x, y: seg.b.y }, seg.n, depth);
+      // Child's side facing the parent (outward normal opposes the parent side's) carries the shared junction.
+      const oppKey = (seg.n.y < 0) ? "S" : (seg.n.y > 0) ? "N" : (seg.n.x > 0) ? "W" : "E";
+      const shared = pushEdge(rect[oppKey].a, rect[oppKey].b, step.viaType, lineById[step.viaEdge] || null);
+      placed[mid] = { sides: rect };
+      addFacet(mid, rect, oppKey, shared);
+    }
     resolved.push(mid);
     if (dInfo.approx) approximations.push({ severity: "warning", code: "approx_plane_depth", target_type: "facet", target_id: mid,
       message: `${(f && f.label) || mid}: depth approximated from Length (no sloped Width + pitch).` });
