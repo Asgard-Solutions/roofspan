@@ -27,6 +27,7 @@
 const { generateProposedSketch, AREA_DIM_TOL } = require("./generateSketch");
 const { createSketchDocument } = require("./schema");
 const { validateSketch } = require("./topology");
+const { planRunFromSlope } = require("./geometry");
 
 const LEN_TOL = 0.5; // ft tolerance for confirmed-edge vs drawn-side and ridge-match consistency
 
@@ -236,10 +237,8 @@ function _layoutSinglePlane(base, facetsIn, edgesIn) {
     return _needsReview(base, [{ severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
       message: "Roof plane needs both Width and Length to lay out its boundary." }]);
   }
-  if (A != null && Math.abs(W * L - A) > AREA_DIM_TOL) {
-    return _needsReview(base, [{ severity: "error", code: "contradictory_dimensions", target_type: "facet", target_id: mid,
-      message: "Roof plane area does not equal Width x Length; dimensions are contradictory." }]);
-  }
+  // An Area override (area_sqft != width_ft*length_ft) is allowed and preserved — the foundation already
+  // emits a non-blocking info diagnostic. Geometry is built from Width/Length; do NOT block on it.
   const lines = _planeLines(edgesIn, mid, null);
   // slots: bottom/top are the L-length sides; left/right are the W-length sides.
   const { assigned, error } = _assignLines(lines, ["bottom", "top"], ["left", "right"]);
@@ -263,13 +262,19 @@ function _layoutSinglePlane(base, facetsIn, edgesIn) {
 
   const doc = createSketchDocument({ structureId: base.structure_id });
   doc.scale = { resolved: true, feetPerUnit: 1, feet_per_unit: 1, method: "measurement_dimensions" };
+  // width_ft is the SLOPED eave->ridge distance; deproject to the horizontal plan run for plan-view Y.
+  const planRun = planRunFromSlope(W, num(f.pitch_rise));
+  if (planRun == null || !(planRun > 0)) {
+    return _needsReview(base, [{ severity: "error", code: "missing_pitch", target_type: "facet", target_id: mid,
+      message: "Roof plane needs a pitch to deproject the sloped Width into plan geometry." }]);
+  }
   const v0 = { id: "gv_0", x: 0, y: 0 }, v1 = { id: "gv_1", x: L, y: 0 };
-  const v2 = { id: "gv_2", x: L, y: W }, v3 = { id: "gv_3", x: 0, y: W };
+  const v2 = { id: "gv_2", x: L, y: planRun }, v3 = { id: "gv_3", x: 0, y: planRun };
   doc.vertices = [v0, v1, v2, v3];
   const eBottom = _edge("gen_e_bottom", v0.id, v1.id, "eave", L, assigned.bottom);
-  const eRight = _edge("gen_e_right", v1.id, v2.id, "rake", W, assigned.right);
+  const eRight = _edge("gen_e_right", v1.id, v2.id, "rake", planRun, assigned.right);
   const eTop = _edge("gen_e_top", v2.id, v3.id, "eave", L, assigned.top);
-  const eLeft = _edge("gen_e_left", v3.id, v0.id, "rake", W, assigned.left);
+  const eLeft = _edge("gen_e_left", v3.id, v0.id, "rake", planRun, assigned.left);
   doc.edges = [eBottom, eRight, eTop, eLeft];
   doc.facets = [{
     id: `msf_${mid}`, measurement_facet_id: mid, relational_facet_id: mid,
@@ -308,10 +313,7 @@ function _layoutGable(base, facetsIn, edgesIn) {
       return { error: { severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
         message: "Each gable plane needs both Width and Length." } };
     }
-    if (A != null && Math.abs(W * L - A) > AREA_DIM_TOL) {
-      return { error: { severity: "error", code: "contradictory_dimensions", target_type: "facet", target_id: mid,
-        message: "Gable plane area does not equal Width x Length; dimensions are contradictory." } };
-    }
+    // Area override allowed/preserved (see single-plane note) — do not block gable generation on it.
     const wMatch = approx(W, R, LEN_TOL), lMatch = approx(L, R, LEN_TOL);
     if (!wMatch && !lMatch) {
       return { error: { severity: "error", code: "contradictory_dimensions", target_type: "facet", target_id: mid,
@@ -336,18 +338,25 @@ function _layoutGable(base, facetsIn, edgesIn) {
 
   const doc = createSketchDocument({ structureId: base.structure_id });
   doc.scale = { resolved: true, feetPerUnit: 1, feet_per_unit: 1, method: "measurement_dimensions" };
+  // Each plane's ridge->eave depth is its SLOPED Width; deproject with THAT plane's pitch for plan-view Y.
+  const pitchA = num(facetByMid[pAmid].pitch_rise), pitchB = num(facetByMid[pBmid].pitch_rise);
+  const planDepthA = planRunFromSlope(dA.depth, pitchA), planDepthB = planRunFromSlope(dB.depth, pitchB);
+  if (planDepthA == null || !(planDepthA > 0) || planDepthB == null || !(planDepthB > 0)) {
+    return _needsReview(base, [{ severity: "error", code: "missing_pitch", target_type: "structure", target_id: base.structure_id,
+      message: "Each gable plane needs a pitch to deproject its sloped Width into plan geometry." }]);
+  }
   const rA = { id: "gv_rA", x: 0, y: 0 }, rB = { id: "gv_rB", x: R, y: 0 };
-  const aL = { id: "gv_aL", x: 0, y: dA.depth }, aR = { id: "gv_aR", x: R, y: dA.depth };
-  const bL = { id: "gv_bL", x: 0, y: -dB.depth }, bR = { id: "gv_bR", x: R, y: -dB.depth };
+  const aL = { id: "gv_aL", x: 0, y: planDepthA }, aR = { id: "gv_aR", x: R, y: planDepthA };
+  const bL = { id: "gv_bL", x: 0, y: -planDepthB }, bR = { id: "gv_bR", x: R, y: -planDepthB };
   doc.vertices = [rA, rB, aL, aR, bL, bR];
 
   const ridge = _edge("gen_e_ridge", rA.id, rB.id, "ridge", R, ridgeLine);
-  const rakeAR = _edge("gen_e_rakeAR", rB.id, aR.id, "rake", dA.depth, asgA.assigned.rakeAR);
+  const rakeAR = _edge("gen_e_rakeAR", rB.id, aR.id, "rake", planDepthA, asgA.assigned.rakeAR);
   const eaveA = _edge("gen_e_eaveA", aR.id, aL.id, "eave", R, asgA.assigned.eaveA);
-  const rakeAL = _edge("gen_e_rakeAL", aL.id, rA.id, "rake", dA.depth, asgA.assigned.rakeAL);
-  const rakeBR = _edge("gen_e_rakeBR", rB.id, bR.id, "rake", dB.depth, asgB.assigned.rakeBR);
+  const rakeAL = _edge("gen_e_rakeAL", aL.id, rA.id, "rake", planDepthA, asgA.assigned.rakeAL);
+  const rakeBR = _edge("gen_e_rakeBR", rB.id, bR.id, "rake", planDepthB, asgB.assigned.rakeBR);
   const eaveB = _edge("gen_e_eaveB", bR.id, bL.id, "eave", R, asgB.assigned.eaveB);
-  const rakeBL = _edge("gen_e_rakeBL", bL.id, rA.id, "rake", dB.depth, asgB.assigned.rakeBL);
+  const rakeBL = _edge("gen_e_rakeBL", bL.id, rA.id, "rake", planDepthB, asgB.assigned.rakeBL);
   doc.edges = [ridge, rakeAR, eaveA, rakeAL, rakeBR, eaveB, rakeBL];
 
   doc.facets = [

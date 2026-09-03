@@ -25,6 +25,18 @@ function pitchAdjustedArea(planArea, pitchRise) {
   return Number(planArea) * Math.sqrt(1 + Math.pow(rise / 12, 2));
 }
 
+// Deproject a SLOPED roof-surface distance (e.g. Measurement width_ft) to its horizontal PLAN run for
+// 2D plan-view geometry. Inverse of pitchAdjustedArea's slope factor. Never assumes a pitch: a missing
+// or invalid pitch returns null so callers can refuse to fabricate geometry.
+function planRunFromSlope(slopeFeet, pitchRise) {
+  const s = Number(slopeFeet);
+  if (!Number.isFinite(s)) return null;
+  if (pitchRise == null || pitchRise === "") return null;
+  const rise = Number(pitchRise);
+  if (!Number.isFinite(rise) || rise < 0) return null;
+  return s / Math.sqrt(1 + Math.pow(rise / 12, 2));
+}
+
 // Establish drawing scale from a known real-world dimension on the canvas.
 function calibrateScale({ canvasDistance, realFeet, method } = {}) {
   const cd = Number(canvasDistance);
@@ -73,4 +85,4 @@ function edgeGeometryLengthFeet(doc, edge) {
   return distance([a.x, a.y], [b.x, b.y]) * Number(doc.scale.feetPerUnit);
 }
 
-module.exports = { distance, polygonArea, pitchAdjustedArea, calibrateScale, segmentsCross, projectPointToSegment, edgeGeometryLengthFeet };
+module.exports = { distance, polygonArea, pitchAdjustedArea, planRunFromSlope, calibrateScale, segmentsCross, projectPointToSegment, edgeGeometryLengthFeet };
