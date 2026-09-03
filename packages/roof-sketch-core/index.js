@@ -55,6 +55,8 @@ module.exports = {
   layoutFromResolutions: require("./resolvePlacement").layoutFromResolutions,
   // ---- deterministic ridge-based roof-framing solver (replaces the fan-out heuristic for complex roofs) ----
   frameRoof: require("./frameRoof").frameRoof,
+  // ---- combine every in-scope structure into one unified site-plan document ----
+  combineStructuresSitePlan: require("./combineStructures").combineStructuresSitePlan,
   // ---- existing sketch vs new proposal comparison (Office review) ----
   compareSketchProposal: compareSketchProposal.compareSketchProposal,
 

@@ -46,7 +46,7 @@ function _hash(str) {
 }
 function _fingerprint(inp) {
   const s = (v) => (v == null ? null : String(v));
-  const facets = (Array.isArray(inp.facets) ? inp.facets : []).map((f) => [s(f.id), s(f.structure_id), f.pitch_rise, f.area_sqft, f.width_ft, f.length_ft, f.orientation_azimuth]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+  const facets = (Array.isArray(inp.facets) ? inp.facets : []).map((f) => [s(f.id), s(f.structure_id), f.pitch_rise, f.area_sqft, f.width_ft, f.length_ft, f.position_offset_ft, f.orientation_azimuth]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
   const edges = (Array.isArray(inp.edges) ? inp.edges : []).map((e) => [s(e.id), e.edge_type, e.length_ft, s(e.facet_id), s(e.facet_id_secondary)]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
   const pens = (Array.isArray(inp.penetrations) ? inp.penetrations : []).map((p) => [s(p.id), p.pen_type, p.quantity, s(p.facet_id)]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
   return _hash(JSON.stringify({ st: inp.structure && inp.structure.id != null ? String(inp.structure.id) : null, facets, edges, pens }));
@@ -147,6 +147,7 @@ function generateProposedSketch(input) {
     const area = num(f.area_sqft);
     const width = num(f.width_ft);
     const length = num(f.length_ft);
+    const positionOffset = num(f.position_offset_ft);
     const azimuth = num(f.orientation_azimuth);
 
     if (pitch == null) diag("error", "missing_pitch", "facet", mid, "Roof plane has no pitch; geometry cannot be constrained.");
@@ -165,6 +166,7 @@ function generateProposedSketch(input) {
       confirmed_area_sqft: area,
       width_ft: width,
       length_ft: length,
+      position_offset_ft: positionOffset,
       orientation_azimuth: azimuth,
       roof_material: f.roof_material != null ? f.roof_material : null,
       edgeIds: [],   // filled below from relational roof-line links (topology intent, not a drawn loop)
@@ -175,6 +177,7 @@ function generateProposedSketch(input) {
       measurement_facet_id: mid,
       label: (f.facet_label != null && f.facet_label !== "") ? String(f.facet_label) : `F${constraintPlanes.length + 1}`,
       pitch_rise: pitch, area_sqft: area, width_ft: width, length_ft: length,
+      position_offset_ft: positionOffset,
       orientation_azimuth: azimuth, edge_ids: [],
     });
   }

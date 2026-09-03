@@ -415,7 +415,13 @@ function tryCrossGable(base, edgesIn) {
     const rw = runOf(w.left); if (rw == null || !(rw > 0)) { w.bad = true; return; }
     w.Wg = rnd(rw * 2); w.hg = rnd(w.Wg / 2);
     let lg = num(planeByMid[w.left].length_ft); w.Lg = lg != null && lg > 0 ? lg : rnd(w.Wg);
-    w.cx = rnd(L * (i + 1) / (N + 1));
+    // Optional measured position: pin the wing centre to `position_offset_ft` (distance from the host
+    // eave start) when supplied on either wing plane; otherwise spread evenly along the wall.
+    const off = num(planeByMid[w.left].position_offset_ft);
+    const off2 = num(planeByMid[w.right].position_offset_ft);
+    const pinned = off != null && off > 0 ? off : (off2 != null && off2 > 0 ? off2 : null);
+    w.cx = pinned != null ? rnd(pinned) : rnd(L * (i + 1) / (N + 1));
+    w.pinned = pinned != null;
   });
   if (wingList.some((w) => w.bad || w.Wg < 0.5 * Wm || w.Wg > Wm + 0.5)) return null;
   // Notches must fit inside the eave and not collide.
@@ -425,8 +431,9 @@ function tryCrossGable(base, edgesIn) {
     if (i > 0 && (w.cx - w.hg) <= (wingList[i - 1].cx + wingList[i - 1].hg)) return null;
   }
 
-  const approximations = [{ severity: "warning", code: "approx_wing_position", target_type: "facet", target_id: wingList[0].left,
-    message: `Cross-gable wing${N > 1 ? "s" : ""} spread along ${(planeByMid[host] && planeByMid[host].label) || host}; exact positions along the wall are approximate.` }];
+  const approximations = [];
+  if (wingList.some((w) => !w.pinned)) approximations.push({ severity: "warning", code: "approx_wing_position", target_type: "facet", target_id: wingList[0].left,
+    message: `Cross-gable wing${N > 1 ? "s" : ""} spread along ${(planeByMid[host] && planeByMid[host].label) || host}; set "Offset from left (ft)" on a wing plane to pin it exactly.` });
   const b = makeBuilder();
   const P = (x, y) => ({ x: rnd(x), y: rnd(y) });
   const rTL = P(0, yM), rTR = P(L, yM), bBL = P(0, Wm), bBR = P(L, Wm);
@@ -525,10 +532,16 @@ function seatDormer(doc, ids, dormer, planeByMid, lineById, host, approximations
   dd = Math.min(dd, host.depth - margin * 1.2);
   if (!(dd > 0)) dd = host.depth * 0.5;
   const cx = rnd(host.L * (host.index + 1) / (host.count + 1));
+  // Optional measured position: if the dormer plane carries `position_offset_ft` (distance from the host
+  // slope's start along the wall), pin to it instead of auto-centring. Clamped to stay on the slope.
+  let cxUse = cx;
+  const off = num(p0.position_offset_ft);
+  if (off != null && off > 0 && off < host.L) cxUse = rnd(Math.min(Math.max(off, hw), host.L - hw));
   const yf = rnd(host.eaveY + host.up * margin);
   const yb = rnd(yf + host.up * dd);
   const P = (x, y) => ({ x: rnd(x), y: rnd(y) });
-  const vid = (pt) => { const id = `dv_${ids.v++}`; doc.vertices.push({ id, x: pt.x, y: pt.y }); return id; };
+  const shift = cxUse - cx;
+  const vid = (pt) => { const id = `dv_${ids.v++}`; doc.vertices.push({ id, x: rnd(pt.x + shift), y: pt.y }); return id; };
   const edge = (v1, v2, type, line, a, b) => {
     const drawn = rnd(Math.hypot(b.x - a.x, b.y - a.y));
     const e = line

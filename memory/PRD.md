@@ -1,5 +1,17 @@
 # RoofSpan — Product Requirements & Status
 
+## Roof Plane "Offset from left (ft)" + Combined multi-structure Site Plan — DONE & VERIFIED (2026-06)
+Two user-approved features on top of the roof-framing solver.
+- **`position_offset_ft` on each Roof Plane (facet)** — optional distance (ft) from the host slope's start to PIN a dormer/wing exactly instead of auto-centering. Full stack:
+  - DB: new nullable `measurement_facets.position_offset_ft` (migration `f8a1b2c3d4e5`, single head). Model + `FacetIn`/`FacetOut` + create/update/clone/serialize in `services/measurements.py`.
+  - Core: carried into `generateSketch.js` `constraints.planes` + `document.facets` + fingerprint; `frameRoof.js` `tryCrossGable` now reads it on a wing plane to set the wing centre `cx` (else even spread), and clears the `approx_wing_position` warning when pinned. `seatDormer` already honored it.
+  - UI: Office `MeasurementWorksheet.jsx` facet row input `facet-offset-{i}`; Field `mobile/src/screens/Measurements.js` `meas-facet-offset-{i}` + payload mapping.
+- **Combined Site Plan (`combineStructuresSitePlan`)** — merges every IN-SCOPE structure's deterministically-framed roof into ONE document, laid side-by-side (largest footprint first, 12 ft gap, aligned to a common top), each vertex/edge/facet tagged with `structure_id` and globally re-ided (no collisions). Optional per-structure `{dx,dy}` offsets make positions draggable. Exported via core `index.js`.
+  - Persistence: new nullable `measurement_revisions.site_plan` JSONB `{offsets:{<structureId>:{dx,dy}}}` (same migration). Office-owned: update overwrites ONLY when the client sends it (Field saves omit it, never wiping the layout). Reset sends `{offsets:{}}` (NOT null) so it clears rather than preserves.
+  - UI: Office `frontend/src/components/roof-sketch/CombinedSitePlan.jsx` (SVG, pointer-drag to reposition, `combined-site-plan` / `site-plan-structure-{id}` / `combined-site-plan-reset` / `combined-site-plan-empty` testids); shown in the worksheet whenever the revision has >= 2 saved structures.
+- **Verified:** core `node test/combineStructures.node.test.js` (3 assertions: offset pins a wing + clears the approx flag; combine side-by-side/largest-first/non-overlapping/unique-ids; drag offsets honored deterministically) + full `npm test` green (frameRoof 18, all suites). Mobile `test:sketch`/`test:measurements` green. Backend curl + testing_agent iteration_75: **backend 100% (5/5)** (GET exposes both fields, PUT round-trips, null-site_plan preserves), **frontend 6/6 after fix** (offset input persists; combined plan renders + drag persists; the one reported bug — Reset-layout not clearing because null=preserve — fixed by sending `{offsets:{}}`). Field/Expo not headless-testable.
+
+
 ## Deterministic Roof-Framing Solver — Stages 0-5 + Uneven Pitch + Dormers + Thumbnail DONE & VERIFIED (2026-06)
 Replaced the old fan-out "pinwheel" heuristic for all topologies below with a real ridge-based framing solver. Blueprint in `/app/memory/ROOF_FRAMING_SOLVER_PLAN.md`.
 - **`packages/roof-sketch-core/frameRoof.js`** (`frameRoof(base, edgesIn, resolutions)`, exported). Builds roofs from the RIDGE outward as rectangular cores; deterministic, validated, defers (returns null) anything it can't uniquely solve so the legacy `resolvePlacement` scaffold still catches the rest (no regression, no pinwheel).

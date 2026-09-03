@@ -31,6 +31,7 @@ class FacetIn(BaseModel):
     area_sqft: float = 0
     width_ft: Optional[float] = None
     length_ft: Optional[float] = None
+    position_offset_ft: Optional[float] = None   # pin a dormer/wing along the host slope (ft from start)
     orientation_azimuth: Optional[float] = None
     roof_material: Optional[str] = None
     notes: Optional[str] = None
@@ -107,6 +108,7 @@ class MeasurementRevisionIn(BaseModel):
     reported_area_sqft: Optional[float] = None
     notes: Optional[str] = None
     mark_field_complete: bool = False
+    site_plan: Optional[Dict[str, Any]] = None    # combined multi-structure site-plan layout offsets
     structures: List[StructureIn] = []
     facets: List[FacetIn] = []
     edges: List[EdgeIn] = []
@@ -139,6 +141,7 @@ class FacetOut(BaseModel):
     area_sqft: float
     width_ft: Optional[float] = None
     length_ft: Optional[float] = None
+    position_offset_ft: Optional[float] = None
     orientation_azimuth: Optional[float] = None
     roof_material: Optional[str] = None
     notes: Optional[str] = None
@@ -225,6 +228,7 @@ class MeasurementRevisionOut(BaseModel):
     verified_at: Optional[datetime] = None
     locked_by: Optional[str] = None
     locked_at: Optional[datetime] = None
+    site_plan: Optional[Dict[str, Any]] = None
     structures: List[StructureOut] = []
     facets: List[FacetOut] = []
     edges: List[EdgeOut] = []

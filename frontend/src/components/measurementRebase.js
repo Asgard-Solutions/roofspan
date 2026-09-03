@@ -38,6 +38,7 @@ export function buildEditablePayload(ed, base, scope = {}) {
     lead_id: scope.leadId || null, property_id: scope.propertyId || null, inspection_id: scope.inspectionId || null,
     source: base?.source || "office", reported_area_sqft: num(ed.reported_area_sqft),
     provider: base?.provider ?? null, report_id: base?.report_id ?? null, notes: base?.notes ?? null,
+    site_plan: ed.site_plan ?? null,
     structures: ed.structures.map((row, i) => ({
       ref: row.ref, name: row.name || "", structure_type: row.structure_type || "main_house",
       included_in_scope: row.included_in_scope !== false, stories: num(row.stories), approx_height_ft: num(row.approx_height_ft),
@@ -46,7 +47,8 @@ export function buildEditablePayload(ed, base, scope = {}) {
     facets: ed.facets.map((row, i) => ({
       ref: row.ref, structure_ref: row.structure_ref || null, facet_label: row.facet_label || `F${i + 1}`,
       pitch_rise: num(row.pitch_rise), area_sqft: parseFloat(row.area_sqft) || 0,
-      width_ft: num(row.width_ft), length_ft: num(row.length_ft), orientation_azimuth: num(row.orientation_azimuth),
+      width_ft: num(row.width_ft), length_ft: num(row.length_ft), position_offset_ft: num(row.position_offset_ft),
+      orientation_azimuth: num(row.orientation_azimuth),
       roof_material: row.roof_material || null, notes: row.notes || null, geometry: row.geometry || null, sort: i,
     })),
     edges: ed.edges.map((row, i) => ({

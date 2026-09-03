@@ -138,6 +138,7 @@ async def _insert_children(db: AsyncSession, rev: MeasurementRevision, payload) 
         row = MeasurementFacet(
             revision_id=rev.id, structure_id=sid, facet_label=f.facet_label or "",
             pitch_rise=f.pitch_rise, area_sqft=f.area_sqft or 0, width_ft=f.width_ft, length_ft=f.length_ft,
+            position_offset_ft=f.position_offset_ft,
             orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material, notes=f.notes,
             geometry=f.geometry, sort=f.sort or 0,
         )
@@ -199,6 +200,7 @@ async def create_revision(db: AsyncSession, payload, user) -> MeasurementRevisio
         set_id=s.id, revision_number=await _next_revision_number(db, s.id), status="draft",
         source=payload.source or "field", provider=payload.provider, report_id=payload.report_id,
         reported_area_sqft=payload.reported_area_sqft, notes=payload.notes,
+        site_plan=payload.site_plan,
         created_by=getattr(user, "email", None),
     )
     if payload.source == "imported":
@@ -315,6 +317,7 @@ async def _reconcile_children(db: AsyncSession, rev: MeasurementRevision, payloa
             row.area_sqft = f.area_sqft or 0
             row.width_ft = f.width_ft
             row.length_ft = f.length_ft
+            row.position_offset_ft = f.position_offset_ft
             row.orientation_azimuth = f.orientation_azimuth
             row.roof_material = f.roof_material
             row.notes = f.notes
@@ -324,6 +327,7 @@ async def _reconcile_children(db: AsyncSession, rev: MeasurementRevision, payloa
             row = MeasurementFacet(
                 revision_id=rid, structure_id=sid, facet_label=f.facet_label or "",
                 pitch_rise=f.pitch_rise, area_sqft=f.area_sqft or 0, width_ft=f.width_ft, length_ft=f.length_ft,
+                position_offset_ft=f.position_offset_ft,
                 orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material, notes=f.notes,
                 geometry=f.geometry, sort=f.sort or 0,
             )
@@ -455,6 +459,10 @@ async def replace_children(db: AsyncSession, rev: MeasurementRevision, payload) 
     rev.report_id = payload.report_id
     rev.reported_area_sqft = payload.reported_area_sqft
     rev.notes = payload.notes
+    # Site-plan layout is owned by Office; only overwrite when the client sends it (Field never does),
+    # so a Field save can never wipe the combined layout.
+    if payload.site_plan is not None:
+        rev.site_plan = payload.site_plan
     await _retain_deleted_child_photos(db, str(rev.id), deleted_ids_by_type)
     rev.updated_at = _now()
 
@@ -464,7 +472,8 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
     new = MeasurementRevision(
         set_id=rev.set_id, revision_number=await _next_revision_number(db, rev.set_id), status="draft",
         supersedes_revision_id=rev.id, source="office", provider=rev.provider, report_id=rev.report_id,
-        reported_area_sqft=rev.reported_area_sqft, notes=rev.notes, created_by=getattr(user, "email", None),
+        reported_area_sqft=rev.reported_area_sqft, notes=rev.notes, site_plan=rev.site_plan,
+        created_by=getattr(user, "email", None),
     )
     db.add(new)
     await db.flush()
@@ -491,7 +500,8 @@ async def clone_revision(db: AsyncSession, rev: MeasurementRevision, user) -> Me
         r = MeasurementFacet(
             revision_id=new.id, structure_id=smap.get(str(f.structure_id)) if f.structure_id else None,
             facet_label=f.facet_label, pitch_rise=f.pitch_rise, area_sqft=f.area_sqft, width_ft=f.width_ft,
-            length_ft=f.length_ft, orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material,
+            length_ft=f.length_ft, position_offset_ft=f.position_offset_ft,
+            orientation_azimuth=f.orientation_azimuth, roof_material=f.roof_material,
             notes=f.notes, geometry=f.geometry, sort=f.sort,
         )
         db.add(r)
@@ -636,7 +646,8 @@ async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
     facet_out = [{
         "id": str(f.id), "structure_id": str(f.structure_id) if f.structure_id else None,
         "facet_label": f.facet_label, "pitch_rise": f.pitch_rise, "area_sqft": f.area_sqft,
-        "width_ft": f.width_ft, "length_ft": f.length_ft, "orientation_azimuth": f.orientation_azimuth,
+        "width_ft": f.width_ft, "length_ft": f.length_ft, "position_offset_ft": f.position_offset_ft,
+        "orientation_azimuth": f.orientation_azimuth,
         "roof_material": f.roof_material, "notes": f.notes, "geometry": f.geometry, "sort": f.sort,
     } for f in facets]
     edge_out = [{
@@ -671,6 +682,7 @@ async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
         "is_immutable": rev.is_immutable, "editable": is_editable(rev), "source": rev.source,
         "provider": rev.provider, "report_id": rev.report_id, "imported_at": rev.imported_at,
         "reported_area_sqft": rev.reported_area_sqft, "notes": rev.notes,
+        "site_plan": rev.site_plan,
         "inspection_id": str(s.inspection_id) if s and s.inspection_id else None,
         "property_id": str(s.property_id) if s and s.property_id else None,
         "lead_id": str(s.lead_id) if s and s.lead_id else None,
