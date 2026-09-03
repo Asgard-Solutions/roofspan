@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createSketchDocument, deriveProposals, validateSketch } from "@roofspan/roof-sketch-core";
+import { createSketchDocument, deriveProposals, validateSketch, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MousePointer2, PenLine, Square, Dot, Undo2, Redo2, Save, X, Loader2 } from "lucide-react";
@@ -50,6 +50,8 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const [validationMsg, setValidationMsg] = useState(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
   const [showMeas, setShowMeas] = useState(true);
+  const [proposal, setProposal] = useState(null);   // local Generate-Proposed preview (unsaved, not persisted)
+  const preGenRef = useRef(null);                    // exact pre-generation snapshot for Cancel
   const measRef = useMemo(() => summarizeScoped({ facets, edges, penetrations }), [facets, edges, penetrations]);
   const [closing, setClosing] = useState(false);       // Save & Close request in progress
   const closeConfirmRef = useRef(false);
@@ -93,6 +95,33 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
   const doc = hist.doc;
   const validation = useMemo(() => validateSketch(doc), [doc]);
   const proposals = useMemo(() => deriveProposals(doc), [doc]);
+
+  // --- Generate Proposed Sketch (Office, empty-sketch only) ---------------------------------------
+  // Offered ONLY when: editable, no saved sketch yet (serverVersion null), and the canvas is empty.
+  // Generation runs the shared core locally — it never saves, never touches Measurements.
+  const isEmptyDoc = (doc.facets?.length || 0) === 0 && (doc.edges?.length || 0) === 0 && (doc.vertices?.length || 0) === 0;
+  const canGenerate = !readOnly && save.serverVersion == null && isEmptyDoc && !proposal;
+  const generateProposed = useCallback(() => {
+    if (readOnly || saveRef.current.serverVersion != null) return;
+    preGenRef.current = { doc: docRef.current, save: saveRef.current };
+    const res = generateSketchGeometry({ structure, facets, edges, penetrations });
+    setProposal(res); setSelection(null);
+    if (res.document && (res.document.vertices?.length || 0) > 0) { docRef.current = res.document; hist.setDocDirect(res.document); }
+  }, [readOnly, structure, facets, edges, penetrations, hist]);
+  const useProposed = useCallback(() => {
+    if (readOnly || !proposal || !proposal.document || (proposal.document.vertices?.length || 0) === 0) return;
+    hist.reset(proposal.document); docRef.current = proposal.document; bumpEdit();
+    setProposal(null); setSelection(null);
+    toast.success(proposal.readiness === "high_confidence"
+      ? "Proposed sketch adopted. Review and Save when ready."
+      : "Proposed sketch adopted — unresolved items remain. Review and Save when ready.");
+  }, [readOnly, proposal, hist, bumpEdit]);
+  const cancelProposed = useCallback(() => {
+    const snap = preGenRef.current;
+    if (snap) { hist.reset(snap.doc); docRef.current = snap.doc; commitSaveState(snap.save); }
+    setProposal(null); setSelection(null);
+  }, [hist, commitSaveState]);
+  const proposalPenPlacements = proposal ? (proposal.document?.penetrations || []).filter((p) => p.position_known === false) : [];
 
   const cmd = useMemo(() => ({
     setEdgeType: (id, t) => ctl.run((d) => ({ doc: C.setEdgeType(d, id, t) })),
@@ -247,6 +276,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
         <ToolBtn id="facet" icon={Square} label="Facet" />
         <ToolBtn id="penetration" icon={Dot} label="Penetration" />
       </div>}
+      {canGenerate && <Button size="sm" variant="secondary" onClick={generateProposed} data-testid="generate-proposed-btn"><Square className="mr-1 h-4 w-4" />Generate Proposed Sketch</Button>}
       {!readOnly && <div className="ml-2 flex gap-1">
         <Button size="sm" variant={doc.edit_mode === "connected_graph" ? "secondary" : "ghost"} onClick={() => switchMode("connected_graph")} data-testid="mode-connected">Connected</Button>
         <Button size="sm" variant={doc.edit_mode === "manual_polygon" ? "secondary" : "ghost"} onClick={() => switchMode("manual_polygon")} data-testid="mode-manual">Manual</Button>
@@ -272,6 +302,23 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
           <RoofSketchCanvas doc={doc} editMode={doc.edit_mode} mode={mode} selection={selection} onSelect={setSelection} readOnly={readOnly} ctl={ctl} />
         </div>
         <div className="flex flex-col overflow-y-auto border-l border-slate-200 p-3">
+          {proposal && <div className="mb-3 rounded border border-sky-200 bg-sky-50 p-2" data-testid="generate-proposal-panel">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-sky-700">Proposed sketch (unsaved)</span>
+              <Badge data-testid="generate-readiness" className={proposal.readiness === "high_confidence" ? "bg-emerald-100 text-emerald-800" : proposal.readiness === "needs_review" ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-800"}>
+                {proposal.readiness === "high_confidence" ? "High confidence" : proposal.readiness === "needs_review" ? "Needs review" : "Insufficient information"}
+              </Badge>
+            </div>
+            <div className="mt-1 text-[11px] text-slate-600" data-testid="generate-meas-used">Measurements used: {proposal.mappings?.facets?.length || 0} planes · {proposal.mappings?.edges?.length || 0} roof lines{(proposal.mappings?.penetrations?.length || 0) > 0 ? ` · ${proposal.mappings.penetrations.length} penetrations` : ""}</div>
+            {proposal.readiness === "insufficient_information" && <div className="mt-1 text-[11px] text-rose-700" data-testid="generate-insufficient">Not enough measurement detail to propose geometry. Draw manually.</div>}
+            {(proposal.unresolved_planes?.length || 0) > 0 && <div className="mt-1 text-[11px] text-amber-800" data-testid="generate-unresolved">Unresolved roof planes: {proposal.unresolved_planes.join(", ")}</div>}
+            {(proposal.ambiguities || []).map((a, i) => <div key={i} className="mt-1 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900" data-testid="generate-ambiguity">{a.message}</div>)}
+            {proposalPenPlacements.map((p) => <div key={p.id} className="mt-1 text-[11px] text-slate-600" data-testid="generate-pen-placement">Penetration {p.measurement_penetration_id} needs manual placement (no position in measurements).</div>)}
+            {!readOnly && <div className="mt-2 flex gap-2">
+              <Button size="sm" disabled={(proposal.document?.vertices?.length || 0) === 0} onClick={useProposed} data-testid="generate-use-btn">Use Proposed Sketch</Button>
+              <Button size="sm" variant="outline" onClick={cancelProposed} data-testid="generate-cancel-btn">Cancel / Draw Manually</Button>
+            </div>}
+          </div>}
           <div className="mb-3" data-testid="sketch-measurements-ref">
             <button type="button" onClick={() => setShowMeas((v) => !v)} className="flex w-full items-center justify-between rounded bg-slate-100 px-2 py-1 text-left" data-testid="sketch-measurements-toggle">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{showMeas ? "▾" : "▸"} Measurements</span>
