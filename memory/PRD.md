@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Office — "Generate New Proposal from Measurements" UX fix (2026-06) — VERIFIED
+User report: clicking "Generate New Proposal from Measurements" (existing-sketch flow) "does nothing / doesn't create the roof image". Root cause (iteration_67): NOT a functional break — the engine + compare run correctly and the review panel opens, but it was undiscoverable (right sidebar, no toast, no scroll) and the identical-proposal case left the "Use Proposed" button enabled yet visibly no-op. Per product rule the existing-sketch flow must NEVER auto-replace the current sketch, so fix improved feedback, not auto-draw.
+Fix in `frontend/src/components/roof-sketch/RoofSketchEditor.jsx`: (a) immediate sonner toast on regenerate for all three outcomes (identical / proposal-ready / insufficient-measurements); (b) `scrollIntoView` on the `regen` panel via new `regenPanelRef`; (c) stronger highlighted border+ring on `regen-review-panel`; (d) `regen-use-btn` disabled when `comparison.identical`. Engine/compare unchanged; empty-sketch auto-draw and Keep-Current regressions confirmed intact. Verified by testing_agent iteration_68 (frontend 100%, no issues).
+
+
+
 ## Mobile — RN Navigation 7 Lockfile Reproducibility Correction (2026-06) — COMPLETE & REPRODUCIBLE. Lockfile-only; no framework/nav/sync code change.
 Root cause: the migration commit (c11c638) captured `mobile/package.json` (RN7) + Home/More/Property `{pop:true}` + `navigation_v7.node.test.js`, but the root workspace `package-lock.json` update stayed UNCOMMITTED — so committed HEAD lockfile still recorded RN6 (native ^6.1.0→6.1.18, native-stack ^6.9.0→6.11.0, bottom-tabs ^6.5.0→6.6.1 hoisted at top-level node_modules). A fresh clone/EAS build would have installed RN6.
 - **Fix (no hand-edit):** deleted root `package-lock.json` and re-ran `npm install` at the workspace root to regenerate it from the declared ranges. No separate `mobile/package-lock.json` exists (root is the sole workspace lockfile owner).
