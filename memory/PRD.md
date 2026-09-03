@@ -14,6 +14,10 @@ NOTE (Phase 1 scope): planes are placed as rectangles attached to the chosen sid
 ## Roof Sketch placement — geometry tightening (2026-06, follow-up to Phase 1)
 - HIP junctions now draw a true hip-end TRIANGLE (base along the shared hip, apex at the outward midpoint, two hips rising to the apex) instead of a rectangle. Valley/ridge junctions remain rectangular wings. Deterministic; passes canonical validation. Node test `resolvePlacement.node.test.js` now 7/7 (adds the hip-triangle assertion). Valley-miter reconciliation is the next fidelity step.
 
+## Roof Sketch — valley-miter + line-length labels (2026-06)
+- VALLEY / DEAD_VALLEY junctions now draw mitered TRIANGLES too (base = shared valley, two valley edges rising to an apex) — matching the hip treatment so junction planes meet at a point instead of a flat rectangle. Ridge junctions stay rectangular (gable partner). Deterministic, passes validation. Node test asserts both hip (F4) and valley (F3) planes are 3-edge mitered triangles with correctly-typed rising edges.
+- LINE LENGTH LABELS: both canvases already render an `edge-dim-<id>` label per edge; broadened shared `edgeDimensions.edgeDimension()` so a length shows whenever the edge has one — geometry-scaled when calibrated, else the edge's confirmed_length_ft (locked/measured) or drawn_length_ft — so users can verify lines are exact even before scale calibration. Applies to Office and Field (shared core). Generated/resolved roofs (feetPerUnit=1) already display exact LF per line.
+
 
 
 ## Office — "Generate New Proposal from Measurements" UX fix (2026-06) — VERIFIED

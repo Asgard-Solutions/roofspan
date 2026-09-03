@@ -61,12 +61,17 @@ assert.ok(laid.document.vertices.length >= 8, "geometry has real vertices");
 assert.ok((laid.resolved_planes || []).length === 4 || laid.ok, "all planes resolved");
 ok("supplying side choices lays out all 4 planes into valid geometry");
 
-// 3b. Hip junction -> the hip-end plane is drawn as a TRIANGLE (3 edges), not a rectangle.
+// 3b. Hip/valley junctions -> the end plane is drawn as a mitered TRIANGLE (3 edges) whose two rising
+// edges meet at an apex (valley-miter / hip fidelity), not a flat rectangle.
 const f4 = laid.document.facets.find((f) => f.measurement_facet_id === "F4");
-assert.ok(f4 && f4.edgeIds.length === 3, "F4 (joined by a Hip) is a hip-end triangle (3 edges)");
+assert.ok(f4 && f4.edgeIds.length === 3, "F4 (joined by a Hip) is a mitered triangle (3 edges)");
 const f4hips = laid.document.edges.filter((e) => f4.edgeIds.includes(e.id) && e.type === "hip");
 assert.ok(f4hips.length >= 2, "the two hip edges rise to the apex");
-ok("a Hip junction draws a true hip-end triangle (base + two hips to an apex)");
+const f3 = laid.document.facets.find((f) => f.measurement_facet_id === "F3");
+assert.ok(f3 && f3.edgeIds.length === 3, "F3 (joined by a Valley) is a mitered triangle (3 edges)");
+const f3valleys = laid.document.edges.filter((e) => f3.edgeIds.includes(e.id) && e.type === "valley");
+assert.ok(f3valleys.length >= 2, "the two valley edges rise to the apex (valley-miter)");
+ok("hip AND valley junctions draw mitered triangles (edges meet at an apex)");
 
 // 4. Determinism: identical input -> identical geometry.
 const laid2 = RS.generateSketchGeometry({ structure, facets, edges, penetrations: [], resolutions });

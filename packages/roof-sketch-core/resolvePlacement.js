@@ -135,14 +135,14 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
       roof_material: null, edgeIds: ids, vertexIds: [] });
   };
 
-  // A hip-end plane is a TRIANGLE: base along the shared hip, apex at the outward midpoint (two hips rise
-  // to the apex). Returns bbox cardinal sides so a (rare) further plane can still attach off a triangle.
+  // A hip/valley-end plane is a mitered TRIANGLE: base along the shared junction, apex at the outward
+  // midpoint (the two rising edges meet at a point instead of a flat rectangle -> valley-miter/hip fidelity).
   const placeTriangleFacet = (mid, seg, depth, viaEdge, viaType) => {
     const a = { x: seg.a.x, y: seg.a.y }, b = { x: seg.b.x, y: seg.b.y }, n = seg.n;
     const apex = { x: rnd((a.x + b.x) / 2 + n.x * depth), y: rnd((a.y + b.y) / 2 + n.y * depth) };
     const base = pushEdge(a, b, viaType, lineById[viaEdge] || null);
-    const eR = pushEdge(b, apex, "hip", null);
-    const eL = pushEdge(a, apex, "hip", null);
+    const eR = pushEdge(b, apex, viaType, null);
+    const eL = pushEdge(a, apex, viaType, null);
     const p = planeById[mid];
     facets.push({ id: "rf_" + mid, measurement_facet_id: mid, relational_facet_id: mid, label: (p && p.label) || "F",
       pitch_rise: num(p && p.pitch_rise), confirmed_area_sqft: num(p && p.area_sqft), orientation_azimuth: num(p && p.orientation_azimuth),
@@ -172,8 +172,8 @@ function layoutFromResolutions(base, edgesIn, resolutions) {
     if (depth == null) { unresolved.push(mid); approximations.push({ severity: "error", code: "insufficient_dimensions", target_type: "facet", target_id: mid,
       message: `${(f && f.label) || mid}: needs a sloped Width + pitch (or a Length) to size its depth.` }); continue; }
     const seg = par.sides[side];
-    if (step.viaType === "hip") {
-      // Hip junction -> draw a true hip-end triangle (base = shared hip, apex outward).
+    if (step.viaType === "hip" || step.viaType === "valley" || step.viaType === "dead_valley") {
+      // Hip / valley junctions -> mitered triangle (base = shared junction, two edges rise to an apex).
       const sides = placeTriangleFacet(mid, seg, depth, step.viaEdge, step.viaType);
       placed[mid] = { sides };
     } else {
