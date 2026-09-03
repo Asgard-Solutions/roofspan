@@ -53,6 +53,8 @@ module.exports = {
   // ---- resolution-driven placement for connected complex roofs (side choices -> deterministic layout) ----
   planPlacement: require("./resolvePlacement").planPlacement,
   layoutFromResolutions: require("./resolvePlacement").layoutFromResolutions,
+  // ---- deterministic ridge-based roof-framing solver (replaces the fan-out heuristic for complex roofs) ----
+  frameRoof: require("./frameRoof").frameRoof,
   // ---- existing sketch vs new proposal comparison (Office review) ----
   compareSketchProposal: compareSketchProposal.compareSketchProposal,
 
