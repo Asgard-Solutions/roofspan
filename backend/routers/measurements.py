@@ -144,11 +144,13 @@ async def save_site_plan_assets(revision_id: str, request: Request, user: User =
         return f"site-plans/{revision_id}.{ext}"
 
     img = _store(body.get("image_base64"), "png", "image/png")
-    pdf = _store(body.get("pdf_base64"), "pdf", "application/pdf")
     if img:
         sp["image_key"] = img
-    if pdf:
+    if (pdf := _store(body.get("pdf_base64"), "pdf", "application/pdf")):
         sp["pdf_key"] = pdf
+    fingerprint = body.get("fingerprint")
+    if fingerprint:
+        sp["fingerprint"] = str(fingerprint)
     from datetime import datetime, timezone
     sp["assets_updated_at"] = datetime.now(timezone.utc).isoformat()
     rev.site_plan = sp

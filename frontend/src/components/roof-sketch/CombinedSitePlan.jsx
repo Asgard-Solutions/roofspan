@@ -1,9 +1,37 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, Download, CheckCircle2 } from "lucide-react";
+import { RotateCcw, Download, CheckCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+
+// Deterministic FNV-1a hash of the measurement values that drive the site plan, so we can tell
+// whether measurements changed since the plan was last saved (nudge the rep to re-save).
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+const num = (v) => (v == null || v === "" ? "" : Number(v));
+function measurementFingerprint(facets, edges, penetrations, offsets) {
+  const f = [...facets].map((x) => [x.id, x.structure_id, num(x.width_ft), num(x.length_ft), num(x.area_sqft), num(x.pitch_rise), num(x.position_offset_ft)].join(":")).sort();
+  const e = [...edges].map((x) => [x.id, x.type, num(x.length_ft), num(x.confirmed_length_ft), x.facet_id, x.facet_id_secondary].join(":")).sort();
+  const p = [...penetrations].map((x) => [x.id, x.facet_id, x.type].join(":")).sort();
+  const o = Object.keys(offsets || {}).sort().map((k) => `${k}:${(offsets[k] || {}).dx}:${(offsets[k] || {}).dy}`);
+  return fnv1a(JSON.stringify({ f, e, p, o }));
+}
+function relativeTime(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "saved";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 45) return "saved just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `saved ${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `saved ${h}h ago`;
+  const d = Math.round(h / 24);
+  return d <= 30 ? `saved ${d}d ago` : `saved ${new Date(t).toLocaleDateString()}`;
+}
 
 const NICE_FT = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000];
 function niceScaleFeet(scale) { // scale = viewBox units per foot; aim for a ~110-unit bar
@@ -158,6 +186,16 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
   }, []);
 
   const savedAt = sitePlan && (sitePlan.pdf_key || sitePlan.assets_updated_at) ? sitePlan.assets_updated_at : null;
+  const currentFingerprint = useMemo(() => measurementFingerprint(facets, edges, penetrations, offsets), [facets, edges, penetrations, offsets]);
+  const savedFingerprint = (sitePlan && sitePlan.fingerprint) || null;
+  const planStale = !!(savedAt && savedFingerprint && savedFingerprint !== currentFingerprint);
+  // Re-render every 60s so the relative "saved Xm ago" label stays fresh while the worksheet is open.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!savedAt) return;
+    const id = setInterval(() => setTick((n) => n + 1), 60000);
+    return () => clearInterval(id);
+  }, [savedAt]);
   const downloadSaved = useCallback(async () => {
     if (!revisionId) return;
     try { const res = await api.get(`/measurements/${revisionId}/site-plan.pdf`, { responseType: "blob" }); downloadBlob(res.data, "site-plan.pdf"); }
@@ -299,7 +337,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         const pdf = await buildPdfDoc();
         const pdf_base64 = pdf ? pdf.output("datauristring") : null;
         if (cancelled) return;
-        await api.put(`/measurements/${revisionId}/site-plan-assets`, { image_base64, pdf_base64 });
+        await api.put(`/measurements/${revisionId}/site-plan-assets`, { image_base64, pdf_base64, fingerprint: currentFingerprint });
       } catch (e) { console.warn("Site plan auto-save failed (worksheet save already succeeded):", e); }
     })();
     return () => { cancelled = true; };
@@ -322,9 +360,17 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           {propertyAddress ? <span className="ml-1 text-slate-400" data-testid="site-plan-address">· {propertyAddress}</span> : null}
           {savedAt ? (
             <button type="button" onClick={downloadSaved} data-testid="site-plan-saved-badge"
-              className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100">
-              <CheckCircle2 className="h-3 w-3" />Site plan saved · download
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+              title={`Site plan saved ${new Date(savedAt).toLocaleString()} — click to download`}>
+              <CheckCircle2 className="h-3 w-3" />Site plan {relativeTime(savedAt)} · download
             </button>
+          ) : null}
+          {planStale ? (
+            <span data-testid="site-plan-stale-nudge"
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+              title="Measurements changed since the site plan was last saved. Save the worksheet again to refresh the stored plan & PDF.">
+              <AlertTriangle className="h-3 w-3" />Measurements changed — re-save to update
+            </span>
           ) : null}
         </div>
         <div className="flex items-center gap-1">

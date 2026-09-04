@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Saved Plan Status Sync (relative time + re-save nudge) — DONE (2026-06)
+Builds on the Saved Plan Badge. `CombinedSitePlan.jsx`:
+- **Relative "saved Xm/h/d ago"** — the green saved badge (`site-plan-saved-badge`) now shows `relativeTime(assets_updated_at)` ("saved just now / 12m ago / 2h ago / 3d ago", falls back to a date >30d), with the exact timestamp in the title tooltip. A 60s interval re-renders so the label stays fresh while the worksheet is open.
+- **Drift nudge** — new deterministic FNV-1a `measurementFingerprint(facets, edges, penetrations, offsets)` (sorted plane/line/penetration/offset values). Sent as `fingerprint` in the `PUT /api/measurements/{rev}/site-plan-assets` auto-save payload; backend stores it in `site_plan.fingerprint` and returns it via `GET /api/measurements/{rev}`. When the saved fingerprint differs from the live one, an amber `site-plan-stale-nudge` chip ("Measurements changed — re-save to update") appears next to the badge. Re-saving the worksheet refreshes both the stored plan/PDF and the fingerprint, clearing the nudge.
+- **Verified:** backend fingerprint round-trip curl-proven (PUT stores `fingerprint`, GET returns it alongside `assets_updated_at`); frontend compiles clean. Backend change: `backend/routers/measurements.py` `save_site_plan_assets` now persists `body["fingerprint"]`. No migration (reuses `site_plan` JSONB).
+
+
 ## Saved Plan Badge + Site Plan In Proposal Doc — DONE & VERIFIED (2026-06)
 (testing_agent iter_84 = 100% frontend; proposal embed backend curl-proven.)
 - **Saved plan badge** — `CombinedSitePlan.jsx`: once the plan is auto-saved (revision `site_plan.pdf_key`/`assets_updated_at` present), a green "Site plan saved · download" badge (`site-plan-saved-badge`) appears; clicking it fetches `GET /api/measurements/{rev}/site-plan.pdf` as an authed axios blob and downloads the stored packet (verified 164 KB download, no re-export).
