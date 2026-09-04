@@ -57,6 +57,8 @@ module.exports = {
   frameRoof: require("./frameRoof").frameRoof,
   // ---- combine every in-scope structure into one unified site-plan document ----
   combineStructuresSitePlan: require("./combineStructures").combineStructuresSitePlan,
+  // ---- synthesize ridge/eave/hip topology for a structure that has planes but no roof lines ----
+  inferTopologyEdges: require("./inferTopology").inferTopologyEdges,
   // ---- existing sketch vs new proposal comparison (Office review) ----
   compareSketchProposal: compareSketchProposal.compareSketchProposal,
 

@@ -190,6 +190,7 @@ function CompanySettings() {
         {field("license_number", "License number", "TX-ROOF-0001")}
         <div className="border-t border-slate-100 pt-4 text-xs font-semibold uppercase text-slate-400">Proposal branding</div>
         {field("logo_url", "Logo URL", "https://…/logo.png")}{field("website", "Website", "www.company.com")}
+        <div className="space-y-1.5"><Label>Brand color</Label><div className="flex items-center gap-2"><input type="color" value={c.primary_color || "#0f172a"} onChange={(e) => setC({ ...c, primary_color: e.target.value })} className="h-9 w-14 cursor-pointer rounded border border-input" data-testid="company-primary_color" /><Input value={c.primary_color || ""} onChange={(e) => setC({ ...c, primary_color: e.target.value })} placeholder="#0f172a" className="w-32" /></div></div>
         {area("proposal_footer_text", "Proposal footer text", "Thank you for your business.")}
         {area("proposal_terms_text", "Default proposal terms", "50% deposit due on acceptance…")}
         <Button onClick={save} disabled={saving} data-testid="save-company">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save profile</>}</Button>

@@ -12,6 +12,7 @@ import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch
 import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
 import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
 import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
+import { inferTopologyEdges } from "@roofspan/roof-sketch-core";
 import RoofThumbnail from "@/components/roof-sketch/RoofThumbnail";
 import CombinedSitePlan from "@/components/roof-sketch/CombinedSitePlan";
 import { finalizeAfterSave, rollbackPlan } from "@/components/roof-sketch/proposalLifecycle";
@@ -197,6 +198,17 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
   };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
   const setSiteOffsets = (val) => { setEd((doc) => ({ ...doc, site_plan: val })); setDirty(true); };
+  // Quick-add: materialize the auto-inferred ridge/eave/hip lines into editable roof-line rows so a rep
+  // can turn an auto-inferred roof into a measured one in one tap, then refine lengths.
+  const addRoofLines = (structureId) => {
+    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === structureId);
+    const inf = inferTopologyEdges(sf);
+    if (!inf.inferred || !inf.edges.length) { toast.error("Not enough roof planes to infer roof lines"); return; }
+    const rows = inf.edges.map((e) => { const L = Number(e.length_ft || 0); const ft = Math.floor(L); const inch = Math.round((L - ft) * 12 * 10) / 10; return { ref: uid(), _k: uid(), edge_type: e.edge_type, length_ft: L || 0, facet_ref: e.facet_id, facet_ref_secondary: e.facet_id_secondary || "", label: "", notes: "", ft: String(ft || ""), in: String(inch || "") }; });
+    setEd((doc) => ({ ...doc, edges: [...doc.edges, ...rows] }));
+    setDirty(true);
+    toast.success(`Added ${rows.length} roof line${rows.length > 1 ? "s" : ""} — refine lengths, then Save`);
+  };
 
   const scope = { leadId, propertyId, inspectionId };
   // Normal save: whole document from the local form + `base` top-level metadata (see measurementRebase.js).
@@ -468,11 +480,21 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
                   {(() => {
                     const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === row.id);
                     const ids = new Set(sf.map((f) => f.id).filter(Boolean));
-                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
+                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_ref) || ids.has(e.facet_ref_secondary) || ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
                     return sf.length >= 2 && se.length === 0 ? (
                       <span data-testid={`structure-inferred-badge-${i}`} className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                         <AlertTriangle className="h-3 w-3" />Auto-inferred — add roof lines to refine
                       </span>
+                    ) : null;
+                  })()}
+                  {editable && (() => {
+                    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === row.id);
+                    const ids = new Set(sf.map((f) => f.id).filter(Boolean));
+                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_ref) || ids.has(e.facet_ref_secondary) || ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
+                    return sf.length >= 2 && se.length === 0 ? (
+                      <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => addRoofLines(row.id)} data-testid={`add-roof-lines-btn-${i}`}>
+                        <Plus className="mr-1 h-3.5 w-3.5" />Add roof lines
+                      </Button>
                     ) : null;
                   })()}
                 </>

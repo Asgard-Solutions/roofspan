@@ -1,8 +1,9 @@
-import React, { useMemo, useRef, useState, useCallback } from "react";
+import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
 import { RotateCcw, Download } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 
 const NICE_FT = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000];
 function niceScaleFeet(scale) { // scale = viewBox units per foot; aim for a ~110-unit bar
@@ -21,8 +22,12 @@ const VB_W = 720, VB_H = 380, PAD = 24;
 
 export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "" }) {
   const svgRef = useRef(null);
-  const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, dxPx, dyPx }
+  const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, tvbx, tvby, guides }
+  const snapKeyRef = useRef(null);
+  const [company, setCompany] = useState(null);
   const offsets = (sitePlan && sitePlan.offsets) || {};
+
+  useEffect(() => { let ok = true; api.get("/company").then((r) => { if (ok) setCompany(r.data); }).catch(() => {}); return () => { ok = false; }; }, []);
 
   const combined = useMemo(() => {
     try { return combineStructuresSitePlan({ structures, facets, edges, penetrations, offsets }); }
@@ -91,19 +96,25 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       view.groups.forEach((o) => {
         if (o.sid === drag.sid) return;
         [[L, o.vb.x0], [L, o.vb.x1], [R, o.vb.x0], [R, o.vb.x1], [CX, o.vb.cx]].forEach(([cur, tgt]) => {
-          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestX == null || Math.abs(d) < Math.abs(bestX.d))) bestX = { d, at: tgt };
+          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestX == null || Math.abs(d) < Math.abs(bestX.d))) bestX = { d, at: tgt, label: o.label };
         });
         [[T, o.vb.y0], [T, o.vb.y1], [B, o.vb.y0], [B, o.vb.y1], [CY, o.vb.cy]].forEach(([cur, tgt]) => {
-          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestY == null || Math.abs(d) < Math.abs(bestY.d))) bestY = { d, at: tgt };
+          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestY == null || Math.abs(d) < Math.abs(bestY.d))) bestY = { d, at: tgt, label: o.label };
         });
       });
       if (bestX) { tdx += bestX.d; guides.push({ x: bestX.at }); }
       if (bestY) { tdy += bestY.d; guides.push({ y: bestY.at }); }
+      // Subtle "snapped to <neighbour>" toast — fire only when a NEW snap engages (not on every move).
+      const snapLabel = (bestX && bestX.label) || (bestY && bestY.label) || null;
+      const key = snapLabel ? `${drag.sid}->${snapLabel}` : null;
+      if (key && key !== snapKeyRef.current) { snapKeyRef.current = key; toast(`Snapped to ${snapLabel} wall`, { duration: 1200 }); }
+      if (!key) snapKeyRef.current = null;
     }
     setDrag((d) => d ? { ...d, tvbx: tdx, tvby: tdy, guides } : d);
   }, [drag, view]);
 
   const commitDrag = useCallback(() => {
+    snapKeyRef.current = null;
     if (!drag || !view) { setDrag(null); return; }
     const dFeetX = drag.tvbx / view.scale, dFeetY = drag.tvby / view.scale;
     if (Math.abs(dFeetX) > 0.05 || Math.abs(dFeetY) > 0.05) {
@@ -169,47 +180,68 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PW}" height="${PH}" viewBox="0 0 ${PW} ${PH}">${body}</svg>`;
     return await new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => { const cv = document.createElement("canvas"); cv.width = PW * 2; cv.height = PH * 2; const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0, cv.width, cv.height); resolve({ dataUrl: cv.toDataURL("image/png"), w: cv.width, h: cv.height }); };
+      img.onload = () => { const cv = document.createElement("canvas"); cv.width = PW * 1.6; cv.height = PH * 1.6; const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0, cv.width, cv.height); resolve({ dataUrl: cv.toDataURL("image/jpeg", 0.85), w: cv.width, h: cv.height }); };
       img.onerror = () => resolve(null);
       img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
     });
   }, [facets, edges, penetrations]);
 
+  const loadImageDataUrl = (url) => new Promise((resolve) => {
+    if (!url) return resolve(null);
+    if (url.startsWith("data:")) return resolve({ dataUrl: url });
+    const img = new Image(); img.crossOrigin = "anonymous";
+    img.onload = () => { try { const cv = document.createElement("canvas"); cv.width = img.naturalWidth || 200; cv.height = img.naturalHeight || 80; const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0); resolve({ dataUrl: cv.toDataURL("image/png"), w: cv.width, h: cv.height }); } catch (e) { resolve(null); } };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+  const hexToRgb = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return [15, 23, 42]; const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+
   const exportPdf = useCallback(async () => {
     try {
       const c = await rasterize();
-      const dataUrl = c.toDataURL("image/png");
+      const dataUrl = c.toDataURL("image/jpeg", 0.85);
       const { jsPDF } = await import("jspdf");
       const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
       const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 36;
-      // ---- Title block ----
-      pdf.setDrawColor(203, 213, 225); pdf.setLineWidth(1); pdf.rect(m, m, pw - 2 * m, 58);
-      pdf.setFontSize(17); pdf.setTextColor(15, 23, 42); pdf.text("Combined Site Plan", m + 12, m + 24);
-      pdf.setFontSize(10); pdf.setTextColor(71, 85, 105);
-      if (propertyAddress) pdf.text(propertyAddress, m + 12, m + 42);
-      const dstr = new Date().toLocaleDateString();
-      pdf.setFontSize(9); pdf.setTextColor(100, 116, 139);
-      const right = [`Date: ${dstr}`, preparedBy ? `Prepared by: ${preparedBy}` : null, `${combined.placed_count} structure(s) · scale bar = ${view.barFt} ft · North ↑`].filter(Boolean);
-      right.forEach((line, i) => pdf.text(line, pw - m - 12, m + 20 + i * 13, { align: "right" }));
+      const co = company || {};
+      const [br, bg, bb] = hexToRgb(co.primary_color);
+      // ---- Branded title block: colored header bar + logo + company + property/date/rep ----
+      const barH = 64;
+      pdf.setFillColor(br, bg, bb); pdf.rect(m, m, pw - 2 * m, barH, "F");
+      let textX = m + 14;
+      const logo = await loadImageDataUrl(co.logo_url);
+      if (logo && logo.dataUrl) {
+        const lh = 40, lw = logo.w && logo.h ? Math.min(120, (logo.w / logo.h) * lh) : 90;
+        try { pdf.addImage(logo.dataUrl, "PNG", m + 12, m + (barH - lh) / 2, lw, lh); textX = m + 12 + lw + 14; } catch (e) { /* skip logo */ }
+      }
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(16); pdf.text(co.name || "Combined Site Plan", textX, m + 26);
+      pdf.setFontSize(9);
+      const sub = [co.phone, co.license_number ? `Lic ${co.license_number}` : null, co.website].filter(Boolean).join("   ·   ");
+      if (sub) pdf.text(sub, textX, m + 44);
+      pdf.text("Combined Site Plan", pw - m - 12, m + 20, { align: "right" });
+      const rp = [propertyAddress || null, `Date: ${new Date().toLocaleDateString()}`, preparedBy ? `Prepared by: ${preparedBy}` : null].filter(Boolean);
+      rp.forEach((line, i) => pdf.text(line, pw - m - 12, m + 34 + i * 12, { align: "right" }));
       // ---- Combined plan image ----
-      const top = m + 58 + 12;
+      const top = m + barH + 12;
       const availW = pw - 2 * m, availH = ph - top - m;
       const ratio = Math.min(availW / c.width, availH / c.height);
-      pdf.addImage(dataUrl, "PNG", (pw - c.width * ratio) / 2, top, c.width * ratio, c.height * ratio);
+      pdf.addImage(dataUrl, "JPEG", (pw - c.width * ratio) / 2, top, c.width * ratio, c.height * ratio);
       // ---- One page per placed structure ----
       for (const pl of (combined.placements || [])) {
         const png = await structurePng(pl.structure_id, pl.label);
         if (!png) continue;
         pdf.addPage("letter", "landscape");
+        pdf.setFillColor(br, bg, bb); pdf.rect(0, 0, pw, 6, "F");
         pdf.setFontSize(13); pdf.setTextColor(15, 23, 42); pdf.text(`${pl.label} — roof sketch`, m, m + 4);
         pdf.setFontSize(9); pdf.setTextColor(100, 116, 139); pdf.text(`${Math.round(pl.bbox.width)}′ × ${Math.round(pl.bbox.height)}′`, pw - m, m + 4, { align: "right" });
         const t2 = m + 16, aW = pw - 2 * m, aH = ph - t2 - m;
         const r2 = Math.min(aW / png.w, aH / png.h);
-        pdf.addImage(png.dataUrl, "PNG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
+        pdf.addImage(png.dataUrl, "JPEG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
       }
       pdf.save("site-plan.pdf");
     } catch (e) { toast.error("Could not export the site plan as PDF"); }
-  }, [combined, view, propertyAddress, preparedBy, structurePng]);
+  }, [combined, view, propertyAddress, preparedBy, structurePng, company]);
 
   if (!combined || !combined.ok || !view) {
     return (
@@ -225,6 +257,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         <div className="text-xs text-slate-500">
           {combined.placed_count} structure{combined.placed_count > 1 ? "s" : ""} combined{editable ? " — drag to reposition" : ""}.
           {combined.unplaced.length ? ` ${combined.unplaced.length} need${combined.unplaced.length > 1 ? "" : "s"} review.` : ""}
+          {propertyAddress ? <span className="ml-1 text-slate-400" data-testid="site-plan-address">· {propertyAddress}</span> : null}
         </div>
         <div className="flex items-center gap-1">
           {editable && Object.keys(offsets).length > 0 &&

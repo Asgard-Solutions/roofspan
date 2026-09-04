@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Company Branding PDF + Address Auto-Fill + Roof-Line Quick-Add + Snap Toast — DONE & VERIFIED (2026-06)
+Final Combined Site Plan / worksheet polish (testing_agent iteration_81: 3/4 fully e2e + snap toast code-verified; all regressions green).
+- **Company logo + brand colors on PDF** — added `CompanyProfile.primary_color` (schemas.py, JSON blob → no migration) + a Brand-color picker in Settings (`company-primary_color`). `CombinedSitePlan` fetches `/api/company` and the exported PDF gets a branded title block: colored header bar (`primary_color`), company logo (`loadImageDataUrl`), name + phone/license/website. PDF images embedded as JPEG q0.85 (was 21 MB PNG → now email-friendly).
+- **Address auto-fill** — property address flows LeadDetail→MeasurementWorksheet(`propertyAddress`)→CombinedSitePlan; shown on-screen (`site-plan-address`) and in the PDF title block for every lead.
+- **Roof-Line Quick-Add** — inferred structures show an "Add roof lines" button (`add-roof-lines-btn-{i}`) that materializes `inferTopologyEdges` output into editable ridge/eave/hip rows (exported from core `index.js`), turning an auto-inferred roof into a measured one in one tap; the auto-inferred badge then clears. Verified persists after Save.
+- **Snap feedback toast** — dragging a structure to a neighbour fires a one-shot "Snapped to {neighbour} wall" toast (guarded by `snapKeyRef`, reset on release) alongside the blue snap guide.
+
+
 ## Snap-to-Wall + Title Block + Refine Badge + Multi-Page Export — DONE & VERIFIED (2026-06)
 Combined Site Plan / worksheet polish (testing_agent iteration_80 = 100% frontend; all regressions green).
 - **Snap-to-Wall drag** — `CombinedSitePlan.jsx`: drag now works in viewBox units; each structure exposes its viewBox bbox (`g.vb`), and `onPointerMove` snaps the dragged structure's left/right/center (x) and top/bottom/center (y) to any neighbour's corresponding edge within ~9 vb units, showing a blue dashed guide (`site-plan-snap-guide`). Commit converts the snapped translate to feet.
