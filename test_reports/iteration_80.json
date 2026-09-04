@@ -1,0 +1,25 @@
+{
+  "summary": "Frontend-only verification of 4 new Combined Site Plan / Worksheet enhancements on lead d0df5baa. All 4 features pass, plus regressions.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "refine_hint_badge": "PASS — badge shown only on structure-row-1 'Attached Garage' (structure-inferred-badge-1). House (row-0) and Front Covered Porch (row-2) correctly have NO badge.",
+    "snap_to_wall_drag": "PASS — while dragging site-plan-structure toward a neighbour, a blue dashed line with data-testid=site-plan-snap-guide appears; it is removed after pointer-up. No console errors.",
+    "title_block_and_multipage_pdf": "PASS — site-plan-export-pdf triggers download of 'site-plan.pdf' (21.4 MB, 4 pages). Text markers present in PDF bytes: 'Combined Site Plan', 'Prepared by', 'Date:', per-structure page marker 'roof sketch', plus 'House', 'Attached Garage', 'Porch'. Page count = 1 combined + 3 per-structure = 4, matching expectation.",
+    "regressions": "PASS — PNG export downloads site-plan.png; north (site-plan-north) and scalebar (site-plan-scalebar) render; 3 site-plan-dim tags render; combined plan shows 3 structures; combined-site-plan-reset visible/clickable."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "CombinedSitePlan.jsx: exportPdf references view.barFt inside the title-block line even when view could theoretically be null; guarded by the early-return so safe currently, but could break if refactored.",
+    "The rasterized combined plan is embedded at 2x scale producing a very large PDF (~21 MB); consider lower up-scaling or JPEG compression for the embedded PNG to reduce filesize significantly."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Lead d0df5baa still has 3 structures: House (with edges → no badge), Attached Garage (3 planes, 0 edges → badge shown), Front Covered Porch (1 plane → no badge). Snap guide appears reliably during slow drag; PDF is multi-page with title block.",
+  "rca of the issue": "N/A - no issues found"
+}

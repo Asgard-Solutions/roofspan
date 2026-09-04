@@ -60,7 +60,7 @@ function toEditable(rev) {
   };
 }
 
-export default function MeasurementWorksheet({ leadId, propertyId, inspectionId }) {
+export default function MeasurementWorksheet({ leadId, propertyId, inspectionId, propertyAddress }) {
   const { user } = useAuth();
   const isOffice = ["owner", "administrator", "office"].includes(user?.role);
   const [list, setList] = useState([]);
@@ -465,6 +465,16 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
               ? <>
                   <RoofThumbnail structure={{ id: row.id }} facets={ed?.facets || []} edges={ed?.edges || []} penetrations={ed?.penetrations || []} testid={`structure-roof-thumbnail-${i}`} />
                   <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+                  {(() => {
+                    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === row.id);
+                    const ids = new Set(sf.map((f) => f.id).filter(Boolean));
+                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
+                    return sf.length >= 2 && se.length === 0 ? (
+                      <span data-testid={`structure-inferred-badge-${i}`} className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                        <AlertTriangle className="h-3 w-3" />Auto-inferred — add roof lines to refine
+                      </span>
+                    ) : null;
+                  })()}
                 </>
               : <span className="text-xs text-slate-400">Save the worksheet to sketch this structure's roof.</span>}
           </div>
@@ -482,6 +492,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             sitePlan={ed.site_plan}
             editable={editable}
             onChangeOffsets={setSiteOffsets}
+            propertyAddress={propertyAddress}
+            preparedBy={user?.name || user?.full_name || user?.email || ""}
           />
         </TableCard>
       )}

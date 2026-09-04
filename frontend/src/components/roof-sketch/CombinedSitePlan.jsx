@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, useCallback } from "react";
-import { combineStructuresSitePlan, resolveFacetBoundary } from "@roofspan/roof-sketch-core";
+import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
 import { RotateCcw, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -19,7 +19,7 @@ function niceScaleFeet(scale) { // scale = viewBox units per foot; aim for a ~11
 const EDGE_COLOR = { ridge: "#0f172a", hip: "#2563eb", valley: "#dc2626", dead_valley: "#b91c1c", eave: "#0f766e", rake: "#a16207" };
 const VB_W = 720, VB_H = 380, PAD = 24;
 
-export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets }) {
+export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "" }) {
   const svgRef = useRef(null);
   const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, dxPx, dyPx }
   const offsets = (sitePlan && sitePlan.offsets) || {};
@@ -57,9 +57,11 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     const dimBySid = {}; (combined.placements || []).forEach((p) => { dimBySid[p.structure_id] = p.bbox; });
     Object.values(byStruct).forEach((g) => {
       const gv = doc.vertices.filter((v) => v.structure_id === g.sid).map((v) => map(v.x, v.y));
-      g.cx = gv.reduce((s, p) => s + p.x, 0) / (gv.length || 1);
-      g.top = Math.min(...gv.map((p) => p.y));
-      g.bottom = Math.max(...gv.map((p) => p.y));
+      const gvx = gv.map((p) => p.x), gvy = gv.map((p) => p.y);
+      g.cx = gvx.reduce((s, x) => s + x, 0) / (gvx.length || 1);
+      g.top = Math.min(...gvy);
+      g.bottom = Math.max(...gvy);
+      g.vb = { x0: Math.min(...gvx), y0: Math.min(...gvy), x1: Math.max(...gvx), y1: Math.max(...gvy), cx: g.cx, cy: (Math.min(...gvy) + Math.max(...gvy)) / 2 };
       const bb = dimBySid[g.sid];
       g.dims = bb ? `${Math.round(bb.width)}′ × ${Math.round(bb.height)}′` : null;
     });
@@ -70,21 +72,40 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
   const onPointerDown = useCallback((sid, e) => {
     if (!editable) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    setDrag({ sid, startClientX: e.clientX, startClientY: e.clientY, dxPx: 0, dyPx: 0 });
+    setDrag({ sid, startClientX: e.clientX, startClientY: e.clientY, tvbx: 0, tvby: 0, guides: [] });
   }, [editable]);
 
   const onPointerMove = useCallback((e) => {
-    if (!drag) return;
-    setDrag((d) => d ? { ...d, dxPx: e.clientX - d.startClientX, dyPx: e.clientY - d.startClientY } : d);
-  }, [drag]);
+    if (!drag || !view || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const ratioX = VB_W / (rect.width || VB_W), ratioY = VB_H / (rect.height || VB_H);
+    let tdx = (e.clientX - drag.startClientX) * ratioX, tdy = (e.clientY - drag.startClientY) * ratioY;
+    // Snap-to-wall: align the dragged structure's edges/center to a neighbour's edges/center.
+    const SNAP = 9; // viewBox units
+    const me = view.groups.find((g) => g.sid === drag.sid);
+    const guides = [];
+    if (me) {
+      const L = me.vb.x0 + tdx, R = me.vb.x1 + tdx, CX = me.vb.cx + tdx;
+      const T = me.vb.y0 + tdy, B = me.vb.y1 + tdy, CY = me.vb.cy + tdy;
+      let bestX = null, bestY = null;
+      view.groups.forEach((o) => {
+        if (o.sid === drag.sid) return;
+        [[L, o.vb.x0], [L, o.vb.x1], [R, o.vb.x0], [R, o.vb.x1], [CX, o.vb.cx]].forEach(([cur, tgt]) => {
+          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestX == null || Math.abs(d) < Math.abs(bestX.d))) bestX = { d, at: tgt };
+        });
+        [[T, o.vb.y0], [T, o.vb.y1], [B, o.vb.y0], [B, o.vb.y1], [CY, o.vb.cy]].forEach(([cur, tgt]) => {
+          const d = tgt - cur; if (Math.abs(d) <= SNAP && (bestY == null || Math.abs(d) < Math.abs(bestY.d))) bestY = { d, at: tgt };
+        });
+      });
+      if (bestX) { tdx += bestX.d; guides.push({ x: bestX.at }); }
+      if (bestY) { tdy += bestY.d; guides.push({ y: bestY.at }); }
+    }
+    setDrag((d) => d ? { ...d, tvbx: tdx, tvby: tdy, guides } : d);
+  }, [drag, view]);
 
   const commitDrag = useCallback(() => {
-    if (!drag || !view || !svgRef.current) { setDrag(null); return; }
-    const rect = svgRef.current.getBoundingClientRect();
-    const vbPerClientX = VB_W / (rect.width || VB_W);
-    const vbPerClientY = VB_H / (rect.height || VB_H);
-    const dFeetX = (drag.dxPx * vbPerClientX) / view.scale;
-    const dFeetY = (drag.dyPx * vbPerClientY) / view.scale;
+    if (!drag || !view) { setDrag(null); return; }
+    const dFeetX = drag.tvbx / view.scale, dFeetY = drag.tvby / view.scale;
     if (Math.abs(dFeetX) > 0.05 || Math.abs(dFeetY) > 0.05) {
       const cur = offsets[drag.sid] || { dx: 0, dy: 0 };
       const next = { ...offsets, [drag.sid]: { dx: Math.round(((cur.dx || 0) + dFeetX) * 10) / 10, dy: Math.round(((cur.dy || 0) + dFeetY) * 10) / 10 } };
@@ -119,6 +140,41 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     try { const c = await rasterize(); c.toBlob((b) => b ? downloadBlob(b, "site-plan.png") : toast.error("Could not export PNG"), "image/png"); }
     catch (e) { toast.error("Could not export the site plan as PNG"); }
   }, []);
+
+  // Build a standalone SVG string for one structure's own roof sketch (for the per-structure PDF pages).
+  const structurePng = useCallback(async (sid, label) => {
+    const sf = facets.filter((f) => String(f.structure_id) === String(sid));
+    if (!sf.length) return null;
+    const ids = new Set(sf.map((f) => String(f.id)));
+    const se = edges.filter((e) => ids.has(String(e.facet_id)) || ids.has(String(e.facet_id_secondary)));
+    const sp = penetrations.filter((p) => ids.has(String(p.facet_id)));
+    let res; try { res = generateSketchGeometry({ structure: { id: sid }, facets: sf, edges: se, penetrations: sp }); } catch (e) { return null; }
+    const doc = res && res.document;
+    if (!doc || !(doc.vertices || []).length || !(doc.facets || []).length) return null;
+    const PW = 900, PH = 560, P = 40;
+    const xs = doc.vertices.map((v) => v.x), ys = doc.vertices.map((v) => v.y);
+    const mnx = Math.min(...xs), mxx = Math.max(...xs), mny = Math.min(...ys), mxy = Math.max(...ys);
+    const sx = Math.max(mxx - mnx, 1e-6), sy = Math.max(mxy - mny, 1e-6);
+    const sc = Math.min((PW - 2 * P) / sx, (PH - 2 * P - 30) / sy);
+    const ox = (PW - sx * sc) / 2, oy = (PH - 30 - sy * sc) / 2 + 30;
+    const mp = (x, y) => [(ox + (x - mnx) * sc).toFixed(1), (oy + (y - mny) * sc).toFixed(1)];
+    const vb = {}; doc.vertices.forEach((v) => { vb[v.id] = mp(v.x, v.y); });
+    let body = `<rect x="0" y="0" width="${PW}" height="${PH}" fill="#ffffff"/>`;
+    body += `<text x="${P}" y="26" fill="#0f172a" font-size="18" font-weight="700" font-family="Arial">${label}</text>`;
+    doc.facets.forEach((f) => {
+      const pts = (resolveFacetBoundary(doc, f).points || []).map(([x, y]) => mp(x, y).join(",")).join(" ");
+      if (pts) body += `<polygon points="${pts}" fill="rgba(148,163,184,0.16)" stroke="none"/>`;
+    });
+    doc.edges.forEach((e) => { const a = vb[e.v1], b = vb[e.v2]; if (a && b) body += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${EDGE_COLOR[e.type] || "#94a3b8"}" stroke-width="2.2" stroke-linecap="round"/>`; });
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PW}" height="${PH}" viewBox="0 0 ${PW} ${PH}">${body}</svg>`;
+    return await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { const cv = document.createElement("canvas"); cv.width = PW * 2; cv.height = PH * 2; const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0, cv.width, cv.height); resolve({ dataUrl: cv.toDataURL("image/png"), w: cv.width, h: cv.height }); };
+      img.onerror = () => resolve(null);
+      img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
+    });
+  }, [facets, edges, penetrations]);
+
   const exportPdf = useCallback(async () => {
     try {
       const c = await rasterize();
@@ -126,15 +182,34 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       const { jsPDF } = await import("jspdf");
       const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
       const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 36;
-      pdf.setFontSize(15); pdf.setTextColor(15, 23, 42); pdf.text("Combined Site Plan", m, m);
+      // ---- Title block ----
+      pdf.setDrawColor(203, 213, 225); pdf.setLineWidth(1); pdf.rect(m, m, pw - 2 * m, 58);
+      pdf.setFontSize(17); pdf.setTextColor(15, 23, 42); pdf.text("Combined Site Plan", m + 12, m + 24);
+      pdf.setFontSize(10); pdf.setTextColor(71, 85, 105);
+      if (propertyAddress) pdf.text(propertyAddress, m + 12, m + 42);
+      const dstr = new Date().toLocaleDateString();
       pdf.setFontSize(9); pdf.setTextColor(100, 116, 139);
-      pdf.text(`${combined.placed_count} structure(s) · scale bar = ${view.barFt} ft · North ↑`, m, m + 15);
-      const availW = pw - 2 * m, availH = ph - 2 * m - 28;
+      const right = [`Date: ${dstr}`, preparedBy ? `Prepared by: ${preparedBy}` : null, `${combined.placed_count} structure(s) · scale bar = ${view.barFt} ft · North ↑`].filter(Boolean);
+      right.forEach((line, i) => pdf.text(line, pw - m - 12, m + 20 + i * 13, { align: "right" }));
+      // ---- Combined plan image ----
+      const top = m + 58 + 12;
+      const availW = pw - 2 * m, availH = ph - top - m;
       const ratio = Math.min(availW / c.width, availH / c.height);
-      pdf.addImage(dataUrl, "PNG", m, m + 26, c.width * ratio, c.height * ratio);
+      pdf.addImage(dataUrl, "PNG", (pw - c.width * ratio) / 2, top, c.width * ratio, c.height * ratio);
+      // ---- One page per placed structure ----
+      for (const pl of (combined.placements || [])) {
+        const png = await structurePng(pl.structure_id, pl.label);
+        if (!png) continue;
+        pdf.addPage("letter", "landscape");
+        pdf.setFontSize(13); pdf.setTextColor(15, 23, 42); pdf.text(`${pl.label} — roof sketch`, m, m + 4);
+        pdf.setFontSize(9); pdf.setTextColor(100, 116, 139); pdf.text(`${Math.round(pl.bbox.width)}′ × ${Math.round(pl.bbox.height)}′`, pw - m, m + 4, { align: "right" });
+        const t2 = m + 16, aW = pw - 2 * m, aH = ph - t2 - m;
+        const r2 = Math.min(aW / png.w, aH / png.h);
+        pdf.addImage(png.dataUrl, "PNG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
+      }
       pdf.save("site-plan.pdf");
     } catch (e) { toast.error("Could not export the site plan as PDF"); }
-  }, [combined, view]);
+  }, [combined, view, propertyAddress, preparedBy, structurePng]);
 
   if (!combined || !combined.ok || !view) {
     return (
@@ -163,7 +238,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         style={{ touchAction: "none" }}>
         <rect x={0} y={0} width={VB_W} height={VB_H} fill="#ffffff" />
         {view.groups.map((g) => {
-          const t = drag && drag.sid === g.sid ? `translate(${drag.dxPx * (VB_W / (svgRef.current?.getBoundingClientRect().width || VB_W))} ${drag.dyPx * (VB_H / (svgRef.current?.getBoundingClientRect().height || VB_H))})` : undefined;
+          const t = drag && drag.sid === g.sid ? `translate(${drag.tvbx} ${drag.tvby})` : undefined;
           return (
             <g key={g.sid} transform={t} data-testid={`site-plan-structure-${g.sid}`}
               onPointerDown={(e) => onPointerDown(g.sid, e)} style={{ cursor: editable ? "move" : "default" }}>
@@ -177,6 +252,10 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
             </g>
           );
         })}
+        {/* Snap guides while dragging */}
+        {drag && (drag.guides || []).map((gd, i) => gd.x != null
+          ? <line key={`sgx${i}`} data-testid="site-plan-snap-guide" x1={gd.x} y1={0} x2={gd.x} y2={VB_H} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" pointerEvents="none" />
+          : <line key={`sgy${i}`} data-testid="site-plan-snap-guide" x1={0} y1={gd.y} x2={VB_W} y2={gd.y} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 3" pointerEvents="none" />)}
         {/* North arrow (top-right) */}
         <g data-testid="site-plan-north" pointerEvents="none">
           <line x1={VB_W - 26} y1={12} x2={VB_W - 26} y2={40} stroke="#0f172a" strokeWidth={1.5} />

@@ -233,7 +233,7 @@ export default function LeadDetail() {
 
         {/* Roof Measurement worksheet */}
         <Section icon={ClipboardCheck} title="Roof measurements" testid="section-measurements">
-          <MeasurementWorksheet leadId={id} propertyId={lead.property_id || null} inspectionId={inspections[0]?.id || null} />
+          <MeasurementWorksheet leadId={id} propertyId={lead.property_id || null} inspectionId={inspections[0]?.id || null} propertyAddress={lead.property_address || lead.address || ""} />
         </Section>
 
 

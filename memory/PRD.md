@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Snap-to-Wall + Title Block + Refine Badge + Multi-Page Export — DONE & VERIFIED (2026-06)
+Combined Site Plan / worksheet polish (testing_agent iteration_80 = 100% frontend; all regressions green).
+- **Snap-to-Wall drag** — `CombinedSitePlan.jsx`: drag now works in viewBox units; each structure exposes its viewBox bbox (`g.vb`), and `onPointerMove` snaps the dragged structure's left/right/center (x) and top/bottom/center (y) to any neighbour's corresponding edge within ~9 vb units, showing a blue dashed guide (`site-plan-snap-guide`). Commit converts the snapped translate to feet.
+- **Site Plan Title Block** — exported PDF page 1 has a bordered title block: "Combined Site Plan", property address, Date, "Prepared by: {rep}", structure count + scale/north note. Address flows LeadDetail→MeasurementWorksheet(`propertyAddress`)→CombinedSitePlan; rep = `user.name||full_name||email`.
+- **Refine Hint Badge** — worksheet Structures list shows an amber "Auto-inferred — add roof lines to refine" badge (`structure-inferred-badge-{i}`) when a structure has ≥2 planes and 0 roof-line edges (exact inference trigger). Verified: shows on Attached Garage only.
+- **Multi-Page Export** — PDF appends one landscape page per placed structure with that structure's own roof sketch (rendered via `generateSketchGeometry`→standalone SVG string→2x canvas PNG in `structurePng()`), labeled with name + W×D.
+
+
 ## North Arrow + Scale Bar + Export + Overlap Guard — DONE & VERIFIED (2026-06)
 Combined Site Plan polish (core unit-tested; testing_agent iterations 78-79 = 100% frontend).
 - **North arrow & scale bar** — `CombinedSitePlan.jsx`: north arrow (top-right, `site-plan-north`) + a "nice"-rounded foot scale bar (bottom-left, `site-plan-scalebar`, via `niceScaleFeet`) with a semi-white backing.
