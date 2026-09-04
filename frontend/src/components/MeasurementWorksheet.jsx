@@ -61,7 +61,7 @@ function toEditable(rev) {
   };
 }
 
-export default function MeasurementWorksheet({ leadId, propertyId, inspectionId, propertyAddress }) {
+export default function MeasurementWorksheet({ leadId, propertyId, inspectionId, propertyAddress, customerName }) {
   const { user } = useAuth();
   const isOffice = ["owner", "administrator", "office"].includes(user?.role);
   const [list, setList] = useState([]);
@@ -516,6 +516,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
             onChangeOffsets={setSiteOffsets}
             propertyAddress={propertyAddress}
             preparedBy={user?.name || user?.full_name || user?.email || ""}
+            customerName={customerName}
           />
         </TableCard>
       )}

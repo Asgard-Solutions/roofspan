@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Snap Tuning + Address Everywhere + PDF Cover Sheet — DONE & VERIFIED (2026-06)
+Final Combined Site Plan polish (testing_agent iteration_82 = 100% frontend, all regressions green).
+- **Snap threshold tuning** — `CombinedSitePlan.jsx`: rep-facing dropdown (`site-plan-snap-select`) Off/Subtle/Normal/Strong → thresholds 0/8/14/22 vb units, default Normal (wider than the old 9), persisted per-rep in `localStorage['sitePlanSnap']` (survives reload). "Off" disables the snap guide/toast.
+- **Address everywhere** — property address now prints as a header on every per-structure PDF page and on the cover sheet (plus the on-screen `site-plan-address`). `customerName` (lead.customer_name||name) flows LeadDetail→worksheet→CombinedSitePlan.
+- **PDF cover sheet** — exported `site-plan.pdf` is now a proposal packet: Page 1 = branded cover (colored header + logo, "Roof Measurement Site Plan", Property, "Prepared for: {customer}", Date, "Prepared by: {rep}"); Page 2 = combined plan; Pages 3+ = per-structure sketches. Verified 5-page/164 KB output (JPEG q0.85, down from 21 MB PNG).
+
+
 ## Company Branding PDF + Address Auto-Fill + Roof-Line Quick-Add + Snap Toast — DONE & VERIFIED (2026-06)
 Final Combined Site Plan / worksheet polish (testing_agent iteration_81: 3/4 fully e2e + snap toast code-verified; all regressions green).
 - **Company logo + brand colors on PDF** — added `CompanyProfile.primary_color` (schemas.py, JSON blob → no migration) + a Brand-color picker in Settings (`company-primary_color`). `CombinedSitePlan` fetches `/api/company` and the exported PDF gets a branded title block: colored header bar (`primary_color`), company logo (`loadImageDataUrl`), name + phone/license/website. PDF images embedded as JPEG q0.85 (was 21 MB PNG → now email-friendly).

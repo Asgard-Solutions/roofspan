@@ -20,12 +20,15 @@ function niceScaleFeet(scale) { // scale = viewBox units per foot; aim for a ~11
 const EDGE_COLOR = { ridge: "#0f172a", hip: "#2563eb", valley: "#dc2626", dead_valley: "#b91c1c", eave: "#0f766e", rake: "#a16207" };
 const VB_W = 720, VB_H = 380, PAD = 24;
 
-export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "" }) {
+const SNAP_LEVELS = { off: 0, subtle: 8, normal: 14, strong: 22 };
+export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "", customerName = "" }) {
   const svgRef = useRef(null);
   const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, tvbx, tvby, guides }
   const snapKeyRef = useRef(null);
   const [company, setCompany] = useState(null);
+  const [snapLevel, setSnapLevel] = useState(() => { try { return localStorage.getItem("sitePlanSnap") || "normal"; } catch (e) { return "normal"; } });
   const offsets = (sitePlan && sitePlan.offsets) || {};
+  const setSnap = (lvl) => { setSnapLevel(lvl); try { localStorage.setItem("sitePlanSnap", lvl); } catch (e) {} };
 
   useEffect(() => { let ok = true; api.get("/company").then((r) => { if (ok) setCompany(r.data); }).catch(() => {}); return () => { ok = false; }; }, []);
 
@@ -86,10 +89,10 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     const ratioX = VB_W / (rect.width || VB_W), ratioY = VB_H / (rect.height || VB_H);
     let tdx = (e.clientX - drag.startClientX) * ratioX, tdy = (e.clientY - drag.startClientY) * ratioY;
     // Snap-to-wall: align the dragged structure's edges/center to a neighbour's edges/center.
-    const SNAP = 9; // viewBox units
+    const SNAP = SNAP_LEVELS[snapLevel] ?? 14; // viewBox units; rep-tunable (off/subtle/normal/strong)
     const me = view.groups.find((g) => g.sid === drag.sid);
     const guides = [];
-    if (me) {
+    if (me && SNAP > 0) {
       const L = me.vb.x0 + tdx, R = me.vb.x1 + tdx, CX = me.vb.cx + tdx;
       const T = me.vb.y0 + tdy, B = me.vb.y1 + tdy, CY = me.vb.cy + tdy;
       let bestX = null, bestY = null;
@@ -111,7 +114,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       if (!key) snapKeyRef.current = null;
     }
     setDrag((d) => d ? { ...d, tvbx: tdx, tvby: tdy, guides } : d);
-  }, [drag, view]);
+  }, [drag, view, snapLevel]);
 
   const commitDrag = useCallback(() => {
     snapKeyRef.current = null;
@@ -205,11 +208,39 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 36;
       const co = company || {};
       const [br, bg, bb] = hexToRgb(co.primary_color);
+      const logo = await loadImageDataUrl(co.logo_url);
+
+      // ================= COVER SHEET (page 1) =================
+      pdf.setFillColor(br, bg, bb); pdf.rect(0, 0, pw, 96, "F");
+      let cvX = m;
+      if (logo && logo.dataUrl) {
+        const lh = 56, lw = logo.w && logo.h ? Math.min(180, (logo.w / logo.h) * lh) : 120;
+        try { pdf.addImage(logo.dataUrl, "PNG", m, (96 - lh) / 2, lw, lh); cvX = m + lw + 16; } catch (e) { /* skip */ }
+      }
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(22); pdf.text(co.name || "Roofing Company", cvX, 44);
+      pdf.setFontSize(10);
+      const coverSub = [co.phone, co.email, co.license_number ? `Lic ${co.license_number}` : null, co.website].filter(Boolean).join("    ·    ");
+      if (coverSub) pdf.text(coverSub, cvX, 66);
+      // Centered title + details block
+      pdf.setTextColor(15, 23, 42); pdf.setFontSize(30);
+      pdf.text("Roof Measurement Site Plan", pw / 2, ph / 2 - 30, { align: "center" });
+      pdf.setDrawColor(br, bg, bb); pdf.setLineWidth(2); pdf.line(pw / 2 - 120, ph / 2 - 14, pw / 2 + 120, ph / 2 - 14);
+      pdf.setFontSize(13); pdf.setTextColor(51, 65, 85);
+      const details = [
+        propertyAddress ? `Property: ${propertyAddress}` : null,
+        customerName ? `Prepared for: ${customerName}` : null,
+        `Date: ${new Date().toLocaleDateString()}`,
+        preparedBy ? `Prepared by: ${preparedBy}` : null,
+      ].filter(Boolean);
+      details.forEach((line, i) => pdf.text(line, pw / 2, ph / 2 + 12 + i * 20, { align: "center" }));
+
+      // ================= COMBINED PLAN (page 2) =================
+      pdf.addPage("letter", "landscape");
       // ---- Branded title block: colored header bar + logo + company + property/date/rep ----
       const barH = 64;
       pdf.setFillColor(br, bg, bb); pdf.rect(m, m, pw - 2 * m, barH, "F");
       let textX = m + 14;
-      const logo = await loadImageDataUrl(co.logo_url);
       if (logo && logo.dataUrl) {
         const lh = 40, lw = logo.w && logo.h ? Math.min(120, (logo.w / logo.h) * lh) : 90;
         try { pdf.addImage(logo.dataUrl, "PNG", m + 12, m + (barH - lh) / 2, lw, lh); textX = m + 12 + lw + 14; } catch (e) { /* skip logo */ }
@@ -227,7 +258,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       const availW = pw - 2 * m, availH = ph - top - m;
       const ratio = Math.min(availW / c.width, availH / c.height);
       pdf.addImage(dataUrl, "JPEG", (pw - c.width * ratio) / 2, top, c.width * ratio, c.height * ratio);
-      // ---- One page per placed structure ----
+      // ---- One page per placed structure (each self-labeled with the property address) ----
       for (const pl of (combined.placements || [])) {
         const png = await structurePng(pl.structure_id, pl.label);
         if (!png) continue;
@@ -235,13 +266,14 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         pdf.setFillColor(br, bg, bb); pdf.rect(0, 0, pw, 6, "F");
         pdf.setFontSize(13); pdf.setTextColor(15, 23, 42); pdf.text(`${pl.label} — roof sketch`, m, m + 4);
         pdf.setFontSize(9); pdf.setTextColor(100, 116, 139); pdf.text(`${Math.round(pl.bbox.width)}′ × ${Math.round(pl.bbox.height)}′`, pw - m, m + 4, { align: "right" });
-        const t2 = m + 16, aW = pw - 2 * m, aH = ph - t2 - m;
+        if (propertyAddress) pdf.text(propertyAddress, m, m + 16);
+        const t2 = m + 24, aW = pw - 2 * m, aH = ph - t2 - m;
         const r2 = Math.min(aW / png.w, aH / png.h);
         pdf.addImage(png.dataUrl, "JPEG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
       }
       pdf.save("site-plan.pdf");
     } catch (e) { toast.error("Could not export the site plan as PDF"); }
-  }, [combined, view, propertyAddress, preparedBy, structurePng, company]);
+  }, [combined, view, propertyAddress, preparedBy, customerName, structurePng, company]);
 
   if (!combined || !combined.ok || !view) {
     return (
@@ -260,6 +292,14 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           {propertyAddress ? <span className="ml-1 text-slate-400" data-testid="site-plan-address">· {propertyAddress}</span> : null}
         </div>
         <div className="flex items-center gap-1">
+          {editable &&
+            <select value={snapLevel} onChange={(e) => setSnap(e.target.value)} data-testid="site-plan-snap-select" title="Snap strength while dragging"
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs text-slate-600">
+              <option value="off">Snap: Off</option>
+              <option value="subtle">Snap: Subtle</option>
+              <option value="normal">Snap: Normal</option>
+              <option value="strong">Snap: Strong</option>
+            </select>}
           {editable && Object.keys(offsets).length > 0 &&
             <Button size="sm" variant="ghost" onClick={resetLayout} data-testid="combined-site-plan-reset"><RotateCcw className="mr-1 h-3.5 w-3.5" />Reset layout</Button>}
           <Button size="sm" variant="outline" onClick={exportPng} data-testid="site-plan-export-png"><Download className="mr-1 h-3.5 w-3.5" />PNG</Button>
