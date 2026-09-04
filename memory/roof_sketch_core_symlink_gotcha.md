@@ -20,3 +20,35 @@ and `diff -q node_modules/@roofspan/roof-sketch-core/<file>.js /app/packages/roo
 
 Symptom seen (iteration_79): overlap-guard fix was green in `node` unit tests but the live UI still
 showed the pre-fix behavior because the frontend loaded the stale copy.
+
+---
+
+# GOTCHA 2 (Sep 2026): "RoofSpan Field crashes on open" == `mobile/node_modules` wiped / expo missing
+
+This is an **npm workspace monorepo** (root `/app/package.json` has `workspaces: ["mobile","packages/*"]`,
+installed with npm — root `/app/package-lock.json`, NOT yarn). Deps are **hoisted to `/app/node_modules`**.
+`mobile/node_modules` normally holds only a few non-hoistable dirs + the `@roofspan` and `expo` symlinks.
+
+**Symptom:** Field crashes on open / expo-tunnel supervisor is FATAL with
+`Cannot find module '/app/mobile/node_modules/expo/bin/cli'`. Checking `ls mobile/node_modules` shows only ~3 dirs;
+`expo`, `react`, `react-native`, `metro`, `react-native-svg`, `expo-sqlite` all MISSING from mobile (they are at root).
+
+**Fix:**
+```
+cd /app && npm install                 # restores hoisted deps per package-lock.json (~4 min, run in bg)
+cd /app/mobile/node_modules && ln -sf ../../node_modules/expo expo   # supervisor command needs expo/bin/cli here
+node -e "require.resolve('@roofspan/roof-sketch-core')"              # ensure workspace link intact
+sudo supervisorctl restart expo-tunnel
+```
+Do NOT run `yarn install` in mobile — it errors `Workspaces can only be enabled in private projects`
+(root package.json intentionally has no `private:true`; use npm).
+
+**Verify (Metro is monorepo-rooted at `/app`, so entry is `/mobile/index.bundle`, NOT `/index.bundle`):**
+```
+curl "http://localhost:8081/" -H "expo-platform: android"                                  # manifest 200
+curl "http://localhost:8081/.expo/.virtual-metro-entry.bundle?platform=android&dev=true"    # bundle 200 (~8MB)
+```
+A `/index.bundle` 404 with `Unable to resolve ./index from /app/.` is EXPECTED (wrong path), not a real failure.
+
+Note: `expo export` fails at the very end on `hermesc` (`ELF: not found`) — that's a prod-only bytecode step that
+can't run in this x86 container; it does NOT affect the dev/Expo Go tunnel, which serves plain JS.

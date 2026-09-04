@@ -2166,3 +2166,17 @@ Existing Roof & Deck / Ventilation / Access (both); #7 Office Gutter Notes + par
 editable Reported Area SF from Office normal form; #9 "Save Measurements" wording both; #16 Office 409 →
 hard Needs-Review state blocking Save until Use-Latest/Keep-Mine; #18 semantic/render parity test. Then
 full regression + Office build + Field expo export + single alembic head.
+
+## FORK RESUME (2026-06) — P0 Field crash FIXED + P2 sync test FIXED — VERIFIED (iteration_85)
+Root cause of "roofspan field crashes as soon as it opens": mobile/node_modules had been wiped down to ~3
+dirs — expo, react, react-native, metro, react-native-svg, expo-sqlite all MISSING (they hoist to root
+/app/node_modules in this npm-workspace monorepo). expo-tunnel supervisor was FATAL: "Cannot find module
+/app/mobile/node_modules/expo/bin/cli". Fix: `npm install` at /app root (restores hoisted deps per
+package-lock.json) + recreate symlink /app/mobile/node_modules/expo -> /app/node_modules/expo (supervisor
+command needs bin/cli there). Metro is monorepo-rooted at /app so entry is /mobile/index.bundle. Verified:
+manifest 200 + dev bundle 200 (~8.7MB, 1250+ modules incl. roof-sketch-core/expo-sqlite/react-native-svg),
+test:resolve/test:sketch/test:measurements all green. Documented in roof_sketch_core_symlink_gotcha.md (GOTCHA 2).
+P2 (Issue 3): mobile/src/tests/sync.node.test.js no longer hardcodes retired preview URL — reads
+REACT_APP_BACKEND_URL, prints clean SKIP + exit 0 if unset; test:sync PASSES with the current backend URL.
+STILL OPEN: Windows installer hash mismatch (user rebuild pending); backlog Saved Plan Status Sync,
+Estimate Attachment (P2); aerial imports (P3, do-not-start).
