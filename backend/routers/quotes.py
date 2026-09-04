@@ -14,6 +14,26 @@ from sales_common import next_number, enforce_version
 from services import estimating as calc
 from services.invoice_pdf import build_quote_pdf
 
+
+async def _lead_site_plan_png(db: AsyncSession, lead_id) -> bytes | None:
+    """Latest saved combined-site-plan image for the lead (embedded into the customer quote PDF)."""
+    if not lead_id:
+        return None
+    try:
+        from models import MeasurementRevision, MeasurementSet
+        from services import object_storage
+        q = (select(MeasurementRevision)
+             .join(MeasurementSet, MeasurementSet.id == MeasurementRevision.set_id)
+             .where(MeasurementSet.lead_id == lead_id)
+             .order_by(MeasurementRevision.created_at.desc()))
+        for rev in (await db.execute(q)).scalars().all():
+            key = (rev.site_plan or {}).get("image_key")
+            if key:
+                return object_storage.get_object(key)
+    except Exception:
+        return None
+    return None
+
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
 
@@ -190,8 +210,10 @@ async def quote_pdf(quote_id: str, user: User = Depends(get_current_user), db: A
     if not q:
         raise HTTPException(status_code=404, detail="Quote not found")
     data = await _quote_document_data(db, q)
+    site_plan_png = await _lead_site_plan_png(db, q.lead_id)
     pdf = build_quote_pdf(quote=data["quote"], company=data["company"],
-                          customer=data["customer"], property_address=data["property_address"])
+                          customer=data["customer"], property_address=data["property_address"],
+                          site_plan_png=site_plan_png)
     return StreamingResponse(iter([pdf]), media_type="application/pdf",
                              headers={"Content-Disposition": f'inline; filename="Quote-{q.number}.pdf"'})
 

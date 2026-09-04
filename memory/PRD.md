@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Save Site Plan To Lead + Site Plan In Quote PDF + Prepared-For — DONE & VERIFIED (2026-06)
+Ties the browser-rendered site plan into storage and the customer-facing quote PDF (testing_agent iter_83 = 100% frontend; backend curl-verified incl. embed proof).
+- **Save to lead (auto)** — new backend `PUT /api/measurements/{rev}/site-plan-assets` ({image_base64, pdf_base64}) stores the PNG (for embedding) + full multi-page PDF packet via the existing dual-mode `object_storage`, merging `image_key`/`pdf_key`/`assets_updated_at` into the revision's `site_plan` JSON (offsets preserved). `GET /api/measurements/{rev}/site-plan.pdf` streams the stored packet. Frontend auto-uploads after every worksheet Save (`saveNonce`→effect in `CombinedSitePlan`); `setSiteOffsets` merges so asset keys survive drags/saves. No migration (reuses `site_plan` JSONB).
+- **Site plan in quote PDF** — `invoice_pdf.build_quote_pdf(..., site_plan_png=)` appends a 'Roof Site Plan' page (reportlab PageBreak + scaled RLImage) when present; `quotes.py` `quote_pdf` fetches the lead's latest revision `site_plan.image_key` via new `_lead_site_plan_png()`. Proven: same quote 3.7 KB → 125 KB after storing a 500×400 image; quotes with no plan still render (regression 200).
+- **Prepared-For editing** — editable 'Prepared for' input (`site-plan-prepared-for`, defaults to lead/customer name) on the combined plan, used in the PDF cover sheet.
+
+
 ## Snap Tuning + Address Everywhere + PDF Cover Sheet — DONE & VERIFIED (2026-06)
 Final Combined Site Plan polish (testing_agent iteration_82 = 100% frontend, all regressions green).
 - **Snap threshold tuning** — `CombinedSitePlan.jsx`: rep-facing dropdown (`site-plan-snap-select`) Off/Subtle/Normal/Strong → thresholds 0/8/14/22 vb units, default Normal (wider than the old 9), persisted per-rep in `localStorage['sitePlanSnap']` (survives reload). "Off" disables the snap guide/toast.

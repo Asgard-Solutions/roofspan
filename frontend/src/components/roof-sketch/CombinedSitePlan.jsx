@@ -21,12 +21,14 @@ const EDGE_COLOR = { ridge: "#0f172a", hip: "#2563eb", valley: "#dc2626", dead_v
 const VB_W = 720, VB_H = 380, PAD = 24;
 
 const SNAP_LEVELS = { off: 0, subtle: 8, normal: 14, strong: 22 };
-export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "", customerName = "" }) {
+export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "", customerName = "", revisionId = null, saveNonce = 0 }) {
   const svgRef = useRef(null);
   const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, tvbx, tvby, guides }
   const snapKeyRef = useRef(null);
   const [company, setCompany] = useState(null);
   const [snapLevel, setSnapLevel] = useState(() => { try { return localStorage.getItem("sitePlanSnap") || "normal"; } catch (e) { return "normal"; } });
+  const [preparedFor, setPreparedFor] = useState(customerName || "");
+  useEffect(() => { setPreparedFor((p) => p || customerName || ""); }, [customerName]);
   const offsets = (sitePlan && sitePlan.offsets) || {};
   const setSnap = (lvl) => { setSnapLevel(lvl); try { localStorage.setItem("sitePlanSnap", lvl); } catch (e) {} };
 
@@ -199,8 +201,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
   });
   const hexToRgb = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return [15, 23, 42]; const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
 
-  const exportPdf = useCallback(async () => {
-    try {
+  const buildPdfDoc = useCallback(async () => {
       const c = await rasterize();
       const dataUrl = c.toDataURL("image/jpeg", 0.85);
       const { jsPDF } = await import("jspdf");
@@ -229,7 +230,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
       pdf.setFontSize(13); pdf.setTextColor(51, 65, 85);
       const details = [
         propertyAddress ? `Property: ${propertyAddress}` : null,
-        customerName ? `Prepared for: ${customerName}` : null,
+        preparedFor ? `Prepared for: ${preparedFor}` : null,
         `Date: ${new Date().toLocaleDateString()}`,
         preparedBy ? `Prepared by: ${preparedBy}` : null,
       ].filter(Boolean);
@@ -271,9 +272,31 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         const r2 = Math.min(aW / png.w, aH / png.h);
         pdf.addImage(png.dataUrl, "JPEG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
       }
-      pdf.save("site-plan.pdf");
-    } catch (e) { toast.error("Could not export the site plan as PDF"); }
-  }, [combined, view, propertyAddress, preparedBy, customerName, structurePng, company]);
+      return pdf;
+  }, [combined, view, propertyAddress, preparedBy, preparedFor, structurePng, company]);
+
+  const exportPdf = useCallback(async () => {
+    try { const pdf = await buildPdfDoc(); if (pdf) pdf.save("site-plan.pdf"); }
+    catch (e) { toast.error("Could not export the site plan as PDF"); }
+  }, [buildPdfDoc]);
+
+  // Auto-save the browser-rendered site plan (PNG for proposal embedding + full PDF packet) to the lead
+  // whenever the worksheet is saved, so it's attachable/emailable without a manual export.
+  useEffect(() => {
+    if (!saveNonce || !revisionId || !combined || !combined.ok) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const c = await rasterize();
+        const image_base64 = c.toDataURL("image/jpeg", 0.85);
+        const pdf = await buildPdfDoc();
+        const pdf_base64 = pdf ? pdf.output("datauristring") : null;
+        if (cancelled) return;
+        await api.put(`/measurements/${revisionId}/site-plan-assets`, { image_base64, pdf_base64 });
+      } catch (e) { console.warn("Site plan auto-save failed (worksheet save already succeeded):", e); }
+    })();
+    return () => { cancelled = true; };
+  }, [saveNonce, revisionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!combined || !combined.ok || !view) {
     return (
@@ -306,6 +329,13 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           <Button size="sm" variant="outline" onClick={exportPdf} data-testid="site-plan-export-pdf"><Download className="mr-1 h-3.5 w-3.5" />PDF</Button>
         </div>
       </div>
+      {editable && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
+          <span>Prepared for:</span>
+          <input value={preparedFor} onChange={(e) => setPreparedFor(e.target.value)} data-testid="site-plan-prepared-for"
+            placeholder="Customer / recipient name" className="h-7 w-56 rounded border border-input bg-background px-2 text-xs" />
+        </div>
+      )}
       <svg ref={svgRef} width="100%" viewBox={`0 0 ${VB_W} ${VB_H}`} className="rounded border border-slate-200 bg-white"
         role="img" aria-label="Combined site plan" onPointerMove={onPointerMove} onPointerUp={commitDrag} onPointerLeave={commitDrag}
         style={{ touchAction: "none" }}>

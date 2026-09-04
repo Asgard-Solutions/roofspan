@@ -48,7 +48,7 @@ def _logo_flowable(logo_url: str, max_w=2.0 * inch, max_h=0.8 * inch):
         return None
 
 
-def _build_pdf(*, doc_type: str, doc: dict, company: dict, customer: dict | None, property_address: str | None) -> bytes:
+def _build_pdf(*, doc_type: str, doc: dict, company: dict, customer: dict | None, property_address: str | None, site_plan_png: bytes | None = None) -> bytes:
     is_quote = doc_type in ("quote", "estimate")
     heading = "QUOTE" if is_quote else "INVOICE"
     buf = io.BytesIO()
@@ -135,6 +135,19 @@ def _build_pdf(*, doc_type: str, doc: dict, company: dict, customer: dict | None
               "please contact us using the details above to arrange payment.")
     story += [Paragraph(footer, small)]
 
+    # Roof Site Plan — appended on its own page when a browser-rendered plan image is available.
+    if site_plan_png:
+        try:
+            from reportlab.platypus import PageBreak
+            from reportlab.lib.utils import ImageReader
+            ir = ImageReader(io.BytesIO(site_plan_png)); iw, ih = ir.getSize()
+            max_w, max_h = 6.8 * inch, 7.5 * inch
+            ratio = min(max_w / iw, max_h / ih)
+            story += [PageBreak(), Paragraph("<b>Roof Site Plan</b>", hb), Spacer(1, 0.12 * inch),
+                      RLImage(io.BytesIO(site_plan_png), width=iw * ratio, height=ih * ratio)]
+        except Exception:
+            pass
+
     pdf.build(story)
     return buf.getvalue()
 
@@ -143,5 +156,5 @@ def build_invoice_pdf(*, invoice: dict, company: dict, customer: dict | None, pr
     return _build_pdf(doc_type="invoice", doc=invoice, company=company, customer=customer, property_address=property_address)
 
 
-def build_quote_pdf(*, quote: dict, company: dict, customer: dict | None, property_address: str | None) -> bytes:
-    return _build_pdf(doc_type="quote", doc=quote, company=company, customer=customer, property_address=property_address)
+def build_quote_pdf(*, quote: dict, company: dict, customer: dict | None, property_address: str | None, site_plan_png: bytes | None = None) -> bytes:
+    return _build_pdf(doc_type="quote", doc=quote, company=company, customer=customer, property_address=property_address, site_plan_png=site_plan_png)

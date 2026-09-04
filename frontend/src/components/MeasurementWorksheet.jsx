@@ -68,6 +68,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
   const [rev, setRev] = useState(null);
   const [ed, setEd] = useState(null);
   const [dirty, setDirty] = useState(false);
+  const [saveNonce, setSaveNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [needsReview, setNeedsReview] = useState(null);   // {server} when Office save hit a stale-version 409
@@ -197,7 +198,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
     setDirty(true);
   };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
-  const setSiteOffsets = (val) => { setEd((doc) => ({ ...doc, site_plan: val })); setDirty(true); };
+  const setSiteOffsets = (val) => { setEd((doc) => ({ ...doc, site_plan: { ...(doc.site_plan || {}), ...val } })); setDirty(true); };
   // Quick-add: materialize the auto-inferred ridge/eave/hip lines into editable roof-line rows so a rep
   // can turn an auto-inferred roof into a measured one in one tap, then refine lengths.
   const addRoofLines = (structureId) => {
@@ -249,6 +250,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
       toast.success("Measurement saved");
       await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
       await finalizePending(saved);
+      setSaveNonce((n) => n + 1); // trigger site-plan asset auto-save
     } catch (e) {
       if (e?.response?.status === 409) {
         const server = e.response.data?.detail?.server;
@@ -517,6 +519,8 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId,
             propertyAddress={propertyAddress}
             preparedBy={user?.name || user?.full_name || user?.email || ""}
             customerName={customerName}
+            revisionId={rev?.id || null}
+            saveNonce={saveNonce}
           />
         </TableCard>
       )}

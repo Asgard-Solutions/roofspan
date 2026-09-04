@@ -122,3 +122,49 @@ async def delete_revision(revision_id: str, request: Request, user: User = Depen
     await log_action(db, user=user, action="measurement.delete", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
     await db.commit()
     return {"ok": True}
+
+
+
+@router.put("/{revision_id}/site-plan-assets")
+async def save_site_plan_assets(revision_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Persist the browser-rendered combined site plan (PNG for embedding + full PDF packet) on the
+    revision. Keys are merged into the revision's site_plan JSON so they survive worksheet saves."""
+    import base64
+    from sqlalchemy.orm.attributes import flag_modified
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    body = await request.json()
+    sp = dict(rev.site_plan or {})
+
+    def _store(b64, ext, ctype):
+        if not b64:
+            return None
+        raw = base64.b64decode(str(b64).split(",")[-1])
+        object_storage.put_object(f"site-plans/{revision_id}.{ext}", raw, content_type=ctype)
+        return f"site-plans/{revision_id}.{ext}"
+
+    img = _store(body.get("image_base64"), "png", "image/png")
+    pdf = _store(body.get("pdf_base64"), "pdf", "application/pdf")
+    if img:
+        sp["image_key"] = img
+    if pdf:
+        sp["pdf_key"] = pdf
+    from datetime import datetime, timezone
+    sp["assets_updated_at"] = datetime.now(timezone.utc).isoformat()
+    rev.site_plan = sp
+    flag_modified(rev, "site_plan")
+    await db.commit()
+    return {"ok": True, "image_key": sp.get("image_key"), "pdf_key": sp.get("pdf_key")}
+
+
+@router.get("/{revision_id}/site-plan.pdf")
+async def get_site_plan_pdf(revision_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import StreamingResponse
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    key = (rev.site_plan or {}).get("pdf_key")
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site plan for this revision")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="application/pdf",
+                             headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
