@@ -128,35 +128,82 @@ async def delete_revision(revision_id: str, request: Request, user: User = Depen
 @router.put("/{revision_id}/site-plan-assets")
 async def save_site_plan_assets(revision_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     """Persist the browser-rendered combined site plan (PNG for embedding + full PDF packet) on the
-    revision. Keys are merged into the revision's site_plan JSON so they survive worksheet saves."""
+    revision. Keys are merged into the revision's site_plan JSON so they survive worksheet saves.
+    Each save that carries a new image/PDF is kept as a versioned entry in site_plan.history (last
+    HISTORY_CAP versions) so a rep can review/download an earlier plan; the top-level keys always
+    point at the latest version (consumed by the quote/proposal embed + the saved badge)."""
     import base64
+    from datetime import datetime, timezone
     from sqlalchemy.orm.attributes import flag_modified
     from services import object_storage
+    HISTORY_CAP = 10
     rev = await _get_rev_or_404(db, revision_id)
     body = await request.json()
     sp = dict(rev.site_plan or {})
+    history = list(sp.get("history") or [])
+    next_version = max([int(h.get("version", 0)) for h in history], default=0) + 1
 
-    def _store(b64, ext, ctype):
+    def _store(b64, key, ctype):
         if not b64:
             return None
         raw = base64.b64decode(str(b64).split(",")[-1])
-        object_storage.put_object(f"site-plans/{revision_id}.{ext}", raw, content_type=ctype)
-        return f"site-plans/{revision_id}.{ext}"
+        object_storage.put_object(key, raw, content_type=ctype)
+        return key
 
-    img = _store(body.get("image_base64"), "png", "image/png")
-    if img:
-        sp["image_key"] = img
-    if (pdf := _store(body.get("pdf_base64"), "pdf", "application/pdf")):
-        sp["pdf_key"] = pdf
+    img_key = _store(body.get("image_base64"), f"site-plans/{revision_id}-v{next_version}.png", "image/png")
+    pdf_key = _store(body.get("pdf_base64"), f"site-plans/{revision_id}-v{next_version}.pdf", "application/pdf")
     fingerprint = body.get("fingerprint")
+    now = datetime.now(timezone.utc).isoformat()
+
+    if img_key or pdf_key:
+        entry = {"version": next_version, "assets_updated_at": now}
+        if img_key:
+            entry["image_key"] = img_key
+        if pdf_key:
+            entry["pdf_key"] = pdf_key
+        if fingerprint:
+            entry["fingerprint"] = str(fingerprint)
+        history.append(entry)
+        sp["history"] = history[-HISTORY_CAP:]
+        if img_key:
+            sp["image_key"] = img_key
+        if pdf_key:
+            sp["pdf_key"] = pdf_key
+        sp["assets_updated_at"] = now
     if fingerprint:
         sp["fingerprint"] = str(fingerprint)
-    from datetime import datetime, timezone
-    sp["assets_updated_at"] = datetime.now(timezone.utc).isoformat()
+
     rev.site_plan = sp
     flag_modified(rev, "site_plan")
     await db.commit()
-    return {"ok": True, "image_key": sp.get("image_key"), "pdf_key": sp.get("pdf_key")}
+    return {"ok": True, "version": sp.get("history", [{}])[-1].get("version") if sp.get("history") else None,
+            "assets_updated_at": sp.get("assets_updated_at"),
+            "image_key": sp.get("image_key"), "pdf_key": sp.get("pdf_key")}
+
+
+def _history_meta(sp: dict) -> list:
+    """Downloadable metadata for each saved version (no raw storage keys leaked)."""
+    out = []
+    for h in (sp.get("history") or []):
+        out.append({"version": int(h.get("version", 0)), "assets_updated_at": h.get("assets_updated_at"),
+                    "fingerprint": h.get("fingerprint"), "has_pdf": bool(h.get("pdf_key")),
+                    "has_image": bool(h.get("image_key"))})
+    out.sort(key=lambda x: x["version"], reverse=True)
+    return out
+
+
+async def _latest_site_plan_rev(db: AsyncSession, lead_id) -> MeasurementRevision | None:
+    """Newest revision for a lead that has a saved site-plan PDF (used by the estimate/quote screens)."""
+    if not lead_id:
+        return None
+    q = (select(MeasurementRevision)
+         .join(MeasurementSet, MeasurementSet.id == MeasurementRevision.set_id)
+         .where(MeasurementSet.lead_id == lead_id)
+         .order_by(MeasurementRevision.created_at.desc()))
+    for rev in (await db.execute(q)).scalars().all():
+        if (rev.site_plan or {}).get("pdf_key"):
+            return rev
+    return None
 
 
 @router.get("/{revision_id}/site-plan.pdf")
@@ -167,6 +214,48 @@ async def get_site_plan_pdf(revision_id: str, user: User = Depends(get_current_u
     key = (rev.site_plan or {}).get("pdf_key")
     if not key:
         raise HTTPException(status_code=404, detail="No saved site plan for this revision")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="application/pdf",
+                             headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
+
+
+@router.get("/{revision_id}/site-plan-history")
+async def get_site_plan_history(revision_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rev = await _get_rev_or_404(db, revision_id)
+    return {"versions": _history_meta(rev.site_plan or {})}
+
+
+@router.get("/{revision_id}/site-plan-v/{version}.pdf")
+async def get_site_plan_pdf_version(revision_id: str, version: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import StreamingResponse
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    entry = next((h for h in (rev.site_plan or {}).get("history") or [] if int(h.get("version", -1)) == version), None)
+    key = entry.get("pdf_key") if entry else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site plan for that version")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="application/pdf",
+                             headers={"Content-Disposition": f'inline; filename="site-plan-v{version}.pdf"'})
+
+
+@router.get("/lead/{lead_id}/site-plan")
+async def lead_site_plan_meta(lead_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    rev = await _latest_site_plan_rev(db, lead_id)
+    if not rev:
+        return {"available": False}
+    sp = rev.site_plan or {}
+    return {"available": True, "revision_id": str(rev.id), "assets_updated_at": sp.get("assets_updated_at")}
+
+
+@router.get("/lead/{lead_id}/site-plan.pdf")
+async def lead_site_plan_pdf(lead_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import StreamingResponse
+    from services import object_storage
+    rev = await _latest_site_plan_rev(db, lead_id)
+    key = (rev.site_plan or {}).get("pdf_key") if rev else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site plan for this lead")
     data = object_storage.get_object(key)
     return StreamingResponse(iter([data]), media_type="application/pdf",
                              headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})

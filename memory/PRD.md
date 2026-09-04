@@ -1,6 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
-## Saved Plan Status Sync (relative time + re-save nudge) — DONE (2026-06)
+## Estimate/Quote Site-Plan Attachment + One-Tap Re-Save + Plan History — DONE & VERIFIED (2026-06)
+(testing_agent iter_86 = 100% frontend, 7/7; backend curl-proven.)
+- **Estimate & Proposal attachment** — the latest saved combined site-plan PDF is now a standalone download on the estimate screen (`EstimateEditor.jsx`, `estimate-site-plan-pdf`, via `GET /api/measurements/lead/{lead_id}/site-plan` + `.pdf`) and the proposal/quote screen (`ProposalPreview.jsx`, `proposal-site-plan-pdf`, via `GET /api/quotes/{id}/site-plan` + `.pdf`). Backend helper `_latest_site_plan_rev` returns the lead's newest revision that has a saved `pdf_key`.
+- **One-Tap Re-Save** — the drift nudge is now a button (`site-plan-stale-nudge`, editable mode) that re-saves the stored plan/PDF in place (shared `saveAssets()` used by both the worksheet-Save auto-save and the button), shows a "Site plan re-saved" toast, and clears the nudge via a `localSaved` override (no full worksheet save, no dirtying). Read-only mode keeps an informational chip.
+- **Plan History** — `save_site_plan_assets` now versions each asset-carrying save into `site_plan.history` (versioned object keys `site-plans/{rev}-v{n}.{ext}`, capped at last 10); top-level keys still point at the latest (quote/proposal embed + badge). New `GET /{rev}/site-plan-history` and `GET /{rev}/site-plan-v/{version}.pdf`. UI: `site-plan-history-toggle` → `site-plan-history-panel` listing versions (newest = "latest") with per-version download (`site-plan-history-download-{v}`).
+- **Verified:** backend curl (v1/v2 versioning, history newest-first, per-version + lead + quote scoped downloads all 200); testing_agent iter_86 drove all UI flows incl. seeding a 2-structure revision. No migration (reuses `site_plan` JSONB).
+
+
 Builds on the Saved Plan Badge. `CombinedSitePlan.jsx`:
 - **Relative "saved Xm/h/d ago"** — the green saved badge (`site-plan-saved-badge`) now shows `relativeTime(assets_updated_at)` ("saved just now / 12m ago / 2h ago / 3d ago", falls back to a date >30d), with the exact timestamp in the title tooltip. A 60s interval re-renders so the label stays fresh while the worksheet is open.
 - **Drift nudge** — new deterministic FNV-1a `measurementFingerprint(facets, edges, penetrations, offsets)` (sorted plane/line/penetration/offset values). Sent as `fingerprint` in the `PUT /api/measurements/{rev}/site-plan-assets` auto-save payload; backend stores it in `site_plan.fingerprint` and returns it via `GET /api/measurements/{rev}`. When the saved fingerprint differs from the live one, an amber `site-plan-stale-nudge` chip ("Measurements changed — re-save to update") appears next to the badge. Re-saving the worksheet refreshes both the stored plan/PDF and the fingerprint, clearing the nudge.

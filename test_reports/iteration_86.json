@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend-only verification of the three site-plan P2 features on RoofSpan Office. All acceptance criteria met. Estimate EST-1041 header shows 'Site Plan PDF' (data-testid=estimate-site-plan-pdf) that downloads site-plan.pdf. Proposal /quotes/3524e39f-.../proposal shows 'Site Plan PDF' (data-testid=proposal-site-plan-pdf) next to proposal-download-pdf; click downloads site-plan.pdf. Worksheet (lead e7b41ad7-cc50-4a56-ae70-30558c974c4a, revision 7d466513): after seeding a 2nd structure with facets via PUT /api/measurements/{rev} and doing one worksheet Save, the Combined Site Plan renders with data-testid=combined-site-plan, green data-testid=site-plan-saved-badge shows 'Site plan saved just now · download' and downloads a PDF on click. Editing a facet length triggered the amber data-testid=site-plan-stale-nudge BUTTON reading 'Measurements changed — re-save'; clicking it re-saved in place, the nudge disappeared, and the badge refreshed to 'saved just now'. After a 2nd re-save, data-testid=site-plan-history-toggle appeared as 'History (3)'; clicking it opened data-testid=site-plan-history-panel listing rows site-plan-history-row-3 (latest), -row-2, -row-1, each with a working site-plan-history-download-{version} button (v1 downloaded as site-plan-v1.pdf). Regression: site-plan-export-png / site-plan-export-pdf buttons still present; worksheet Save works. No blocking issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Re-save toast", "issue": "'Site plan re-saved' toast selector count was 0 immediately after click — toast likely auto-dismissed by the time the assertion ran (5s wait). UI state (nudge gone, badge = 'saved just now', history increments) confirms the re-save succeeded, so this is a minor timing artifact of the sonner toast, not a functional bug.", "affected_selectors": ["text=Site plan re-saved"]}
+    ],
+    "design_issues": [
+      {"screen": "Combined site plan header", "issues": ["When only 1 of 2 structures has resolvable geometry, the summary reads '1 structure combined — 1 needs review'. Copy is technically correct but the SVG then renders only one placed structure while the sibling 'Auto-Inferred — add roof lines to refine' badge appears on the other structure. Consider making it clearer that the un-placed structure won't appear in the exported PDF until roof lines are added."]}
+    ]
+  },
+  "test_report_links": ["/tmp/seed_rev.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "CombinedSitePlan.jsx line 193: useEffect dep `sitePlan && sitePlan.assets_updated_at` is a plain expression, not an array — the second useEffect argument is not an array, which is a react-hooks bug. It works accidentally because the truthy value equals the timestamp string, but on transitions from truthy→null it fires unnecessarily. Should be `[sitePlan?.assets_updated_at]`.",
+    "CombinedSitePlan.jsx: planStale requires savedFingerprint to be non-null, so a pre-existing saved plan (from before the fingerprint field was added) never shows the stale nudge until one fresh worksheet-Save persists a fingerprint. Consider back-filling by computing the fingerprint of the current facets/edges at load time when sitePlan exists but fingerprint is missing, or triggering an implicit silent re-save."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (7/7 acceptance criteria)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "PUT /api/measurements/7d466513-14c9-442c-b9a8-eade57e53987 with 2 structures (Main House, Detached Garage) and 4 facets to enable the Combined Site Plan on lead e7b41ad7-cc50-4a56-ae70-30558c974c4a. Then via UI: 1x worksheet Save + 2x nudge re-saves produced history versions v1, v2, v3.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Lead e7b41ad7-cc50-4a56-ae70-30558c974c4a / revision 7d466513-... now has 2 structures + 4 facets and 3 site-plan history versions saved from this run — no further seeding needed to re-verify. To force a fresh stale-nudge cycle, use PUT /api/measurements/{rev} to bump any facet's length_ft or open the worksheet and edit an input, then click data-testid=site-plan-stale-nudge. Login redirects to '/' (NOT '/dashboard') — do not wait_for_url('**/dashboard**')."
+}

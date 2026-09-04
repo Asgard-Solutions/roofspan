@@ -196,6 +196,37 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
     return await _out(db, q)
 
 
+@router.get("/{quote_id}/site-plan")
+async def quote_site_plan_meta(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Whether a saved combined site-plan PDF is attachable to this quote (via its lead)."""
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    from routers.measurements import _latest_site_plan_rev
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    if not rev:
+        return {"available": False}
+    sp = rev.site_plan or {}
+    return {"available": True, "assets_updated_at": sp.get("assets_updated_at")}
+
+
+@router.get("/{quote_id}/site-plan.pdf")
+async def quote_site_plan_pdf(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Stream the lead's latest saved combined site-plan PDF as a standalone attachment."""
+    from services import object_storage
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    from routers.measurements import _latest_site_plan_rev
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    key = (rev.site_plan or {}).get("pdf_key") if rev else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site plan for this quote's lead")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="application/pdf",
+                             headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
+
+
 @router.get("/{quote_id}/document")
 async def quote_document(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     q = await db.get(Quote, quote_id)

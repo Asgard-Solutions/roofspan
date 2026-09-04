@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Plus, Trash2, Loader2, Search, Package, Layers, PenLine, Save, RefreshCw, FileCheck2, Star } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Loader2, Search, Package, Layers, PenLine, Save, RefreshCw, FileCheck2, Star, Map } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNITS = ["EA", "PC", "BDL", "SQ", "RL", "BX", "PL", "LF", "SF", "GAL", "PAIL"];
@@ -45,6 +45,7 @@ export default function EstimateEditor() {
   const [priceBooks, setPriceBooks] = useState([]);
   const [priceBookId, setPriceBookId] = useState("");
   const [reprice, setReprice] = useState(null); // { price_book_id, lines }
+  const [sitePlan, setSitePlan] = useState(null); // { available, revision_id, assets_updated_at }
 
   useEffect(() => { api.get("/estimating/price-books", { params: { active: true } }).then((r) => setPriceBooks(r.data)).catch(() => {}); }, []);
 
@@ -66,6 +67,20 @@ export default function EstimateEditor() {
     } catch (e) { toast.error(apiError(e)); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!est?.lead_id) { setSitePlan(null); return; }
+    api.get(`/measurements/lead/${est.lead_id}/site-plan`).then((r) => setSitePlan(r.data)).catch(() => setSitePlan(null));
+  }, [est?.lead_id]);
+
+  const downloadSitePlan = async () => {
+    try {
+      const res = await api.get(`/measurements/lead/${est.lead_id}/site-plan.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data); const a = document.createElement("a");
+      a.href = url; a.download = "site-plan.pdf"; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast.error("No saved site plan for this lead yet"); }
+  };
 
   const setLine = (i, patch) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
@@ -175,6 +190,7 @@ export default function EstimateEditor() {
               </div>
             )}
             {seeCost && <Button variant="outline" size="sm" onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="h-4 w-4" /> Refresh Current Costs</Button>}
+            {sitePlan?.available && <Button variant="outline" size="sm" onClick={downloadSitePlan} data-testid="estimate-site-plan-pdf"><Map className="h-4 w-4" /> Site Plan PDF</Button>}
             <Button variant="outline" size="sm" onClick={generateQuote} data-testid="estimate-generate-quote"><FileCheck2 className="h-4 w-4" /> Generate Quote</Button>
             <Button size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
           </div>
