@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend-only verification of 3 CombinedSitePlan enhancements (Prepared-for input, auto-save PUT on worksheet Save, regression) on lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086. All 3 features verified end-to-end.\n\n(1) PREPARED-FOR EDITING: [data-testid=site-plan-prepared-for] renders in the Combined site plan card in edit mode. Default value equals the lead/customer name ('TEST Cat Lead'). Typed a custom value ('Custom Recipient QA') — input reflects the new value and PDF export downloaded (site-plan.pdf, 164,649 bytes, no console error). Previous iteration (iter_82) already inspected PDF text via pypdf and confirmed 'Prepared for: <name>' appears on the cover sheet.\n\n(2) SAVE TO LEAD (auto-save): Made a dirty edit to the worksheet (stories field 1 -> 2) — the [data-testid=measurement-save-btn] 'Save Measurements' button appeared, was clicked. Observed the following backend calls in order:\n  - PUT /api/measurements/422ea69c-f870-4c5c-877f-706ce9b632bd -> 200 (worksheet save)\n  - GET /api/measurements?lead_id=... -> 200 (reload)\n  - GET /api/measurements/{rev}/sketches -> 200\n  - PUT /api/measurements/422ea69c-f870-4c5c-877f-706ce9b632bd/site-plan-assets -> 200 (AUTO-SAVE FIRED)\n  - GET /api/measurements/{rev} -> 200 (merged offsets preserved)\nThis proves setSaveNonce triggered the useEffect in CombinedSitePlan.jsx that PUTs image_base64 + pdf_base64. Auto-save happened AFTER the worksheet save succeeded, matching design.\n\n(3) REGRESSION: All expected testids present on the combined plan: site-plan-snap-select (1), site-plan-north (1), site-plan-scalebar (1), site-plan-address (1), site-plan-export-png (1), site-plan-export-pdf (1). PDF export downloaded successfully (164 KB). Combined plan still renders 3 structures (House, Attached Garage, Front Covered Porch) with dim tags and property address header; Snap: Normal dropdown default preserved; Reset layout button visible when offsets exist.\n\nNote on toast: The 'Measurement saved' toast text was not captured via page.text_content('body') at the 20s mark (sonner portal likely auto-dismissed by then), but the network trace (PUT worksheet 200 -> setSaveNonce -> PUT site-plan-assets 200) proves the save+auto-upload chain executed as intended.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "CombinedSitePlan.jsx auto-save useEffect swallows errors silently (empty catch). Consider a debug console.warn so a failing site-plan-assets PUT is visible during dev without spamming the user (worksheet save already succeeded).",
+    "CombinedSitePlan.jsx is now ~380 lines and mixes rendering + drag/snap + PNG/PDF export + auto-save. Extracting buildPdfDoc/exportPdf and the auto-save effect into separate modules/hooks would improve maintainability.",
+    "Auto-save effect depends on [saveNonce, revisionId] with eslint-disable — combined/buildPdfDoc/rasterize are stable via useMemo/useCallback so this is intentional, but a comment explaining why other deps are excluded would help future maintainers."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086 current draft revision id = 422ea69c-f870-4c5c-877f-706ce9b632bd. Worksheet Save button [data-testid=measurement-save-btn] only shows when rev && editable && dirty — to trigger it modify any numeric input (e.g. structure stories) then Tab. The auto-save PUT to /api/measurements/{rev}/site-plan-assets happens ~1-2s AFTER the worksheet PUT succeeds (via setSaveNonce useEffect). The 'Prepared for' input [data-testid=site-plan-prepared-for] is only in the combined plan card in edit mode. All 3 features confirmed working; no retest needed.",
+  "rca of the issue": "n/a — no issues found."
+}

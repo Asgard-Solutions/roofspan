@@ -1,0 +1,38 @@
+{
+  "summary": "Re-tested OVERLAP GUARD live UI drag fix. Discovered ROOT CAUSE: source fix in packages/roof-sketch-core/combineStructures.js was correct (Node unit test = 7/7 green) but the frontend was loading a STALE COPY from /app/frontend/node_modules/@roofspan/roof-sketch-core/combineStructures.js (pre-fix version, no Phase 2 overlap guard). Yarn's `file:../packages/roof-sketch-core` dependency creates a copy (not a symlink) and a stale webpack cache in node_modules/.cache further prevented picking up updates. After syncing the file into node_modules AND clearing the webpack cache and restarting frontend, the live UI drag now correctly pushes the small Porch fully clear of the House (interior overlap = 0). All regression checks pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Combined Site Plan overlap guard",
+        "issue": "STALE PACKAGE COPY: /app/frontend/node_modules/@roofspan/roof-sketch-core/combineStructures.js was the pre-fix version (no Phase 2 overlap guard) even though /app/packages/roof-sketch-core/combineStructures.js contained the fix. Additionally, webpack's persistent cache in /app/frontend/node_modules/.cache further served the stale bundle. This is why iteration_78 (and the initial run of this iteration) showed the porch remaining fully contained inside the house after an extreme drag — the fix was never actually shipping to the browser.",
+        "affected_selectors": ["[data-testid=\"site-plan-structure-{id}\"]", "[data-testid=\"combined-site-plan\"]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/packages/roof-sketch-core/test/combineStructures.node.test.js"],
+  "action_items": [
+    "CRITICAL: Sync updates from /app/packages/roof-sketch-core into /app/frontend/node_modules/@roofspan/roof-sketch-core after any edit. Recommended: run `cd /app/frontend && yarn install --force` after changes, OR replace the file: dependency with a symlink so edits propagate automatically. As a workaround I copied the updated combineStructures.js into node_modules and cleared node_modules/.cache.",
+    "Add a build/dev script (or postinstall hook) that copies /app/packages/roof-sketch-core/*.js into /app/frontend/node_modules/@roofspan/roof-sketch-core/ so this class of skew cannot recur.",
+    "CombinedSitePlan.jsx has react-hooks/exhaustive-deps warnings on line 25 (`offsets` logical expression could change dependencies of useMemo/useCallback every render) — wrap `offsets` in useMemo to stabilize.",
+    "Consider persisting drag offsets through the revision save flow (currently reset works but a page reload behavior wasn't tested this iteration — offsets appear to persist server-side already; ok)."
+  ],
+  "critical_code_review_comments": [
+    "Workspace linking gap: the frontend depends on the local package via `file:../packages/roof-sketch-core`, which yarn resolves as a copy at install time. Any subsequent edit to /app/packages/... is invisible to the running dev server unless yarn install is re-run. This is a foot-gun that will keep hiding fixes from live testing. Prefer a Yarn workspace, or a portal:/link: protocol, or a symlink.",
+    "combineStructures.js overlap guard logic itself is correct: minimal-translation to nearest side, up to 16 iterations, MIN_SEP=1ft. Node unit tests cover both the colliding side-drag and the small-inside-large cases (7/7 assertions green).",
+    "CombinedSitePlan.jsx SVG group has no interactive rect; drag relies on pointerdown on the <g>. This works but is easy to lose focus of. Confirmed live drag via dispatched PointerEvents works fine."
+  ],
+  "updated_files": [
+    "/app/frontend/node_modules/@roofspan/roof-sketch-core/combineStructures.js (copied from /app/packages/roof-sketch-core/combineStructures.js to un-stale the frontend build)",
+    "Cleared /app/frontend/node_modules/.cache (webpack persistent cache) and restarted supervisor frontend"
+  ],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100% (all overlap-guard + regression cases pass after sync)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "None (used pre-seeded lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086: House 50x40, Attached Garage 21x36, Front Covered Porch 20x8).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live UI overlap guard now works after fixing the stale package copy. Verified: 1) Clean auto layout: House(x=1153-1526), Porch(x=1683-1832) — non-overlapping. 2) Extreme drag Porch (center 1758,681) → House center (1340,560): guard pushed porch to (1352-1490, 675-728) — ix=138 iy=0 → touching edges only, NO interior overlap. Screenshot .screenshots/final_verify.png confirms porch rendered fully below the house. 3) Small colliding drag: also non-overlapping. 4) 3 structures caption present, 3 dim tags render, no console/JS errors. 5) Reset layout button restores auto arrangement and hides itself (delta 0/0). Main agent must add a proper workspace sync mechanism so /app/packages/roof-sketch-core edits stop getting silently ignored by /app/frontend/node_modules.",
+  "rca of the issue": "Root cause: /app/frontend/node_modules/@roofspan/roof-sketch-core/combineStructures.js was pinned at the pre-fix version because yarn resolves `file:../packages/roof-sketch-core` as a one-time COPY at install. The Phase-2 overlap-guard block (lines 87-114 of the source) was entirely absent from the node_modules copy — diff confirmed. Webpack's persistent cache in node_modules/.cache compounded the issue. Reproduction: dragging Front Covered Porch to the House center left the porch fully contained (ix=167, iy=63). Mitigation applied here: `cp /app/packages/roof-sketch-core/combineStructures.js /app/frontend/node_modules/@roofspan/roof-sketch-core/combineStructures.js && rm -rf /app/frontend/node_modules/.cache && sudo supervisorctl restart frontend`. Permanent fix: add a postinstall/prestart sync script, convert to a Yarn workspace, or use a symlink so /app/packages/… changes propagate."
+}

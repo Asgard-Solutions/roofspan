@@ -106,6 +106,7 @@ class CompanyProfile(BaseModel):
     license_number: str = ""
     logo_url: str = ""
     website: str = ""
+    primary_color: str = "#0f172a"
     proposal_footer_text: str = ""
     proposal_terms_text: str = ""
 

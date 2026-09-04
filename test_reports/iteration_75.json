@@ -1,0 +1,38 @@
+{
+  "summary": "Tested new position_offset_ft (Roof Plane 'Offset from left (ft)') and site_plan (Combined site plan) features on Office SPA + backend. Backend: 5/5 pytest passed — GET exposes position_offset_ft on every facet and site_plan on revision, PUT round-trips both, and a null-site_plan PUT preserves previously saved layout (Office-owned semantics). Frontend: facet-offset input persists across reload (9.75 saved on M1 of lead e7b41ad7 Rev 6), Combined site plan card renders 2 in-scope structures on d0df5baa (3rd 'Attached Garage' is in 'Preview needs review' state), drag persists offsets via PUT (server confirmed site_plan.offsets after save on rev 422ea69c). One BUG found: 'Reset layout' does not clear site_plan on the server.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/measurements/{rev}", "issue": "The 'preserve on null' semantics collide with Office 'Reset layout' — the reset button sends site_plan=null which is then treated as 'preserve' by services/measurements.py:464 (`if payload.site_plan is not None`), so the previously-saved offsets remain in DB. Effect: users cannot fully clear a combined-layout once saved. Reset-then-Save toast says 'Measurement saved' but server retains old offsets."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CombinedSitePlan / MeasurementWorksheet", "issue": "Reset layout button (data-testid=combined-site-plan-reset) calls onChangeOffsets(null); Save sends site_plan=null which backend interprets as 'preserve'. Recommended fix: send { offsets: {} } instead of null in resetLayout (CombinedSitePlan.jsx line 82), OR change backend to distinguish explicit null (clear) vs missing (preserve). Verified via network capture: PUT body has site_plan: null; server GET still returns previous offsets afterward.", "selector": "[data-testid=combined-site-plan-reset]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_site_plan_and_offset.py",
+    "/app/test_reports/pytest/site_plan.xml"
+  ],
+  "action_items": [
+    "Fix Reset-layout clearing: change frontend/src/components/roof-sketch/CombinedSitePlan.jsx `resetLayout` to send `{ offsets: {} }` instead of `null` so the backend's 'None means preserve' branch is bypassed. Alternatively, change backend services/measurements.py:464 to accept explicit null as clear (harder — would require Pydantic to distinguish unset vs null)."
+  ],
+  "critical_code_review_comments": [
+    "backend/services/measurements.py:464 — the `if payload.site_plan is not None` gate silently keeps stale offsets whenever a client sends null. Since Pydantic cannot distinguish 'omitted' from 'null', this design forces every Office-side clear operation to send a non-null sentinel. Consider explicit protocol: `{offsets: {}}` = clear, missing key = preserve, and drop the null branch.",
+    "CombinedSitePlan.jsx: only two structures render on d0df5baa even though the revision has 3 in-scope structures — because 'Attached Garage' failed roof-generation and shows 'Preview needs review' upstream. Label text 'X structures combined... N needs review' correctly reflects this. No action, just noting the placed vs unplaced split works.",
+    "combined-site-plan-empty placeholder path was not exercised — no revision in the test data has >=2 saved structures with zero facets across all of them. Consider a small QA seed to cover this gate."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_site_plan_and_offset.py (new)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "83% (5/6 flows — Reset-layout clear broken)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — used existing seed revisions (b5a05924 L-Roof w/ 4 facets, 422ea69c 3-structure, 7d466513 draft). Backend tests mutated site_plan and position_offset_ft on b5a05924 and left them at test values; frontend tests wrote position_offset_ft=9.75 on M1 of 7d466513 and site_plan offsets on 422ea69c.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend: pytest /app/backend/tests/test_site_plan_and_offset.py -o addopts='' passes all 5 (get exposes fields, roundtrip, null-preserve, multi-structure, explicit overwrite). Frontend flow: (1) facet-offset-{i} input on Roof plane rows works and persists (verified on Rev 6 of lead e7b41ad7). (2) Combined site plan card only appears when >=2 saved structures (structure.id truthy). (3) Drag via real mouse works — Playwright must use `page.mouse.down/move/up` with steps, not JS-dispatched PointerEvent; the React handler needs the currentTarget to receive the actual bubble. (4) In-browser fetch('/api/measurements/...') does NOT auto-attach the JWT Bearer token; use axios or the backend directly (with requests + Bearer header) to verify server state. Known bug to retest after fix: Reset layout must actually clear site_plan on server.",
+  "rca of the issue": "Root cause: `services/measurements.py:464` treats `payload.site_plan is None` uniformly as 'preserve' to protect Field-side saves that omit the key. But Pydantic v2 sends both 'unset' and 'explicit null' as `None` on the model, so the Office Reset action (which explicitly sets site_plan=null) cannot ever clear the DB column. Repro: on lead d0df5baa, drag House in Combined site plan, Save (site_plan persists correctly), then click Reset layout, Save — network PUT body shows site_plan=null, server responds 200 'Measurement saved', but GET still returns the previous offsets. Mitigation: switch resetLayout to pass `{offsets: {}}` in CombinedSitePlan.jsx line 82."
+}

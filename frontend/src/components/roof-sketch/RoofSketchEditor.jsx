@@ -132,7 +132,10 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
     if (snap) { hist.reset(snap.doc); docRef.current = snap.doc; commitSaveState(snap.save); }
     setProposal(null); setSelection(null);
   }, [hist, commitSaveState]);
-  const proposalPenPlacements = proposal ? (proposal.document?.penetrations || []).filter((p) => p.position_known === false) : [];
+  // Only penetrations with NO position at all need manual placement; auto-placed ones already sit on their
+  // plane at a suggested spot (the rep just drags to fine-tune), so they are not flagged.
+  const proposalPenPlacements = proposal ? (proposal.document?.penetrations || []).filter((p) => !p.auto_placed && (p.x == null || p.y == null)) : [];
+  const proposalPenAutoPlaced = proposal ? (proposal.document?.penetrations || []).filter((p) => p.auto_placed && p.x != null && p.y != null) : [];
 
   // --- Existing sketch: Generate New Proposal + safe review (Office) ------------------------------
   // Offered when a saved sketch exists and the canvas is non-empty. The proposal stays a SEPARATE
@@ -404,6 +407,7 @@ export default function RoofSketchEditor({ revision, structure, facets = [], edg
             {(proposal.unresolved_planes?.length || 0) > 0 && <div className="mt-1 text-[11px] text-amber-800" data-testid="generate-unresolved">Unresolved roof planes: {proposal.unresolved_planes.join(", ")}</div>}
             {(proposal.ambiguities || []).map((a, i) => <div key={i} className="mt-1 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900" data-testid="generate-ambiguity">{a.message}</div>)}
             {proposalPenPlacements.map((p) => <div key={p.id} className="mt-1 text-[11px] text-slate-600" data-testid="generate-pen-placement">Penetration {p.measurement_penetration_id} needs manual placement (no position in measurements).</div>)}
+            {proposalPenAutoPlaced.length > 0 && <div className="mt-1 text-[11px] text-slate-600" data-testid="generate-pen-autoplaced">{proposalPenAutoPlaced.length} penetration{proposalPenAutoPlaced.length > 1 ? "s" : ""} auto-placed on the roof — drag to fine-tune after adopting.</div>}
             {renderPlacementResolver(proposal.placement_requests, generateProposed)}
             {!readOnly && <div className="mt-2 flex gap-2">
               <Button size="sm" disabled={(proposal.document?.vertices?.length || 0) === 0} onClick={useProposed} data-testid="generate-use-btn">Use Proposed Sketch</Button>

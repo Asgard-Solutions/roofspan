@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend-only verification of the Combined Site Plan additions (north arrow, scale bar, PNG/PDF export, overlap guard) on lead d0df5baa. Login OK, worksheet loads. Combined site plan renders 3 structures (House, Attached Garage, Front Covered Porch) with dim tags. site-plan-north (upward arrow + 'N') is present at top-right; site-plan-scalebar (bar with '{n} ft' label) is present at bottom-left. Both site-plan-export-png and site-plan-export-pdf buttons are present, clickable, and produced real downloads ('site-plan.png' and 'site-plan.pdf') with no console/JS errors. Reset layout button works. Overlap guard: an extreme dispatched drag of Porch onto House center did move Porch (delta ~(-281px, -96px)) and re-rendered without a crash; caption still shows 3 structures; however the post-render bbox of Porch was still contained inside House bbox (~10k px² overlap). Under a small realistic drag, the site plan continues to look clean. Unit test noted as green per request. Flagging the extreme-drag visual overlap only as an observation to double-check.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Combined site plan overlap guard (extreme drag)", "issue": "After dispatching a large pointer drag that moves 'Front Covered Porch' fully inside 'House', the porch g-element bbox remained contained within the house bbox (post-render), i.e. the guard did not visibly separate them under this stress input. Under smaller drags the plan continues to look clean, and per request the roof-sketch-core unit test (combineStructures.node.test.js) is green. Worth eyeballing whether the guard should still separate attached porches in all overlap magnitudes.", "affected_selectors": ["[data-testid^=\"site-plan-structure-\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "OPTIONAL: verify the overlap-guard behaviour when a flush-attached child (e.g. Front Covered Porch, attachment='Attached') is dragged fully inside the parent's bbox — screenshot shows the porch label/box still visually inside the house after render. If the guard is meant to exempt attached structures, this is expected; otherwise revisit the Phase-2 axis-of-least-penetration MIN_SEP handling for the attached case."
+  ],
+  "critical_code_review_comments": [
+    "CombinedSitePlan.jsx exportPng/exportPdf swallow errors silently via /* noop */ catches — consider surfacing a toast on failure so the user knows if rasterization or jsPDF import failed.",
+    "rasterize() reads document.querySelector via svgRef; the current SVG is inlined as data URL. External CSS-based font styles aren't embedded (only inline text style attributes are used, which is correct). Good.",
+    "Phase-2 overlap guard iterates max 12 times with MIN_SEP=1ft; if the guard cannot resolve an overlap it silently stops. Consider logging or clamping when moved==true after 12 iters."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "95%"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Used existing lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 review items covered on lead d0df5baa: north arrow + scale bar render inside the SVG (verified DOM), PNG and PDF export both triggered downloads with correct filenames (verified via page.expect_download), reset-layout works, and regression items (dim tags, 3-structure count, garage auto-draw) are green. Only open observation: under an extreme dispatched pointer drag placing Porch fully inside House, post-render bboxes still overlap (~10k px²) — this may be intentional for 'flush attached' structures; unit test is green per request.",
+  "rca of the issue": "N/A — no blocking issue found."
+}

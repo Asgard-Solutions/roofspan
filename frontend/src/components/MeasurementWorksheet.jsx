@@ -12,6 +12,9 @@ import { Plus, Trash2, Check, ShieldCheck, Lock, Undo2, Save, Loader2, GitBranch
 import RoofSketchEditor from "@/components/roof-sketch/RoofSketchEditor";
 import { listSketches, saveSketch } from "@/components/roof-sketch/sketchApi";
 import { scopeForStructure } from "@/components/roof-sketch/scopeMeasurements";
+import { inferTopologyEdges } from "@roofspan/roof-sketch-core";
+import RoofThumbnail from "@/components/roof-sketch/RoofThumbnail";
+import CombinedSitePlan from "@/components/roof-sketch/CombinedSitePlan";
 import { finalizeAfterSave, rollbackPlan } from "@/components/roof-sketch/proposalLifecycle";
 import { setDecisions } from "@/components/roof-sketch/commands";
 import { num, buildEditablePayload, buildRebasePayload } from "@/components/measurementRebase";
@@ -54,16 +57,18 @@ function toEditable(rev) {
     edges: (rev?.edges || []).map((row) => { const L = Number(row.length_ft || 0); const ft = Math.floor(L); const inches = Math.round((L - ft) * 12 * 10) / 10; return ({ ...row, ref: row.id || row.ref || uid(), _k: row.id || row._k || uid(), facet_ref: row.facet_id || "", facet_ref_secondary: row.facet_id_secondary || "", ft: String(ft || ""), in: String(inches || "") }); }),
     penetrations: (rev?.penetrations || []).map(penetrationForEdit),
     summary: rev?.summary || {},
+    site_plan: rev?.site_plan || null,
   };
 }
 
-export default function MeasurementWorksheet({ leadId, propertyId, inspectionId }) {
+export default function MeasurementWorksheet({ leadId, propertyId, inspectionId, propertyAddress, customerName }) {
   const { user } = useAuth();
   const isOffice = ["owner", "administrator", "office"].includes(user?.role);
   const [list, setList] = useState([]);
   const [rev, setRev] = useState(null);
   const [ed, setEd] = useState(null);
   const [dirty, setDirty] = useState(false);
+  const [saveNonce, setSaveNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [needsReview, setNeedsReview] = useState(null);   // {server} when Office save hit a stale-version 409
@@ -193,6 +198,18 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
     setDirty(true);
   };
   const setSummary = (field, value) => { setEd((doc) => ({ ...doc, summary: { ...doc.summary, [field]: value } })); setDirty(true); };
+  const setSiteOffsets = (val) => { setEd((doc) => ({ ...doc, site_plan: { ...(doc.site_plan || {}), ...val } })); setDirty(true); };
+  // Quick-add: materialize the auto-inferred ridge/eave/hip lines into editable roof-line rows so a rep
+  // can turn an auto-inferred roof into a measured one in one tap, then refine lengths.
+  const addRoofLines = (structureId) => {
+    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === structureId);
+    const inf = inferTopologyEdges(sf);
+    if (!inf.inferred || !inf.edges.length) { toast.error("Not enough roof planes to infer roof lines"); return; }
+    const rows = inf.edges.map((e) => { const L = Number(e.length_ft || 0); const ft = Math.floor(L); const inch = Math.round((L - ft) * 12 * 10) / 10; return { ref: uid(), _k: uid(), edge_type: e.edge_type, length_ft: L || 0, facet_ref: e.facet_id, facet_ref_secondary: e.facet_id_secondary || "", label: "", notes: "", ft: String(ft || ""), in: String(inch || "") }; });
+    setEd((doc) => ({ ...doc, edges: [...doc.edges, ...rows] }));
+    setDirty(true);
+    toast.success(`Added ${rows.length} roof line${rows.length > 1 ? "s" : ""} — refine lengths, then Save`);
+  };
 
   const scope = { leadId, propertyId, inspectionId };
   // Normal save: whole document from the local form + `base` top-level metadata (see measurementRebase.js).
@@ -233,6 +250,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
       toast.success("Measurement saved");
       await loadList(); setRev(saved); setEd(toEditable(saved)); setDirty(false);
       await finalizePending(saved);
+      setSaveNonce((n) => n + 1); // trigger site-plan asset auto-save
     } catch (e) {
       if (e?.response?.status === 409) {
         const server = e.response.data?.detail?.server;
@@ -456,14 +474,56 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             <Field label="Attachment" className="w-32"><Select value={row.attachment || "none"} disabled={!editable} onValueChange={(v) => setRow("structures", i, "attachment", v === "none" ? "" : v)}><SelectTrigger className="w-full"><SelectValue placeholder="Attachment" /></SelectTrigger><SelectContent><SelectItem value="none">—</SelectItem><SelectItem value="attached">Attached</SelectItem><SelectItem value="detached">Detached</SelectItem></SelectContent></Select></Field>
             {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("structures", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-3">
             {row.id
-              ? <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+              ? <>
+                  <RoofThumbnail structure={{ id: row.id }} facets={ed?.facets || []} edges={ed?.edges || []} penetrations={ed?.penetrations || []} testid={`structure-roof-thumbnail-${i}`} />
+                  <Button size="sm" variant="outline" onClick={() => setSketchFor(row)} data-testid={`sketch-roof-btn-${i}`}><PencilRuler className="mr-1 h-4 w-4" />{sketchStructIds.has(row.id) ? "Edit Roof Sketch" : "Sketch Roof"}</Button>
+                  {(() => {
+                    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === row.id);
+                    const ids = new Set(sf.map((f) => f.id).filter(Boolean));
+                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_ref) || ids.has(e.facet_ref_secondary) || ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
+                    return sf.length >= 2 && se.length === 0 ? (
+                      <span data-testid={`structure-inferred-badge-${i}`} className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                        <AlertTriangle className="h-3 w-3" />Auto-inferred — add roof lines to refine
+                      </span>
+                    ) : null;
+                  })()}
+                  {editable && (() => {
+                    const sf = (ed.facets || []).filter((f) => (f.structure_id || f.structure_ref) === row.id);
+                    const ids = new Set(sf.map((f) => f.id).filter(Boolean));
+                    const se = (ed.edges || []).filter((e) => ids.has(e.facet_ref) || ids.has(e.facet_ref_secondary) || ids.has(e.facet_id) || ids.has(e.facet_id_secondary));
+                    return sf.length >= 2 && se.length === 0 ? (
+                      <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => addRoofLines(row.id)} data-testid={`add-roof-lines-btn-${i}`}>
+                        <Plus className="mr-1 h-3.5 w-3.5" />Add roof lines
+                      </Button>
+                    ) : null;
+                  })()}
+                </>
               : <span className="text-xs text-slate-400">Save the worksheet to sketch this structure's roof.</span>}
           </div>
           <div className="mt-2"><Field label="Structure Notes"><Input placeholder="Optional" value={row.notes || ""} disabled={!editable} onChange={(e) => setRow("structures", i, "notes", e.target.value)} /></Field></div>
         </div>)}
       </TableCard>
+
+      {ed.structures.filter((s) => s.id).length >= 2 && (
+        <TableCard title="Combined site plan" testid="site-plan">
+          <CombinedSitePlan
+            structures={ed.structures.map((s, i) => ({ id: s.id, name: s.name, structure_type: s.structure_type, included_in_scope: s.included_in_scope !== false, sort: i }))}
+            facets={(ed.facets || []).map((f) => ({ ...f, structure_id: f.structure_id || f.structure_ref || null }))}
+            edges={ed.edges || []}
+            penetrations={ed.penetrations || []}
+            sitePlan={ed.site_plan}
+            editable={editable}
+            onChangeOffsets={setSiteOffsets}
+            propertyAddress={propertyAddress}
+            preparedBy={user?.name || user?.full_name || user?.email || ""}
+            customerName={customerName}
+            revisionId={rev?.id || null}
+            saveNonce={saveNonce}
+          />
+        </TableCard>
+      )}
 
       <TableCard title="Roof planes" onAdd={editable ? () => addRow("facets", { ref: uid(), facet_label: `F${ed.facets.length + 1}`, pitch_rise: "", area_sqft: "" }) : null} testid="facets">
         {ed.facets.map((row, i) => <div key={row.ref || i} className="rounded border border-slate-100 p-2" data-testid={`facet-block-${i}`}>
@@ -473,6 +533,7 @@ export default function MeasurementWorksheet({ leadId, propertyId, inspectionId 
             <Field label="Pitch" className="w-28"><PitchSelect value={row.pitch_rise} disabled={!editable} onChange={(v) => setRow("facets", i, "pitch_rise", v)} /></Field>
             <Field label="Width (ft)" className="w-24"><Input type="number" value={row.width_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "width_ft", e.target.value)} /></Field>
             <Field label="Length (ft)" className="w-24"><Input type="number" value={row.length_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "length_ft", e.target.value)} /></Field>
+            <Field label="Offset from left (ft)" className="w-32"><Input type="number" placeholder="Optional" value={row.position_offset_ft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "position_offset_ft", e.target.value)} data-testid={`facet-offset-${i}`} /></Field>
             <Field label="Area (SF)" className="w-28"><Input type="number" placeholder="= W × L" value={row.area_sqft ?? ""} disabled={!editable} onChange={(e) => setRow("facets", i, "area_sqft", e.target.value)} /></Field>
             <Field label="Roof Material" className="min-w-40 flex-1"><Input placeholder="Optional" value={row.roof_material || ""} disabled={!editable} onChange={(e) => setRow("facets", i, "roof_material", e.target.value)} /></Field>
             {editable && <Button size="icon" variant="ghost" className="mb-0.5" onClick={() => delRow("facets", i)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>}

@@ -53,6 +53,12 @@ module.exports = {
   // ---- resolution-driven placement for connected complex roofs (side choices -> deterministic layout) ----
   planPlacement: require("./resolvePlacement").planPlacement,
   layoutFromResolutions: require("./resolvePlacement").layoutFromResolutions,
+  // ---- deterministic ridge-based roof-framing solver (replaces the fan-out heuristic for complex roofs) ----
+  frameRoof: require("./frameRoof").frameRoof,
+  // ---- combine every in-scope structure into one unified site-plan document ----
+  combineStructuresSitePlan: require("./combineStructures").combineStructuresSitePlan,
+  // ---- synthesize ridge/eave/hip topology for a structure that has planes but no roof lines ----
+  inferTopologyEdges: require("./inferTopology").inferTopologyEdges,
   // ---- existing sketch vs new proposal comparison (Office review) ----
   compareSketchProposal: compareSketchProposal.compareSketchProposal,
 

@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend-only verification of the three refinements on lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086 (rev 422ea69c). ALL THREE ITEMS GREEN. (1) SITE PLAN LABELS: combined-site-plan renders exactly 3 dim tags — site-plan-dim-9b2149b4... => '50′ × 40′' (House), site-plan-dim-9dd9510c... => '21′ × 36′' (Attached Garage), site-plan-dim-97b20b30... => '20′ × 8′' (Front Covered Porch). Tags render just under each structure. (2) SMARTER GARAGE: Attached Garage dim tag reads '21′ × 36′' — depth (36 ft, derived from the two 20-ft main slopes ≈ planRun) is noticeably GREATER than width (21 ft, ridge length), matching the expected gable-with-hip-end proportions. Attached Garage combined-site-plan drawing and structure-roof-thumbnail-1 both paint 3 SVG polygons in a well-proportioned depth>width shape (not a sliver). (3) EDITOR CANVAS OFFSET GUIDE (E2E): Set facet-offset-0 (House F1, width 25) to 8 → Save changes (PUT 200). Clicked 'Sketch Roof' on House → editor opened (roof-sketch-canvas present) → clicked 'Generate Proposed Sketch' → toast 'Proposed sketch adopted. Review and Save when ready.' → clicked 'Use Proposed Sketch' → clicked 'Save Sketch' → toast 'Roof sketch saved.'. Verified canvas-offset-guide-F1 is rendered inside the saved editor canvas SVG (amber dashed vertical guide, count=1, testid data-testid='canvas-offset-guide-F1' present in SVG string). SVG has 8 polygons (all 8 facets drawn) and 24 'facet' refs. REGRESSION: 3 site-plan-structure-* groups still render, no 'needs review' banner, combined-site-plan-reset-layout button still present, facet-offset-{i} input still saves & persists (verified on reload — value stays 8), 3 Sketch Roof buttons still present. Console only shows 2 benign 404s for static assets, no functional errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (3/3 targeted refinements + regression checks all green)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Left House F1 facet-offset-0 set to '8' on lead d0df5baa rev 422ea69c and saved a Roof Sketch (adopted from Generate Proposed Sketch) to exercise canvas-offset-guide-F1. Main agent may want to clear these back to pre-test state if needed, but they are the expected artifacts to keep the editor guide visible for QA review.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Lead d0df5baa (rev 422ea69c) now has (a) F1 offset=8 saved, and (b) a saved House Roof Sketch generated via 'Generate Proposed Sketch' → 'Use Proposed Sketch' → 'Save Sketch'. The saved sketch carries position_offset_ft on F1, so canvas-offset-guide-F1 renders inside data-testid=roof-sketch-canvas whenever the House Sketch editor is reopened. If a truly clean lead is needed for future tests, either revert the offset or delete/regenerate the sketch. Attached Garage & Porch editors were not opened this iteration.",
+  "rca of the issue": "n/a — no defects found."
+}

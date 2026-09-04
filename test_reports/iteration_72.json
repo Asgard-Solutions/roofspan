@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend-only verification of the new deterministic Cross-Gable framing solver + penetration auto-place + roof preview thumbnail on the seeded Cross-Gable lead (e7b41ad7-cc50-4a56-ae70-30558c974c4a). All 4 review-request checks passed. Cross-gable renders as a real 4-plane roof with a projecting wing and two valleys, penetration is auto-placed, thumbnail shows the T shape, and Use Proposed adopts cleanly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_details": {
+    "test_1_thumbnail": "data-testid='structure-roof-thumbnail-0' is present on the Cross-Gable House structure row. Contains <svg> with 4 <polygon> fills and 15 <line> segments forming a clear cross/T shape (ridge + perpendicular wing ridge + 2 valleys + eaves). NOT the 'needs review' placeholder.",
+    "test_2_generate_proposed": "Clicking data-testid='generate-proposed-btn' opens generate-proposal-panel with generate-readiness='High confidence'. Canvas renders a real cross-gable roof: 4 facets M1 (500 SF, 6/12), M2 (500 SF), G1 (160 SF), G2 (160 SF); main ridge across the top plus perpendicular wing projecting past the main eave; TWO valley segments (labeled 13.0 LF each, total 26.0 LF valley) meet at the wing peak. Validation panel shows 'No issues'. No pinwheel/overlap, no empty canvas, no 'Needs review'.",
+    "test_3_penetration_auto_placed": "Pipe Boot x2 marker visible as a green square on the M2 facet in the canvas (centroid auto-place). Panel text 'Penetration <id> needs manual placement (no position in measurements)' is an informational tag noting auto-place origin (matches autoPlacePenetrations behavior: position_known:false, auto_placed:true) — the marker IS pre-placed on plane rather than requiring user to place from scratch.",
+    "test_4_use_proposed": "data-testid='generate-use-btn' is enabled. Click triggers success toast 'Proposed sketch adopted. Review and Save when ready.' Editor shows 'Saved' state, sketch remains rendered, proposals list populates with Accept Proposed/Keep Current per facet (M1/M2/G1/G2). No runtime error, no page-level errors.",
+    "console_errors": "Only 2 unrelated 404s for static resources. No RoofThumbnail / generateSketchGeometry / frameRoof errors."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Minor UX polish: the 'Penetration <uuid> needs manual placement (no position in measurements)' line in the proposal panel is confusing — the pen actually IS auto-placed on the plane centroid. Consider changing wording to something like 'Penetration auto-placed on M2 (please verify position)' so users don't think placement failed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None — used the seeded Cross-Gable lead as provided.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Cross-Gable framing solver + auto-place penetration + thumbnail verified end-to-end in the Office browser on lead e7b41ad7-cc50-4a56-ae70-30558c974c4a / structure 'Cross-Gable House'. Navigation path: /leads/{lead_id} → 'Sketch Roof' → 'Generate Proposed Sketch' → 'Use Proposed Sketch'."
+}

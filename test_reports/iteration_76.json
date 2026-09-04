@@ -1,0 +1,24 @@
+{
+  "summary": "Frontend-only verification of three new roof-sketch features on lead d0df5baa (rev 422ea69c). All acceptance criteria met: (1) GARAGE SOLVE — Combined site plan now renders THREE in-scope structures (House + Attached Garage + Front Covered Porch); header text reads '3 structures combined — drag to reposition' with no 'needs review' banner. (2) SITE PLAN FIDELITY — Attached Garage renders flush against the House (no gap) and shares the common bottom baseline; House is the largest/leftmost anchor and Front Covered Porch is drawn overlaid within the House footprint band (bottom-aligned, flush). (3) OFFSET GUIDES on thumbnail — Setting facet-offset-0 to '8' on House F1 (width 25) renders roof-offset-guide-F1 (amber dashed vertical) inside structure-roof-thumbnail-0; persisted across Save (PUT 200) and reload. (4) Attached Garage thumbnail now draws a real roof shape (3 SVG polygons) instead of 'Preview needs review'. Regression: facet-offset input still saves+persists, combined-site-plan-reset button still present. Canvas offset guide could NOT be exercised on this lead because the House Sketch Roof editor is empty (no drawn geometry in editor — worksheet-driven thumbnails only); this is expected — canvas-offset-guide-{label} only renders when the editor has drawn facets. Low-priority per request. No console errors beyond two benign 404s for static assets.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Combined site plan (lead d0df5baa)", "issues": ["Front Covered Porch is drawn overlapping/inside the House outline rather than beside it. Since porch is attached and small, this appears intended by the flush+bottom-aligned rule (porch stacks against the previous attached structure), but visually the porch label sits inside House footprint which can be confusing. Consider adding minimal Z-order tinting or a subtle outline to differentiate attached-overlap-attached scenarios."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "RoofSketchCanvas canvas-offset-guide-{label} could not be verified end-to-end because the sample lead's editor sketch is empty. Consider seeding a lead where the roof-sketch editor has drawn geometry AND a plane with a position_offset_ft, so QA can visually confirm the amber dashed guide inside the large editor canvas."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% of testable flows (5/5 in-scope; canvas-editor guide deferred as lower priority — editor empty for this lead)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Temporarily set facet-offset-0 (House F1) to 8 on rev 422ea69c to verify the offset guide, then cleared back to empty and saved (PUT 200). Final DB state on that facet is empty (unchanged from pre-test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All three tasks GREEN on d0df5baa: combined-site-plan shows 3 site-plan-structure-* groups (9b2149b4 House / 9dd9510c Attached Garage / 97b20b30 Porch); Attached Garage thumbnail (structure-roof-thumbnail-1) now paints 3 polygons via inferred_topology (previously 'Preview needs review'). roof-offset-guide-{F1..} appears on thumbnails when facet-offset-{i} is within roof width. canvas-offset-guide-{label} on the Roof Sketch editor requires geometry drawn/generated inside that editor — the House editor on this lead is empty, so seed a lead with drawn editor geometry + offset to exercise that path.",
+  "rca of the issue": "n/a — no bugs found in this iteration."
+}

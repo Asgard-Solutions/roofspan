@@ -1092,6 +1092,9 @@ class MeasurementRevision(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     locked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Combined multi-structure site-plan layout: { "offsets": { "<structure_id>": {"dx": ft, "dy": ft} } }.
+    # Presentational placement only — never affects measured dimensions or per-structure sketches.
+    site_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class MeasurementStructure(Base):
@@ -1117,6 +1120,9 @@ class MeasurementFacet(Base):
     area_sqft: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     width_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     length_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Optional distance (ft) from the host slope's start along the wall to pin a dormer/wing exactly
+    # instead of auto-centering it. Consumed only by the roof-framing solver; null => auto-place.
+    position_offset_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     orientation_azimuth: Mapped[float | None] = mapped_column(Float, nullable=True)
     roof_material: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -7,6 +7,7 @@ import { getCache } from "../storage";
 import { resolveMeasurementView } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
+import RoofThumbnail from "../components/RoofThumbnail";
 import { LabeledField, SelectField, PitchField, ToggleRow } from "../components/MeasurementFields";
 import { computeAreaSqft } from "../measurementFieldControls";
 
@@ -351,6 +352,7 @@ export default function Measurements({ route, navigation }) {
       ref: f.ref, structure_ref: f.structure_ref || null, facet_label: f.facet_label || `F${i + 1}`,
       pitch_rise: numberOrNull(f.pitch_rise), area_sqft: parseFloat(f.area_sqft) || 0,
       width_ft: numberOrNull(f.width_ft), length_ft: numberOrNull(f.length_ft),
+      position_offset_ft: numberOrNull(f.position_offset_ft),
       // Preserve technical values Field never shows (sketch/office/import geometry) — never erase them.
       orientation_azimuth: f.orientation_azimuth != null ? f.orientation_azimuth : null,
       geometry: f.geometry != null ? f.geometry : null,
@@ -446,9 +448,12 @@ export default function Measurements({ route, navigation }) {
             <SelectField label="Attachment" value={st.attachment || ""} options={ATTACH_OPTS} disabled={readonly} onChange={(v) => setS(i, "attachment", v || null)} testID={`meas-structure-attachment-${i}`} />
             <LabeledField label="Structure Notes" placeholder="Optional" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} testID={`meas-structure-notes-${i}`} />
             {existing?.id && st.id ? (
-              <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
-                <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
-              </TouchableOpacity>
+              <>
+                <RoofThumbnail structure={st} facets={facets} edges={edges} testID={`meas-structure-thumbnail-${i}`} />
+                <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
+                  <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
+                </TouchableOpacity>
+              </>
             ) : (
               <Text style={s.sketchHint} testID={`sketch-roof-disabled-${i}`}>Save the measurement first to create this structure before sketching the roof.</Text>
             )}
@@ -466,6 +471,9 @@ export default function Measurements({ route, navigation }) {
             <View style={s.rowline}>
               <View style={s.half}><LabeledField label="Width (ft)" keyboardType="numeric" value={f.width_ft != null ? String(f.width_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "width_ft", v)} testID={`meas-facet-width-${i}`} /></View>
               <View style={[s.half, s.leftGap]}><LabeledField label="Length (ft)" keyboardType="numeric" value={f.length_ft != null ? String(f.length_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "length_ft", v)} testID={`meas-facet-length-${i}`} /></View>
+            </View>
+            <View style={s.rowline}>
+              <View style={s.half}><LabeledField label="Offset from left (ft)" keyboardType="numeric" value={f.position_offset_ft != null ? String(f.position_offset_ft) : ""} editable={!readonly} onChangeText={(v) => setF(i, "position_offset_ft", v)} testID={`meas-facet-offset-${i}`} /></View>
             </View>
             <LabeledField label="Area (SF)" placeholder="Auto = W × L (editable)" keyboardType="numeric" value={String(f.area_sqft ?? "")} editable={!readonly} onChangeText={(v) => setF(i, "area_sqft", v)} testID={`meas-facet-area-${i}`} />
             <LabeledField label="Roof Material" placeholder="Optional" value={f.roof_material || ""} editable={!readonly} onChangeText={(v) => setF(i, "roof_material", v)} testID={`meas-facet-material-${i}`} />
