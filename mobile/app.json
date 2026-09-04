@@ -17,7 +17,6 @@
     "ios": { "supportsTablet": true, "bundleIdentifier": "io.roofspan.field" },
     "android": {
       "package": "io.roofspan.field",
-      "jsEngine": "jsc",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
