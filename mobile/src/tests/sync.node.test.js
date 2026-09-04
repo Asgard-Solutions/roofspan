@@ -12,7 +12,12 @@ const path = require("path");
 const axios = require("axios");
 const queue = require("../queue");
 
-const API = (process.env.REACT_APP_BACKEND_URL || "https://unified-mono-deploy.preview.emergentagent.com").replace(/\/$/, "") + "/api";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
+if (!BACKEND_URL) {
+  console.log("SKIP: sync.node.test.js — set REACT_APP_BACKEND_URL to run this live-backend test.");
+  process.exit(0);
+}
+const API = BACKEND_URL.replace(/\/$/, "") + "/api";
 const EMAIL = "pjacobsen@asgardsolution.io";
 const PASSWORD = "RoofSpan#Owner2026";
 const DEVICE_FILE = path.join(os.tmpdir(), "roofspan_mobile_pending.json");
