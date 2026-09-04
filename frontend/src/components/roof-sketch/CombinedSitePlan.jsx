@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, Download } from "lucide-react";
+import { RotateCcw, Download, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
@@ -156,6 +156,13 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     try { const c = await rasterize(); c.toBlob((b) => b ? downloadBlob(b, "site-plan.png") : toast.error("Could not export PNG"), "image/png"); }
     catch (e) { toast.error("Could not export the site plan as PNG"); }
   }, []);
+
+  const savedAt = sitePlan && (sitePlan.pdf_key || sitePlan.assets_updated_at) ? sitePlan.assets_updated_at : null;
+  const downloadSaved = useCallback(async () => {
+    if (!revisionId) return;
+    try { const res = await api.get(`/measurements/${revisionId}/site-plan.pdf`, { responseType: "blob" }); downloadBlob(res.data, "site-plan.pdf"); }
+    catch (e) { toast.error("No saved site plan yet — save the worksheet first"); }
+  }, [revisionId]);
 
   // Build a standalone SVG string for one structure's own roof sketch (for the per-structure PDF pages).
   const structurePng = useCallback(async (sid, label) => {
@@ -313,6 +320,12 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           {combined.placed_count} structure{combined.placed_count > 1 ? "s" : ""} combined{editable ? " — drag to reposition" : ""}.
           {combined.unplaced.length ? ` ${combined.unplaced.length} need${combined.unplaced.length > 1 ? "" : "s"} review.` : ""}
           {propertyAddress ? <span className="ml-1 text-slate-400" data-testid="site-plan-address">· {propertyAddress}</span> : null}
+          {savedAt ? (
+            <button type="button" onClick={downloadSaved} data-testid="site-plan-saved-badge"
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100">
+              <CheckCircle2 className="h-3 w-3" />Site plan saved · download
+            </button>
+          ) : null}
         </div>
         <div className="flex items-center gap-1">
           {editable &&

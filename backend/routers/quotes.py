@@ -349,6 +349,7 @@ async def quote_proposal_pdf(quote_id: str, user: User = Depends(require_roles(*
     if not q:
         raise HTTPException(status_code=404, detail="Quote not found")
     data = await _proposal.proposal_data(db, q)
+    data["site_plan_png"] = await _lead_site_plan_png(db, q.lead_id)
     pdf = _proposal.build_pdf(data)
     return _Streaming(_io.BytesIO(pdf), media_type="application/pdf",
                       headers={"Content-Disposition": f'inline; filename="Proposal-{q.number}.pdf"'})

@@ -1,0 +1,15 @@
+{
+  "summary": "Frontend-only verification of the SAVED PLAN BADGE + regression on Combined site plan for lead d0df5baa. Logged in as owner, opened lead → Roof measurements → Combined site plan. Green 'Site plan saved · download' badge (data-testid=site-plan-saved-badge) is rendered in the card header alongside the address; text color rgb(4,120,87), bg rgb(236,253,245) — matches emerald palette. Clicking it triggered an authed blob GET of /api/measurements/{rev}/site-plan.pdf and browser download of 'site-plan.pdf' (164,644 bytes) with no console errors. Regression: Prepared-for input editable and persists value; Snap select present; PNG export downloads 'site-plan.png'; PDF export downloads 'site-plan.pdf' (client-generated); Reset layout button visible; combined plan renders with 3 structures (House, Attached Garage, Front Covered Porch), north arrow, scale bar (ft), dim tags (21′×36′, 50′×40′, 20′×8′), and on-screen address '9d2ff9 Cat St, Austin, TX 78701'. No pageerrors, no console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100%"},
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Lead d0df5baa-ed39-4ac9-ae6d-45e82bab5086 has a saved site_plan (pdf_key + assets_updated_at) so the saved badge renders immediately. Badge testid: site-plan-saved-badge. Download path: GET /api/measurements/{revisionId}/site-plan.pdf as blob via axios api client. Regression selectors used: site-plan-prepared-for, site-plan-snap-select, site-plan-export-png, site-plan-export-pdf, combined-site-plan. All working.",
+  "rca of the issue": "n/a — no issues found"
+}

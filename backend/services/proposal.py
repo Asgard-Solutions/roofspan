@@ -161,6 +161,21 @@ def build_pdf(data: dict) -> bytes:
         story.append(Spacer(1, 16))
         story.append(Paragraph(c["proposal_footer_text"], label))
 
+    # Roof Site Plan — appended on its own page when a site plan image is available for the lead.
+    spp = data.get("site_plan_png")
+    if spp:
+        try:
+            from reportlab.platypus import PageBreak, Image as RLImage
+            from reportlab.lib.utils import ImageReader
+            ir = ImageReader(io.BytesIO(spp)); iw, ih = ir.getSize()
+            ratio = min((6.8 * inch) / iw, (7.5 * inch) / ih)
+            story.append(PageBreak())
+            story.append(Paragraph("Roof Site Plan", ParagraphStyle("sp", parent=styles["Heading3"], textColor=SLATE)))
+            story.append(Spacer(1, 8))
+            story.append(RLImage(io.BytesIO(spp), width=iw * ratio, height=ih * ratio))
+        except Exception:
+            pass
+
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()

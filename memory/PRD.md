@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Saved Plan Badge + Site Plan In Proposal Doc — DONE & VERIFIED (2026-06)
+(testing_agent iter_84 = 100% frontend; proposal embed backend curl-proven.)
+- **Saved plan badge** — `CombinedSitePlan.jsx`: once the plan is auto-saved (revision `site_plan.pdf_key`/`assets_updated_at` present), a green "Site plan saved · download" badge (`site-plan-saved-badge`) appears; clicking it fetches `GET /api/measurements/{rev}/site-plan.pdf` as an authed axios blob and downloads the stored packet (verified 164 KB download, no re-export).
+- **Site plan in proposal doc** — `proposal.py build_pdf` now appends a "Roof Site Plan" page (PageBreak + scaled RLImage) when `data.site_plan_png` is set; `quotes.py quote_proposal_pdf` populates it via `_lead_site_plan_png(db, lead_id)`. Proven: proposal.pdf 124 KB with plan vs 2.3 KB without (both 200). Both customer docs (quote + proposal) now carry the site plan.
+
+
 ## Save Site Plan To Lead + Site Plan In Quote PDF + Prepared-For — DONE & VERIFIED (2026-06)
 Ties the browser-rendered site plan into storage and the customer-facing quote PDF (testing_agent iter_83 = 100% frontend; backend curl-verified incl. embed proof).
 - **Save to lead (auto)** — new backend `PUT /api/measurements/{rev}/site-plan-assets` ({image_base64, pdf_base64}) stores the PNG (for embedding) + full multi-page PDF packet via the existing dual-mode `object_storage`, merging `image_key`/`pdf_key`/`assets_updated_at` into the revision's `site_plan` JSON (offsets preserved). `GET /api/measurements/{rev}/site-plan.pdf` streams the stored packet. Frontend auto-uploads after every worksheet Save (`saveNonce`→effect in `CombinedSitePlan`); `setSiteOffsets` merges so asset keys survive drags/saves. No migration (reuses `site_plan` JSONB).
