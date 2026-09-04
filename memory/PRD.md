@@ -2180,3 +2180,18 @@ P2 (Issue 3): mobile/src/tests/sync.node.test.js no longer hardcodes retired pre
 REACT_APP_BACKEND_URL, prints clean SKIP + exit 0 if unset; test:sync PASSES with the current backend URL.
 STILL OPEN: Windows installer hash mismatch (user rebuild pending); backlog Saved Plan Status Sync,
 Estimate Attachment (P2); aerial imports (P3, do-not-start).
+
+## P0 ANDROID STARTUP CRASH — FIXED (2026-06, commit 31753dd)
+Physical Android EAS build crashed immediately on launch. ROOT CAUSE: commit dc9acb2 set
+mobile/app.json android.jsEngine="jsc" solely to dodge hermesc not running in the Emergent x86
+container. RN 0.81 dropped the bundled JSC runtime and no @react-native-community/javascriptcore
+package is installed → JSC-configured build has no JS engine → immediate device crash. FIX: removed
+the `"jsEngine": "jsc"` line (single-line diff), restoring Expo SDK 54 default Hermes. No engine
+substituted, no downgrade, package stays io.roofspan.field, permissions/EAS project/identity unchanged.
+Startup import graph (index/App/auth/pairingContext/storage/sync + all statically-imported screens)
+audited: no top-level throwing native calls (MapScreen MapLibre require is try/catch guarded; native
+calls are lazy inside functions/effects). Property.js FALLBACK_OUTCOMES + Object.fromEntries fix intact.
+VERIFIED IN CONTAINER: expo-doctor 18/18, npx expo config shows no jsEngine, all mobile suites green
+(resolve/map/pairing/transport/reconcile/measurements/sketch). STILL REQUIRES USER: physical-device
+acceptance via `npx eas-cli build --platform android --profile preview --clear-cache` (Emergent
+container cannot run native Android / EAS, and cannot run hermesc — that is an env limit, NOT shipped).
