@@ -60,8 +60,16 @@ Write-Host "==> Syncing backend Python dependencies"
 & $pip install -r $requirements
 if ($LASTEXITCODE -ne 0) { throw "Failed to install backend requirements; refusing to freeze stale dependencies." }
 
+# Ensure pywin32 (the Windows service runtime) is present in the build environment. `pip show` writes a
+# "WARNING: Package(s) not found" line to STDERR when the package is absent, and under
+# $ErrorActionPreference='Stop' that stderr trips a terminating NativeCommandError BEFORE we can inspect
+# $LASTEXITCODE. Relax the preference for just this probe so "not installed" is a normal, non-fatal result.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $pip show pywin32 *> $null
-if ($LASTEXITCODE -ne 0) {
+$pywin32Present = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEAP
+if (-not $pywin32Present) {
   Write-Host "==> Installing pywin32 (Windows service runtime) into the build environment"
   & $pip install pywin32
   if ($LASTEXITCODE -ne 0) { throw "Failed to install pywin32; the Windows services cannot be built." }
