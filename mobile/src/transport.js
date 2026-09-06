@@ -73,7 +73,11 @@ class RelayTransport {
     let f; try { f = JSON.parse(ev.data); } catch (e) { return; }
     const rid = f.request_id;
     const p = rid && this.pending.get(rid);
-    if (!p) return;
+    if (!p) {
+      // Unsolicited server->device event (no matching request) — route to the relay event handler.
+      if (f && f.type && rid == null && _relayEventHandler) { try { _relayEventHandler(f); } catch (e) {} }
+      return;
+    }
     clearTimeout(p.timer);
     this.pending.delete(rid);
     if (f.type === "response") { _lastOkAt = Date.now(); p.resolve(parseResponseFrame(f)); }
@@ -141,6 +145,11 @@ class RelayTransport {
 }
 
 function _netErr(message, code) { const e = new Error(message); e.code = code || message; e.isNetwork = true; return e; }
+
+// Server-initiated relay events (e.g. Office `measurement_changed` invalidation) arrive on the persistent
+// relay socket WITHOUT a request_id. They are routed to this handler so sync can pull the canonical copy.
+let _relayEventHandler = null;
+export function setRelayEventHandler(fn) { _relayEventHandler = fn; }
 
 export function getTransport() {
   if (_activePairing) {

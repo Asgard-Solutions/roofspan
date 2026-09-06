@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { cache, patchCachedDetail, patchCachedList } from "../cache";
-import { queueMutation } from "../sync";
+import { queueMutation, refreshLead, registerActiveLead } from "../sync";
 import { getCache, putCache } from "../storage";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
@@ -22,6 +22,9 @@ export default function LeadDetail({ route, navigation }) {
     const r = await cache.lead(id);
     if (r.data) { setLead(r.data); setForm({ name: r.data.name, phone: r.data.phone, email: r.data.email, status: r.data.status }); }
     setStale(!!r.stale);
+    // Lead-aware sync: opening a lead registers it + pulls the canonical measurements for it (screen-independent).
+    registerActiveLead({ lead_id: id });
+    refreshLead({ lead_id: id }, "lead_open").catch(() => {});
   }, [id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));

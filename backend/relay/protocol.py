@@ -25,6 +25,19 @@ T_PING = "ping"
 T_PONG = "pong"
 T_ERROR = "error"
 T_BYE = "bye"
+T_MEASUREMENT_CHANGED = "measurement_changed"
+
+
+def measurement_changed(*, lead_id=None, measurement_set_id=None, revision_id=None, updated_at=None) -> dict:
+    """Lightweight Office->Field invalidation. Carries NO business document — it only tells Field WHICH
+    lead/revision changed (+ a watermark) so it retrieves the canonical copy from Office."""
+    return {
+        "type": T_MEASUREMENT_CHANGED,
+        "lead_id": str(lead_id) if lead_id is not None else None,
+        "measurement_set_id": str(measurement_set_id) if measurement_set_id is not None else None,
+        "revision_id": str(revision_id) if revision_id is not None else None,
+        "updated_at": updated_at if isinstance(updated_at, str) or updated_at is None else updated_at.isoformat(),
+    }
 
 
 def b64e(b: bytes | None) -> str:

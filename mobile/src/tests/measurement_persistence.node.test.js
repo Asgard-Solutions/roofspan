@@ -41,10 +41,10 @@ const pu = (ifMatch, state = "pending") => ({ client_id: "measurement-update:REV
 // ---- 4. Office changed the SAME revision since our base → explicit conflict (never silent overwrite) ----
 {
   const v = resolveMeasurementView({ serverDetail: server("v5", 400), serverStale: false, optimistic: optimistic("v2", 999), pendingUpdate: pu("v2"), pendingCreate: null, isSyncing: false });
-  assert.strictEqual(v.kind, "conflict"); assert.strictEqual(v.status, "Needs review"); assert.strictEqual(v.conflict, true);
+  assert.strictEqual(v.kind, "conflict"); assert.strictEqual(v.status, "Conflict — review required"); assert.strictEqual(v.conflict, true);
   assert.strictEqual(v.detail.facets[0].area_sqft, 999, "local work preserved as working copy during conflict");
   assert.strictEqual(v.serverDetail.updated_at, "v5", "office version available for explicit resolution");
-  ok("pending local update + Office changed same revision → Needs review conflict (both versions preserved)");
+  ok("pending local update + Office changed same revision → Conflict — review required (both versions preserved)");
 }
 
 // ---- 5. Conflict must NOT be inferred from a stale/offline read ----

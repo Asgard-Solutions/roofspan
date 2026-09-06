@@ -7,7 +7,7 @@ import * as RS from "@roofspan/roof-sketch-core";
 import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
-import { loadSketchDraft, saveSketchDraftStrict, cache, cacheMeasurementDetail } from "../cache";
+import { loadSketchDraft, saveSketchDraftStrict, clearSketchDraft, cacheSketchDetail, cache, cacheMeasurementDetail } from "../cache";
 import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, currentMeasurementMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
 import { conflictReview } from "../roofSketchConflict";
 import * as RECON from "../roofProposalReconcile";
@@ -31,6 +31,7 @@ export default function RoofSketch({ route }) {
   const [status, setStatus] = useState(readOnly ? "Locked" : "Loading");
   const [resetToken, setResetToken] = useState(0);
   const [conflict, setConflict] = useState(null);       // B3C: Base/Local/Office review, or null
+  const [openConflict, setOpenConflict] = useState(null); // Office-advanced-at-open review (local ops), or null
   const [locked, setLocked] = useState(false);          // B3D: revision locked live while editor is open
   const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
   const [measDetail, setMeasDetail] = useState(null);   // Phase C: authoritative measurement revision detail
@@ -54,16 +55,27 @@ export default function RoofSketch({ route }) {
     let alive = true;
     (async () => {
       const draft = await loadSketchDraft(revision_id, structure_id);
+      // Office-sketch discovery: always validate against the current Office copy on open — even when a
+      // local draft exists — so an obsolete draft is retired and an Office-advanced change is surfaced.
       let sketchResult = null;
-      if (!draft) { try { sketchResult = await cache.sketch(revision_id, structure_id); } catch (e) { sketchResult = null; } }
+      try { sketchResult = await cache.sketch(revision_id, structure_id); } catch (e) { sketchResult = null; }
+      const m0 = await currentSketchMutation(revision_id, structure_id);
+      const hasActiveMutation = !!(m0 && (m0.state === "pending" || m0.state === "failed" || m0.state === "conflict"));
       if (!alive) return;
-      const { initial, statusMeta } = WIRE.resolveFieldSketchLoad({ draft, sketchResult, structureId: structure_id });
+      const { initial, statusMeta } = WIRE.resolveFieldSketchLoad({ draft, sketchResult, structureId: structure_id, hasActiveMutation });
+      // (1) obsolete draft identical to Office → retire it and adopt the authoritative Office sketch.
+      if (initial.retireObsoleteDraft) {
+        await clearSketchDraft(revision_id, structure_id);
+        if (sketchResult && sketchResult.data) await cacheSketchDetail(revision_id, structure_id, sketchResult.data);
+      }
       editorRef.current = createFieldEditor(WIRE.makeFieldEditorArgs({
         revision_id, structure_id, initial,
         persist: (d) => saveSketchDraftStrict(revision_id, structure_id, d),
       }));
       coordRef.current = createSketchSyncCoordinator({ queueMutation });
       editedRef.current = initial.source === "local_draft";   // reopened local work is already "edited"
+      // (3) Office advanced past the local draft → surface an open-time conflict review.
+      setOpenConflict(initial.conflict && initial.serverDetail ? { serverDetail: initial.serverDetail, officeVersion: Number(initial.serverDetail.document_version) || 0 } : null);
       setEditMode(initial.editMode);
       setStatus(readOnly ? "Locked" : initialStatus(initial, statusMeta));
       setReady(true);
@@ -112,7 +124,29 @@ export default function RoofSketch({ route }) {
 
   const editor = editorRef.current;
   const conflictActive = !!conflict;                  // B3C: a real 409 is awaiting explicit resolution
-  const editingBlocked = WIRE.editingLocked({ readOnly, conflict, locked });  // no edits/undo/redo/mode/Save/build while blocked
+  const openConflictActive = !!openConflict;          // Office changed the sketch before this open
+
+  // Open-time conflict resolution (local ops — Office is already authoritative, no server round trip):
+  const onOpenUseOffice = useCallback(async () => {
+    const oc = openConflict; const ed = editorRef.current;
+    if (!oc || !ed) return;
+    await clearSketchDraft(revision_id, structure_id);
+    await cacheSketchDetail(revision_id, structure_id, oc.serverDetail);
+    ed.adoptOfficeDocument({ document: oc.serverDetail.document, documentVersion: oc.serverDetail.document_version, editMode: oc.serverDetail.edit_mode });
+    editedRef.current = false;
+    setOpenConflict(null);
+    setEditMode(ed.editMode);
+  }, [openConflict, revision_id, structure_id]);
+
+  const onOpenKeepMine = useCallback(async () => {
+    const oc = openConflict; const ed = editorRef.current;
+    if (!oc || !ed) return;
+    // Rebase the local draft onto the Office version/base so the next Save resolves against current Office.
+    ed.adoptServerVersion({ documentVersion: oc.officeVersion, baseServerDocument: oc.serverDetail.document });
+    await ed.retry();
+    setOpenConflict(null);
+  }, [openConflict]);
+  const editingBlocked = WIRE.editingLocked({ readOnly, conflict, locked }) || openConflictActive;  // no edits/undo/redo/mode/Save/build while blocked
   editingBlockedRef.current = editingBlocked;         // fresh value for stable useCallback handlers
   const validation = useMemo(() => (editor ? editor.validate() : { valid: true, errors: [], warnings: [] }), [ready, status, selection]);
 
@@ -462,6 +496,15 @@ export default function RoofSketch({ route }) {
       {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
       {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
+      {openConflictActive ? (
+        <View style={sx.openConflict} testID="open-conflict-banner">
+          <Text style={sx.conflictBanner}>The office updated this sketch. Choose which version to keep.</Text>
+          <View style={sx.openConflictRow}>
+            <TouchableOpacity style={sx.openConflictBtn} onPress={onOpenKeepMine} testID="open-conflict-keep-mine"><Text style={sx.openConflictBtnT}>Keep my changes</Text></TouchableOpacity>
+            <TouchableOpacity style={[sx.openConflictBtn, sx.openConflictBtnAlt]} onPress={onOpenUseOffice} testID="open-conflict-use-office"><Text style={sx.openConflictBtnT}>Use office version</Text></TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       {canGenerate ? (
         <TouchableOpacity testID="field-generate-btn" onPress={generateProposed} style={sx.genCta}>
@@ -616,6 +659,11 @@ const sx = StyleSheet.create({
   vWarn: { color: "#FDE68A", backgroundColor: "rgba(180,83,9,0.18)", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginRight: 8, fontSize: 12, overflow: "hidden" },
   locked: { color: "#FBBF24", textAlign: "center", paddingVertical: 6, fontWeight: "700" },
   conflictBanner: { color: "#FCA5A5", backgroundColor: "rgba(220,38,38,0.15)", textAlign: "center", paddingVertical: 6, fontWeight: "700" },
+  openConflict: { backgroundColor: "rgba(220,38,38,0.12)", borderRadius: 10, padding: 8, marginBottom: 6 },
+  openConflictRow: { flexDirection: "row", justifyContent: "center", marginTop: 8, gap: 10 },
+  openConflictBtn: { backgroundColor: "#DC2626", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
+  openConflictBtnAlt: { backgroundColor: "#334155" },
+  openConflictBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
   toolStrip: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 10, paddingHorizontal: 6, backgroundColor: "#0B1220", borderTopWidth: 1, borderTopColor: "#1E293B" },
   tool: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 },
   toolOn: { backgroundColor: C.brand },

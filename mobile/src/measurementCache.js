@@ -30,6 +30,11 @@ function updateMutationId(revisionId) {
   return `measurement-update:${String(revisionId)}`;
 }
 
+// The in-progress working-draft cache slot for one scope (survives background/restart before Save).
+function workingKey(scope) {
+  return `measurement_working:${scopeKey(scope)}`;
+}
+
 function pickCurrent(list) {
   const rows = Array.isArray(list) ? list.filter(Boolean) : [];
   if (!rows.length) return null;
@@ -59,4 +64,4 @@ function isLocalDraft(value) {
   return !!(value && value.local_draft === true && value.client_id);
 }
 
-module.exports = { scopeKey, detailKey, draftKey, updateMutationId, pickCurrent, makeDraft, mergeDraft, isLocalDraft };
+module.exports = { scopeKey, detailKey, draftKey, workingKey, updateMutationId, pickCurrent, makeDraft, mergeDraft, isLocalDraft };

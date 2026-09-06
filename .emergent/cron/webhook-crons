@@ -1,9 +1,9 @@
 # Managed by Emergent webhook-cron (pod-local syscron). DO NOT EDIT.
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-JOB_ID=78609198-6bda-4680-b13d-d3f33c7034f4
+JOB_ID=71b6b19b-ec94-414e-8cb2-cf10230b12d6
 WEBHOOK_ENV_FILE=/app/backend/.env
 CRON_API_URL=https://ea.int.apis.emergentagent.com
 
-0 8 * * * root CRON_NAME=nightly-db-backup METHOD=POST ENDPOINT_URL_B64=aHR0cHM6Ly8zNzc4MjA2NS00NWQ5LTQzMDYtYTEyZC0zYWM5MWY3OWMxYjQucHJldmlldy5lbWVyZ2VudGFnZW50LmNvbS9hcGkvY3Jvbi9iYWNrdXA= /bin/sh /app/.emergent/cron/dispatch_webhook.sh >> /var/log/webhook-cron.log 2>&1
-* * * * * root JOB_ID=78609198-6bda-4680-b13d-d3f33c7034f4 CRON_API_URL=https://ea.int.apis.emergentagent.com /bin/sh /app/.emergent/cron/watch_crons.sh >> /var/log/webhook-cron.log 2>&1
+0 8 * * * root CRON_NAME=nightly-db-backup METHOD=POST ENDPOINT_URL_B64=aHR0cHM6Ly8xNGRjMGFhMy1kNjQwLTQyODQtYjU5OS1jMGU5NTJlMTgxYjMucHJldmlldy5lbWVyZ2VudGFnZW50LmNvbS9hcGkvY3Jvbi9iYWNrdXA= /bin/sh /app/.emergent/cron/dispatch_webhook.sh >> /var/log/webhook-cron.log 2>&1
+* * * * * root JOB_ID=71b6b19b-ec94-414e-8cb2-cf10230b12d6 CRON_API_URL=https://ea.int.apis.emergentagent.com /bin/sh /app/.emergent/cron/watch_crons.sh >> /var/log/webhook-cron.log 2>&1

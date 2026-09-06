@@ -139,6 +139,34 @@ export async function floorPendingSketchExpectedVersion(client_id, serverVersion
   });
 }
 
+// Measurement acknowledgement lifecycle (mirrors floorPendingSketchExpectedVersion): when Office ACKs a
+// measurement but a NEWER local edit (higher generation) is still pending for the same revision, advance
+// ONLY that pending row's authoritative token (If-Match = the server's fresh updated_at) so it re-applies
+// cleanly instead of 409-ing. Operates on the CURRENT stored row inside the serialization boundary;
+// preserves the row's body + generation; never resurrects a missing/synced row; scoped to this account.
+export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const row = await d.getFirstAsync(
+      "SELECT json FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      client_id, scope
+    );
+    if (!row) return { updated: false, reason: "missing" };
+    const m = JSON.parse(row.json);
+    if (m.state !== "pending" || (m.kind !== "measurement_update" && m.kind !== "measurement")) {
+      return { updated: false, reason: "not_pending_measurement" };
+    }
+    if (String(m.ifMatch || "") === String(newIfMatch || "")) return { updated: false, reason: "already_rebased" };
+    m.ifMatch = newIfMatch;
+    await d.runAsync(
+      "UPDATE pending_mutations SET json = ? WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      JSON.stringify(m), client_id, scope
+    );
+    return { updated: true, ifMatch: newIfMatch };
+  });
+}
+
 // Remove exactly ONE mutation (used by the "Remove failed photo" recovery control). Scoped so a
 // device can only delete its own account's row; never touches other Leads/Jobs/Visits/Inspections.
 export async function removeMutation(client_id) {

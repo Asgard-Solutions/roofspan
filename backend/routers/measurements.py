@@ -36,16 +36,9 @@ async def list_revisions(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ):
     if not set_id:
-        stmt = select(MeasurementSet)
-        if inspection_id:
-            stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
-        elif property_id:
-            stmt = stmt.where(MeasurementSet.property_id == property_id)
-        elif lead_id:
-            stmt = stmt.where(MeasurementSet.lead_id == lead_id)
-        else:
+        s = await svc.find_measurement_set(db, inspection_id=inspection_id, property_id=property_id, lead_id=lead_id)
+        if not (inspection_id or property_id or lead_id):
             raise HTTPException(status_code=400, detail="Provide inspection_id, property_id, lead_id or set_id")
-        s = (await db.execute(stmt)).scalars().first()
         if not s:
             return []
         set_id = str(s.id)
