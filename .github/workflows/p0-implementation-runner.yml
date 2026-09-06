@@ -1,4 +1,4 @@
-name: P0 implementation runner
+name: P0 finalization runner
 
 on:
   push:
@@ -6,15 +6,14 @@ on:
       - fix/p0-measurement-sync-hardening-20260906
     paths:
       - "tools/p0_apply.py"
-      - "tools/p0_apply_retry.py"
 
 permissions:
   contents: write
 
 jobs:
-  apply-and-verify:
+  finalize-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -39,22 +38,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Install backend runtime and test dependencies
         run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
-      - name: Apply current P0 production change and run its focused verification
-        run: python tools/p0_apply_retry.py
+      - name: Finalize permanent coverage, repository safety, and lockfiles
+        run: python tools/p0_apply.py
       - name: Validate resulting diff
         run: |
           git diff --check
           git status --short
-      - name: Commit verified implementation
+      - name: Commit verified finalization
         run: |
           git config user.name "RoofSpan P0 Bot"
           git config user.email "actions@roofspan.io"
           git add -A
           if git diff --cached --quiet; then
-            echo "No implementation changes were produced."
+            echo "No finalization changes were produced."
             exit 1
           fi
-          git commit -m "$(cat /tmp/p0_commit_message)"
+          git commit -m "chore: finalize P0 sync verification coverage"
           git push origin HEAD:${GITHUB_REF_NAME}
