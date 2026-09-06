@@ -118,7 +118,9 @@ def test_release_filenames_consistent():
 
 def test_version_is_valid_semver():
     assert ver.is_valid_version(ver.ROOFSPAN_VERSION)
-    assert ver.DISPLAY_VERSION == "0.1.0-dev"  # NOT a stable 1.0.0 yet
+    # Dev channel until production versioning is approved: DISPLAY carries the "-dev" suffix over the
+    # numeric VERSION file (asserted by format, not a frozen number, so version bumps don't break CI).
+    assert ver.DISPLAY_VERSION == f"{ver.ROOFSPAN_VERSION}-dev"
 
 
 def test_cloudfront_urls_correct():
