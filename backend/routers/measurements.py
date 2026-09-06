@@ -239,6 +239,67 @@ async def get_site_plan_pdf_version(revision_id: str, version: int, user: User =
                              headers={"Content-Disposition": f'inline; filename="site-plan-v{version}.pdf"'})
 
 
+@router.get("/{revision_id}/site-plan-v/{version}.png")
+async def get_site_plan_image_version(revision_id: str, version: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Thumbnail image for one saved version (used by the history 'Version Compare' preview)."""
+    from fastapi.responses import StreamingResponse
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    entry = next((h for h in (rev.site_plan or {}).get("history") or [] if int(h.get("version", -1)) == version), None)
+    key = entry.get("image_key") if entry else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site-plan image for that version")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="image/jpeg",
+                             headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.delete("/{revision_id}/site-plan-v/{version}")
+async def delete_site_plan_version(revision_id: str, version: int, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Delete one saved site-plan version from the history. If the deleted version was the latest,
+    the top-level pointers (pdf_key/image_key/assets_updated_at/fingerprint) fall back to the newest
+    remaining version; if none remain they are cleared."""
+    import os
+    from sqlalchemy.orm.attributes import flag_modified
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    sp = dict(rev.site_plan or {})
+    history = list(sp.get("history") or [])
+    entry = next((h for h in history if int(h.get("version", -1)) == version), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="No saved site plan for that version")
+    history = [h for h in history if int(h.get("version", -1)) != version]
+
+    # Best-effort remove the underlying objects (local disk only; the managed proxy has no delete API).
+    base = object_storage._local_dir()
+    if base:
+        for k in (entry.get("pdf_key"), entry.get("image_key")):
+            if not k:
+                continue
+            try:
+                p = object_storage._local_path(base, k)
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+    sp["history"] = history
+    if history:
+        latest = max(history, key=lambda h: int(h.get("version", 0)))
+        sp["pdf_key"] = latest.get("pdf_key")
+        sp["image_key"] = latest.get("image_key")
+        sp["assets_updated_at"] = latest.get("assets_updated_at")
+        sp["fingerprint"] = latest.get("fingerprint")
+    else:
+        for k in ("pdf_key", "image_key", "assets_updated_at", "fingerprint"):
+            sp.pop(k, None)
+    rev.site_plan = sp
+    flag_modified(rev, "site_plan")
+    await db.commit()
+    await log_action(db, user=user, action="measurement.site_plan.delete_version", entity_type="measurement_revision", entity_id=str(rev.id), detail={"version": version}, request=request)
+    return {"ok": True, "versions": _history_meta(sp)}
+
+
 @router.get("/lead/{lead_id}/site-plan")
 async def lead_site_plan_meta(lead_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     rev = await _latest_site_plan_rev(db, lead_id)

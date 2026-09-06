@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, Download, CheckCircle2, AlertTriangle, RefreshCw, History as HistoryIcon } from "lucide-react";
+import { RotateCcw, Download, CheckCircle2, AlertTriangle, RefreshCw, History as HistoryIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
@@ -189,6 +189,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
   const [history, setHistory] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [resaving, setResaving] = useState(false);
+  const [thumbs, setThumbs] = useState({}); // {version: objectURL} for the version-compare previews
   // A newer save from the parent (worksheet Save) supersedes any local in-place override.
   useEffect(() => { setLocalSaved(null); }, [sitePlan?.assets_updated_at]);
   const savedAt = localSaved?.assets_updated_at || (sitePlan && (sitePlan.pdf_key || sitePlan.assets_updated_at) ? sitePlan.assets_updated_at : null);
@@ -218,6 +219,28 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     try { const res = await api.get(`/measurements/${revisionId}/site-plan-v/${v}.pdf`, { responseType: "blob" }); downloadBlob(res.data, `site-plan-v${v}.pdf`); }
     catch (e) { toast.error("Could not download that version"); }
   }, [revisionId]);
+  const deleteVersion = useCallback(async (v) => {
+    if (!revisionId) return;
+    if (!window.confirm(`Delete site-plan version v${v}? This can't be undone.`)) return;
+    try { const res = await api.delete(`/measurements/${revisionId}/site-plan-v/${v}`); setHistory(res.data.versions || []); toast.success(`Deleted v${v}`); }
+    catch (e) { toast.error("Could not delete that version"); }
+  }, [revisionId]);
+  // Version-compare thumbnails: fetch each version's stored image as a blob when the panel opens.
+  const thumbUrlsRef = useRef({});
+  const loadThumbs = useCallback(async () => {
+    if (!revisionId) return;
+    const next = {};
+    for (const h of history) {
+      if (!h.has_image) continue;
+      try { const res = await api.get(`/measurements/${revisionId}/site-plan-v/${h.version}.png`, { responseType: "blob" }); next[h.version] = URL.createObjectURL(res.data); }
+      catch (e) { /* thumbnail is best-effort */ }
+    }
+    Object.values(thumbUrlsRef.current).forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) {} });
+    thumbUrlsRef.current = next;
+    setThumbs(next);
+  }, [revisionId, history]);
+  useEffect(() => { if (historyOpen) loadThumbs(); }, [historyOpen, loadThumbs]);
+  useEffect(() => () => { Object.values(thumbUrlsRef.current).forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) {} }); }, []);
 
   // Build a standalone SVG string for one structure's own roof sketch (for the per-structure PDF pages).
   const structurePng = useCallback(async (sid, label) => {
@@ -436,15 +459,29 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Saved versions</div>
           <ul className="divide-y divide-slate-100">
             {history.map((h, i) => (
-              <li key={h.version} className="flex items-center justify-between py-1 text-xs" data-testid={`site-plan-history-row-${h.version}`}>
-                <span className="text-slate-600">
-                  v{h.version}{i === 0 ? <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">latest</span> : null}
-                  <span className="ml-2 text-slate-400">{relativeTime(h.assets_updated_at)}</span>
-                </span>
-                <button type="button" onClick={() => downloadVersion(h.version)} disabled={!h.has_pdf} data-testid={`site-plan-history-download-${h.version}`}
-                  className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800 disabled:opacity-40">
-                  <Download className="h-3 w-3" />download
-                </button>
+              <li key={h.version} className="flex items-center justify-between gap-2 py-1.5 text-xs" data-testid={`site-plan-history-row-${h.version}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  {thumbs[h.version]
+                    ? <img src={thumbs[h.version]} alt={`v${h.version} preview`} data-testid={`site-plan-history-thumb-${h.version}`}
+                        className="h-10 w-16 flex-shrink-0 rounded border border-slate-200 bg-white object-cover" />
+                    : <div className="flex h-10 w-16 flex-shrink-0 items-center justify-center rounded border border-dashed border-slate-200 bg-white text-[9px] text-slate-300">{h.has_image ? "…" : "no img"}</div>}
+                  <span className="truncate text-slate-600">
+                    v{h.version}{i === 0 ? <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">latest</span> : null}
+                    <span className="ml-2 text-slate-400">{relativeTime(h.assets_updated_at)}</span>
+                  </span>
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-3">
+                  <button type="button" onClick={() => downloadVersion(h.version)} disabled={!h.has_pdf} data-testid={`site-plan-history-download-${h.version}`}
+                    className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800 disabled:opacity-40">
+                    <Download className="h-3 w-3" />download
+                  </button>
+                  {editable && history.length > 1 && (
+                    <button type="button" onClick={() => deleteVersion(h.version)} data-testid={`site-plan-history-delete-${h.version}`}
+                      className="inline-flex items-center gap-1 text-slate-400 hover:text-red-600" title={`Delete version v${h.version}`}>
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

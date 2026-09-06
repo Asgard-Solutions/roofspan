@@ -1,6 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
-## Estimate/Quote Site-Plan Attachment + One-Tap Re-Save + Plan History — DONE & VERIFIED (2026-06)
+## Version Compare Thumbnails + Plan Pruning — DONE & VERIFIED (2026-06)
+Extends the site-plan history panel (`CombinedSitePlan.jsx`).
+- **Version Compare** — each history row now shows a small image preview of that saved version (`site-plan-history-thumb-{v}`), fetched as an authed blob from new `GET /api/measurements/{rev}/site-plan-v/{version}.png` (streams the stored version image as `image/jpeg`). Blobs are object-URL'd on panel open and revoked on refresh/unmount.
+- **Plan Pruning** — editable reps get a trash button per row (`site-plan-history-delete-{v}`, hidden when only 1 version remains) → `DELETE /api/measurements/{rev}/site-plan-v/{version}`. The backend drops the entry, best-effort removes the local objects, and re-points the top-level `pdf_key`/`image_key`/`assets_updated_at`/`fingerprint` at the newest remaining version (clears them if none remain); audit-logged as `measurement.site_plan.delete_version`.
+- **Verified:** backend curl (version image 200 `image/jpeg`; delete v1 → history=[2], top-level falls back to v2) + live screenshot (history panel shows v3/v2/v1 with thumbnails, download links, and delete buttons). Frontend compiles clean. No migration.
+
+
 (testing_agent iter_86 = 100% frontend, 7/7; backend curl-proven.)
 - **Estimate & Proposal attachment** — the latest saved combined site-plan PDF is now a standalone download on the estimate screen (`EstimateEditor.jsx`, `estimate-site-plan-pdf`, via `GET /api/measurements/lead/{lead_id}/site-plan` + `.pdf`) and the proposal/quote screen (`ProposalPreview.jsx`, `proposal-site-plan-pdf`, via `GET /api/quotes/{id}/site-plan` + `.pdf`). Backend helper `_latest_site_plan_rev` returns the lead's newest revision that has a saved `pdf_key`.
 - **One-Tap Re-Save** — the drift nudge is now a button (`site-plan-stale-nudge`, editable mode) that re-saves the stored plan/PDF in place (shared `saveAssets()` used by both the worksheet-Save auto-save and the button), shows a "Site plan re-saved" toast, and clears the nudge via a `localSaved` override (no full worksheet save, no dirtying). Read-only mode keeps an informational chip.
