@@ -28,6 +28,7 @@ RELAY_VALKEY_URL = os.environ.get("RELAY_VALKEY_URL", "").strip() or None
 
 # Routing bounds & timing (seconds / bytes).
 REQUEST_TIMEOUT = float(os.environ.get("RELAY_REQUEST_TIMEOUT", "30"))
+BROADCAST_PUBLISH_TIMEOUT = float(os.environ.get("RELAY_BROADCAST_PUBLISH_TIMEOUT", "5"))
 MAX_JSON_BYTES = int(os.environ.get("RELAY_MAX_JSON_BYTES", str(2 * 1024 * 1024)))        # 2 MB JSON body
 MAX_UPLOAD_BYTES = int(os.environ.get("RELAY_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))   # 20 MB file
 # Cross-node Pub/Sub envelope ceiling. A 20MB binary base64-encodes to ~26.7MB; +JSON envelope

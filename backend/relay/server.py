@@ -252,12 +252,10 @@ async def installation_ws(ws: WebSocket):
             if frame_type == P.T_RESPONSE:
                 hub.resolve(installation_id, frame.get("request_id"), frame)
             elif frame_type == P.T_MEASUREMENT_CHANGED:
-                # Office->Field invalidation pushed UP the tunnel by the loopback connector. Fan it out
-                # to every paired device for this installation, then ACK so the connector can retire the
-                # durable outbox event (it retries until it sees this acceptance).
-                delivered = await hub.broadcast(installation_id, frame)
-                async with conn.send_lock:
-                    await _send(ws, P.broadcast_ack(event_id=frame.get("event_id"), delivered=delivered))
+                # Fan out and ACK only after the configured Relay topology accepts responsibility. A
+                # failed/timeout cross-node publication intentionally sends no ACK, so the Office lease
+                # expires and the stable event is retried.
+                await hub.broadcast_and_ack(installation_id, frame, conn)
             elif frame_type == P.T_PING:
                 await _send(ws, {"type": P.T_PONG, "ts": frame.get("ts")})
             elif frame_type == P.T_BYE:
