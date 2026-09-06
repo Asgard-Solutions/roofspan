@@ -6,6 +6,7 @@ on:
       - fix/p0-measurement-sync-hardening-20260906
     paths:
       - "tools/p0_apply.py"
+      - "tools/p0_apply_retry.py"
 
 permissions:
   contents: write
@@ -41,7 +42,7 @@ jobs:
       - name: Install backend runtime and test dependencies
         run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
       - name: Apply current P0 production change and run its focused verification
-        run: python tools/p0_apply.py
+        run: python tools/p0_apply_retry.py
       - name: Validate resulting diff
         run: |
           git diff --check
