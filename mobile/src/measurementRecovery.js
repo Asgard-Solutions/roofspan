@@ -114,6 +114,20 @@ function recoveryAttentionItem(mutation) {
   };
 }
 
+// Pure classification of the ON-DEVICE queue at startup (restart-after-ack safety). synced measurement
+// creates/updates are settled (their drafts retired by the caller); failed/conflict rows are surfaced for
+// explicit resolution and NEVER auto-resolved. pending rows are left alone.
+function planStartupRecovery(mutations) {
+  const settle = [], conflicts = [], failures = [];
+  for (const m of (mutations || [])) {
+    if (!m || (m.kind !== "measurement" && m.kind !== "measurement_update")) continue;
+    if (m.state === "conflict") { const it = recoveryAttentionItem(m); if (it) conflicts.push(it); continue; }
+    if (m.state === "failed") { const it = recoveryAttentionItem(m); if (it) failures.push(it); continue; }
+    if (m.state === "synced") settle.push(m);
+  }
+  return { settle, conflicts, failures };
+}
+
 module.exports = {
   canonicalMeasurement,
   canonicalEqual,
@@ -121,4 +135,5 @@ module.exports = {
   parseUpdateRevisionId,
   classifyOrphanWorkingDraft,
   recoveryAttentionItem,
+  planStartupRecovery,
 };

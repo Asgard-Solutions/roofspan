@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "test:sync": "node src/tests/sync.node.test.js",
     "test:nav": "node src/tests/navigation_v7.node.test.js",
-    "test:measurements": "node src/tests/measurement_cache.node.test.js && node src/tests/scope.node.test.js && node src/tests/edge_identity.node.test.js && node src/tests/measurement_persistence.node.test.js && node src/tests/measurement_field_parity.node.test.js && node src/tests/measurement_field_controls.node.test.js && node src/tests/measurement_draft_priority.node.test.js && node src/tests/measurement_save_autosave_race.node.test.js && node src/tests/measurement_ack_reconcile.node.test.js && node src/tests/measurement_recovery.node.test.js && node src/tests/measurement_sync_coordinator.node.test.js",
+    "test:measurements": "node src/tests/measurement_cache.node.test.js && node src/tests/scope.node.test.js && node src/tests/edge_identity.node.test.js && node src/tests/measurement_persistence.node.test.js && node src/tests/measurement_field_parity.node.test.js && node src/tests/measurement_field_controls.node.test.js && node src/tests/measurement_draft_priority.node.test.js && node src/tests/measurement_save_autosave_race.node.test.js && node src/tests/measurement_ack_reconcile.node.test.js && node src/tests/measurement_recovery.node.test.js && node src/tests/measurement_sync_coordinator.node.test.js && node src/tests/sync_diagnostics.node.test.js && node src/tests/measurement_acceptance.node.test.js",
     "test:map": "node src/tests/mapconfig.node.test.js",
     "test:canvass": "node src/tests/canvass.node.test.js",
     "test:pairing": "node src/tests/pairing.node.test.js",

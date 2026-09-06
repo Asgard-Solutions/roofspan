@@ -14,8 +14,9 @@ import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
 import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
-import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope } from "./measurementRecovery";
+import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
+import { createDiagnostics } from "./syncDiagnostics";
 import { cache } from "./cache";
 import { api } from "./api";
 import { setRelayEventHandler } from "./transport";
@@ -82,9 +83,11 @@ export async function runSync() {
     const pending = await loadPending();            // active scope only
     if (pending.length > 0) {
       const processed = await queue.processQueue(pending, send);
+      _diag.recordPush();   // a push cycle ran (Field→Office write attempts completed)
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
+      for (const m of processed) _recordMutationDiag(m);
       await _reconcileSketchAcks(processed);
       await _reconcileFieldAcks(processed);
       await _reconcileMeasurementAcks(processed);
@@ -107,6 +110,22 @@ export async function runSync() {
 
 // Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
 async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
+
+// Device sync diagnostics: last PULL and last PUSH tracked separately + a bounded per-mutation log.
+const _diag = createDiagnostics();
+export function syncDiagnostics() { return _diag.snapshot(); }
+function _recordMutationDiag(m) {
+  if (!m) return;
+  const sv = m.serverValue || null;
+  const revisionId = sv && sv.id != null ? sv.id
+    : (String(m.client_id || "").startsWith("measurement-update:") ? String(m.client_id).split(":")[1] : (sv && sv.revision_id) || null);
+  const serverToken = sv ? (sv.updated_at != null ? sv.updated_at : sv.document_version) : null;
+  _diag.recordMutation({
+    clientId: m.client_id, kind: m.kind, state: m.state,
+    httpResult: m.errorCode != null ? m.errorCode : (m.state === "synced" ? "ok" : m.state),
+    revisionId, serverToken, cacheSource: sv ? "server_ack" : null, error: m.error || null,
+  });
+}
 
 // B3B1 (atomic): generation-safe application of successful sketch acknowledgements. All three writes are
 // concurrency-safe against a newer local edit (C) landing mid-reconciliation:
@@ -221,6 +240,7 @@ export async function refreshLead(scope, trigger = "manual") {
   try { const r = await api.get("/mobile/measurements/watermark", { params: scope }); wm = r && r.data; }
   catch (e) { return { refreshed: false, offline: true }; }   // offline → cached copy stays; retry next trigger
   _coordinator.markRefreshed(scope);
+  _diag.recordPull();   // a successful Office→Field read completed for this lead
   const all = await loadAllMutations();
   let changed = false;
   for (const rev of (wm && wm.revisions) || []) {
@@ -269,11 +289,10 @@ export async function recoverMeasurementsOnStartup() {
 
   // 1) Settle every SYNCED measurement create/update whose local draft was never retired (the bad state),
   //    and collect failed/conflict rows for explicit resolution (never auto-resolved, never deleted).
-  for (const m of all) {
-    if (m.kind !== "measurement" && m.kind !== "measurement_update") continue;
-    if (m.state === "conflict") { const it = recoveryAttentionItem(m); if (it) summary.conflicts.push(it); continue; }
-    if (m.state === "failed") { const it = recoveryAttentionItem(m); if (it) summary.failures.push(it); continue; }
-    if (m.state !== "synced") continue;
+  const plan = planStartupRecovery(all);
+  summary.conflicts.push(...plan.conflicts);
+  summary.failures.push(...plan.failures);
+  for (const m of plan.settle) {
     // Use serverValue, else locate the authoritative revision by server_id (read-through; skip if offline).
     let rev = (m.serverValue && m.serverValue.id) ? m.serverValue : null;
     if (!rev && m.server_id) {
