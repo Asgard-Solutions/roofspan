@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## CI Infra Unblock — Corrupt Path Removed + Path-Safety Guard + yarn.lock + Dynamic Alembic Head — DONE & VERIFIED (2026-06)
+Three CI/checkout blockers fixed (bash/YAML-validated; no app code change):
+- **Corrupt Windows-incompatible file removed**: `git rm mobile/*@@*` deleted the 0-byte control-character binary path (`\001\220\370@@\320\3039@8`) that broke Windows checkouts. NEW workflow `.github/workflows/repo-path-safety.yml` rejects any tracked path with control chars, Windows-reserved chars (`<>:"|?*`), or a segment ending in dot/space — verified locally: 1284 tracked paths all Windows-safe (0 offenders).
+- **`frontend/yarn.lock` finalized**: working-tree lockfile (+125 lines) proven consistent — `yarn install --frozen-lockfile` inside `frontend/` succeeds ("Already up-to-date", no "lockfile needs to be updated"). Unblocks the Office build + `hosted-mobile-pairing` frozen-install jobs.
+- **Alembic CI made dynamic** (`roof-takeoff-contract.yml`): the "Verify Alembic migration graph" step no longer hardcodes `grep -q '^e0f1a2b3c4d5 '` (stale; real head is now `c4d5e6f7a8b9`). It now only asserts EXACTLY ONE head exists (`grep -c '(head)' == 1`, verified locally = 1). End-to-end `alembic upgrade head` is already run against Postgres in the `sketch-backend-contract` job (line ~270, no hardcoded id), so upgrade success stays covered without a DB in the graph-verify job.
+- **Verified:** both edited/new YAML files parse (`yaml.safe_load` OK); single-head check = 1; frozen yarn install clean; path-safety script passes. No migration, no runtime code touched.
+
+
 ## P0 — Canonical-Set Migration Revision-Number Protection + Lead-Primary Resolution — DONE & VERIFIED (2026-06)
 - **Renumber on merge**: `a2b3c4d5e6f7._merge_by` now calls `_renumber_set(canon_id)` after repointing revisions — assigns a UNIQUE, deterministic chronological (`created_at ASC, id ASC`) `revision_number` sequence so a merged canonical set can never hold tied numbers. `supersedes_revision_id` references revision IDs (unchanged) and is preserved.
 - **Unique constraint + backfill migration `c4d5e6f7a8b9`**: renumbers any pre-existing tied `(set_id, revision_number)` collisions in already-migrated DBs, then adds `UNIQUE(measurement_revisions.set_id, revision_number)` (`uq_measurement_revisions_set_number`) so ties can never recur, and prints a migration report (`sets_fixed / revisions_renumbered / remaining_lead_relationship_conflicts`).

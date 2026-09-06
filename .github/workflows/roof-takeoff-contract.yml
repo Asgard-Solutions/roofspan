@@ -199,8 +199,10 @@ jobs:
         run: |
           heads="$(alembic -c alembic.ini heads)"
           printf '%s\n' "$heads"
+          # Exactly one migration head must exist (no divergent branches / no
+          # hardcoded revision id). The single head is upgraded end-to-end
+          # against Postgres in the sketch-backend-contract job below.
           test "$(printf '%s\n' "$heads" | grep -c '(head)')" -eq 1
-          printf '%s\n' "$heads" | grep -q '^e0f1a2b3c4d5 '
       - name: Compile roof measurement backend modules
         run: >-
           python -m compileall -q
