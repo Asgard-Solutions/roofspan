@@ -128,7 +128,7 @@ function threeWayMergeMeasurement(base, field, office) {
   merged.summary = ms;
   // Hidden/import metadata is part of the backend's full-document replacement contract too. Merge it
   // independently so a Field roof-line edit cannot revert an Office-only provider/report/note change.
-  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
+  for (const key of ["source", "provider", "report_id", "reported_area_sqft", "notes"]) {
     const has = (obj) => Object.prototype.hasOwnProperty.call(obj, key);
     if (!has(base) && !has(field) && !has(office)) continue;
     const bv = JSON.stringify(base[key]), fv = JSON.stringify(field[key]), ov = JSON.stringify(office[key]);

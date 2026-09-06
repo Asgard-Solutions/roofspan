@@ -75,16 +75,68 @@ function measScopeFromBody(body) {
 // Extract the complete editable measurement document from an authoritative revision detail. Routing and
 // command fields stay on the mutation body; these are the values that must participate in conflict merge.
 function _cloneJson(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
+function _ref(row, preferred, fallback) {
+  const value = row && row[preferred] != null ? row[preferred] : (row && row[fallback] != null ? row[fallback] : null);
+  return value == null || value === "" ? null : String(value);
+}
 function measurementDocumentFromRevision(src) {
   if (!src || typeof src !== "object") return null;
+  const structures = (src.structures || []).map((row, index) => ({
+    ref: _ref(row, "ref", "id"),
+    name: row.name || "",
+    structure_type: row.structure_type || "main_house",
+    included_in_scope: row.included_in_scope !== false,
+    stories: row.stories == null ? null : row.stories,
+    approx_height_ft: row.approx_height_ft == null ? null : row.approx_height_ft,
+    attachment: row.attachment == null ? null : row.attachment,
+    notes: row.notes == null ? null : row.notes,
+    sort: row.sort == null ? index : row.sort,
+  }));
+  const facets = (src.facets || []).map((row, index) => ({
+    ref: _ref(row, "ref", "id"),
+    structure_ref: _ref(row, "structure_ref", "structure_id"),
+    facet_label: row.facet_label || "",
+    pitch_rise: row.pitch_rise == null ? null : row.pitch_rise,
+    area_sqft: row.area_sqft == null ? 0 : row.area_sqft,
+    width_ft: row.width_ft == null ? null : row.width_ft,
+    length_ft: row.length_ft == null ? null : row.length_ft,
+    position_offset_ft: row.position_offset_ft == null ? null : row.position_offset_ft,
+    orientation_azimuth: row.orientation_azimuth == null ? null : row.orientation_azimuth,
+    roof_material: row.roof_material == null ? null : row.roof_material,
+    notes: row.notes == null ? null : row.notes,
+    geometry: row.geometry == null ? null : _cloneJson(row.geometry),
+    sort: row.sort == null ? index : row.sort,
+  }));
+  const edges = (src.edges || []).map((row, index) => ({
+    ref: _ref(row, "ref", "id"),
+    edge_type: row.edge_type || "eave",
+    length_ft: row.length_ft == null ? 0 : row.length_ft,
+    facet_ref: _ref(row, "facet_ref", "facet_id"),
+    facet_ref_secondary: _ref(row, "facet_ref_secondary", "facet_id_secondary"),
+    label: row.label == null ? null : row.label,
+    notes: row.notes == null ? null : row.notes,
+    sort: row.sort == null ? index : row.sort,
+  }));
+  const sourcePenetrations = src.penetrations != null ? src.penetrations : (src.pens || []);
+  const penetrations = sourcePenetrations.map((row, index) => ({
+    ref: _ref(row, "ref", "id"),
+    pen_type: row.pen_type || "pipe_boot",
+    quantity: row.quantity == null ? 1 : row.quantity,
+    facet_ref: _ref(row, "facet_ref", "facet_id"),
+    diameter_in: row.diameter_in == null ? null : row.diameter_in,
+    width_in: row.width_in == null ? null : row.width_in,
+    length_in: row.length_in == null ? null : row.length_in,
+    notes: row.notes == null ? null : row.notes,
+    sort: row.sort == null ? index : row.sort,
+  }));
   const out = {
-    structures: _cloneJson(src.structures || []),
-    facets: _cloneJson(src.facets || []),
-    edges: _cloneJson(src.edges || []),
-    penetrations: _cloneJson(src.penetrations != null ? src.penetrations : (src.pens || [])),
+    structures,
+    facets,
+    edges,
+    penetrations,
     summary: _cloneJson(src.summary || {}),
   };
-  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
+  for (const key of ["source", "provider", "report_id", "reported_area_sqft", "notes"]) {
     if (Object.prototype.hasOwnProperty.call(src, key)) out[key] = _cloneJson(src[key]);
   }
   return out;
@@ -97,7 +149,9 @@ function chooseDurableMeasurementBase(authoritative, pending) {
     if (!pending.base_body || pending.base_token == null || pending.base_token === "") {
       return { ok: false, reason: "missing_durable_base" };
     }
-    return { ok: true, baseBody: _cloneJson(pending.base_body), baseToken: String(pending.base_token) };
+    const normalizedBase = measurementDocumentFromRevision(pending.base_body);
+    if (!normalizedBase) return { ok: false, reason: "missing_durable_base" };
+    return { ok: true, baseBody: normalizedBase, baseToken: String(pending.base_token) };
   }
   const token = authoritative && (authoritative.base_token || authoritative.updated_at || authoritative.if_match);
   const body = authoritative && authoritative.base_body
@@ -123,8 +177,8 @@ function measurementConflictMergeInputs(mutation, serverDetail) {
   }
   return {
     ok: true,
-    base: _cloneJson(mutation.base_body),
-    field: _cloneJson(mutation.body || {}),
+    base: measurementDocumentFromRevision(mutation.base_body),
+    field: measurementDocumentFromRevision(mutation.body || {}),
     office,
     officeToken: String(serverDetail.updated_at),
   };
@@ -132,13 +186,16 @@ function measurementConflictMergeInputs(mutation, serverDetail) {
 
 function buildMergedMeasurementBody(fieldBody, merged) {
   const next = _cloneJson(fieldBody || {}) || {};
-  next.structures = _cloneJson(merged.structures || []);
-  next.facets = _cloneJson(merged.facets || []);
-  next.edges = _cloneJson(merged.edges || []);
-  next.penetrations = _cloneJson(merged.pens != null ? merged.pens : (merged.penetrations || []));
-  next.summary = _cloneJson(merged.summary || {});
-  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
-    if (Object.prototype.hasOwnProperty.call(merged, key)) next[key] = _cloneJson(merged[key]);
+  const normalized = measurementDocumentFromRevision(merged) || {
+    structures: [], facets: [], edges: [], penetrations: [], summary: {},
+  };
+  next.structures = normalized.structures;
+  next.facets = normalized.facets;
+  next.edges = normalized.edges;
+  next.penetrations = normalized.penetrations;
+  next.summary = normalized.summary;
+  for (const key of ["source", "provider", "report_id", "reported_area_sqft", "notes"]) {
+    if (Object.prototype.hasOwnProperty.call(normalized, key)) next[key] = _cloneJson(normalized[key]);
   }
   return next;
 }
