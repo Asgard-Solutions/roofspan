@@ -186,7 +186,8 @@ def _history_meta(sp: dict) -> list:
     out = []
     for h in (sp.get("history") or []):
         out.append({"version": int(h.get("version", 0)), "assets_updated_at": h.get("assets_updated_at"),
-                    "fingerprint": h.get("fingerprint"), "has_pdf": bool(h.get("pdf_key")),
+                    "fingerprint": h.get("fingerprint"), "label": h.get("label"),
+                    "has_pdf": bool(h.get("pdf_key")),
                     "has_image": bool(h.get("image_key"))})
     out.sort(key=lambda x: x["version"], reverse=True)
     return out
@@ -297,6 +298,74 @@ async def delete_site_plan_version(revision_id: str, version: int, request: Requ
     flag_modified(rev, "site_plan")
     await db.commit()
     await log_action(db, user=user, action="measurement.site_plan.delete_version", entity_type="measurement_revision", entity_id=str(rev.id), detail={"version": version}, request=request)
+    return {"ok": True, "versions": _history_meta(sp)}
+
+
+@router.post("/{revision_id}/site-plan-v/{version}/restore")
+async def restore_site_plan_version(revision_id: str, version: int, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Make an older saved version the current one: copy its assets into a fresh version at the top
+    and re-point the top-level pointers at it (the stored/attached plan, not the live editor geometry)."""
+    from datetime import datetime, timezone
+    from sqlalchemy.orm.attributes import flag_modified
+    from services import object_storage
+    rev = await _get_rev_or_404(db, revision_id)
+    sp = dict(rev.site_plan or {})
+    history = list(sp.get("history") or [])
+    src = next((h for h in history if int(h.get("version", -1)) == version), None)
+    if not src:
+        raise HTTPException(status_code=404, detail="No saved site plan for that version")
+    next_version = max([int(h.get("version", 0)) for h in history], default=0) + 1
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {"version": next_version, "assets_updated_at": now}
+
+    def _copy(src_key, ext, ctype):
+        if not src_key:
+            return None
+        raw = object_storage.get_object(src_key)
+        nk = f"site-plans/{revision_id}-v{next_version}.{ext}"
+        object_storage.put_object(nk, raw, content_type=ctype)
+        return nk
+
+    if (pk := _copy(src.get("pdf_key"), "pdf", "application/pdf")):
+        entry["pdf_key"] = pk
+    if (ik := _copy(src.get("image_key"), "png", "image/png")):
+        entry["image_key"] = ik
+    if src.get("fingerprint"):
+        entry["fingerprint"] = src["fingerprint"]
+    entry["label"] = (f'{src["label"]} (restored)' if src.get("label") else f"restored from v{version}")[:120]
+    history.append(entry)
+    sp["history"] = history[-10:]
+    sp["pdf_key"] = entry.get("pdf_key")
+    sp["image_key"] = entry.get("image_key")
+    sp["assets_updated_at"] = now
+    sp["fingerprint"] = entry.get("fingerprint")
+    rev.site_plan = sp
+    flag_modified(rev, "site_plan")
+    await db.commit()
+    await log_action(db, user=user, action="measurement.site_plan.restore_version", entity_type="measurement_revision", entity_id=str(rev.id), detail={"restored_from": version, "new_version": next_version}, request=request)
+    return {"ok": True, "versions": _history_meta(sp)}
+
+
+@router.patch("/{revision_id}/site-plan-v/{version}")
+async def label_site_plan_version(revision_id: str, version: int, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Set/clear a short note on a saved version so history is easy to scan."""
+    from sqlalchemy.orm.attributes import flag_modified
+    rev = await _get_rev_or_404(db, revision_id)
+    body = await request.json()
+    label = (body.get("label") or "").strip()[:120]
+    sp = dict(rev.site_plan or {})
+    history = list(sp.get("history") or [])
+    entry = next((h for h in history if int(h.get("version", -1)) == version), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="No saved site plan for that version")
+    if label:
+        entry["label"] = label
+    else:
+        entry.pop("label", None)
+    sp["history"] = history
+    rev.site_plan = sp
+    flag_modified(rev, "site_plan")
+    await db.commit()
     return {"ok": True, "versions": _history_meta(sp)}
 
 

@@ -75,3 +75,34 @@ async def send_invoice_email(*, to_email: str, invoice: dict, company: dict, pdf
         html=_invoice_html(invoice, company),
         attachments=[{"filename": f"Invoice-{invoice.get('number','')}.pdf", "content": pdf_bytes}],
     )
+
+
+def _quote_html(quote: dict, company: dict, has_site_plan: bool) -> str:
+    comp = (company or {}).get("name") or "RoofSpan Roofing Co."
+    contact = " · ".join(filter(None, [(company or {}).get("phone"), (company or {}).get("email")]))
+    plan_line = ("<p>We've also attached a site plan of your roof for reference.</p>" if has_site_plan else "")
+    return (
+        f'<div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:14px;line-height:1.5">'
+        f'<p>Hello,</p>'
+        f'<p>Please find attached your proposal <b>{quote.get("number","")}</b> from <b>{comp}</b> '
+        f'for a total of <b>{_money(quote.get("total"))}</b>.</p>'
+        f'{plan_line}'
+        f'<p>To accept this proposal or ask any questions, please contact us'
+        f'{(" at " + contact) if contact else ""}.</p>'
+        f'<p>Thank you,<br/>{comp}</p></div>'
+    )
+
+
+async def send_quote_email(*, to_email: str, quote: dict, company: dict, proposal_pdf: bytes,
+                           site_plan_pdf: bytes | None = None) -> dict:
+    """Send a customer proposal with the proposal PDF and (optionally) the site-plan PDF attached."""
+    number = quote.get("number", "")
+    attachments = [{"filename": f"Proposal-{number}.pdf", "content": proposal_pdf}]
+    if site_plan_pdf:
+        attachments.append({"filename": f"Site-Plan-{number}.pdf", "content": site_plan_pdf})
+    return await send_email(
+        to=to_email,
+        subject=f"Proposal {number} from {(company or {}).get('name') or 'RoofSpan'}",
+        html=_quote_html(quote, company, bool(site_plan_pdf)),
+        attachments=attachments,
+    )

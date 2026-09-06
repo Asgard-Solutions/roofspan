@@ -227,6 +227,48 @@ async def quote_site_plan_pdf(quote_id: str, user: User = Depends(get_current_us
                              headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
 
 
+@router.post("/{quote_id}/send")
+async def send_quote(quote_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Email the customer their proposal with the proposal PDF + latest saved site-plan PDF attached.
+    Email delivery routes through the app-wide transport (stubbed until a provider is configured)."""
+    from services import object_storage
+    from services.email_sender import send_quote_email, EmailNotConfigured
+    from routers.measurements import _latest_site_plan_rev
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    cust = await db.get(Customer, q.customer_id) if q.customer_id else None
+    to_email = getattr(cust, "email", None) if cust else None
+    if not to_email:
+        raise HTTPException(status_code=400, detail="This proposal's customer has no email address on file.")
+    data = await _proposal.proposal_data(db, q)
+    data["site_plan_png"] = await _lead_site_plan_png(db, q.lead_id)
+    proposal_pdf = _proposal.build_pdf(data)
+    site_plan_pdf = None
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    key = (rev.site_plan or {}).get("pdf_key") if rev else None
+    if key:
+        try:
+            site_plan_pdf = object_storage.get_object(key)
+        except Exception:
+            site_plan_pdf = None
+    try:
+        result = await send_quote_email(to_email=to_email, quote=data["quote"], company=data["company"],
+                                        proposal_pdf=proposal_pdf, site_plan_pdf=site_plan_pdf)
+    except EmailNotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not send the proposal email: {e}")
+    stubbed = bool(result.get("stubbed"))
+    await log_action(db, user=user, action="quote.send", entity_type="quote", entity_id=q.id,
+                     detail={"to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed,
+                             "site_plan_attached": bool(site_plan_pdf)}, request=request)
+    return {"ok": True, "to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed,
+            "site_plan_attached": bool(site_plan_pdf),
+            "message": ("Email delivery isn't switched on yet, so nothing was sent — use Download PDF for now."
+                        if stubbed else f"Proposal emailed to {to_email}.")}
+
+
 @router.get("/{quote_id}/document")
 async def quote_document(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     q = await db.get(Quote, quote_id)

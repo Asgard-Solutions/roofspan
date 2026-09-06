@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, Download, CheckCircle2, AlertTriangle, RefreshCw, History as HistoryIcon, Trash2 } from "lucide-react";
+import { RotateCcw, Download, CheckCircle2, AlertTriangle, RefreshCw, History as HistoryIcon, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
@@ -224,6 +224,21 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     if (!window.confirm(`Delete site-plan version v${v}? This can't be undone.`)) return;
     try { const res = await api.delete(`/measurements/${revisionId}/site-plan-v/${v}`); setHistory(res.data.versions || []); toast.success(`Deleted v${v}`); }
     catch (e) { toast.error("Could not delete that version"); }
+  }, [revisionId]);
+  const restoreVersion = useCallback(async (v) => {
+    if (!revisionId) return;
+    try {
+      const res = await api.post(`/measurements/${revisionId}/site-plan-v/${v}/restore`);
+      const versions = res.data.versions || [];
+      setHistory(versions);
+      if (versions[0]) setLocalSaved({ assets_updated_at: versions[0].assets_updated_at, fingerprint: versions[0].fingerprint });
+      toast.success(`Restored v${v} as the current site plan`);
+    } catch (e) { toast.error("Could not restore that version"); }
+  }, [revisionId]);
+  const saveLabel = useCallback(async (v, label) => {
+    if (!revisionId) return;
+    try { const res = await api.patch(`/measurements/${revisionId}/site-plan-v/${v}`, { label }); setHistory(res.data.versions || []); }
+    catch (e) { toast.error("Could not save the note"); }
   }, [revisionId]);
   // Version-compare thumbnails: fetch each version's stored image as a blob when the panel opens.
   const thumbUrlsRef = useRef({});
@@ -465,16 +480,30 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
                     ? <img src={thumbs[h.version]} alt={`v${h.version} preview`} data-testid={`site-plan-history-thumb-${h.version}`}
                         className="h-10 w-16 flex-shrink-0 rounded border border-slate-200 bg-white object-cover" />
                     : <div className="flex h-10 w-16 flex-shrink-0 items-center justify-center rounded border border-dashed border-slate-200 bg-white text-[9px] text-slate-300">{h.has_image ? "…" : "no img"}</div>}
-                  <span className="truncate text-slate-600">
-                    v{h.version}{i === 0 ? <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">latest</span> : null}
-                    <span className="ml-2 text-slate-400">{relativeTime(h.assets_updated_at)}</span>
-                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-slate-600">
+                      v{h.version}{i === 0 ? <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">latest</span> : null}
+                      <span className="ml-2 text-slate-400">{relativeTime(h.assets_updated_at)}</span>
+                    </div>
+                    {editable ? (
+                      <input defaultValue={h.label || ""} placeholder="Add a note…" data-testid={`site-plan-history-label-${h.version}`}
+                        onBlur={(e) => { if ((e.target.value || "").trim() !== (h.label || "")) saveLabel(h.version, e.target.value); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                        className="mt-0.5 h-6 w-40 rounded border border-transparent bg-transparent px-1 text-[11px] text-slate-500 hover:border-slate-200 focus:border-slate-300 focus:bg-white focus:outline-none" />
+                    ) : (h.label ? <div className="mt-0.5 text-[11px] italic text-slate-400" data-testid={`site-plan-history-label-${h.version}`}>{h.label}</div> : null)}
+                  </div>
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-3">
                   <button type="button" onClick={() => downloadVersion(h.version)} disabled={!h.has_pdf} data-testid={`site-plan-history-download-${h.version}`}
                     className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800 disabled:opacity-40">
                     <Download className="h-3 w-3" />download
                   </button>
+                  {editable && i !== 0 && (
+                    <button type="button" onClick={() => restoreVersion(h.version)} data-testid={`site-plan-history-restore-${h.version}`}
+                      className="inline-flex items-center gap-1 text-slate-500 hover:text-emerald-700" title={`Make v${h.version} the current site plan`}>
+                      <Undo2 className="h-3 w-3" />restore
+                    </button>
+                  )}
                   {editable && history.length > 1 && (
                     <button type="button" onClick={() => deleteVersion(h.version)} data-testid={`site-plan-history-delete-${h.version}`}
                       className="inline-flex items-center gap-1 text-slate-400 hover:text-red-600" title={`Delete version v${h.version}`}>

@@ -1,6 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
-## Version Compare Thumbnails + Plan Pruning — DONE & VERIFIED (2026-06)
+## Email Proposal + Restore Version + Version Labels — DONE & VERIFIED (2026-06)
+- **Email proposal (stubbed-ready)** — new `POST /api/quotes/{id}/send` (MANAGE roles) builds the proposal PDF (with embedded site plan) + attaches the lead's latest saved site-plan PDF and routes through the app-wide `email_sender.send_email` choke point (new `send_quote_email`). Delivery stays STUBBED (per product decision) until an `EMAIL_PROVIDER` is configured — the endpoint returns `{stubbed:true, site_plan_attached, message}` and logs `quote.send`. UI: `ProposalPreview.jsx` "Email to Customer" button (`proposal-email-customer`); toasts the stubbed/sent message.
+- **Restore version** — `POST /api/measurements/{rev}/site-plan-v/{version}/restore` copies that version's assets into a fresh top version and re-points the top-level pointers at it (the stored/attached plan). UI: per-row `site-plan-history-restore-{v}` (non-latest rows) → refreshes history + sets the saved badge; audit-logged `measurement.site_plan.restore_version`.
+- **Version labels** — `PATCH /api/measurements/{rev}/site-plan-v/{version}` `{label}` sets/clears a short note (≤120 chars) stored on the history entry and returned in `_history_meta`. UI: inline "Add a note…" input per row (`site-plan-history-label-{v}`, saves on blur/Enter; read-only shows italic note).
+- **Verified:** backend curl (label set; restore v2→v3 with "(restored)" label + top-level re-point; quote send 200 stubbed with `site_plan_attached:true`) + live screenshots (proposal shows Site Plan PDF · Email to Customer · Download PDF; history rows show thumbnail + note input + download + restore + delete). Frontend compiles clean. No migration.
+
+
 Extends the site-plan history panel (`CombinedSitePlan.jsx`).
 - **Version Compare** — each history row now shows a small image preview of that saved version (`site-plan-history-thumb-{v}`), fetched as an authed blob from new `GET /api/measurements/{rev}/site-plan-v/{version}.png` (streams the stored version image as `image/jpeg`). Blobs are object-URL'd on panel open and revoked on refresh/unmount.
 - **Plan Pruning** — editable reps get a trash button per row (`site-plan-history-delete-{v}`, hidden when only 1 version remains) → `DELETE /api/measurements/{rev}/site-plan-v/{version}`. The backend drops the entry, best-effort removes the local objects, and re-points the top-level `pdf_key`/`image_key`/`assets_updated_at`/`fingerprint` at the newest remaining version (clears them if none remain); audit-logged as `measurement.site_plan.delete_version`.

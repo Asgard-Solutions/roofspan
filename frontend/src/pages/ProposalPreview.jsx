@@ -6,7 +6,7 @@ import { money } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, Loader2, CheckCircle2, Map } from "lucide-react";
+import { ArrowLeft, Download, Loader2, CheckCircle2, Map, Mail } from "lucide-react";
 
 function Items({ lines, subtotal, tax, total, testid }) {
   return (
@@ -43,6 +43,7 @@ export default function ProposalPreview() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sitePlan, setSitePlan] = useState(null);
+  const [emailing, setEmailing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +72,15 @@ export default function ProposalPreview() {
     } catch (e) { toast.error("No saved site plan for this proposal yet"); }
   };
 
+  const emailToCustomer = async () => {
+    setEmailing(true);
+    try {
+      const { data } = await api.post(`/quotes/${id}/send`);
+      if (data.stubbed) toast.info(data.message || "Email delivery isn't switched on yet — use Download PDF.");
+      else toast.success(data.message || "Proposal emailed.");
+    } catch (e) { toast.error(apiError(e)); } finally { setEmailing(false); }
+  };
+
   if (loading) return <div className="flex items-center gap-2 p-8 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading proposal…</div>;
   if (!data) return <p className="p-8 text-slate-500">Proposal unavailable.</p>;
   const c = data.company; const q = data.quote;
@@ -81,6 +91,7 @@ export default function ProposalPreview() {
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)}><ArrowLeft className="h-4 w-4" /> Back</Button>
         <div className="flex items-center gap-2">
           {sitePlan?.available && <Button variant="outline" size="sm" onClick={downloadSitePlan} data-testid="proposal-site-plan-pdf"><Map className="h-4 w-4" /> Site Plan PDF</Button>}
+          <Button variant="outline" size="sm" onClick={emailToCustomer} disabled={emailing} data-testid="proposal-email-customer">{emailing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />} Email to Customer</Button>
           <Button size="sm" onClick={download} data-testid="proposal-download-pdf"><Download className="h-4 w-4" /> Download PDF</Button>
         </div>
       </div>
