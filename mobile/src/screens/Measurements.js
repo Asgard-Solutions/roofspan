@@ -5,6 +5,7 @@ import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentM
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
+import { canonicalFingerprint } from "../measurementRecovery";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import RoofThumbnail from "../components/RoofThumbnail";
@@ -88,9 +89,16 @@ export default function Measurements({ route, navigation }) {
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
     if (readonly) return true;
+    // base_fingerprint = the COMPLETE canonical fingerprint of the authoritative baseline the rep opened
+    // from. Startup recovery clears a content-bearing draft ONLY when the draft still fingerprints equal to
+    // this — so an edit to ANY persisted field (material, notes, plane assignment, diameter, geometry, …)
+    // is preserved even if the app is killed before Save (P0 data-loss guard).
+    let baseFp = null;
+    try { baseFp = canonicalFingerprint(JSON.parse(baselineRef.current)); } catch (e) { baseFp = null; }
     return await wdStoreRef.current.persist({
       working: true, base: existing ? { ...existing } : null,
       local_client_id: localDraft ? localDraft.client_id : null,
+      base_fingerprint: baseFp,
       structures, facets, edges, pens, summary, updated_at: new Date().toISOString(),
     });
   }, [scope, readonly, existing, localDraft, structures, facets, edges, pens, summary]);
