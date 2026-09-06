@@ -6,14 +6,14 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
-import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
+import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
@@ -207,9 +207,21 @@ async function _reconcileMeasurementAcks(processed) {
     // b. scoped measurement-list cache: insert/update this revision, preserving all others.
     if (measScope) await mutateCache(measScopeKey(measScope), (cur) => upsertRevision(cur, rev));
     if (superseded) {
-      // A newer local edit is still pending — NEVER retire its drafts; only advance its authoritative
-      // token so it applies cleanly against the freshly-acknowledged server version.
-      if (stored.kind === "measurement_update") await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+      // A newer local edit is still pending — NEVER retire its drafts.
+      if (stored.kind === "measurement_update") {
+        // Rebase the newer update onto the fresh authoritative token so it applies cleanly.
+        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+      } else if (stored.kind === "measurement") {
+        // P0 data-loss fix: a newer CREATE generation superseded this acknowledged create. Convert it into
+        // an UPDATE of the just-created revision so the newer body is actually applied (an idempotent
+        // create replay would otherwise silently return the original record and the second edit would be
+        // lost). Draft is rebased onto the new revision and retired only after the update's OWN ack.
+        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);
+        if (res && res.converted) {
+          if (measScope) await mutateCache(measWorkingKey(measScope), (cur) => rebaseWorkingDraftToRevision(cur, { oldClientId: m.client_id, revisionId, ifMatch: rev.updated_at }));
+          _rerunRequested = true;   // automatically run the converted update on the next pass
+        }
+      }
       touched = true;
       continue;
     }
