@@ -6,12 +6,14 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
+import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
+import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -80,6 +82,7 @@ export async function runSync() {
       for (const m of processed) await saveMutationIfCurrent(m);
       await _reconcileSketchAcks(processed);
       await _reconcileFieldAcks(processed);
+      await _reconcileMeasurementAcks(processed);
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -153,6 +156,49 @@ async function _reconcileFieldAcks(processed) {
     }
   }
 }
+// Measurement convergence (mirrors _reconcileSketchAcks): after a `measurement` create or a
+// `measurement_update` is ACKNOWLEDGED, apply the authoritative Office revision so no cache disagrees with
+// Postgres, retire the exact acknowledged local drafts, and notify the open screen immediately (no 15s
+// wait). Every write runs through the SERIALIZED storage boundary shared with the editor's working-draft
+// writes, so a NEWER local edit (higher generation) that landed mid-reconciliation is never deleted — its
+// authoritative token is merely advanced so it re-applies cleanly.
+async function _reconcileMeasurementAcks(processed) {
+  const acks = processed.filter(
+    (m) => (m.kind === "measurement" || m.kind === "measurement_update") && m.state === "synced" && m.serverValue && m.serverValue.id != null
+  );
+  if (!acks.length) return;
+  // Freshly re-read the durable queue (post generation-guarded writeback) to detect supersession safely.
+  const current = await loadAllMutations();
+  const byId = new Map(current.map((r) => [r.client_id, r]));
+  let touched = false;
+  for (const m of acks) {
+    const rev = m.serverValue;                 // validated: authoritative revision detail (has id + updated_at)
+    const revisionId = String(rev.id);
+    const stored = byId.get(m.client_id) || null;
+    const superseded = isSupersededAck(stored, m);
+    const measScope = measScopeFromBody(m.body);
+    // a. authoritative detail cache in the RAW read-through/GET shape (serialized alongside the draft acks).
+    await putCacheSerialized(measDetailKey(revisionId), rev);
+    // b. scoped measurement-list cache: insert/update this revision, preserving all others.
+    if (measScope) await mutateCache(measScopeKey(measScope), (cur) => upsertRevision(cur, rev));
+    if (superseded) {
+      // A newer local edit is still pending — NEVER retire its drafts; only advance its authoritative
+      // token so it applies cleanly against the freshly-acknowledged server version.
+      if (stored.kind === "measurement_update") await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+      touched = true;
+      continue;
+    }
+    // c. matched: retire ONLY the local drafts tied to exactly this acknowledged mutation.
+    if (measScope) {
+      if (m.kind === "measurement") await mutateCache(measDraftKey(measScope), (cur) => retireCreateDraft(cur, m.client_id));
+      await mutateCache(measWorkingKey(measScope), (cur) => planMeasurementWorkingAck(cur, { kind: m.kind, clientId: m.client_id, revisionId }));
+    }
+    touched = true;
+  }
+  // d. notify the open screen immediately so it adopts the authoritative revision without a poll.
+  if (touched) _emit({ type: "measurement_reconciled" });
+}
+
 // B3C-style Property conflict surfacing: the durable Property/Visit/DNK mutation for ONE property that
 // is currently in `conflict` state (or null). Drives the Use-Server / Keep-Local banner on Property.js.
 export async function conflictMutationForProperty(propertyId) {

@@ -90,7 +90,7 @@ export async function clearMeasurementDraft(scope) {
 
 // Working draft = the salesperson's IN-PROGRESS edits, persisted as they type (debounced) so they survive
 // backgrounding/restart BEFORE Save is pressed. Keyed per scope. Cleared once Save stages the mutation.
-function workingKey(scope) { return `measurement_working:${measurementKeys.scopeKey(scope)}`; }
+function workingKey(scope) { return measurementKeys.workingKey(scope); }
 export async function saveMeasurementWorkingDraft(scope, wd) {
   try { await putCacheSerialized(workingKey(scope), wd); return true; } catch (e) { return false; }
 }

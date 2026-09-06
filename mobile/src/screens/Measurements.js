@@ -1,10 +1,10 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
-import { resolveMeasurementView } from "../measurementReconcile";
+import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import RoofThumbnail from "../components/RoofThumbnail";
@@ -30,6 +30,9 @@ const PEN_TYPES = [
   ["powered_vent", "Powered Vent"], ["exhaust_vent", "Exhaust Vent"], ["chimney", "Chimney"], ["satellite", "Satellite"], ["other", "Other"],
 ];
 const ATTACH_OPTS = [["", "None"], ["attached", "Attached"], ["detached", "Detached"]];
+// Status-pill tone buckets for the explicit measurement mutation state table.
+const WARN_STATUSES = new Set(["Conflict — review required", "Sync failed — retry needed", "Locked — new revision needed", "Local save failed — retry"]);
+const OK_STATUSES = new Set(["Synced", "Saved on device"]);
 const uid = () => "r" + Math.random().toString(36).slice(2, 10);
 const numberOrNull = (v) => (v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 
@@ -63,6 +66,7 @@ export default function Measurements({ route, navigation }) {
   const [cachedAt, setCachedAt] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null);   // Saved on device / Waiting to sync / Syncing / Synced / Needs review
   const [conflict, setConflict] = useState(null);       // { serverDetail } when Office changed the same revision
+  const [failure, setFailure] = useState(null);         // { reason } when the durable mutation FAILED to sync
   const [showGutters, setShowGutters] = useState(false);
 
   const autosaveTimer = useRef(null);
@@ -153,9 +157,11 @@ export default function Measurements({ route, navigation }) {
     if (wd && wd.working && workingDraftHasContent(wd)) {
       hydrateWorking(wd);
       const pend = wd.base ? await currentMeasurementMutation(wd.base.id) : (wd.local_client_id ? await currentMeasurementCreate(wd.local_client_id) : null);
-      const pendingActive = pend && (pend.state === "pending" || pend.state === "failed");
-      setSyncStatus(pendingActive ? (isSyncing() ? "Syncing" : "Waiting to sync") : "Saved on device");
-      setConflict(null);
+      const active = pend && pend.state !== "synced" ? pend : null;
+      const st = measurementSyncState(active, isSyncing());
+      setSyncStatus(st.state === "none" ? "Saved on device" : st.status);
+      setFailure(st.failed ? { reason: st.reason } : null);
+      setConflict(pend && pend.state === "conflict" && wd.base ? { serverDetail: pend.serverValue, revisionId: wd.base.id } : null);
       return;
     }
     // An empty/orphaned working draft must never shadow the authoritative Office copy — drop it so the
@@ -171,7 +177,7 @@ export default function Measurements({ route, navigation }) {
       let optimistic = null;
       try { optimistic = await getCache(measurementKeys.detailKey(head.id)); } catch (e) { /* best effort */ }
       const pu = await currentMeasurementMutation(head.id);
-      const pendingUpdate = pu && (pu.state === "pending" || pu.state === "failed") ? pu : null;
+      const pendingUpdate = pu && pu.state !== "synced" ? pu : null;
       const detailResult = await cache.measurement(head.id);
 
       const view = resolveMeasurementView({
@@ -186,6 +192,7 @@ export default function Measurements({ route, navigation }) {
         hydrate(view.detail, view.kind === "server_cached", detailResult.cachedAt || listResult.cachedAt);
         setSyncStatus(view.status);
         setConflict(view.conflict ? { serverDetail: view.serverDetail, revisionId: head.id } : null);
+        setFailure(view.failed ? { reason: view.reason } : null);
         // Clear the local draft ONLY when the authoritative server copy is showing and nothing is pending.
         if (view.kind === "server" && !pendingCreate) await clearMeasurementDraft(scope);
         return;
@@ -194,8 +201,10 @@ export default function Measurements({ route, navigation }) {
 
     if (draft) {
       hydrate(draft, true, draft.updated_at);
-      setSyncStatus(isSyncing() ? "Syncing" : "Waiting to sync");
+      const st = measurementSyncState(pendingCreate && pendingCreate.state !== "synced" ? pendingCreate : null, isSyncing());
+      setSyncStatus(st.state === "none" ? (isSyncing() ? "Syncing" : "Waiting to sync") : st.status);
       setConflict(null);
+      setFailure(st.failed ? { reason: st.reason } : null);
       return;
     }
     setExisting(null);
@@ -210,6 +219,7 @@ export default function Measurements({ route, navigation }) {
     setCachedAt(listResult.cachedAt || null);
     setSyncStatus(null);
     setConflict(null);
+    setFailure(null);
   }, [scope, hydrate]);
 
   // Autosave the working draft as the salesperson edits — debounced, local only (no network per keystroke).
@@ -229,7 +239,7 @@ export default function Measurements({ route, navigation }) {
       autosaveTimer.current = null;
       const okSave = await persistWorking();
       // Only claim "Saved on device" after the durable local write actually succeeded.
-      setSyncStatus((s) => (s === "Waiting to sync" || s === "Syncing" || s === "Needs review") ? s : (okSave ? "Saved on device" : "Local save failed — retry"));
+      setSyncStatus((s) => (s === "Waiting to sync" || s === "Syncing" || s === "Conflict — review required" || s === "Sync failed — retry needed") ? s : (okSave ? "Saved on device" : "Local save failed — retry"));
     }, 700);
     return () => {};
   }, [structures, facets, edges, pens, summary, readonly, formJson, persistWorking, scope]);
@@ -260,6 +270,12 @@ export default function Measurements({ route, navigation }) {
     await load();
   }, [conflict, load]);
 
+  // Failed-sync recovery: preserve local work and re-attempt the durable mutation on demand.
+  const onRetrySync = useCallback(async () => {
+    await syncNow().catch(() => {});
+    await load();
+  }, [load]);
+
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Live two-way sync while this screen is open: every 15s push any local pending edits up to Office, and
@@ -276,6 +292,18 @@ export default function Measurements({ route, navigation }) {
       }
     }, 15000);
     return () => clearInterval(iv);
+  }, []));
+
+  // Immediate convergence: when the sync engine finishes reconciling an acknowledged measurement, adopt the
+  // authoritative Office revision at once (no 15s wait) — but only when the rep is NOT mid-edit.
+  useFocusEffect(useCallback(() => {
+    const off = onSyncChange((evt) => {
+      if (!evt || (evt.type !== "measurement_reconciled" && evt.type !== "sync_end")) return;
+      if (AppState.currentState === "active" && formJsonRef.current() === baselineRef.current) {
+        loadRef.current().catch(() => {});
+      }
+    });
+    return off;
   }, []));
 
   const totals = useMemo(() => {
@@ -414,7 +442,15 @@ export default function Measurements({ route, navigation }) {
       <Text style={s.h}>Roof measurements</Text>
       {existing && <Text style={s.status} testID="meas-status">Revision {existing.revision_number || ""} · {String(existing.status || "draft").replace("_", " ")}{readonly ? " · locked" : ""}</Text>}
       {!existing && localDraft && <Text style={s.status}>Local draft · waiting to sync</Text>}
-      {syncStatus && <View style={[s.syncPill, syncStatus === "Needs review" ? s.syncWarn : (syncStatus === "Synced" ? s.syncOk : s.syncPend)]}><Text style={s.syncPillT} testID="meas-sync-status">{syncStatus}</Text></View>}
+      {syncStatus && <View style={[s.syncPill, WARN_STATUSES.has(syncStatus) ? s.syncWarn : (OK_STATUSES.has(syncStatus) ? s.syncOk : s.syncPend)]}><Text style={s.syncPillT} testID="meas-sync-status">{syncStatus}</Text></View>}
+      {failure && (
+        <View style={s.failBanner} testID="meas-sync-failed-banner">
+          <Text style={s.failT}>Sync failed — retry needed</Text>
+          {failure.reason ? <Text style={s.failSub} testID="meas-sync-failed-reason">{failure.reason}</Text> : null}
+          <Text style={s.failSafe}>Your changes are saved on this device and were not lost.</Text>
+          <TouchableOpacity style={s.failBtn} onPress={onRetrySync} testID="meas-sync-retry"><Text style={s.failBtnT}>Retry sync</Text></TouchableOpacity>
+        </View>
+      )}
       {conflict && (
         <View style={s.conflict} testID="meas-conflict-banner">
           <Text style={s.conflictT}>Measurement changed in Office</Text>
@@ -425,6 +461,7 @@ export default function Measurements({ route, navigation }) {
           </View>
         </View>
       )}
+      {readonly && existing && <View style={s.lockedBanner} testID="meas-locked-banner"><Text style={s.lockedT}>This revision is locked</Text><Text style={s.lockedSub}>Ask the office to return it to the field, or create a new revision, to edit these measurements.</Text></View>}
       {usingCached && <View style={s.offline}><Text style={s.offlineT}>Offline/cached measurement{cachedAt ? ` · saved ${new Date(cachedAt).toLocaleString()}` : ""}</Text></View>}
 
       <View style={s.totals} testID="meas-totals">
@@ -625,6 +662,15 @@ const s = StyleSheet.create({
   conflictBtn: { flex: 1, backgroundColor: C.brand, borderRadius: 10, paddingVertical: 11, alignItems: "center", marginRight: 8 },
   conflictBtnAlt: { backgroundColor: "#fff", borderWidth: 1, borderColor: C.brand, marginRight: 0 },
   conflictBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  failBanner: { backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5", borderRadius: 12, padding: 12, marginBottom: 10 },
+  failT: { color: "#991B1B", fontWeight: "800", fontSize: 15 },
+  failSub: { color: "#B91C1C", fontSize: 12, marginTop: 2 },
+  failSafe: { color: "#7F1D1D", fontSize: 12, marginTop: 4, marginBottom: 8 },
+  failBtn: { alignSelf: "flex-start", backgroundColor: C.brand, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 16 },
+  failBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  lockedBanner: { backgroundColor: "#F1F5F9", borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 12, marginBottom: 10 },
+  lockedT: { color: C.ink, fontWeight: "800", fontSize: 15 },
+  lockedSub: { color: C.sub, fontSize: 12, marginTop: 2 },
   disclosure: { paddingVertical: 8 },
   disclosureT: { color: C.brand, fontWeight: "800", fontSize: 14 },
   offline: { padding: 8, borderRadius: 8, backgroundColor: "#FEF3C7", marginBottom: 10 },
