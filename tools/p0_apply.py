@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
-"""Apply and verify P0-5: generation-safe, atomic Use Office resolution."""
+"""Apply and verify P0-6: lead-primary measurement-set database constraints."""
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def replace_once(path: str, old: str, new: str) -> None:
-    target = ROOT / path
-    text = target.read_text(encoding="utf-8")
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"{path}: expected exactly one replacement, found {count}: {old[:140]!r}")
-    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+BACKEND = ROOT / "backend"
+NEW_REVISION = "e7f8a9b0c1d2"
+OLD_REVISION = "d5e6f7a8b9c0"
 
 
 def write(path: str, content: str) -> None:
@@ -23,570 +17,425 @@ def write(path: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
 
 
-def run(*cmd: str, cwd: str | None = None) -> None:
-    subprocess.run(cmd, cwd=ROOT / cwd if cwd else ROOT, check=True)
+def run(*cmd: str, cwd: Path | None = None) -> None:
+    subprocess.run(cmd, cwd=cwd or ROOT, check=True)
 
 
-def run_expected_failure(*cmd: str) -> None:
-    proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
-    print(proc.stdout, flush=True)
-    print(proc.stderr, flush=True)
-    if proc.returncode == 0:
-        raise RuntimeError("Regression test unexpectedly passed before the P0-5 production change")
+def run_capture(*cmd: str, cwd: Path | None = None) -> str:
+    result = subprocess.run(cmd, cwd=cwd or ROOT, text=True, capture_output=True, check=True)
+    output = (result.stdout or "") + (result.stderr or "")
+    print(output, flush=True)
+    return output
 
 
-# ---------------------------------------------------------------------------
-# RED: prove exact-generation success, stale rejection, full-document adoption,
-# rollback on write failure, seal-without-clear, and runtime wiring contracts.
-# ---------------------------------------------------------------------------
+def run_expected_failure(*cmd: str, cwd: Path | None = None) -> None:
+    result = subprocess.run(cmd, cwd=cwd or ROOT, text=True, capture_output=True)
+    print(result.stdout, flush=True)
+    print(result.stderr, flush=True)
+    if result.returncode == 0:
+        raise RuntimeError("Regression test unexpectedly passed before the P0-6 migration")
+
+
+# Bring the disposable database to the current pre-P0-6 head first. The new semantics test below must
+# fail under the broad uq_measurement_sets_property index, proving the regression before implementation.
+run("alembic", "-c", "alembic.ini", "upgrade", "head", cwd=BACKEND)
+
 write(
-    "mobile/src/tests/measurement_conflict_transition.node.test.js",
-    r'''"use strict";
-const assert = require("assert");
-const fs = require("fs");
-const path = require("path");
-const C = require("../measurementConflict");
-const K = require("../measurementCache");
-const { createMeasurementWorkingDraftStore } = require("../measurementWorkingDraft");
+    "backend/tests/test_measurement_set_constraint_migration.py",
+    r'''"""Real-PostgreSQL contract for lead-primary measurement-set identity.
 
-function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
-function officeDetail(token = "office-v7") {
-  return {
-    id: "R1", set_id: "SET1", revision_number: 4, status: "draft", editable: true,
-    source: "office", updated_at: token, created_at: "2026-09-06T10:00:00Z",
-    lead_id: "L1", property_id: "P1", inspection_id: "I1",
-    provider: "eagleview", report_id: "EV-1", reported_area_sqft: 1800, notes: "Office wins",
-    structures: [{ id: "S1", name: "House", structure_type: "main_house" }],
-    facets: [{ id: "F1", structure_id: "S1", facet_label: "F1", area_sqft: 1800 }],
-    edges: [{ id: "E1", facet_id: "F1", edge_type: "ridge", length_ft: 52 }],
-    penetrations: [], summary: null, totals: { total_area_sqft: 1800 },
-  };
-}
-function mutation({ generation = 2, state = "conflict" } = {}) {
-  return {
-    client_id: "measurement-update:R1", kind: "measurement_update", state,
-    mutation_generation: generation, ifMatch: "field-v1",
-    body: { lead_id: "L1", structures: [], facets: [], edges: [], penetrations: [], summary: {} },
-  };
-}
-function initialState(row = mutation()) {
-  const scope = { lead_id: "L1" };
-  return {
-    mutations: { [row.client_id]: clone(row) },
-    caches: {
-      [K.detailKey("R1")]: { id: "R1", updated_at: "field-v1", facets: [{ area_sqft: 1000 }] },
-      [K.draftKey(scope)]: { local_draft: true },
-      [K.workingKey(scope)]: { working: true, facets: [{ area_sqft: 1000 }] },
-      [K.scopeKey(scope)]: [{ id: "R0", revision_number: 3 }, { id: "R1", revision_number: 4, total_area_sqft: 1000 }],
-    },
-  };
-}
-function makeExecutor(scratch, failKey = null) {
-  return {
-    readMutation: async (clientId) => clone(scratch.mutations[clientId] || null),
-    readCache: async (key) => clone(Object.prototype.hasOwnProperty.call(scratch.caches, key) ? scratch.caches[key] : null),
-    writeCache: async (key, value) => {
-      if (key === failKey) throw new Error("injected cache failure");
-      scratch.caches[key] = clone(value);
-    },
-    deleteMutation: async (clientId, generation, expectedState) => {
-      const row = scratch.mutations[clientId];
-      if (!row || Number(row.mutation_generation || 1) !== Number(generation) || row.state !== expectedState) return 0;
-      delete scratch.mutations[clientId];
-      return 1;
-    },
-  };
-}
-async function atomic(state, callback, failKey = null) {
-  const scratch = clone(state);
-  const result = await callback(makeExecutor(scratch, failKey));
-  state.mutations = scratch.mutations;
-  state.caches = scratch.caches;
-  return result;
-}
+The migration hierarchy is:
+  * lead_id is the primary business key when present;
+  * inspection_id is unique only for lead-less fallback sets;
+  * property_id is unique only for sets with neither a lead nor an inspection.
+"""
+from __future__ import annotations
 
-async function main() {
-  const scope = { lead_id: "L1" };
+import os
+import subprocess
+import uuid
+from pathlib import Path
 
-  // Exact reviewed generation: remove only that row and adopt the complete Office document everywhere.
-  {
-    const state = initialState();
-    const built = C.buildMeasurementUseOfficeReview(mutation(), scope, officeDetail());
-    assert.strictEqual(built.ok, true);
-    const result = await atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, built.reviewed));
-    assert.strictEqual(result.action, "use_office");
-    assert.deepStrictEqual(state.mutations, {});
-    assert.deepStrictEqual(state.caches[K.detailKey("R1")], officeDetail());
-    assert.strictEqual(state.caches[K.draftKey(scope)], null);
-    assert.strictEqual(state.caches[K.workingKey(scope)], null);
-    const list = state.caches[K.scopeKey(scope)];
-    assert.strictEqual(list.length, 2);
-    assert.deepStrictEqual(list.find((x) => x.id === "R1"), officeDetail());
-  }
+import psycopg
+import pytest
+from psycopg import errors
 
-  // A newer local generation landed after review: the old choice is stale and NOTHING changes.
-  {
-    const reviewed = C.buildMeasurementUseOfficeReview(mutation({ generation: 2 }), scope, officeDetail()).reviewed;
-    const state = initialState(mutation({ generation: 3 }));
-    const before = clone(state);
-    await assert.rejects(
-      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed)),
-      (e) => e && e.__stale === "mutation_generation_changed",
-    );
-    assert.deepStrictEqual(state, before);
-  }
+ROOT = Path(__file__).resolve().parents[2]
+BACKEND = ROOT / "backend"
+MIGRATION = BACKEND / "alembic" / "versions" / "e7f8a9b0c1d2_lead_primary_measurement_sets.py"
+NEW_REVISION = "e7f8a9b0c1d2"
+OLD_REVISION = "d5e6f7a8b9c0"
 
-  // State/revision drift is stale rather than a broad delete.
-  {
-    const reviewed = C.buildMeasurementUseOfficeReview(mutation({ state: "conflict" }), scope, officeDetail()).reviewed;
-    const state = initialState(mutation({ state: "pending" }));
-    const before = clone(state);
-    await assert.rejects(
-      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed)),
-      (e) => e && e.__stale === "mutation_state_changed",
-    );
-    assert.deepStrictEqual(state, before);
-  }
 
-  // Any cache failure aborts the entire logical transaction, including mutation deletion.
-  {
-    const state = initialState();
-    const before = clone(state);
-    const reviewed = C.buildMeasurementUseOfficeReview(mutation(), scope, officeDetail()).reviewed;
-    await assert.rejects(
-      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed), K.workingKey(scope)),
-      /injected cache failure/,
-    );
-    assert.deepStrictEqual(state, before);
-  }
+def _dsn() -> str:
+    raw = os.environ["DATABASE_URL"]
+    return raw.replace("postgresql+asyncpg://", "postgresql://")
 
-  // A partial screen model is never accepted as the authoritative Office revision.
-  {
-    const partial = { id: "R1", updated_at: "office-v7", status: "draft", editable: true };
-    const result = C.buildMeasurementUseOfficeReview(mutation(), scope, partial);
-    assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.reason, "office_revision_incomplete");
-  }
 
-  // Failed updates use the same exact-state transition once a full Office revision is fetched.
-  {
-    const failed = mutation({ state: "failed", generation: 9 });
-    const built = C.buildMeasurementUseOfficeReview(failed, scope, officeDetail("office-v9"));
-    assert.strictEqual(built.ok, true);
-    const state = initialState(failed);
-    const result = await atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, built.reviewed));
-    assert.strictEqual(result.action, "use_office");
-    assert.deepStrictEqual(state.caches[K.detailKey("R1")], officeDetail("office-v9"));
-  }
+@pytest.fixture
+def db():
+    connection = psycopg.connect(_dsn())
+    try:
+        yield connection
+    finally:
+        connection.rollback()
+        connection.close()
 
-  // Use Office seals/drains autosaves without clearing outside the atomic storage transaction.
-  {
-    let slot = { working: true };
-    let clears = 0;
-    const store = createMeasurementWorkingDraftStore({
-      put: async (v) => { slot = v; return true; },
-      clear: async () => { clears += 1; slot = null; },
-    });
-    await store.seal();
-    assert.strictEqual(store.isSealed(), true);
-    assert.deepStrictEqual(slot, { working: true });
-    assert.strictEqual(clears, 0);
-    assert.strictEqual(await store.persist({ working: true, newer: true }), false);
-  }
 
-  // Static wiring guard: real storage is exclusive/generation-guarded; UI fetches full Office data and
-  // carries the reviewed mutation generation instead of passing its partial `existing` object.
-  {
-    const storage = fs.readFileSync(path.join(__dirname, "..", "storage.js"), "utf8");
-    const sync = fs.readFileSync(path.join(__dirname, "..", "sync.js"), "utf8");
-    const screen = fs.readFileSync(path.join(__dirname, "..", "screens", "Measurements.js"), "utf8");
-    assert(storage.includes("withExclusiveTransactionAsync"));
-    assert(storage.includes("applyMeasurementResolutionInTx"));
-    assert(storage.includes("COALESCE(mutation_generation, 1) = ? AND state = ?"));
-    assert(sync.includes("fetchOfficeMeasurementRevision"));
-    assert(sync.includes("prepareMeasurementUseOfficeReview"));
-    assert(screen.includes("mutationGeneration"));
-    assert(screen.includes("wdStoreRef.current.seal()"));
-    assert(!screen.includes("resolveMeasurementConflictUseOffice(existing.id, scope, existing)"));
-  }
+def _property(conn, label: str = "property"):
+    value = uuid.uuid4()
+    conn.execute(
+        """INSERT INTO properties
+           (id, source, formatted_address, address_line1, city, state, zip_code,
+            do_not_knock, created_at, updated_at)
+           VALUES (%s, 'test', %s, %s, 'Oklahoma City', 'OK', '73101', false, now(), now())""",
+        (value, f"{label}-{value}", f"{label}-{value}"),
+    )
+    return value
 
-  console.log("measurement conflict transition tests passed");
-}
-main().catch((e) => { console.error(e); process.exit(1); });
-''',
-)
-replace_once(
-    "mobile/package.json",
-    "node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/sync_status.node.test.js",
-    "node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/measurement_conflict_transition.node.test.js && node src/tests/sync_status.node.test.js",
-)
-run_expected_failure("node", "mobile/src/tests/measurement_conflict_transition.node.test.js")
 
-# ---------------------------------------------------------------------------
-# GREEN: pure reviewed-transition contract, exclusive SQLite implementation,
-# full Office fetch, exact generation/state stamps in the screen, and seal-only
-# autosave protection before the transaction owns draft clearing.
-# ---------------------------------------------------------------------------
-write(
-    "mobile/src/measurementConflict.js",
-    r'''"use strict";
-/* Pure decision layer for atomic Field measurement Use-Office resolution. */
-const K = require("./measurementCache");
-const { measScopeFromBody, upsertRevision } = require("./measurementReconcile");
+def _lead(conn, property_id, label: str = "lead"):
+    value = uuid.uuid4()
+    conn.execute(
+        """INSERT INTO leads (id, property_id, name, status, created_at, updated_at)
+           VALUES (%s, %s, %s, 'new', now(), now())""",
+        (value, property_id, f"{label}-{value}"),
+    )
+    return value
 
-const RESOLVABLE_STATES = new Set(["pending", "conflict", "failed"]);
-function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
-function revisionIdFromClientId(clientId) {
-  const value = String(clientId || "");
-  return value.startsWith("measurement-update:") ? value.slice("measurement-update:".length) : null;
-}
-function isFullOfficeRevision(value, expectedRevisionId = null) {
-  if (!value || typeof value !== "object") return false;
-  const id = value.id == null ? null : String(value.id);
-  if (!id || (expectedRevisionId != null && id !== String(expectedRevisionId))) return false;
-  if (value.updated_at == null || value.updated_at === "") return false;
-  for (const key of ["structures", "facets", "edges", "penetrations"]) {
-    if (!Object.prototype.hasOwnProperty.call(value, key) || !Array.isArray(value[key])) return false;
-  }
-  if (!Object.prototype.hasOwnProperty.call(value, "summary")) return false;
-  if (value.summary !== null && (typeof value.summary !== "object" || Array.isArray(value.summary))) return false;
-  return true;
-}
-function buildMeasurementUseOfficeReview(mutation, scope, serverDetail) {
-  if (!mutation || mutation.kind !== "measurement_update") return { ok: false, reason: "not_measurement_update" };
-  if (!RESOLVABLE_STATES.has(mutation.state)) return { ok: false, reason: "mutation_not_resolvable" };
-  const revisionId = revisionIdFromClientId(mutation.client_id);
-  if (!revisionId) return { ok: false, reason: "revision_missing" };
-  const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
-  if (!Number.isFinite(generation) || generation < 1) return { ok: false, reason: "generation_invalid" };
-  if (!isFullOfficeRevision(serverDetail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
-  let listKey;
-  try {
-    listKey = K.scopeKey(scope);
-    const mutationScope = measScopeFromBody(mutation.body);
-    if (!mutationScope || K.scopeKey(mutationScope) !== listKey) return { ok: false, reason: "scope_mismatch" };
-  } catch (e) {
-    return { ok: false, reason: "scope_missing" };
-  }
-  return {
-    ok: true,
-    reviewed: {
-      clientId: String(mutation.client_id), revisionId,
-      mutationGeneration: generation, expectedState: mutation.state,
-      detailKey: K.detailKey(revisionId), draftKey: K.draftKey(scope),
-      workingKey: K.workingKey(scope), listKey,
-      serverDetail: clone(serverDetail),
-    },
-  };
-}
-function stale(reason) {
-  const error = new Error(reason);
-  error.__stale = reason;
-  throw error;
-}
-function validateLiveMutation(reviewed, live) {
-  if (!live) stale("mutation_missing");
-  if (String(live.client_id || "") !== reviewed.clientId) stale("mutation_client_changed");
-  if (live.kind !== "measurement_update") stale("mutation_kind_changed");
-  if (revisionIdFromClientId(live.client_id) !== reviewed.revisionId) stale("mutation_revision_changed");
-  if (Number(live.mutation_generation == null ? 1 : live.mutation_generation) !== Number(reviewed.mutationGeneration)) {
-    stale("mutation_generation_changed");
-  }
-  if (live.state !== reviewed.expectedState) stale("mutation_state_changed");
-  try {
-    const liveScope = measScopeFromBody(live.body);
-    if (!liveScope || K.scopeKey(liveScope) !== reviewed.listKey) stale("mutation_scope_changed");
-  } catch (e) {
-    if (e && e.__stale) throw e;
-    stale("mutation_scope_changed");
-  }
-}
-async function applyMeasurementResolutionInTx(tx, reviewed) {
-  if (!tx || !reviewed || !isFullOfficeRevision(reviewed.serverDetail, reviewed.revisionId)) {
-    throw new Error("invalid_measurement_resolution");
-  }
-  const live = await tx.readMutation(reviewed.clientId);
-  validateLiveMutation(reviewed, live);
-  const removed = await tx.deleteMutation(
-    reviewed.clientId, reviewed.mutationGeneration, reviewed.expectedState,
-  );
-  if (removed !== 1) stale("mutation_guard_missed");
 
-  const currentList = await tx.readCache(reviewed.listKey);
-  await tx.writeCache(reviewed.detailKey, reviewed.serverDetail);
-  await tx.writeCache(reviewed.draftKey, null);
-  await tx.writeCache(reviewed.workingKey, null);
-  await tx.writeCache(reviewed.listKey, upsertRevision(currentList, reviewed.serverDetail));
-  return { action: "use_office", revisionId: reviewed.revisionId, serverDetail: clone(reviewed.serverDetail) };
-}
+def _inspection(conn, property_id=None, lead_id=None):
+    value = uuid.uuid4()
+    conn.execute(
+        """INSERT INTO inspections (id, lead_id, property_id, created_at, updated_at)
+           VALUES (%s, %s, %s, now(), now())""",
+        (value, lead_id, property_id),
+    )
+    return value
 
-module.exports = {
-  revisionIdFromClientId,
-  isFullOfficeRevision,
-  buildMeasurementUseOfficeReview,
-  validateLiveMutation,
-  applyMeasurementResolutionInTx,
-};
+
+def _measurement_set(conn, *, lead_id=None, property_id=None, inspection_id=None, value=None):
+    value = value or uuid.uuid4()
+    conn.execute(
+        """INSERT INTO measurement_sets
+           (id, inspection_id, property_id, lead_id, created_at, updated_at)
+           VALUES (%s, %s, %s, %s, now(), now())""",
+        (value, inspection_id, property_id, lead_id),
+    )
+    return value
+
+
+def _index_definitions(conn):
+    rows = conn.execute(
+        """SELECT indexname, indexdef FROM pg_indexes
+           WHERE schemaname = current_schema() AND tablename = 'measurement_sets'"""
+    ).fetchall()
+    return {name: definition.lower() for name, definition in rows}
+
+
+def test_hierarchical_partial_indexes_exist(db):
+    indexes = _index_definitions(db)
+    assert "uq_measurement_sets_lead" in indexes
+    assert "uq_measurement_sets_inspection_fallback" in indexes
+    assert "uq_measurement_sets_property_fallback" in indexes
+    assert "uq_measurement_sets_inspection" not in indexes
+    assert "uq_measurement_sets_property" not in indexes
+
+    lead = indexes["uq_measurement_sets_lead"]
+    inspection = indexes["uq_measurement_sets_inspection_fallback"]
+    prop = indexes["uq_measurement_sets_property_fallback"]
+    assert "unique index" in lead and "(lead_id)" in lead and "lead_id is not null" in lead
+    assert "unique index" in inspection and "(inspection_id)" in inspection
+    assert "lead_id is null" in inspection and "inspection_id is not null" in inspection
+    assert "unique index" in prop and "(property_id)" in prop
+    assert "lead_id is null" in prop and "inspection_id is null" in prop and "property_id is not null" in prop
+
+
+def test_distinct_leads_same_property_are_allowed(db):
+    property_id = _property(db, "shared-property")
+    lead_a = _lead(db, property_id, "lead-a")
+    lead_b = _lead(db, property_id, "lead-b")
+    _measurement_set(db, lead_id=lead_a, property_id=property_id)
+    _measurement_set(db, lead_id=lead_b, property_id=property_id)
+    count = db.execute(
+        "SELECT count(*) FROM measurement_sets WHERE property_id = %s", (property_id,)
+    ).fetchone()[0]
+    assert count == 2
+
+
+def test_duplicate_lead_id_is_still_rejected(db):
+    property_id = _property(db, "lead-unique")
+    lead_id = _lead(db, property_id)
+    _measurement_set(db, lead_id=lead_id, property_id=property_id)
+    with pytest.raises(errors.UniqueViolation):
+        _measurement_set(db, lead_id=lead_id, property_id=property_id)
+
+
+def test_duplicate_inspection_is_rejected_only_in_leadless_fallback(db):
+    property_id = _property(db, "inspection-fallback")
+    inspection_id = _inspection(db, property_id=property_id)
+    _measurement_set(db, inspection_id=inspection_id, property_id=property_id)
+    with pytest.raises(errors.UniqueViolation):
+        _measurement_set(db, inspection_id=inspection_id, property_id=property_id)
+
+
+def test_duplicate_property_is_rejected_only_in_bare_property_fallback(db):
+    property_id = _property(db, "property-fallback")
+    _measurement_set(db, property_id=property_id)
+    with pytest.raises(errors.UniqueViolation):
+        _measurement_set(db, property_id=property_id)
+
+
+def test_lead_specific_and_property_fallback_sets_can_coexist(db):
+    property_id = _property(db, "hierarchy")
+    lead_id = _lead(db, property_id)
+    _measurement_set(db, lead_id=lead_id, property_id=property_id)
+    _measurement_set(db, property_id=property_id)
+    assert db.execute(
+        "SELECT count(*) FROM measurement_sets WHERE property_id = %s", (property_id,)
+    ).fetchone()[0] == 2
+
+
+def test_migration_is_report_only_for_suspicious_historical_relationships():
+    source = MIGRATION.read_text(encoding="utf-8")
+    assert "potential_cross_lead_merge_candidates" in source
+    assert "lead_property_mismatches" in source
+    assert "inspection_lead_mismatches" in source
+    assert "data_split=0" in source
+    assert "uq_measurement_sets_inspection_fallback" in source
+    assert "uq_measurement_sets_property_fallback" in source
+
+
+def test_z_downgrade_refuses_to_reintroduce_broad_indexes_when_data_would_be_rejected():
+    """Downgrade must fail before DDL when currently-valid lead-specific rows share a property."""
+    property_id = uuid.uuid4()
+    lead_a = uuid.uuid4()
+    lead_b = uuid.uuid4()
+    set_a = uuid.uuid4()
+    set_b = uuid.uuid4()
+    env = os.environ.copy()
+
+    connection = psycopg.connect(_dsn(), autocommit=True)
+    try:
+        connection.execute(
+            """INSERT INTO properties
+               (id, source, formatted_address, address_line1, city, state, zip_code,
+                do_not_knock, created_at, updated_at)
+               VALUES (%s, 'test', %s, %s, 'Oklahoma City', 'OK', '73101', false, now(), now())""",
+            (property_id, f"downgrade-{property_id}", f"downgrade-{property_id}"),
+        )
+        for lead_id, label in ((lead_a, "A"), (lead_b, "B")):
+            connection.execute(
+                """INSERT INTO leads (id, property_id, name, status, created_at, updated_at)
+                   VALUES (%s, %s, %s, 'new', now(), now())""",
+                (lead_id, property_id, f"downgrade-{label}"),
+            )
+        for set_id, lead_id in ((set_a, lead_a), (set_b, lead_b)):
+            connection.execute(
+                """INSERT INTO measurement_sets
+                   (id, property_id, lead_id, created_at, updated_at)
+                   VALUES (%s, %s, %s, now(), now())""",
+                (set_id, property_id, lead_id),
+            )
+
+        refused = subprocess.run(
+            ["alembic", "-c", "alembic.ini", "downgrade", OLD_REVISION],
+            cwd=BACKEND, env=env, text=True, capture_output=True,
+        )
+        combined = (refused.stdout or "") + (refused.stderr or "")
+        assert refused.returncode != 0, combined
+        assert "Cannot downgrade lead-primary measurement-set constraints" in combined
+        current = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        assert current == NEW_REVISION
+    finally:
+        connection.execute("DELETE FROM measurement_sets WHERE id IN (%s, %s)", (set_a, set_b))
+        connection.execute("DELETE FROM leads WHERE id IN (%s, %s)", (lead_a, lead_b))
+        connection.execute("DELETE FROM properties WHERE id = %s", (property_id,))
+        connection.close()
+
+    # Once incompatible rows are removed, both downgrade and re-upgrade must work cleanly.
+    down = subprocess.run(
+        ["alembic", "-c", "alembic.ini", "downgrade", OLD_REVISION],
+        cwd=BACKEND, env=env, text=True, capture_output=True,
+    )
+    assert down.returncode == 0, (down.stdout or "") + (down.stderr or "")
+    up = subprocess.run(
+        ["alembic", "-c", "alembic.ini", "upgrade", "head"],
+        cwd=BACKEND, env=env, text=True, capture_output=True,
+    )
+    assert up.returncode == 0, (up.stdout or "") + (up.stderr or "")
 ''',
 )
 
-replace_once(
-    "mobile/src/measurementWorkingDraft.js",
-    '''    // Save path: seal first (blocks every concurrent/late autosave), then clear the draft slot.\n    sealAndClear() {''',
-    '''    // Conflict-resolution preflight: seal synchronously and drain any already-queued persist, but DO\n    // NOT clear. The exclusive SQLite transition owns mutation deletion + both draft clears atomically.\n    seal() {\n      sealed = true;\n      return run(async () => true);\n    },\n    // Save path: seal first (blocks every concurrent/late autosave), then clear the draft slot.\n    sealAndClear() {''',
+run_expected_failure(
+    "pytest", "-q",
+    "backend/tests/test_measurement_set_constraint_migration.py::test_distinct_leads_same_property_are_allowed",
 )
 
-replace_once(
-    "mobile/src/storage.js",
-    '''import { applyResolutionInTx } from "./roofSketchConflict";''',
-    '''import { applyResolutionInTx } from "./roofSketchConflict";\nimport { applyMeasurementResolutionInTx } from "./measurementConflict";''',
-)
-append_storage = r'''
+# ---------------------------------------------------------------------------
+# GREEN: the forward migration replaces only the broad property/inspection
+# indexes. The lead key stays globally unique; fallbacks become hierarchical.
+# No historical rows are split without trustworthy provenance.
+# ---------------------------------------------------------------------------
+write(
+    f"backend/alembic/versions/{NEW_REVISION}_lead_primary_measurement_sets.py",
+    r'''"""Align measurement-set uniqueness with lead-primary business identity.
 
-// P0-5: measurement Use-Office uses one EXCLUSIVE transaction, mirroring the proven Roof Sketch path.
-// Every row is freshly read inside the transaction; the guarded delete must match the exact reviewed
-// generation AND state. Any stale decision or cache write failure rolls back mutation + all cache writes.
-function _measurementResolutionTxExecutor(txn, scope, now) {
-  return {
-    readMutation: async (clientId) => {
-      const raw = await txn.getFirstAsync(
-        "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
-        clientId, scope,
-      );
-      return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
-    },
-    readCache: async (key) => {
-      const row = await txn.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, key));
-      return row ? JSON.parse(row.json) : null;
-    },
-    writeCache: async (key, value) => {
-      await txn.runAsync(
-        "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
-        scopedKey(scope, key), JSON.stringify(value), now,
-      );
-    },
-    deleteMutation: async (clientId, generation, expectedState) => {
-      const result = await txn.runAsync(
-        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = ? AND (scope = ? OR scope IS NULL)",
-        clientId, generation, expectedState, scope,
-      );
-      return (result && (result.changes != null ? result.changes : result.rowsAffected)) || 0;
-    },
-  };
-}
+Lead-scoped sets may legitimately share a property or inspection with another lead. Property and
+inspection uniqueness therefore apply only to progressively broader fallback identities.
 
-export async function resolveMeasurementConflictTransition(reviewed) {
-  return _serialize(async () => {
-    const d = await db();
-    const scope = getScope();
-    const now = new Date().toISOString();
-    let decision = null;
-    try {
-      await d.withExclusiveTransactionAsync(async (txn) => {
-        decision = await applyMeasurementResolutionInTx(
-          _measurementResolutionTxExecutor(txn, scope, now), reviewed,
-        );
-      });
-    } catch (e) {
-      if (e && e.__stale) return { action: "stale", reason: e.__stale };
-      throw e;
-    }
-    return decision;
-  });
-}
-'''
-storage_path = ROOT / "mobile/src/storage.js"
-storage_path.write_text(storage_path.read_text(encoding="utf-8") + append_storage, encoding="utf-8")
+Historical data is never split automatically: the previous canonical-set migration did not retain enough
+provenance to reconstruct any pre-merge ownership safely. This migration emits report-only diagnostics for
+candidate/mismatched relationships so operators can review them without destructive guessing.
 
-replace_once(
-    "mobile/src/sync.js",
-    '''floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope,''',
-    '''floorPendingSketchExpectedVersion, resolveSketchConflictTransition, resolveMeasurementConflictTransition, getScope,''',
-)
-replace_once(
-    "mobile/src/sync.js",
-    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";''',
-    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";\nimport { buildMeasurementUseOfficeReview, isFullOfficeRevision } from "./measurementConflict";''',
-)
-replace_once(
-    "mobile/src/sync.js",
-    r'''// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
-// Serialized so all actions land together: confirm the pending update still matches, remove that exact
-// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
-// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
-// authoritative Office revision, and update the scoped list.
-export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
-  const id = `measurement-update:${String(revisionId)}`;
-  await _removeMutation(id);                                   // remove the reviewed conflict mutation
-  if (serverDetail && serverDetail.id != null) {
-    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
-  }
-  if (scope) {
-    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
-    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
-    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
-  }
-  _emit({ type: "queued" });
-  _emit({ type: "measurement_reconciled" });
-  return { action: "use_office" };
-}''',
-    r'''// Fetch the full authoritative revision WITHOUT mutating caches before the atomic Use-Office transition.
-export async function fetchOfficeMeasurementRevision(revisionId) {
-  try {
-    const response = await api.get(`/mobile/measurements/${String(revisionId)}`);
-    const detail = response && response.data;
-    if (!isFullOfficeRevision(detail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
-    return { ok: true, detail };
-  } catch (e) {
-    return { ok: false, reason: "office_fetch_failed" };
-  }
-}
+Revision ID: e7f8a9b0c1d2
+Revises: d5e6f7a8b9c0
+"""
+from alembic import op
+import sqlalchemy as sa
 
-// Freeze the exact mutation generation/state the rep reviewed. A newer save or sync state transition
-// between rendering and tapping Use Office returns stale before storage is touched.
-export async function prepareMeasurementUseOfficeReview(revisionId, scope, serverDetail, observed = null) {
-  const mutation = await currentMeasurementMutation(revisionId);
-  if (!mutation) return { ok: false, reason: "mutation_missing" };
-  if (observed) {
-    const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
-    if (String(mutation.client_id || "") !== String(observed.clientId || "")
-        || generation !== Number(observed.mutationGeneration)
-        || mutation.state !== observed.expectedState) {
-      return { ok: false, reason: "review_stale" };
-    }
-  }
-  return buildMeasurementUseOfficeReview(mutation, scope, serverDetail);
-}
+revision = "e7f8a9b0c1d2"
+down_revision = "d5e6f7a8b9c0"
+branch_labels = None
+depends_on = None
 
-// Apply the reviewed choice as ONE exclusive, generation-checked SQLite transaction.
-export async function resolveMeasurementConflictUseOffice(reviewed) {
-  const decision = await resolveMeasurementConflictTransition(reviewed);
-  _emit({ type: "queued" });
-  if (decision.action === "use_office") _emit({ type: "measurement_reconciled" });
-  return decision;
-}''',
-)
 
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    '''queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead''',
-    '''queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, fetchOfficeMeasurementRevision, prepareMeasurementUseOfficeReview, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead''',
-)
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    '''function penForEdit(row) {\n  const ref = row.ref || row.id || row._k || uid();\n  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };\n}\n''',
-    '''function penForEdit(row) {\n  const ref = row.ref || row.id || row._k || uid();\n  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };\n}\n\nfunction conflictDescriptor(mutation, revisionId, serverDetail) {\n  if (!mutation) return null;\n  return {\n    serverDetail, revisionId: String(revisionId), clientId: mutation.client_id,\n    mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),\n    expectedState: mutation.state,\n  };\n}\n''',
-)
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    '''  const autosaveTimer = useRef(null);''',
-    '''  const autosaveTimer = useRef(null);\n  const resolvingOfficeRef = useRef(false);''',
-)
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    '''setConflict(pend && pend.state === "conflict" && wd.base ? { serverDetail: pend.serverValue, revisionId: wd.base.id } : null);''',
-    '''setConflict(pend && pend.state === "conflict" && wd.base ? conflictDescriptor(pend, wd.base.id, pend.serverValue) : null);''',
-)
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    '''setConflict(view.conflict ? { serverDetail: view.serverDetail, revisionId: head.id } : null);''',
-    '''setConflict(view.conflict ? conflictDescriptor(pendingUpdate, head.id, view.serverDetail) : null);''',
-)
-old_handlers = r'''  const onUseOffice = useCallback(async () => {
-    if (!conflict) return;
-    // Atomic Use-Office: seal the store so no late autosave resurrects the local draft, then run the
-    // generation-checked transition that clears the saved + working drafts and adopts Office.
-    await wdStoreRef.current.sealAndClear();
-    await resolveMeasurementConflictUseOffice(conflict.revisionId, scope, conflict.serverDetail);
-    setConflict(null);
-    setWdEpoch((e) => e + 1);   // fresh, unsealed store for future edits on the adopted Office copy
-    await load();
-  }, [conflict, scope, load]);
-'''
-new_handlers = r'''  const adoptOfficeVersion = useCallback(async (revisionId, observed) => {
-    if (!revisionId || resolvingOfficeRef.current) return { action: "noop" };
-    resolvingOfficeRef.current = true;
-    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
-    // Seal immediately and drain any in-flight autosave. Do NOT clear here: the exclusive SQLite
-    // transaction owns mutation deletion, both draft clears, detail replacement, and list replacement.
-    await wdStoreRef.current.seal();
-    let decision = { action: "noop" };
-    try {
-      const fetched = await fetchOfficeMeasurementRevision(revisionId);
-      if (!fetched.ok) {
-        Alert.alert("Office version unavailable", "RoofSpan could not retrieve the complete Office measurement. Your local work was preserved.");
-        return { action: "preserved", reason: fetched.reason };
-      }
-      const prepared = await prepareMeasurementUseOfficeReview(revisionId, scope, fetched.detail, observed);
-      if (!prepared.ok) {
-        Alert.alert("Measurement changed again", "Your local measurement changed after this review opened. Nothing was discarded; review the latest version again.");
-        return { action: "stale", reason: prepared.reason };
-      }
-      decision = await resolveMeasurementConflictUseOffice(prepared.reviewed);
-      if (decision.action === "use_office") {
-        setConflict(null);
-        setFailure(null);
-      } else if (decision.action === "stale") {
-        Alert.alert("Measurement changed again", "A newer local edit was preserved. Review the latest version before choosing again.");
-      }
-      return decision;
-    } catch (e) {
-      Alert.alert("Could not use Office version", "The local change was preserved because the atomic update did not complete.");
-      return { action: "preserved", reason: "transition_failed" };
-    } finally {
-      // The old store remains sealed; create a fresh store for whatever the latest persisted state contains.
-      resolvingOfficeRef.current = false;
-      setWdEpoch((e) => e + 1);
-      await load();
-    }
-  }, [scope, load]);
+def _count(conn, sql: str) -> int:
+    return int(conn.execute(sa.text(sql)).scalar() or 0)
 
-  const onUseOffice = useCallback(async () => {
-    if (!conflict) return;
-    await adoptOfficeVersion(conflict.revisionId, {
-      clientId: conflict.clientId,
-      mutationGeneration: conflict.mutationGeneration,
-      expectedState: conflict.expectedState,
-    });
-  }, [conflict, adoptOfficeVersion]);
-'''
-replace_once("mobile/src/screens/Measurements.js", old_handlers, new_handlers)
-replace_once(
-    "mobile/src/screens/Measurements.js",
-    r'''  // Failed EXISTING revision → adopt the authoritative Office copy (drop the local update).
-  const onFailedUseOffice = useCallback(async () => {
-    if (!existing) return;
-    await wdStoreRef.current.sealAndClear();
-    await resolveMeasurementConflictUseOffice(existing.id, scope, existing);
-    setFailure(null);
-    setWdEpoch((e) => e + 1);
-    await load();
-  }, [existing, scope, load]);''',
-    r'''  // Failed EXISTING revision → fetch the complete Office document, then use the same atomic,
-  // exact-generation transition as a 409 conflict. The partial screen model is never authoritative.
-  const onFailedUseOffice = useCallback(async () => {
-    if (!existing) return;
-    const mutation = await currentMeasurementMutation(existing.id);
-    if (!mutation) { await load(); return; }
-    await adoptOfficeVersion(existing.id, {
-      clientId: mutation.client_id,
-      mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),
-      expectedState: mutation.state,
-    });
-  }, [existing, adoptOfficeVersion, load]);''',
+
+def upgrade() -> None:
+    conn = op.get_bind()
+
+    # Report only. A property with multiple active leads but one set is a possible artifact of the old
+    # broad-property merge; it is not proof, so we never manufacture or split records automatically.
+    potential_cross_lead_merge_candidates = _count(conn, """
+        SELECT count(*) FROM (
+            SELECT l.property_id
+            FROM leads l
+            LEFT JOIN measurement_sets ms ON ms.property_id = l.property_id
+            WHERE l.property_id IS NOT NULL AND l.status <> 'archived'
+            GROUP BY l.property_id
+            HAVING count(DISTINCT l.id) > 1 AND count(DISTINCT ms.id) = 1
+        ) candidates
+    """)
+    lead_property_mismatches = _count(conn, """
+        SELECT count(*)
+        FROM measurement_sets ms
+        JOIN leads l ON l.id = ms.lead_id
+        WHERE ms.property_id IS NOT NULL
+          AND l.property_id IS NOT NULL
+          AND ms.property_id <> l.property_id
+    """)
+    inspection_lead_mismatches = _count(conn, """
+        SELECT count(*)
+        FROM measurement_sets ms
+        JOIN inspections i ON i.id = ms.inspection_id
+        WHERE ms.lead_id IS NOT NULL
+          AND i.lead_id IS NOT NULL
+          AND ms.lead_id <> i.lead_id
+    """)
+
+    # The lead index from a2b3c4d5e6f7 already expresses the primary identity and remains unchanged.
+    op.drop_index("uq_measurement_sets_inspection", table_name="measurement_sets")
+    op.drop_index("uq_measurement_sets_property", table_name="measurement_sets")
+
+    op.create_index(
+        "uq_measurement_sets_inspection_fallback",
+        "measurement_sets",
+        ["inspection_id"],
+        unique=True,
+        postgresql_where=sa.text("lead_id IS NULL AND inspection_id IS NOT NULL"),
+    )
+    op.create_index(
+        "uq_measurement_sets_property_fallback",
+        "measurement_sets",
+        ["property_id"],
+        unique=True,
+        postgresql_where=sa.text(
+            "lead_id IS NULL AND inspection_id IS NULL AND property_id IS NOT NULL"
+        ),
+    )
+
+    print(
+        "[lead-primary measurement-set constraints] "
+        f"potential_cross_lead_merge_candidates={potential_cross_lead_merge_candidates} "
+        f"lead_property_mismatches={lead_property_mismatches} "
+        f"inspection_lead_mismatches={inspection_lead_mismatches} "
+        "data_split=0"
+    )
+
+
+def downgrade() -> None:
+    conn = op.get_bind()
+    property_duplicates = conn.execute(sa.text("""
+        SELECT property_id, count(*)
+        FROM measurement_sets
+        WHERE property_id IS NOT NULL
+        GROUP BY property_id
+        HAVING count(*) > 1
+        ORDER BY count(*) DESC, property_id
+        LIMIT 10
+    """)).fetchall()
+    inspection_duplicates = conn.execute(sa.text("""
+        SELECT inspection_id, count(*)
+        FROM measurement_sets
+        WHERE inspection_id IS NOT NULL
+        GROUP BY inspection_id
+        HAVING count(*) > 1
+        ORDER BY count(*) DESC, inspection_id
+        LIMIT 10
+    """)).fetchall()
+    if property_duplicates or inspection_duplicates:
+        raise RuntimeError(
+            "Cannot downgrade lead-primary measurement-set constraints: current rows are valid under "
+            "the hierarchy but violate the former broad property/inspection uniqueness. Resolve or "
+            "archive the duplicate identities before retrying. "
+            f"property_conflicts={len(property_duplicates)} "
+            f"inspection_conflicts={len(inspection_duplicates)}"
+        )
+
+    op.drop_index("uq_measurement_sets_property_fallback", table_name="measurement_sets")
+    op.drop_index("uq_measurement_sets_inspection_fallback", table_name="measurement_sets")
+    op.create_index(
+        "uq_measurement_sets_property",
+        "measurement_sets",
+        ["property_id"],
+        unique=True,
+        postgresql_where=sa.text("property_id IS NOT NULL"),
+    )
+    op.create_index(
+        "uq_measurement_sets_inspection",
+        "measurement_sets",
+        ["inspection_id"],
+        unique=True,
+        postgresql_where=sa.text("inspection_id IS NOT NULL"),
+    )
+''',
 )
 
-run("npm", "--prefix", "mobile", "run", "test:measurements")
+run("alembic", "-c", "alembic.ini", "upgrade", "head", cwd=BACKEND)
+run("pytest", "-q", "backend/tests/test_measurement_set_constraint_migration.py")
+
+heads = run_capture("alembic", "-c", "alembic.ini", "heads", cwd=BACKEND)
+head_lines = [line for line in heads.splitlines() if "(head)" in line]
+if len(head_lines) != 1 or NEW_REVISION not in head_lines[0]:
+    raise RuntimeError(f"Expected one Alembic head at {NEW_REVISION}, got: {head_lines}")
+
+# Existing measurement lifecycle/outbox contracts still run on the corrected schema.
 run(
-    "node", "-e",
-    "const b=require('@babel/core'); for (const f of ['mobile/src/measurementConflict.js','mobile/src/measurementWorkingDraft.js','mobile/src/storage.js','mobile/src/sync.js','mobile/src/screens/Measurements.js']) b.transformFileSync(f,{presets:['babel-preset-expo']}); console.log('P0-5 Babel parse passed');",
+    "pytest", "-q",
+    "backend/tests/test_measurement_sketch_service.py",
+    "backend/tests/test_office_outbox.py",
+    "backend/tests/test_measurement_lifecycle_regression.py",
 )
 run(
-    "npx", "expo", "export", "--platform", "android", "--output-dir", "/tmp/roofspan-p0-5-export",
-    cwd="mobile",
+    "python", "-m", "py_compile",
+    f"backend/alembic/versions/{NEW_REVISION}_lead_primary_measurement_sets.py",
+    "backend/services/measurements.py",
 )
 
 Path("/tmp/p0_commit_message").write_text(
-    "fix: make measurement use-office atomic\n",
+    "fix: align measurement set constraints with lead identity\n",
     encoding="utf-8",
 )
