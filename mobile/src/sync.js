@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, resolveMeasurementConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
@@ -14,6 +14,7 @@ import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
 import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";
+import { buildMeasurementUseOfficeReview, isFullOfficeRevision } from "./measurementConflict";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
@@ -576,25 +577,40 @@ export async function discardMeasurementUpdate(revisionId) {
   return { action: "use_office" };
 }
 
-// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
-// Serialized so all actions land together: confirm the pending update still matches, remove that exact
-// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
-// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
-// authoritative Office revision, and update the scoped list.
-export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
-  const id = `measurement-update:${String(revisionId)}`;
-  await _removeMutation(id);                                   // remove the reviewed conflict mutation
-  if (serverDetail && serverDetail.id != null) {
-    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
+// Fetch the full authoritative revision WITHOUT mutating caches before the atomic Use-Office transition.
+export async function fetchOfficeMeasurementRevision(revisionId) {
+  try {
+    const response = await api.get(`/mobile/measurements/${String(revisionId)}`);
+    const detail = response && response.data;
+    if (!isFullOfficeRevision(detail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
+    return { ok: true, detail };
+  } catch (e) {
+    return { ok: false, reason: "office_fetch_failed" };
   }
-  if (scope) {
-    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
-    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
-    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
+}
+
+// Freeze the exact mutation generation/state the rep reviewed. A newer save or sync state transition
+// between rendering and tapping Use Office returns stale before storage is touched.
+export async function prepareMeasurementUseOfficeReview(revisionId, scope, serverDetail, observed = null) {
+  const mutation = await currentMeasurementMutation(revisionId);
+  if (!mutation) return { ok: false, reason: "mutation_missing" };
+  if (observed) {
+    const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
+    if (String(mutation.client_id || "") !== String(observed.clientId || "")
+        || generation !== Number(observed.mutationGeneration)
+        || mutation.state !== observed.expectedState) {
+      return { ok: false, reason: "review_stale" };
+    }
   }
+  return buildMeasurementUseOfficeReview(mutation, scope, serverDetail);
+}
+
+// Apply the reviewed choice as ONE exclusive, generation-checked SQLite transaction.
+export async function resolveMeasurementConflictUseOffice(reviewed) {
+  const decision = await resolveMeasurementConflictTransition(reviewed);
   _emit({ type: "queued" });
-  _emit({ type: "measurement_reconciled" });
-  return { action: "use_office" };
+  if (decision.action === "use_office") _emit({ type: "measurement_reconciled" });
+  return decision;
 }
 
 // Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer Office

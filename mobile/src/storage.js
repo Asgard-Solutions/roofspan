@@ -6,6 +6,7 @@ import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
 import { planExpectedVersionFloor, reconcileDraftWrite } from "./roofSketchAck";
 import { applyResolutionInTx } from "./roofSketchConflict";
+import { applyMeasurementResolutionInTx } from "./measurementConflict";
 import { buildConvertedUpdateMutation, measurementDocumentFromRevision } from "./measurementReconcile";
 
 let _db = null;
@@ -429,5 +430,58 @@ export async function resolveSketchConflictTransition(choice, reviewed) {
       throw e;   // real SQL failure: transaction rolled back; caller keeps the conflict, records nothing
     }
     return decision;   // committed
+  });
+}
+
+
+// P0-5: measurement Use-Office uses one EXCLUSIVE transaction, mirroring the proven Roof Sketch path.
+// Every row is freshly read inside the transaction; the guarded delete must match the exact reviewed
+// generation AND state. Any stale decision or cache write failure rolls back mutation + all cache writes.
+function _measurementResolutionTxExecutor(txn, scope, now) {
+  return {
+    readMutation: async (clientId) => {
+      const raw = await txn.getFirstAsync(
+        "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+        clientId, scope,
+      );
+      return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
+    },
+    readCache: async (key) => {
+      const row = await txn.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, key));
+      return row ? JSON.parse(row.json) : null;
+    },
+    writeCache: async (key, value) => {
+      await txn.runAsync(
+        "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+        scopedKey(scope, key), JSON.stringify(value), now,
+      );
+    },
+    deleteMutation: async (clientId, generation, expectedState) => {
+      const result = await txn.runAsync(
+        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = ? AND (scope = ? OR scope IS NULL)",
+        clientId, generation, expectedState, scope,
+      );
+      return (result && (result.changes != null ? result.changes : result.rowsAffected)) || 0;
+    },
+  };
+}
+
+export async function resolveMeasurementConflictTransition(reviewed) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const now = new Date().toISOString();
+    let decision = null;
+    try {
+      await d.withExclusiveTransactionAsync(async (txn) => {
+        decision = await applyMeasurementResolutionInTx(
+          _measurementResolutionTxExecutor(txn, scope, now), reviewed,
+        );
+      });
+    } catch (e) {
+      if (e && e.__stale) return { action: "stale", reason: e.__stale };
+      throw e;
+    }
+    return decision;
   });
 }
