@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
 from fastapi.responses import StreamingResponse
@@ -35,6 +35,52 @@ async def _lead_site_plan_png(db: AsyncSession, lead_id) -> bytes | None:
     return None
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
+
+
+async def _default_quote_exp_days(db: AsyncSession) -> int:
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+    cfg = row.value if row else {}
+    try:
+        return int((cfg or {}).get("quote_expiration_days") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id, accepted_by, notes, request, user=None):
+    """Shared accept logic for both the Office (authed) and public share-link (no-auth) flows.
+    Idempotent: an already-accepted quote returns its existing Job."""
+    existing_job = (await db.execute(select(Job).where(Job.quote_id == q.id))).scalar_one_or_none()
+    if q.status == "accepted" and existing_job:
+        return q, existing_job
+    accepted_total = q.total
+    if q.multi_package:
+        if not package_id:
+            raise HTTPException(status_code=400, detail="Select a package to accept for this multi-option quote")
+        pkg = await db.get(QuotePackage, package_id)
+        if not pkg or pkg.quote_id != q.id:
+            raise HTTPException(status_code=404, detail="Package not found on this quote")
+        q.accepted_package_id = pkg.id
+        accepted_total = pkg.total
+        q.subtotal, q.tax, q.total = pkg.subtotal, pkg.tax, pkg.total
+    q.status = "accepted"
+    q.accepted_at = datetime.now(timezone.utc)
+    q.accepted_by = accepted_by
+    q.acceptance_name = acceptance_name
+    if notes:
+        q.terms = (q.terms or "") + f"\n[Acceptance] {notes}"
+    job = existing_job
+    if not job:
+        number = await next_number(db, "job", "JOB")
+        job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created",
+                  total=accepted_total, scope=f"From quote {q.number}", created_by=accepted_by)
+        db.add(job)
+        await db.flush()
+    await db.commit()
+    await db.refresh(q)
+    await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id,
+                     detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None,
+                             "via": "office" if user is not None else "public_link"}, request=request)
+    return q, job
 
 
 async def _quote_document_data(db: AsyncSession, q: Quote) -> dict:
@@ -178,8 +224,14 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
         customer_id = customer_id or (str(est.customer_id) if est.customer_id else None)
         property_id = property_id or (str(est.property_id) if est.property_id else None)
     number = await next_number(db, "quote", "QUO")
+    issue_dt = payload.issue_date or datetime.now(timezone.utc)
+    exp_dt = payload.expiration_date
+    if exp_dt is None:
+        days = await _default_quote_exp_days(db)
+        if days and days > 0:
+            exp_dt = issue_dt + timedelta(days=days)
     q = Quote(number=number, estimate_id=est_id, lead_id=lead_id, customer_id=customer_id, property_id=property_id,
-              status="draft", issue_date=payload.issue_date or datetime.now(timezone.utc), expiration_date=payload.expiration_date,
+              status="draft", issue_date=issue_dt, expiration_date=exp_dt,
               tax_rate=tax_rate, terms=payload.terms, created_by=user.email, multi_package=payload.multi_package)
     db.add(q)
     await db.flush()
@@ -355,39 +407,20 @@ async def accept_quote(quote_id: str, payload: QuoteAccept, request: Request, us
     q = await db.get(Quote, quote_id)
     if not q:
         raise HTTPException(status_code=404, detail="Quote not found")
-    existing_job = (await db.execute(select(Job).where(Job.quote_id == q.id))).scalar_one_or_none()
-    if q.status == "accepted" and existing_job:
-        return QuoteAcceptResult(quote=await _out(db, q), job_id=str(existing_job.id))
-
-    accepted_total = q.total
-    if q.multi_package:
-        if not payload.package_id:
-            raise HTTPException(status_code=400, detail="Select a package to accept for this multi-option quote")
-        pkg = await db.get(QuotePackage, payload.package_id)
-        if not pkg or pkg.quote_id != q.id:
-            raise HTTPException(status_code=404, detail="Package not found on this quote")
-        q.accepted_package_id = pkg.id
-        accepted_total = pkg.total
-        q.subtotal, q.tax, q.total = pkg.subtotal, pkg.tax, pkg.total
-
-    q.status = "accepted"
-    q.accepted_at = datetime.now(timezone.utc)
-    q.accepted_by = user.email
-    q.acceptance_name = payload.acceptance_name
-    if payload.notes:
-        q.terms = (q.terms or "") + f"\n[Acceptance] {payload.notes}"
-
-    job = existing_job
-    if not job:
-        number = await next_number(db, "job", "JOB")
-        job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created", total=accepted_total,
-                  scope=f"From quote {q.number}", created_by=user.email)
-        db.add(job)
-        await db.flush()
-    await db.commit()
-    await db.refresh(q)
-    await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id, detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None}, request=request)
+    q, job = await perform_quote_acceptance(db, q, acceptance_name=payload.acceptance_name, package_id=payload.package_id,
+                                            accepted_by=user.email, notes=payload.notes, request=request, user=user)
     return QuoteAcceptResult(quote=await _out(db, q), job_id=str(job.id))
+
+
+@router.get("/{quote_id}/share-link")
+async def quote_share_link(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Mint a customer-facing 'accept online' share link (signed, quote-scoped token)."""
+    from core import create_proposal_share_token
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    token = create_proposal_share_token(str(q.id))
+    return {"token": token, "path": f"/p/{token}"}
 
 
 @router.post("/{quote_id}/decline", response_model=QuoteOut)

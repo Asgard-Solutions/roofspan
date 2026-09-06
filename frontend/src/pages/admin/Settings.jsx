@@ -178,7 +178,7 @@ function CompanySettings() {
   const [c, setC] = useState(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { api.get("/company").then((r) => setC(r.data)); }, []);
-  const save = async () => { setSaving(true); try { const { data } = await api.put("/company", c); setC(data); toast.success("Company profile saved"); } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); } };
+  const save = async () => { setSaving(true); try { const payload = { ...c, quote_expiration_days: Number(c.quote_expiration_days) || 0 }; const { data } = await api.put("/company", payload); setC(data); toast.success("Company profile saved"); } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); } };
   if (!c) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
   const field = (key, label, ph) => <div className="space-y-1.5"><Label>{label}</Label><Input value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} /></div>;
   const area = (key, label, ph) => <div className="space-y-1.5"><Label>{label}</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={c[key] || ""} onChange={(e) => setC({ ...c, [key]: e.target.value })} placeholder={ph} data-testid={`company-${key}`} /></div>;
@@ -188,6 +188,13 @@ function CompanySettings() {
         {field("name", "Company name", "RoofSpan Roofing Co.")}{field("phone", "Phone", "(555) 123-4567")}
         {field("email", "Email", "office@company.com")}{field("address", "Address", "123 Main St, Austin, TX")}
         {field("license_number", "License number", "TX-ROOF-0001")}
+        <div className="space-y-1.5">
+          <Label>Default quote expiration (days)</Label>
+          <Input type="number" min="0" step="1" value={c.quote_expiration_days ?? 30}
+            onChange={(e) => setC({ ...c, quote_expiration_days: e.target.value === "" ? "" : Number(e.target.value) })}
+            placeholder="30" className="w-40" data-testid="company-quote_expiration_days" />
+          <p className="text-xs text-slate-500">New quotes expire this many days after their issue date (e.g. 30, 60, 90). Set 0 for no automatic expiration.</p>
+        </div>
         <div className="border-t border-slate-100 pt-4 text-xs font-semibold uppercase text-slate-400">Proposal branding</div>
         {field("logo_url", "Logo URL", "https://…/logo.png")}{field("website", "Website", "www.company.com")}
         <div className="space-y-1.5"><Label>Brand color</Label><div className="flex items-center gap-2"><input type="color" value={c.primary_color || "#0f172a"} onChange={(e) => setC({ ...c, primary_color: e.target.value })} className="h-9 w-14 cursor-pointer rounded border border-input" data-testid="company-primary_color" /><Input value={c.primary_color || ""} onChange={(e) => setC({ ...c, primary_color: e.target.value })} placeholder="#0f172a" className="w-32" /></div></div>

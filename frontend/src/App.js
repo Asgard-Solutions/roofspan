@@ -26,6 +26,7 @@ import Suppliers from "@/pages/Suppliers";
 import Finance from "@/pages/Finance";
 import Reports from "@/pages/Reports";
 import ProposalPreview from "@/pages/ProposalPreview";
+import PublicProposal from "@/pages/PublicProposal";
 import Placeholder from "@/pages/Placeholder";
 import Users from "@/pages/admin/Users";
 import Roles from "@/pages/admin/Roles";
@@ -43,6 +44,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/p/:token" element={<PublicProposal />} />
           <Route
             element={
               <ProtectedRoute>
