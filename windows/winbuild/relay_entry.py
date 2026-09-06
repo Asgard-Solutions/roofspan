@@ -34,6 +34,24 @@ def build_info() -> dict:
     }
 
 
+def parse_connector_identity(data: dict) -> tuple[str, str, str]:
+    """Validate the loopback identity response required by the packaged connector.
+
+    A connector without the durable loopback outbox token would look connected while silently skipping
+    Office-to-Field invalidations, so incomplete responses are rejected and retried by RelayWorker.
+    """
+    if not isinstance(data, dict):
+        raise RuntimeError("Office identity endpoint returned incomplete data")
+    installation_id = str(data.get("installation_id") or "").strip()
+    relay_ws_url = str(data.get("relay_ws_url") or "").strip()
+    connector_token = str(data.get("connector_token") or "").strip()
+    if not installation_id or not relay_ws_url or not connector_token:
+        raise RuntimeError("Office identity endpoint returned incomplete data")
+    if not relay_ws_url.endswith(INSTALLATION_RELAY_PATH):
+        raise RuntimeError("Office identity endpoint returned a non-canonical Relay route")
+    return installation_id, relay_ws_url, connector_token
+
+
 class RelayWorker:
     def __init__(self, logger):
         self.log = logger
@@ -75,19 +93,16 @@ class RelayWorker:
                                 pass
                             raise RuntimeError(f"Office identity endpoint returned {detail}")
 
-                        data = response.json()
-                        installation_id = str(data.get("installation_id") or "").strip()
-                        relay_ws_url = str(data.get("relay_ws_url") or "").strip()
-                        if not installation_id or not relay_ws_url:
-                            raise RuntimeError("Office identity endpoint returned incomplete data")
-                        if not relay_ws_url.endswith(INSTALLATION_RELAY_PATH):
-                            raise RuntimeError("Office identity endpoint returned a non-canonical Relay route")
+                        installation_id, relay_ws_url, connector_token = parse_connector_identity(
+                            response.json()
+                        )
 
                         self._tunnel = InstallationTunnel(
                             relay_ws_url,
                             installation_id,
                             private_key,
                             local_api,
+                            outbox_token=connector_token,
                         )
                         self.log.info(
                             "relay: hosted installation identity ready; outbound tunnel -> %s "

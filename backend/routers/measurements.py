@@ -56,7 +56,7 @@ async def get_revision(revision_id: str, user: User = Depends(get_current_user),
 async def create_revision(payload: MeasurementRevisionIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     rev = await svc.create_revision(db, payload, user)
     out = await svc.build_out(db, rev)
-    await log_action(db, user=user, action="measurement.create", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
+    await log_action(db, user=user, action="measurement.create", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, rev, "measurement.create")
     await db.commit()
     return out
@@ -73,7 +73,7 @@ async def replace_revision(revision_id: str, payload: MeasurementRevisionIn, req
         raise HTTPException(status_code=409, detail={"message": "This measurement changed on the server since your copy.", "server": jsonable_encoder(out)})
     await svc.replace_children(db, rev, payload)
     out = await svc.build_out(db, rev)
-    await log_action(db, user=user, action="measurement.update", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
+    await log_action(db, user=user, action="measurement.update", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, rev, "measurement.update")
     await db.commit()
     return out
@@ -84,7 +84,7 @@ async def change_status(revision_id: str, payload: StatusChangeIn, request: Requ
     rev = await _get_rev_or_404(db, revision_id)
     await svc.transition_status(db, rev, payload.to, user)
     out = await svc.build_out(db, rev)
-    await log_action(db, user=user, action=f"measurement.status.{payload.to}", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
+    await log_action(db, user=user, action=f"measurement.status.{payload.to}", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, rev, f"measurement.status.{payload.to}")
     await db.commit()
     return out
@@ -95,7 +95,7 @@ async def unlock_revision(revision_id: str, request: Request, user: User = Depen
     rev = await _get_rev_or_404(db, revision_id)
     await svc.unlock_revision(db, rev, user)
     out = await svc.build_out(db, rev)
-    await log_action(db, user=user, action="measurement.unlock", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request)
+    await log_action(db, user=user, action="measurement.unlock", entity_type="measurement_revision", entity_id=str(rev.id), detail={"revision": rev.revision_number}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, rev, "measurement.unlock")
     await db.commit()
     return out
@@ -106,7 +106,7 @@ async def new_revision(revision_id: str, request: Request, user: User = Depends(
     rev = await _get_rev_or_404(db, revision_id)
     new = await svc.clone_revision(db, rev, user)
     out = await svc.build_out(db, new)
-    await log_action(db, user=user, action="measurement.new_revision", entity_type="measurement_revision", entity_id=str(new.id), detail={"from": rev.revision_number, "to": new.revision_number}, request=request)
+    await log_action(db, user=user, action="measurement.new_revision", entity_type="measurement_revision", entity_id=str(new.id), detail={"from": rev.revision_number, "to": new.revision_number}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, new, "measurement.new_revision")
     await db.commit()
     return out

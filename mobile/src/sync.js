@@ -6,14 +6,15 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, resolveMeasurementConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
-import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";
+import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";
+import { buildMeasurementUseOfficeReview, isFullOfficeRevision } from "./measurementConflict";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
@@ -256,13 +257,13 @@ async function _reconcileMeasurementAcks(processed) {
       // A newer local edit is still pending — NEVER retire its drafts.
       if (stored.kind === "measurement_update") {
         // Rebase the newer update onto the fresh authoritative token so it applies cleanly.
-        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at, rev);
       } else if (stored.kind === "measurement") {
         // P0 data-loss fix: a newer CREATE generation superseded this acknowledged create. Convert it into
         // an UPDATE of the just-created revision so the newer body is actually applied (an idempotent
         // create replay would otherwise silently return the original record and the second edit would be
         // lost). Draft is rebased onto the new revision and retired only after the update's OWN ack.
-        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);
+        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at, rev);
         if (res && res.converted) {
           if (measScope) await mutateCache(measWorkingKey(measScope), (cur) => rebaseWorkingDraftToRevision(cur, { oldClientId: m.client_id, revisionId, ifMatch: rev.updated_at }));
           _rerunRequested = true;   // automatically run the converted update on the next pass
@@ -576,37 +577,59 @@ export async function discardMeasurementUpdate(revisionId) {
   return { action: "use_office" };
 }
 
-// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
-// Serialized so all actions land together: confirm the pending update still matches, remove that exact
-// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
-// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
-// authoritative Office revision, and update the scoped list.
-export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
-  const id = `measurement-update:${String(revisionId)}`;
-  await _removeMutation(id);                                   // remove the reviewed conflict mutation
-  if (serverDetail && serverDetail.id != null) {
-    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
+// Fetch the full authoritative revision WITHOUT mutating caches before the atomic Use-Office transition.
+export async function fetchOfficeMeasurementRevision(revisionId) {
+  try {
+    const response = await api.get(`/mobile/measurements/${String(revisionId)}`);
+    const detail = response && response.data;
+    if (!isFullOfficeRevision(detail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
+    return { ok: true, detail };
+  } catch (e) {
+    return { ok: false, reason: "office_fetch_failed" };
   }
-  if (scope) {
-    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
-    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
-    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
+}
+
+// Freeze the exact mutation generation/state the rep reviewed. A newer save or sync state transition
+// between rendering and tapping Use Office returns stale before storage is touched.
+export async function prepareMeasurementUseOfficeReview(revisionId, scope, serverDetail, observed = null) {
+  const mutation = await currentMeasurementMutation(revisionId);
+  if (!mutation) return { ok: false, reason: "mutation_missing" };
+  if (observed) {
+    const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
+    if (String(mutation.client_id || "") !== String(observed.clientId || "")
+        || generation !== Number(observed.mutationGeneration)
+        || mutation.state !== observed.expectedState) {
+      return { ok: false, reason: "review_stale" };
+    }
   }
+  return buildMeasurementUseOfficeReview(mutation, scope, serverDetail);
+}
+
+// Apply the reviewed choice as ONE exclusive, generation-checked SQLite transaction.
+export async function resolveMeasurementConflictUseOffice(reviewed) {
+  const decision = await resolveMeasurementConflictTransition(reviewed);
   _emit({ type: "queued" });
-  _emit({ type: "measurement_reconciled" });
-  return { action: "use_office" };
+  if (decision.action === "use_office") _emit({ type: "measurement_reconciled" });
+  return decision;
 }
 
 // Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer Office
 // version (adopt its updated_at as If-Match). When a 3-way-merged body is supplied, apply it so Office-only
 // changes are preserved and only Field-changed fields override. Re-triggers sync after the durable rebase.
-export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {
+export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody, newBaseDetail) {
   const id = `measurement-update:${String(revisionId)}`;
   const all = await loadAllMutations();
   const m = all.find((x) => x.client_id === id);
   if (!m) return { action: "noop" };
-  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;
-  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });
+  const base = measurementDocumentFromRevision(newBaseDetail);
+  if (!mergedBody || !base || newIfMatch == null || newIfMatch === "") {
+    return { action: "review_required", reason: "missing_or_untrusted_base" };
+  }
+  await saveMutation({
+    ...m, body: mergedBody, ifMatch: newIfMatch,
+    base_body: base, base_token: String(newIfMatch),
+    state: "pending", error: null, errorCode: null, serverValue: null,
+  });
   _emit({ type: "queued" });
   runSync().catch(() => {});
   return { action: "keep_local" };

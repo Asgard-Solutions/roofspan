@@ -35,6 +35,12 @@ function createMeasurementWorkingDraftStore(io) {
         return await io.put(value);
       });
     },
+    // Conflict-resolution preflight: seal synchronously and drain any already-queued persist, but DO
+    // NOT clear. The exclusive SQLite transition owns mutation deletion + both draft clears atomically.
+    seal() {
+      sealed = true;
+      return run(async () => true);
+    },
     // Save path: seal first (blocks every concurrent/late autosave), then clear the draft slot.
     sealAndClear() {
       sealed = true;

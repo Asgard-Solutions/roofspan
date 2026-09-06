@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from relay import config as C
 from relay import envelope as E
@@ -31,6 +32,15 @@ class RelayPayloadTooLarge(Exception):
     """Cross-node envelope exceeds the relay payload ceiling; rejected before publish."""
 
 
+@dataclass(frozen=True)
+class BroadcastResult:
+    """Whether Relay accepted responsibility for an Office invalidation."""
+
+    delivered_local: int
+    accepted: bool
+    reason: str | None = None
+
+
 class InstallationConn:
     def __init__(self, installation_id: str, ws):
         self.installation_id = installation_id
@@ -40,10 +50,15 @@ class InstallationConn:
 
 
 class RelayHub:
-    def __init__(self, node_id: str, registry=None, transport=None):
+    def __init__(self, node_id: str, registry=None, transport=None, broadcast_publish_timeout=None):
         self.node_id = node_id
         self._registry = registry
         self._transport = transport
+        self._broadcast_publish_timeout = (
+            C.BROADCAST_PUBLISH_TIMEOUT
+            if broadcast_publish_timeout is None
+            else max(0.001, float(broadcast_publish_timeout))
+        )
         self._installs: dict[str, InstallationConn] = {}
         self._devices: dict[str, dict[str, object]] = {}  # installation_id -> {conn_key: DeviceConn}
         self._cross_pending: dict[str, asyncio.Future] = {}  # correlation_id -> future (this node is origin)
@@ -141,23 +156,51 @@ class RelayHub:
                 pass
         return delivered
 
-    async def broadcast(self, installation_id: str, frame: dict) -> int:
-        """Fan an Office->Field invalidation to all paired devices for this installation.
+    async def broadcast(self, installation_id: str, frame: dict) -> BroadcastResult:
+        """Fan an Office->Field invalidation and report topology-wide acceptance.
 
-        Delivers to LOCAL devices immediately, then (multi-node) publishes ONCE to the shared broadcast
-        channel so every OTHER node delivers to its own local devices. The originating node drops its own
-        echo in ``_on_broadcast`` (origin match) so a device on the origin node is never double-delivered.
-        Returns the count delivered locally."""
+        Local device sends are best-effort. In multi-node mode the durable Office event may be retired only
+        after the shared broker accepts the publication; a broker failure/timeout leaves it unacknowledged so
+        the connector retries after the lease expires.
+        """
         delivered = await self._deliver_local(installation_id, frame)
-        if self._transport is not None:
-            env = E.build_broadcast(self.node_id, installation_id, frame)
-            raw = P.dumps(env)
-            if len(raw.encode("utf-8")) <= C.MAX_ENVELOPE_BYTES:
-                try:
-                    await self._transport.publish(R.broadcast_channel(), raw)
-                except Exception as e:  # noqa: BLE001 - transport bounce: local devices already got it
-                    log.warning("relay broadcast publish failed: %s", str(e)[:160])
-        return delivered
+        if self._transport is None:
+            return BroadcastResult(delivered_local=delivered, accepted=True)
+
+        env = E.build_broadcast(self.node_id, installation_id, frame)
+        raw = P.dumps(env)
+        if len(raw.encode("utf-8")) > C.MAX_ENVELOPE_BYTES:
+            log.warning("relay broadcast rejected: envelope exceeds configured ceiling")
+            return BroadcastResult(delivered_local=delivered, accepted=False, reason="payload_too_large")
+        try:
+            await asyncio.wait_for(
+                self._transport.publish(R.broadcast_channel(), raw),
+                timeout=self._broadcast_publish_timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            log.warning("relay broadcast publish timed out")
+            return BroadcastResult(delivered_local=delivered, accepted=False, reason="publish_timeout")
+        except Exception as e:  # noqa: BLE001 - leave Office event unacked for lease-expiry retry
+            log.warning("relay broadcast publish failed: %s", str(e)[:160])
+            return BroadcastResult(delivered_local=delivered, accepted=False, reason="publish_failed")
+        return BroadcastResult(delivered_local=delivered, accepted=True)
+
+    async def broadcast_and_ack(
+        self, installation_id: str, frame: dict, conn: InstallationConn
+    ) -> BroadcastResult:
+        """Acknowledge upstream only after ``broadcast`` accepted the full configured topology."""
+        result = await self.broadcast(installation_id, frame)
+        if not result.accepted:
+            return result
+        ack = P.broadcast_ack(
+            event_id=frame.get("event_id"),
+            delivered=result.delivered_local,
+        )
+        async with conn.send_lock:
+            await conn.ws.send_text(P.dumps(ack))
+        return result
 
     async def _on_broadcast(self, raw: str) -> None:
         try:

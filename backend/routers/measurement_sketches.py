@@ -61,7 +61,7 @@ async def put_sketch(revision_id: str, structure_id: str, payload: SketchWriteIn
     except svc.SketchConflict as c:
         await log_action(db, user=user, action="measurement.sketch.conflict", entity_type="measurement_sketch", entity_id=structure_id, detail={"revision_id": revision_id}, request=request)
         raise HTTPException(status_code=409, detail={"message": "This roof sketch changed on the server since your copy.", "server": _jsonable(c.server)})
-    await log_action(db, user=user, action="measurement.sketch.update" if existed else "measurement.sketch.create", entity_type="measurement_sketch", entity_id=structure_id, detail={"revision_id": revision_id, "document_version": out["document_version"]}, request=request)
+    await log_action(db, user=user, action="measurement.sketch.update" if existed else "measurement.sketch.create", entity_type="measurement_sketch", entity_id=structure_id, detail={"revision_id": revision_id, "document_version": out["document_version"]}, request=request, commit=False)
     await office_outbox.emit_for_revision(db, rev, "measurement.sketch", structure_id=structure_id, sketch_document_version=out["document_version"])
     await db.commit()
     return out

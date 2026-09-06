@@ -1,0 +1,211 @@
+name: Measurement Sync P0 Contract
+
+on:
+  push:
+    branches:
+      - main
+      - fix/p0-measurement-sync-hardening-20260906
+    paths:
+      - "backend/core.py"
+      - "backend/models.py"
+      - "backend/services/measurement*.py"
+      - "backend/services/office_outbox.py"
+      - "backend/routers/measurements.py"
+      - "backend/routers/measurement_sketches.py"
+      - "backend/routers/relay_connector.py"
+      - "backend/relay/**"
+      - "backend/alembic/versions/a2b3c4d5e6f7_canonical_measurement_set.py"
+      - "backend/alembic/versions/b3c4d5e6f7a8_idempotency_fingerprint.py"
+      - "backend/alembic/versions/c4d5e6f7a8b9_revision_number_unique.py"
+      - "backend/alembic/versions/d5e6f7a8b9c0_relay_outbox.py"
+      - "backend/alembic/versions/e7f8a9b0c1d2_lead_primary_measurement_sets.py"
+      - "backend/tests/test_measurement_sketch_service.py"
+      - "backend/tests/test_office_outbox.py"
+      - "backend/tests/test_relay_broadcast.py"
+      - "backend/tests/test_measurement_set_constraint_migration.py"
+      - "windows/winbuild/relay_entry.py"
+      - "windows/tests/test_relay_connector_release_contract.py"
+      - "windows/tests/test_relay_connector_outbox_bootstrap.py"
+      - "mobile/src/queue.js"
+      - "mobile/src/storage.js"
+      - "mobile/src/sync.js"
+      - "mobile/src/measurement*.js"
+      - "mobile/src/screens/Measurements.js"
+      - "mobile/src/screens/RoofSketch.js"
+      - "mobile/src/tests/measurement*.test.js"
+      - "mobile/package.json"
+      - "package.json"
+      - "package-lock.json"
+      - "frontend/package.json"
+      - "frontend/yarn.lock"
+      - ".github/workflows/measurement-sync-p0-contract.yml"
+  pull_request:
+    paths:
+      - "backend/core.py"
+      - "backend/models.py"
+      - "backend/services/measurement*.py"
+      - "backend/services/office_outbox.py"
+      - "backend/routers/measurements.py"
+      - "backend/routers/measurement_sketches.py"
+      - "backend/routers/relay_connector.py"
+      - "backend/relay/**"
+      - "backend/alembic/versions/a2b3c4d5e6f7_canonical_measurement_set.py"
+      - "backend/alembic/versions/b3c4d5e6f7a8_idempotency_fingerprint.py"
+      - "backend/alembic/versions/c4d5e6f7a8b9_revision_number_unique.py"
+      - "backend/alembic/versions/d5e6f7a8b9c0_relay_outbox.py"
+      - "backend/alembic/versions/e7f8a9b0c1d2_lead_primary_measurement_sets.py"
+      - "backend/tests/test_measurement_sketch_service.py"
+      - "backend/tests/test_office_outbox.py"
+      - "backend/tests/test_relay_broadcast.py"
+      - "backend/tests/test_measurement_set_constraint_migration.py"
+      - "windows/winbuild/relay_entry.py"
+      - "windows/tests/test_relay_connector_release_contract.py"
+      - "windows/tests/test_relay_connector_outbox_bootstrap.py"
+      - "mobile/src/queue.js"
+      - "mobile/src/storage.js"
+      - "mobile/src/sync.js"
+      - "mobile/src/measurement*.js"
+      - "mobile/src/screens/Measurements.js"
+      - "mobile/src/screens/RoofSketch.js"
+      - "mobile/src/tests/measurement*.test.js"
+      - "mobile/package.json"
+      - "package.json"
+      - "package-lock.json"
+      - "frontend/package.json"
+      - "frontend/yarn.lock"
+      - ".github/workflows/measurement-sync-p0-contract.yml"
+  workflow_dispatch:
+
+jobs:
+  postgres-transaction-and-identity:
+    name: PostgreSQL transaction and lead identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: roofspan
+          POSTGRES_PASSWORD: roofspan
+          POSTGRES_DB: roofspan_measurement_p0
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U roofspan"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PYTHONPATH: backend
+      DATABASE_URL: postgresql+asyncpg://roofspan:roofspan@127.0.0.1:5432/roofspan_measurement_p0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+      - name: Apply complete migration graph
+        working-directory: backend
+        run: alembic -c alembic.ini upgrade head
+      - name: Prove one migration head
+        working-directory: backend
+        run: |
+          heads="$(alembic -c alembic.ini heads)"
+          printf '%s\n' "$heads"
+          test "$(printf '%s\n' "$heads" | grep -c '(head)')" -eq 1
+          printf '%s\n' "$heads" | grep -q 'e7f8a9b0c1d2'
+      - name: Prove transaction rollback, outbox leasing, and lead-primary constraints
+        run: >-
+          pytest -q -n 0
+          backend/tests/test_measurement_sketch_service.py
+          backend/tests/test_office_outbox.py
+          backend/tests/test_measurement_set_constraint_migration.py
+      - name: Compile transaction and migration modules
+        run: >-
+          python -m py_compile
+          backend/core.py
+          backend/services/office_outbox.py
+          backend/routers/measurements.py
+          backend/routers/measurement_sketches.py
+          backend/alembic/versions/e7f8a9b0c1d2_lead_primary_measurement_sets.py
+
+  relay-and-windows-connector:
+    name: Relay acceptance and packaged connector
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+      - name: Prove Relay publication acceptance and Windows token bootstrap
+        run: >-
+          pytest -q -n 0
+          backend/tests/test_relay_broadcast.py
+          windows/tests/test_relay_connector_release_contract.py
+          windows/tests/test_relay_connector_outbox_bootstrap.py
+      - name: Compile Relay and connector modules
+        run: >-
+          python -m py_compile
+          backend/relay/config.py
+          backend/relay/hub.py
+          backend/relay/server.py
+          backend/relay/tunnel_client.py
+          backend/routers/relay_connector.py
+          windows/winbuild/relay_entry.py
+
+  field-measurement-contract:
+    name: Field durable conflict and Android bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked workspace dependencies
+        working-directory: ${{ github.workspace }}
+        run: npm ci
+      - name: Run all Field measurement and offline contracts
+        run: npm run test:measurements
+      - name: Parse changed Field modules with Expo Babel
+        run: >-
+          node -e "const b=require('@babel/core');
+          ['src/queue.js','src/storage.js','src/sync.js','src/measurementCache.js','src/measurementConflict.js','src/measurementReconcile.js','src/measurementRecovery.js','src/measurementWorkingDraft.js','src/screens/Measurements.js','src/screens/RoofSketch.js']
+          .forEach(f=>b.transformFileSync(f,{presets:['babel-preset-expo']}));
+          console.log('Measurement sync P0 modules parsed');"
+      - name: Build production Android Metro export
+        run: npx expo export --platform android --output-dir "$RUNNER_TEMP/measurement-p0-expo-export"
+
+  office-frozen-build:
+    name: Office frozen dependency and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install Yarn 1
+        run: npm install --global yarn@1.22.22
+      - name: Install locked Office dependencies
+        run: yarn install --frozen-lockfile --network-timeout 600000
+      - name: Build Office UI
+        env:
+          CI: "false"
+        run: yarn build

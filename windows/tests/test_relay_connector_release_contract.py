@@ -98,3 +98,9 @@ def test_live_hosted_probe_routes_current_and_legacy_connectors():
     assert 'installation_route="/api/relay/tunnel"' in probe
     assert "installation_claim=public_pem" in probe
     assert 'assert ready["installation_id"] == installation_id' in probe
+
+
+def test_relay_worker_supplies_the_loopback_outbox_token():
+    source = _text(WINBUILD / "relay_entry.py")
+    assert 'data.get("connector_token")' in source
+    assert "outbox_token=connector_token" in source

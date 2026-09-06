@@ -205,6 +205,7 @@ async def log_action(
     entity_id: str | None = None,
     detail: dict | None = None,
     request: Request | None = None,
+    commit: bool = True,
 ):
     ip = None
     if request is not None:
@@ -221,4 +222,9 @@ async def log_action(
         ip_address=ip,
     )
     db.add(entry)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        # The caller owns the transaction boundary. Flush so database constraints fail here, while the
+        # business mutation, audit entry and transactional outbox row remain part of one final commit.
+        await db.flush()

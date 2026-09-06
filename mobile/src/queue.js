@@ -53,7 +53,7 @@ function _measurementUpdateId(kind, path) {
 // A caller may provide clientId when one logical offline draft must replace its own queued mutation.
 // Existing roof-measurement PUTs automatically get a revision-stable id so repeated offline edits
 // replace the same SQLite row instead of later conflicting with one another on a stale If-Match.
-function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {
+function makeMutation({ kind, method, path, body, ifMatch = null, baseBody = null, baseToken = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {
   const id = clientId || _measurementUpdateId(kind, path) || uuidv4();
   return {
     client_id: id,
@@ -63,6 +63,10 @@ function makeMutation({ kind, method, path, body, ifMatch = null, label = "", sc
     path,
     body: body || {},
     ifMatch,
+    // Durable 3-way-merge lineage for full-document measurement PUTs. This survives Save clearing the
+    // transient working draft and is never sent to the backend.
+    base_body: baseBody == null ? null : JSON.parse(JSON.stringify(baseBody)),
+    base_token: baseToken == null ? null : String(baseToken),
     label,
     scope,
     photo,

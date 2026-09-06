@@ -6,7 +6,8 @@ import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
 import { planExpectedVersionFloor, reconcileDraftWrite } from "./roofSketchAck";
 import { applyResolutionInTx } from "./roofSketchConflict";
-import { buildConvertedUpdateMutation } from "./measurementReconcile";
+import { applyMeasurementResolutionInTx } from "./measurementConflict";
+import { buildConvertedUpdateMutation, measurementDocumentFromRevision } from "./measurementReconcile";
 
 let _db = null;
 let _inst = "none";
@@ -84,7 +85,7 @@ export async function saveMutation(m) {
 // the just-created revision so its body is actually applied (an idempotent create replay would otherwise
 // silently return the original record). Writes the new update row DURABLY, then removes the original create
 // — atomic within one serialized transaction; scoped to this account.
-export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch) {
+export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch, serverBase) {
   return _serialize(async () => {
     const d = await db();
     const scope = getScope();
@@ -95,7 +96,7 @@ export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId
     if (!row) return { converted: false, reason: "gone" };
     const m = JSON.parse(row.json);
     if (m.kind !== "measurement" || m.state !== "pending") return { converted: false, reason: "not_pending_create" };
-    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch);
+    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch, serverBase);
     const gen = Number(m.mutation_generation) || 1;
     // Durably WRITE the new update row BEFORE deleting the original create (single atomic txn).
     await d.runAsync(
@@ -191,7 +192,7 @@ export async function floorPendingSketchExpectedVersion(client_id, serverVersion
 // ONLY that pending row's authoritative token (If-Match = the server's fresh updated_at) so it re-applies
 // cleanly instead of 409-ing. Operates on the CURRENT stored row inside the serialization boundary;
 // preserves the row's body + generation; never resurrects a missing/synced row; scoped to this account.
-export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch) {
+export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch, serverBase) {
   return _serialize(async () => {
     const d = await db();
     const scope = getScope();
@@ -204,8 +205,11 @@ export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch) {
     if (m.state !== "pending" || (m.kind !== "measurement_update" && m.kind !== "measurement")) {
       return { updated: false, reason: "not_pending_measurement" };
     }
-    if (String(m.ifMatch || "") === String(newIfMatch || "")) return { updated: false, reason: "already_rebased" };
+    const base = measurementDocumentFromRevision(serverBase);
+    if (!base || newIfMatch == null || newIfMatch === "") return { updated: false, reason: "missing_authoritative_base" };
     m.ifMatch = newIfMatch;
+    m.base_body = base;
+    m.base_token = String(newIfMatch);
     await d.runAsync(
       "UPDATE pending_mutations SET json = ? WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
       JSON.stringify(m), client_id, scope
@@ -426,5 +430,58 @@ export async function resolveSketchConflictTransition(choice, reviewed) {
       throw e;   // real SQL failure: transaction rolled back; caller keeps the conflict, records nothing
     }
     return decision;   // committed
+  });
+}
+
+
+// P0-5: measurement Use-Office uses one EXCLUSIVE transaction, mirroring the proven Roof Sketch path.
+// Every row is freshly read inside the transaction; the guarded delete must match the exact reviewed
+// generation AND state. Any stale decision or cache write failure rolls back mutation + all cache writes.
+function _measurementResolutionTxExecutor(txn, scope, now) {
+  return {
+    readMutation: async (clientId) => {
+      const raw = await txn.getFirstAsync(
+        "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+        clientId, scope,
+      );
+      return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
+    },
+    readCache: async (key) => {
+      const row = await txn.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, key));
+      return row ? JSON.parse(row.json) : null;
+    },
+    writeCache: async (key, value) => {
+      await txn.runAsync(
+        "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+        scopedKey(scope, key), JSON.stringify(value), now,
+      );
+    },
+    deleteMutation: async (clientId, generation, expectedState) => {
+      const result = await txn.runAsync(
+        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = ? AND (scope = ? OR scope IS NULL)",
+        clientId, generation, expectedState, scope,
+      );
+      return (result && (result.changes != null ? result.changes : result.rowsAffected)) || 0;
+    },
+  };
+}
+
+export async function resolveMeasurementConflictTransition(reviewed) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const now = new Date().toISOString();
+    let decision = null;
+    try {
+      await d.withExclusiveTransactionAsync(async (txn) => {
+        decision = await applyMeasurementResolutionInTx(
+          _measurementResolutionTxExecutor(txn, scope, now), reviewed,
+        );
+      });
+    } catch (e) {
+      if (e && e.__stale) return { action: "stale", reason: e.__stale };
+      throw e;
+    }
+    return decision;
   });
 }

@@ -1,10 +1,10 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, fetchOfficeMeasurementRevision, prepareMeasurementUseOfficeReview, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
-import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
+import { resolveMeasurementView, measurementSyncState, measurementDocumentFromRevision, chooseDurableMeasurementBase, measurementConflictMergeInputs, buildMergedMeasurementBody } from "../measurementReconcile";
 import { canonicalFingerprint, threeWayMergeMeasurement } from "../measurementRecovery";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
@@ -52,6 +52,15 @@ function penForEdit(row) {
   return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };
 }
 
+function conflictDescriptor(mutation, revisionId, serverDetail) {
+  if (!mutation) return null;
+  return {
+    serverDetail, revisionId: String(revisionId), clientId: mutation.client_id,
+    mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),
+    expectedState: mutation.state,
+  };
+}
+
 export default function Measurements({ route, navigation }) {
   const { lead_id, property_id, inspection_id } = route.params || {};
   const scope = useMemo(() => lead_id ? { lead_id } : (property_id ? { property_id } : { inspection_id }), [lead_id, property_id, inspection_id]);
@@ -71,6 +80,7 @@ export default function Measurements({ route, navigation }) {
   const [showGutters, setShowGutters] = useState(false);
 
   const autosaveTimer = useRef(null);
+  const resolvingOfficeRef = useRef(false);
   // Bumping wdEpoch recreates a FRESH (unsealed) working-draft store after a Use-Office resolution, so a
   // sealed store can never block the rep's subsequent edits on the adopted Office copy.
   const [wdEpoch, setWdEpoch] = useState(0);
@@ -149,6 +159,7 @@ export default function Measurements({ route, navigation }) {
         source: full.source || "field", revision_number: full.revision_number,
         provider: full.provider ?? null, report_id: full.report_id ?? null,
         reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,
+        base_body: measurementDocumentFromRevision(full), base_token: full.updated_at,
       });
       setReadonly(!full.editable);
       setStructures((full.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })));
@@ -174,7 +185,7 @@ export default function Measurements({ route, navigation }) {
       const st = measurementSyncState(active, isSyncing());
       setSyncStatus(st.state === "none" ? "Saved on device" : st.status);
       setFailure(st.failed ? { reason: st.reason } : null);
-      setConflict(pend && pend.state === "conflict" && wd.base ? { serverDetail: pend.serverValue, revisionId: wd.base.id } : null);
+      setConflict(pend && pend.state === "conflict" && wd.base ? conflictDescriptor(pend, wd.base.id, pend.serverValue) : null);
       return;
     }
     // An empty/orphaned working draft must never shadow the authoritative Office copy — drop it so the
@@ -204,7 +215,7 @@ export default function Measurements({ route, navigation }) {
         if (view.kind === "local_update" || view.kind === "conflict") await cacheMeasurementDetail(view.detail);
         hydrate(view.detail, view.kind === "server_cached", detailResult.cachedAt || listResult.cachedAt);
         setSyncStatus(view.status);
-        setConflict(view.conflict ? { serverDetail: view.serverDetail, revisionId: head.id } : null);
+        setConflict(view.conflict ? conflictDescriptor(pendingUpdate, head.id, view.serverDetail) : null);
         setFailure(view.failed ? { reason: view.reason } : null);
         // Clear the local draft ONLY when the authoritative server copy is showing and nothing is pending.
         if (view.kind === "server" && !pendingCreate) await clearMeasurementDraft(scope);
@@ -268,35 +279,77 @@ export default function Measurements({ route, navigation }) {
     return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
   }, [readonly, formJson, persistWorking]);
 
+  const adoptOfficeVersion = useCallback(async (revisionId, observed) => {
+    if (!revisionId || resolvingOfficeRef.current) return { action: "noop" };
+    resolvingOfficeRef.current = true;
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+    // Seal immediately and drain any in-flight autosave. Do NOT clear here: the exclusive SQLite
+    // transaction owns mutation deletion, both draft clears, detail replacement, and list replacement.
+    await wdStoreRef.current.seal();
+    let decision = { action: "noop" };
+    try {
+      const fetched = await fetchOfficeMeasurementRevision(revisionId);
+      if (!fetched.ok) {
+        Alert.alert("Office version unavailable", "RoofSpan could not retrieve the complete Office measurement. Your local work was preserved.");
+        return { action: "preserved", reason: fetched.reason };
+      }
+      const prepared = await prepareMeasurementUseOfficeReview(revisionId, scope, fetched.detail, observed);
+      if (!prepared.ok) {
+        Alert.alert("Measurement changed again", "Your local measurement changed after this review opened. Nothing was discarded; review the latest version again.");
+        return { action: "stale", reason: prepared.reason };
+      }
+      decision = await resolveMeasurementConflictUseOffice(prepared.reviewed);
+      if (decision.action === "use_office") {
+        setConflict(null);
+        setFailure(null);
+      } else if (decision.action === "stale") {
+        Alert.alert("Measurement changed again", "A newer local edit was preserved. Review the latest version before choosing again.");
+      }
+      return decision;
+    } catch (e) {
+      Alert.alert("Could not use Office version", "The local change was preserved because the atomic update did not complete.");
+      return { action: "preserved", reason: "transition_failed" };
+    } finally {
+      // The old store remains sealed; create a fresh store for whatever the latest persisted state contains.
+      resolvingOfficeRef.current = false;
+      setWdEpoch((e) => e + 1);
+      await load();
+    }
+  }, [scope, load]);
+
   const onUseOffice = useCallback(async () => {
     if (!conflict) return;
-    // Atomic Use-Office: seal the store so no late autosave resurrects the local draft, then run the
-    // generation-checked transition that clears the saved + working drafts and adopts Office.
-    await wdStoreRef.current.sealAndClear();
-    await resolveMeasurementConflictUseOffice(conflict.revisionId, scope, conflict.serverDetail);
-    setConflict(null);
-    setWdEpoch((e) => e + 1);   // fresh, unsealed store for future edits on the adopted Office copy
-    await load();
-  }, [conflict, scope, load]);
+    await adoptOfficeVersion(conflict.revisionId, {
+      clientId: conflict.clientId,
+      mutationGeneration: conflict.mutationGeneration,
+      expectedState: conflict.expectedState,
+    });
+  }, [conflict, adoptOfficeVersion]);
 
   const onKeepMine = useCallback(async () => {
     if (!conflict || !conflict.serverDetail) return;
-    // Three-way merge (base vs Field vs Office): apply Field-only changes, preserve Office-only changes.
-    // If a group changed on BOTH sides, keep the conflict for explicit review — never silently overwrite.
-    let mergedBody = null;
-    try {
-      const wd = await loadMeasurementWorkingDraft(scope);
-      if (wd && wd.base_body) {
-        const field = { structures: wd.structures, facets: wd.facets, edges: wd.edges, pens: wd.pens, summary: wd.summary };
-        const r = threeWayMergeMeasurement(wd.base_body, field, conflict.serverDetail);
-        if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }
-        mergedBody = { structures: r.merged.structures, facets: r.merged.facets, edges: r.merged.edges, penetrations: r.merged.pens, summary: r.merged.summary };
-      }
-    } catch (e) { mergedBody = null; }
-    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at, mergedBody);
+    // The transient working draft is intentionally cleared by Save. The durable mutation is therefore the
+    // only legal Base/Field lineage for conflict resolution. Legacy rows without it stay in review.
+    const mutation = await currentMeasurementMutation(conflict.revisionId);
+    const inputs = measurementConflictMergeInputs(mutation, conflict.serverDetail);
+    if (!inputs.ok) {
+      setConflict({ ...conflict, mergeUnavailable: inputs.reason });
+      Alert.alert("Review required", "This older saved change does not contain a trustworthy merge base. Use the Office version, then reapply your change.");
+      return;
+    }
+    const r = threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);
+    if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }
+    const mergedBody = buildMergedMeasurementBody(mutation.body, r.merged);
+    const decision = await rebaseMeasurementUpdate(
+      conflict.revisionId, conflict.serverDetail.updated_at, mergedBody, conflict.serverDetail
+    );
+    if (decision.action !== "keep_local") {
+      setConflict({ ...conflict, mergeUnavailable: decision.reason || "review_required" });
+      return;
+    }
     setConflict(null);
     await load();
-  }, [conflict, scope, load]);
+  }, [conflict, load]);
 
   // Failed-sync recovery: preserve local work and re-attempt the durable mutation on demand.
   const onRetrySync = useCallback(async () => {
@@ -304,15 +357,18 @@ export default function Measurements({ route, navigation }) {
     await load();
   }, [load]);
 
-  // Failed EXISTING revision → adopt the authoritative Office copy (drop the local update).
+  // Failed EXISTING revision → fetch the complete Office document, then use the same atomic,
+  // exact-generation transition as a 409 conflict. The partial screen model is never authoritative.
   const onFailedUseOffice = useCallback(async () => {
     if (!existing) return;
-    await wdStoreRef.current.sealAndClear();
-    await resolveMeasurementConflictUseOffice(existing.id, scope, existing);
-    setFailure(null);
-    setWdEpoch((e) => e + 1);
-    await load();
-  }, [existing, scope, load]);
+    const mutation = await currentMeasurementMutation(existing.id);
+    if (!mutation) { await load(); return; }
+    await adoptOfficeVersion(existing.id, {
+      clientId: mutation.client_id,
+      mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),
+      expectedState: mutation.state,
+    });
+  }, [existing, adoptOfficeVersion, load]);
 
   // Failed CREATE (no Office copy yet) → remove the local change entirely.
   const onFailedRemoveLocal = useCallback(async () => {
@@ -457,6 +513,15 @@ export default function Measurements({ route, navigation }) {
     }
     const body = buildBody(markComplete);
     if (existing) {
+      const pending = await currentMeasurementMutation(existing.id);
+      const base = chooseDurableMeasurementBase(existing, pending && pending.state !== "synced" ? pending : null);
+      if (!base.ok) {
+        Alert.alert("Cannot safely save", "This older local edit has no trustworthy Office base. Use the Office version, reopen it, and reapply the change.");
+        return;
+      }
+      const writeToken = pending && pending.state !== "synced" && pending.ifMatch
+        ? pending.ifMatch
+        : (existing.if_match || base.baseToken);
       const optimistic = {
         id: existing.id, updated_at: existing.if_match, status: markComplete ? "field_complete" : existing.status,
         editable: true, source: existing.source, revision_number: existing.revision_number,
@@ -468,7 +533,8 @@ export default function Measurements({ route, navigation }) {
       await cacheMeasurementDetail(optimistic);
       await queueMutation({
         kind: "measurement_update", method: "put", path: `/mobile/measurements/${existing.id}`,
-        body, ifMatch: existing.if_match, label: "Roof measurement",
+        body, ifMatch: writeToken, baseBody: base.baseBody, baseToken: base.baseToken,
+        label: "Roof measurement",
       });
     } else {
       const draft = localDraft
