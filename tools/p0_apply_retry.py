@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the P0-5 implementation with canonical measurement-list replacement semantics."""
+"""Run P0-5 with canonical, authoritative measurement-list replacement semantics."""
 from pathlib import Path
 import subprocess
 
