@@ -18,6 +18,7 @@ import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, p
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
 import { countStates, deriveSyncStatus } from "./syncStatus";
+import { sketchRefreshDecision } from "./sketchRefreshDecision";
 import { cache } from "./cache";
 import { api } from "./api";
 import { setRelayEventHandler } from "./transport";
@@ -29,6 +30,7 @@ const LAST_PUSH_ATTEMPT = "last_push_attempt_at";
 const LAST_PUSH_OK = "last_successful_push_at";
 const LAST_PULL_OK = "last_successful_pull_at";
 const LAST_CONVERGED = "last_fully_converged_at";
+const DIAG_KEY = "sync_diag";           // persisted, scoped diagnostics ring + timestamps (survive restart)
 const _listeners = new Set();
 
 export function onSyncChange(cb) { _listeners.add(cb); return () => _listeners.delete(cb); }
@@ -90,8 +92,8 @@ export async function runSync() {
     const pending = await loadPending();            // active scope only
     if (pending.length > 0) {
       await putCache(LAST_PUSH_ATTEMPT, new Date().toISOString());  // a Field→Office push cycle is starting
+      _diag.recordPushAttempt();
       const processed = await queue.processQueue(pending, send);
-      _diag.recordPush();   // a push cycle ran (Field→Office write attempts completed)
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
@@ -100,7 +102,11 @@ export async function runSync() {
       await _reconcileFieldAcks(processed);
       await _reconcileMeasurementAcks(processed);
       // A successful PUSH = at least one mutation acknowledged (reached 'synced') this cycle.
-      if (processed.some((m) => m.state === "synced")) await putCache(LAST_PUSH_OK, new Date().toISOString());
+      if (processed.some((m) => m.state === "synced")) {
+        await putCache(LAST_PUSH_OK, new Date().toISOString());
+        _diag.recordPushSuccess();
+      }
+      await _persistDiag();
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -125,9 +131,30 @@ export async function runSync() {
 // conflict, or locked mutation at write time (spec). Never advances while any issue remains.
 async function _markConverged() { return markConvergedIfClean(LAST_CONVERGED, new Date().toISOString()); }
 
-// Device sync diagnostics: last PULL and last PUSH tracked separately + a bounded per-mutation log.
+// Device sync diagnostics: last PULL and last PUSH (attempt vs success) tracked separately + a bounded
+// per-mutation ring. Persisted to scoped SQLite so it SURVIVES the app kill/restart it diagnoses.
 const _diag = createDiagnostics();
 export function syncDiagnostics() { return _diag.snapshot(); }
+async function _persistDiag() { try { await putCache(DIAG_KEY, _diag.snapshot()); } catch (e) { /* best effort */ } }
+
+function _pathCategoryFor(m) {
+  const k = String(m.kind || ""); const cid = String(m.client_id || "");
+  if (k.startsWith("measurement") || cid.startsWith("measurement")) {
+    return cid.includes("sketch") || k.includes("sketch") ? "/api/measurements/sketches" : "/api/measurements";
+  }
+  if (k.includes("sketch") || cid.includes("sketch")) return "/api/measurements/sketches";
+  if (k.startsWith("photo")) return "/api/photos";
+  if (k.startsWith("lead")) return "/api/mobile/leads";
+  if (k.startsWith("visit")) return "/api/visits";
+  if (k.startsWith("inspection")) return "/api/inspections";
+  return "/api";
+}
+function _recoveryActionFor(m) {
+  if (m.state === "conflict") return "conflict";
+  if (m.state === "synced") return "retire";
+  if (m.state === "failed") return "none";
+  return null;
+}
 function _recordMutationDiag(m) {
   if (!m) return;
   const sv = m.serverValue || null;
@@ -137,7 +164,12 @@ function _recordMutationDiag(m) {
   _diag.recordMutation({
     clientId: m.client_id, kind: m.kind, state: m.state,
     httpResult: m.errorCode != null ? m.errorCode : (m.state === "synced" ? "ok" : m.state),
-    revisionId, serverToken, cacheSource: sv ? "server_ack" : null, error: m.error || null,
+    httpStatus: m.status != null ? m.status : (m.httpStatus != null ? m.httpStatus : null),
+    relayErrorCode: m.errorCode != null ? m.errorCode : null,
+    pathCategory: _pathCategoryFor(m),
+    mutationGeneration: m.mutation_generation != null ? m.mutation_generation : m.local_edit_generation,
+    revisionId, serverToken, cacheSource: sv ? "server_ack" : null,
+    recoveryAction: _recoveryActionFor(m), error: m.error || null,
   });
 }
 
@@ -268,6 +300,7 @@ export async function refreshLead(scope, trigger = "manual") {
   _coordinator.markRefreshed(scope);
   _diag.recordPull();   // a successful Office→Field read completed for this lead
   try { await putCache(LAST_PULL_OK, new Date().toISOString()); } catch (e) { /* best effort */ }
+  await _persistDiag();
   const all = await loadAllMutations();
   let changed = false;
   for (const rev of (wm && wm.revisions) || []) {
@@ -280,9 +313,27 @@ export async function refreshLead(scope, trigger = "manual") {
       try { const d = await cache.measurement(rev.revision_id); if (d && d.data) changed = true; } catch (e) { /* offline */ }
     }
     for (const sk of rev.sketches || []) {
-      let skCached = null; try { skCached = await getCache(sketchDetailKey(rev.revision_id, sk.structure_id)); } catch (e) {}
-      const skVer = skCached && skCached.document_version != null ? Number(skCached.document_version) : null;
-      if (skVer != null && skVer !== Number(sk.document_version)) { noteCasFloor(rev.revision_id, sk.structure_id, Number(sk.document_version)); changed = true; }
+      const structureId = sk.structure_id;
+      let skCached = null; try { skCached = await getCache(sketchDetailKey(rev.revision_id, structureId)); } catch (e) {}
+      const localVersion = skCached && skCached.document_version != null ? Number(skCached.document_version) : null;
+      const officeVersion = Number(sk.document_version) || 0;
+      const hasActiveMutation = !!all.find((m) => m.client_id === sketchUpdateMutationId(rev.revision_id, structureId) && (m.state === "pending" || m.state === "failed" || m.state === "conflict"));
+      let localDraft = null; try { localDraft = await getCache(sketchDraftKey(rev.revision_id, structureId)); } catch (e) {}
+      const hasDraft = !!(localDraft && localDraft.document);
+      const contentDiffers = hasDraft && skCached && skCached.document
+        && JSON.stringify(localDraft.document) !== JSON.stringify(skCached.document);
+      const decision = sketchRefreshDecision({ officeVersion, localVersion, hasDraft, hasActiveMutation, contentDiffers });
+      if (decision === "pull") {
+        // Office CREATED the first sketch — pull + cache so the row flips to "Edit Roof Sketch" now.
+        try { const d = await cache.sketch(rev.revision_id, structureId); if (d && d.data) changed = true; } catch (e) { /* offline → retry next trigger */ }
+      } else if (decision === "floor_and_pull") {
+        noteCasFloor(rev.revision_id, structureId, officeVersion);   // never let a stale local CAS overwrite Office
+        try { const d = await cache.sketch(rev.revision_id, structureId); if (d && d.data) changed = true; } catch (e) { /* offline */ }
+        changed = true;
+      } else if (decision === "review") {
+        // Same version, divergent local draft, no active mutation → explicit review (editor-open resolves).
+        _emit({ type: "sketch_review", revisionId: rev.revision_id, structureId, documentVersion: officeVersion });
+      }
     }
   }
   if (changed) _emit({ type: "measurement_reconciled" });
@@ -642,6 +693,9 @@ export async function pendingSummary() {
 // Auto-sync triggers. A device having internet does NOT guarantee Office is reachable, so a failed
 // attempt simply leaves work pending (the queue never drops it) and we retry on the next trigger.
 export function startAutoSync() {
+  // Restore persisted diagnostics FIRST so the record of what happened before an app kill/restart is
+  // available even before the first new sync pass writes anything.
+  getCache(DIAG_KEY).then((s) => _diag.hydrate(s)).catch(() => {});
   // One-time startup recovery for phones stuck in the pre-fix state, BEFORE the first sync pass. Best-effort;
   // never blocks sync. Heals synced-but-undrained creates/updates + orphaned drafts; preserves conflicts/failures.
   recoverMeasurementsOnStartup().catch(() => {}).finally(() => { runSync().catch(() => {}); });

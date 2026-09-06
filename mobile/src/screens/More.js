@@ -158,6 +158,9 @@ export default function More({ navigation }) {
         <TouchableOpacity style={s.syncBtn} onPress={syncNow} disabled={syncing} testID="more-sync-now">
           <Text style={s.syncBtnText}>{syncing ? "Syncing…" : "Sync now"}</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={s.diagBtn} onPress={() => navigation.navigate("Diagnostics")} testID="more-diagnostics">
+          <Text style={s.diagBtnText}>Sync diagnostics</Text>
+        </TouchableOpacity>
       </View>
 
       {undo ? (
@@ -251,6 +254,8 @@ const s = StyleSheet.create({
   syncVal: { fontWeight: "800", fontSize: 15 },
   syncBtn: { backgroundColor: C.brand, borderRadius: 10, padding: 12, alignItems: "center", marginTop: 10 },
   syncBtnText: { color: "#fff", fontWeight: "800" },
+  diagBtn: { borderRadius: 10, padding: 12, alignItems: "center", marginTop: 8, borderWidth: 1, borderColor: C.brand },
+  diagBtnText: { color: C.brand, fontWeight: "800" },
   billingNote: { color: C.sub, fontSize: 13, lineHeight: 19 },
   attRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.line },
   attLabel: { color: C.ink, fontSize: 15, fontWeight: "700", textTransform: "capitalize" },
