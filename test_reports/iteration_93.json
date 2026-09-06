@@ -1,0 +1,21 @@
+{
+  "summary": "Verified the Linux-runnable portions of the Windows build script's preflight after fresh checkout of commit 4340b06 and fresh Postgres DB. (1) Backend import preflight (from build_exes.ps1 lines 75-76) succeeded with exit code 0 and stdout 'backend import preflight OK'. (2) GET /api/health returned 200 with control_plane.ready=true. (3) GET /api/version returned JSON with control_plane.ready=true (migration head e1f2a3b4c5d6). (4) Owner login POST /api/auth/login for pjacobsen@asgardsolution.io returned 200 with valid access_token and role=owner. The PowerShell-specific pywin32 stderr/ErrorActionPreference bug fix itself is not verifiable in this Linux container as noted in the request.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "skipped" },
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (login verified, HTTP 200)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Fresh checkout at commit 4340b06 with fresh Postgres DB. Preflight command (with inert build-preflight DATABASE_URL/JWT_SECRET/SECRETS_ENCRYPTION_KEY env values) imports server + property_dedup + location_upgrade + mapbox_geocoding + maptiler + mapbox_vector_tile + shapely + control_plane.{bootstrap,readiness,migrations_runner} successfully without needing a live DB connection. Backend service is healthy at REACT_APP_BACKEND_URL and control_plane is ready. Migration head e1f2a3b4c5d6.",
+  "preflight_verification": {
+    "command_stdout": "backend import preflight OK",
+    "exit_code": 0,
+    "cwd": "/app/backend",
+    "env_used": "DATABASE_URL=postgresql+asyncpg://roofspan:build-preflight@127.0.0.1:5432/roofspan JWT_SECRET=build-preflight-only SECRETS_ENCRYPTION_KEY=<inert base64>"
+  }
+}
