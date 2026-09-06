@@ -679,11 +679,20 @@ async def build_out(db: AsyncSession, rev: MeasurementRevision) -> dict:
     ext = await _extension(db, rev.id)
     scope = (ext.structure_scope or {}) if ext else {}
 
+    # Per-structure Office sketch metadata so Field can DISCOVER which structures already have an Office
+    # sketch (and its authoritative version) directly from the measurement detail — no separate call.
+    from services import measurement_sketches as _sketch_svc
+    _sketch_docs = await _sketch_svc.list_sketches(db, str(rev.id))
+    _sketch_by_struct = {str(d["structure_id"]): d for d in _sketch_docs}
+
     structure_out = [{
         "id": str(x.id), "name": x.name, "structure_type": x.structure_type,
         "included_in_scope": bool(scope.get(str(x.id), True)),
         "stories": x.stories, "approx_height_ft": x.approx_height_ft,
         "attachment": x.attachment, "notes": x.notes, "sort": x.sort,
+        "has_sketch": str(x.id) in _sketch_by_struct,
+        "sketch_document_version": _sketch_by_struct.get(str(x.id), {}).get("document_version"),
+        "sketch_updated_at": _sketch_by_struct.get(str(x.id), {}).get("updated_at"),
     } for x in structs]
     facet_out = [{
         "id": str(f.id), "structure_id": str(f.structure_id) if f.structure_id else None,

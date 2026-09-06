@@ -6,32 +6,59 @@
 const RS = require("@roofspan/roof-sketch-core");
 const { makeSketchDraft } = require("./sketchCache");
 
-// Decide the initial working document. Local draft is authoritative in B2A (never silently replaced by
-// a server GET). Falls back to a normalized server/cached sketch, then to a fresh document.
-function resolveInitialSketch({ draft, server, structureId } = {}) {
+// Decide the initial working document AND validate against the current Office copy even when a local draft
+// exists (Office-sketch discovery). Four deterministic cases:
+//   (1) identical content at the same version -> retire the obsolete draft, Office wins
+//   (2) an ACTIVE unsynced local edit         -> local remains authoritative
+//   (3) Office version advanced past the draft -> conflict review (preserve local, no silent overwrite)
+//   (4) no local work                          -> Office version wins
+function _localInitial(draft) {
+  return {
+    document: RS.normalizeSketchDocument(draft.document),
+    editMode: draft.edit_mode || "connected_graph",
+    documentVersion: draft.document_version || 0,
+    editGeneration: draft.edit_generation || 1,
+    baseServerDocument: draft.base_server_document || null,
+    source: "local_draft",
+  };
+}
+function _serverInitial(server) {
+  const doc = RS.normalizeSketchDocument(server.document);
+  return {
+    document: doc,
+    editMode: server.edit_mode || doc.edit_mode || "connected_graph",
+    documentVersion: server.document_version || 0,
+    editGeneration: 1,
+    baseServerDocument: server.document,
+    source: "server",
+  };
+}
+function _sketchDocsEqual(a, b) {
+  if (!a || !b) return false;
+  try { return JSON.stringify(RS.normalizeSketchDocument(a)) === JSON.stringify(RS.normalizeSketchDocument(b)); }
+  catch (e) { return false; }
+}
+function resolveInitialSketch({ draft, server, structureId, hasActiveMutation = false } = {}) {
+  const serverVersion = server ? (Number(server.document_version) || 0) : 0;
   if (draft && draft.document) {
-    return {
-      document: RS.normalizeSketchDocument(draft.document),
-      editMode: draft.edit_mode || "connected_graph",
-      documentVersion: draft.document_version || 0,
-      editGeneration: draft.edit_generation || 1,
-      baseServerDocument: draft.base_server_document || null,
-      source: "local_draft",
-    };
+    const draftVersion = Number(draft.document_version) || 0;
+    // (2) Active unsynced local edit is always authoritative — never replaced by an Office GET.
+    if (hasActiveMutation) return { ..._localInitial(draft), decision: "local_active" };
+    // (1) No active local work AND identical to Office at the same version -> the draft is obsolete.
+    if (server && server.document && serverVersion === draftVersion && _sketchDocsEqual(draft.document, server.document)) {
+      return { ..._serverInitial(server), decision: "office_identical", retireObsoleteDraft: true };
+    }
+    // (3) Office advanced beyond the draft's base version -> explicit conflict review (preserve local).
+    if (server && server.document && serverVersion > draftVersion) {
+      return { ..._localInitial(draft), decision: "conflict", conflict: true, serverDetail: server };
+    }
+    // Otherwise preserve local unsynced work (never lose edits) even without an active mutation.
+    return { ..._localInitial(draft), decision: "local" };
   }
-  if (server && server.document) {
-    const doc = RS.normalizeSketchDocument(server.document);
-    return {
-      document: doc,
-      editMode: server.edit_mode || doc.edit_mode || "connected_graph",
-      documentVersion: server.document_version || 0,
-      editGeneration: 1,
-      baseServerDocument: server.document,
-      source: "server",
-    };
-  }
+  // (4) No local work: Office (or a cached Office copy) wins.
+  if (server && server.document) return { ..._serverInitial(server), decision: "office" };
   const doc = RS.createSketchDocument({ structureId });
-  return { document: doc, editMode: doc.edit_mode, documentVersion: 0, editGeneration: 1, baseServerDocument: null, source: "new" };
+  return { document: doc, editMode: doc.edit_mode, documentVersion: 0, editGeneration: 1, baseServerDocument: null, source: "new", decision: "new" };
 }
 
 // persist: async (draft, generation) => void  (e.g. bound cache.saveSketchDraft). Injected so the

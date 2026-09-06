@@ -10,9 +10,9 @@ const DRAG_THRESHOLD_PX = 8;
 
 // Resolve the read-through cache envelope { data, stale, cachedAt, error } into the pure resolver's
 // `server` shape, keeping the local draft authoritative. Returns { initial, statusMeta }.
-function resolveFieldSketchLoad({ draft, sketchResult, structureId } = {}) {
+function resolveFieldSketchLoad({ draft, sketchResult, structureId, hasActiveMutation = false } = {}) {
   const server = sketchResult && sketchResult.data ? sketchResult.data : null;
-  const initial = resolveInitialSketch({ draft, server, structureId });
+  const initial = resolveInitialSketch({ draft, server, structureId, hasActiveMutation });
   const statusMeta = {
     stale: !!(sketchResult && sketchResult.stale),
     cachedAt: (sketchResult && sketchResult.cachedAt) || null,
