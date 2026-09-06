@@ -18,6 +18,21 @@ branch_labels = None
 depends_on = None
 
 
+def _renumber_set(conn, set_id) -> int:
+    """Assign a UNIQUE, deterministic (chronological) revision_number sequence within a canonical set so a
+    merge can never leave tied numbers. supersedes_revision_id references revision IDs (unchanged), so
+    supersede chains are preserved. Returns how many revision numbers changed."""
+    rows = conn.execute(sa.text(
+        "SELECT id, revision_number FROM measurement_revisions WHERE set_id = :s ORDER BY created_at ASC, id ASC"
+    ), {"s": set_id}).fetchall()
+    changed = 0
+    for i, (rid, num) in enumerate(rows, start=1):
+        if num != i:
+            conn.execute(sa.text("UPDATE measurement_revisions SET revision_number = :n WHERE id = :id"), {"n": i, "id": rid})
+            changed += 1
+    return changed
+
+
 def _merge_by(conn, key: str):
     dup_values = conn.execute(sa.text(
         f"SELECT {key} FROM measurement_sets WHERE {key} IS NOT NULL GROUP BY {key} HAVING COUNT(*) > 1"
@@ -48,6 +63,8 @@ def _merge_by(conn, key: str):
                 conn.execute(sa.text("UPDATE measurement_sets SET lead_id = :x WHERE id = :c"), {"x": d_lead, "c": canon_id})
                 canon_lead = d_lead
             conn.execute(sa.text("DELETE FROM measurement_sets WHERE id = :d"), {"d": dupe_id})
+        # Renumber the canonical set so merged revisions never share a revision_number.
+        _renumber_set(conn, canon_id)
 
 
 def upgrade() -> None:

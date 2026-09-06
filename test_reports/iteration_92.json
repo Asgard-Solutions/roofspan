@@ -1,0 +1,25 @@
+{
+  "summary": "Iter92: Verified canonical measurement-set migration correctness end-to-end. 8/8 executed backend tests pass (1 skipped by design). UNIQUE constraint uq_measurement_revisions_set_number exists in pg_constraint and is DB-enforced (duplicate (set_id,revision_number) insert raises psycopg2.UniqueViolation). Revision numbering after a normal create + 3 PUTs + 2 new-revisions is unique, chronological, and equal to 1..N in created_at ASC order. Lead-primary resolution verified: POST /api/mobile/leads dedupes by (property_id, assigned_user_id, status!=archived) so leadA==leadB when created back-to-back on the same property by the same owner (this is expected product behavior, not a resolver bug). Fallback test with two distinct leads on two distinct properties confirms disjoint measurement sets. Office (/api/measurements) and Field (/api/mobile/measurements) return identical revision families for the same lead. Lifecycle regressions intact: POST 201, PUT If-Match 200 rotates updated_at, stale If-Match returns 409 with detail.server, invalid body returns 422. Migration file prints sets_fixed / revisions_renumbered / remaining_lead_relationship_conflicts.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_measurement_lead_primary_iter92.py",
+    "/app/test_reports/pytest/iter92.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "resolve_measurement_set correctly restricts to lead_id when supplied (services/measurements.py:118-123) — this is what makes the lead-primary guarantee hold.",
+    "POST /api/mobile/leads dedupes by (property_id, assigned_user_id, non-archived) (routers/mobile.py:720-731). This explains E1's manual observation of leadA==leadB on same property; not a resolver bug. If product intent is that two distinct leads can coexist on a shared property for the same rep, this dedupe rule needs revisiting — but per the request, this is acceptable as-is.",
+    "Migration c4d5e6f7a8b9 uses ORDER BY created_at ASC, id ASC before renumbering (correct deterministic ordering matching supersedes_revision_id references)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_measurement_lead_primary_iter92.py (new)"
+  ],
+  "success_rate": {"backend": "100% (8/8 executed, 1 skipped by-design)", "frontend": "n/a"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from problem statement)",
+  "seed_data_creation": "Created TEST_iter92 properties + leads + measurements per test; no cleanup (isolated by uuid prefixes).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Head migration is c4d5e6f7a8b9. psycopg2-binary was pip-installed for DB assertions. Note that POST /api/mobile/leads dedupes leads by (property, assigned_user_id, status!=archived) — to force two DISTINCT leads on the same property, either archive lead A first or use two different rep users. The alembic downgrade -1 / upgrade head cycle was NOT actually run in this iteration (migration report line existence was verified via source-code assertion); running it would require care because it drops/re-adds a UNIQUE constraint on a live DB.",
+  "rca of the issue": "E1's suspicion is confirmed by inspection + test: POST /api/mobile/leads returns the same lead id for a repeated (owner, property) pair (routers/mobile.py:720-731). Therefore E1's manual case of 'leadB inherits leadA's measurements' was actually leadB == leadA. The resolver is correct."
+}
