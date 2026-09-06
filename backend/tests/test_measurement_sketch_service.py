@@ -6,15 +6,18 @@ pre-existing "first" Property; never mutates arbitrary customer rows.
 """
 import asyncio
 import sys
+import uuid
 sys.path.insert(0, "backend")
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from db import SessionLocal
-from models import MeasurementStructure
+from models import AuditLog, MeasurementRevision, MeasurementStructure, RelayOutboxEvent
 from schemas_measurements import MeasurementRevisionIn, StructureIn
 from services import measurements as msvc
 from services import measurement_sketches as ssvc
+from services import office_outbox
+from core import log_action
 from fastapi import HTTPException
 
 from _sketch_fixtures import FakeUser, seed_property, teardown
@@ -98,12 +101,73 @@ async def _scenario():
             await teardown(db, set_ids=[created_set_id] if created_set_id else [], property_ids=[prop.id])
 
 
+async def _transactional_outbox_rollback_scenario():
+    """Failure injection: business write, audit and outbox must all roll back together."""
+    marker = f"test.measurement.transaction.{uuid.uuid4()}"
+    user = FakeUser(id=None, role="owner", email="transaction_pytest@roofspan.test")
+    prop_id = set_id = revision_id = None
+
+    async with SessionLocal() as db:
+        prop = await seed_property(db)
+        prop_id = prop.id
+        rev = await msvc.create_revision(
+            db,
+            MeasurementRevisionIn(property_id=str(prop.id), notes="before transaction"),
+            user,
+        )
+        set_id = rev.set_id
+        revision_id = rev.id
+        await db.commit()
+
+    try:
+        # This is the exact required transaction boundary. The injected exception occurs after all three
+        # writes have been flushed, but before the route's one final commit.
+        with pytest.raises(RuntimeError, match="injected before final commit"):
+            async with SessionLocal() as db:
+                rev = await db.get(MeasurementRevision, revision_id)
+                rev.notes = "must roll back"
+                await log_action(
+                    db,
+                    user=user,
+                    action=marker,
+                    entity_type="measurement_revision",
+                    entity_id=str(revision_id),
+                    commit=False,
+                )
+                await office_outbox.emit_for_revision(db, rev, marker)
+                await db.flush()
+                raise RuntimeError("injected before final commit")
+
+        async with SessionLocal() as db:
+            persisted = await db.get(MeasurementRevision, revision_id)
+            audit_rows = (await db.execute(select(AuditLog).where(AuditLog.action == marker))).scalars().all()
+            outbox_rows = (await db.execute(select(RelayOutboxEvent).where(RelayOutboxEvent.event_type == marker[:48]))).scalars().all()
+            assert persisted.notes == "before transaction"
+            assert audit_rows == []
+            assert outbox_rows == []
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(delete(RelayOutboxEvent).where(RelayOutboxEvent.event_type == marker[:48]))
+            await db.execute(delete(AuditLog).where(AuditLog.action == marker))
+            await teardown(
+                db,
+                set_ids=[set_id] if set_id else [],
+                property_ids=[prop_id] if prop_id else [],
+            )
+
+
 def test_sketch_service_contract():
     from _sketch_fixtures import run_isolated
     run_isolated(_scenario)
 
 
+def test_measurement_audit_and_outbox_roll_back_as_one_transaction():
+    from _sketch_fixtures import run_isolated
+    run_isolated(_transactional_outbox_rollback_scenario)
+
+
 if __name__ == "__main__":
     from _sketch_fixtures import run_isolated
     run_isolated(_scenario)
+    run_isolated(_transactional_outbox_rollback_scenario)
     print("SKETCH SERVICE TESTS PASSED")
