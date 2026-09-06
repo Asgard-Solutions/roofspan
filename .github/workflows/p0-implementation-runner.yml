@@ -6,6 +6,8 @@ on:
       - fix/p0-measurement-sync-hardening-20260906
     paths:
       - "tools/p0_apply.py"
+      - "tools/p0_apply_retry.py"
+      - ".github/workflows/p0-implementation-runner.yml"
 
 permissions:
   contents: write
@@ -46,7 +48,7 @@ jobs:
       - name: Install locked workspace dependencies
         run: npm ci
       - name: Apply current P0 production change and run its focused verification
-        run: python tools/p0_apply.py
+        run: python tools/p0_apply_retry.py
       - name: Validate resulting diff
         run: |
           git diff --check
