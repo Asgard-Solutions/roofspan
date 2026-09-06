@@ -9,6 +9,7 @@ RELAY_INTERNAL_VERSION = 1
 
 T_REQUEST = "request"
 T_RESPONSE = "response"
+T_BROADCAST = "broadcast"
 
 
 class EnvelopeError(ValueError):
@@ -48,6 +49,34 @@ def validate(env) -> dict:
     if env.get("type") not in (T_REQUEST, T_RESPONSE):
         raise EnvelopeError(f"unknown type {env.get('type')!r}")
     for k in ("source_node", "target_node", "installation_id", "correlation_id"):
+        v = env.get(k)
+        if not isinstance(v, str) or not v:
+            raise EnvelopeError(f"missing/invalid {k}")
+    if not isinstance(env.get("frame"), dict):
+        raise EnvelopeError("frame must be an object")
+    return env
+
+
+def build_broadcast(origin_node: str, installation_id: str, frame: dict) -> dict:
+    """Office->Field invalidation fanned to ALL relay nodes over a shared broadcast channel. Carries the
+    ORIGIN node id so the originating node can drop its own echo (it already delivered locally)."""
+    return {
+        "relay_internal_version": RELAY_INTERNAL_VERSION,
+        "type": T_BROADCAST,
+        "origin_node": origin_node,
+        "installation_id": installation_id,
+        "frame": frame,
+    }
+
+
+def validate_broadcast(env) -> dict:
+    if not isinstance(env, dict):
+        raise EnvelopeError("envelope is not an object")
+    if env.get("relay_internal_version") != RELAY_INTERNAL_VERSION:
+        raise EnvelopeError(f"unsupported version {env.get('relay_internal_version')!r}")
+    if env.get("type") != T_BROADCAST:
+        raise EnvelopeError(f"unknown type {env.get('type')!r}")
+    for k in ("origin_node", "installation_id"):
         v = env.get(k)
         if not isinstance(v, str) or not v:
             raise EnvelopeError(f"missing/invalid {k}")

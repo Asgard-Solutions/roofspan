@@ -63,6 +63,31 @@ class AppConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class RelayOutboxEvent(Base):
+    """Durable transactional outbox for Office->Field measurement invalidations.
+
+    Written in the SAME transaction as the measurement/sketch mutation, so an event is never lost and
+    never emitted for an uncommitted write. The loopback Relay Connector leases undelivered rows,
+    forwards a lightweight `measurement_changed` frame up the tunnel, and acks after the Relay confirms
+    acceptance. `id` is the stable event id echoed end to end; delivery is at-least-once. Carries NO
+    business document — only routing ids + a watermark (Field pulls the canonical copy)."""
+    __tablename__ = "relay_outbox_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    measurement_set_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    structure_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sketch_document_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at_watermark: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+
 # ---------- Phase 2: Property Acquisition ----------
 
 class Territory(Base):

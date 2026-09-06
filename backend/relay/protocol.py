@@ -26,6 +26,14 @@ T_PONG = "pong"
 T_ERROR = "error"
 T_BYE = "bye"
 T_MEASUREMENT_CHANGED = "measurement_changed"
+T_BROADCAST_ACK = "broadcast_ack"
+
+
+def broadcast_ack(*, event_id=None, delivered=0) -> dict:
+    """Relay -> Installation acknowledgement that a `measurement_changed` invalidation was ACCEPTED and
+    fanned out. The connector waits for this BEFORE acking the durable Office outbox event (so an event
+    is retried until the Relay has taken responsibility for it)."""
+    return {"type": T_BROADCAST_ACK, "event_id": event_id, "delivered": int(delivered or 0)}
 
 
 def measurement_changed(*, lead_id=None, measurement_set_id=None, revision_id=None, updated_at=None) -> dict:
