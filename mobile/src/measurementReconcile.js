@@ -72,6 +72,77 @@ function measScopeFromBody(body) {
   return null;
 }
 
+// Extract the complete editable measurement document from an authoritative revision detail. Routing and
+// command fields stay on the mutation body; these are the values that must participate in conflict merge.
+function _cloneJson(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
+function measurementDocumentFromRevision(src) {
+  if (!src || typeof src !== "object") return null;
+  const out = {
+    structures: _cloneJson(src.structures || []),
+    facets: _cloneJson(src.facets || []),
+    edges: _cloneJson(src.edges || []),
+    penetrations: _cloneJson(src.penetrations != null ? src.penetrations : (src.pens || [])),
+    summary: _cloneJson(src.summary || {}),
+  };
+  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
+    if (Object.prototype.hasOwnProperty.call(src, key)) out[key] = _cloneJson(src[key]);
+  }
+  return out;
+}
+
+// Coalescing rule: once a measurement_update is pending, every later local edit retains that row's ORIGINAL
+// base. Falling back to the current optimistic cache would manufacture a false base and permit data loss.
+function chooseDurableMeasurementBase(authoritative, pending) {
+  if (pending && pending.kind === "measurement_update") {
+    if (!pending.base_body || pending.base_token == null || pending.base_token === "") {
+      return { ok: false, reason: "missing_durable_base" };
+    }
+    return { ok: true, baseBody: _cloneJson(pending.base_body), baseToken: String(pending.base_token) };
+  }
+  const token = authoritative && (authoritative.base_token || authoritative.updated_at || authoritative.if_match);
+  const body = authoritative && authoritative.base_body
+    ? _cloneJson(authoritative.base_body)
+    : measurementDocumentFromRevision(authoritative);
+  if (!body || token == null || token === "") return { ok: false, reason: "missing_authoritative_base" };
+  return { ok: true, baseBody: body, baseToken: String(token) };
+}
+
+// A Keep-Mine merge is legal only when the durable base token is exactly the token used by the failed PUT.
+// Legacy rows are preserved for explicit review rather than blindly re-sending an entire stale snapshot.
+function measurementConflictMergeInputs(mutation, serverDetail) {
+  if (!mutation || mutation.kind !== "measurement_update") return { ok: false, reason: "not_measurement_update" };
+  if (!mutation.base_body || mutation.base_token == null || mutation.base_token === "") {
+    return { ok: false, reason: "missing_durable_base" };
+  }
+  if (String(mutation.base_token) !== String(mutation.ifMatch || "")) {
+    return { ok: false, reason: "base_token_mismatch" };
+  }
+  const office = measurementDocumentFromRevision(serverDetail);
+  if (!office || !serverDetail || serverDetail.updated_at == null) {
+    return { ok: false, reason: "missing_office_detail" };
+  }
+  return {
+    ok: true,
+    base: _cloneJson(mutation.base_body),
+    field: _cloneJson(mutation.body || {}),
+    office,
+    officeToken: String(serverDetail.updated_at),
+  };
+}
+
+function buildMergedMeasurementBody(fieldBody, merged) {
+  const next = _cloneJson(fieldBody || {}) || {};
+  next.structures = _cloneJson(merged.structures || []);
+  next.facets = _cloneJson(merged.facets || []);
+  next.edges = _cloneJson(merged.edges || []);
+  next.penetrations = _cloneJson(merged.pens != null ? merged.pens : (merged.penetrations || []));
+  next.summary = _cloneJson(merged.summary || {});
+  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
+    if (Object.prototype.hasOwnProperty.call(merged, key)) next[key] = _cloneJson(merged[key]);
+  }
+  return next;
+}
+
 // A newer local edit (higher generation) landed while the ack was in flight → the ack is stale for the
 // currently-stored row. Its authoritative caches still advance, but its drafts must NEVER be retired.
 function isSupersededAck(storedRow, ack) {
@@ -143,8 +214,9 @@ function resolveMeasurementView({ serverDetail, serverStale, optimistic, draft, 
 // Transform a superseded CREATE row into an UPDATE of the just-created server revision (P0 data-loss fix):
 // the newer local body must be APPLIED, not lost to an idempotent create replay. Preserves the newer body,
 // generation, scope and local_edit_generation; resets the network/result fields; becomes a PUT.
-function buildConvertedUpdateMutation(m, revisionId, ifMatch) {
+function buildConvertedUpdateMutation(m, revisionId, ifMatch, serverBase) {
   const cid = `measurement-update:${String(revisionId)}`;
+  const authoritativeBase = measurementDocumentFromRevision(serverBase);
   return {
     ...m,
     client_id: cid,
@@ -153,6 +225,8 @@ function buildConvertedUpdateMutation(m, revisionId, ifMatch) {
     method: "PUT",
     path: `/mobile/measurements/${String(revisionId)}`,
     ifMatch,
+    base_body: authoritativeBase,
+    base_token: ifMatch == null ? null : String(ifMatch),
     server_id: String(revisionId),
     serverValue: null,
     error: null,
@@ -176,6 +250,10 @@ module.exports = {
   measurementSyncState,
   upsertRevision,
   measScopeFromBody,
+  measurementDocumentFromRevision,
+  chooseDurableMeasurementBase,
+  measurementConflictMergeInputs,
+  buildMergedMeasurementBody,
   isSupersededAck,
   retireCreateDraft,
   planMeasurementWorkingAck,

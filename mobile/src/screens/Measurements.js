@@ -4,7 +4,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
-import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
+import { resolveMeasurementView, measurementSyncState, measurementDocumentFromRevision, chooseDurableMeasurementBase, measurementConflictMergeInputs, buildMergedMeasurementBody } from "../measurementReconcile";
 import { canonicalFingerprint, threeWayMergeMeasurement } from "../measurementRecovery";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
@@ -149,6 +149,7 @@ export default function Measurements({ route, navigation }) {
         source: full.source || "field", revision_number: full.revision_number,
         provider: full.provider ?? null, report_id: full.report_id ?? null,
         reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,
+        base_body: measurementDocumentFromRevision(full), base_token: full.updated_at,
       });
       setReadonly(!full.editable);
       setStructures((full.structures || []).map((row) => ({ ...row, ref: row.id || row.ref || uid(), included_in_scope: row.included_in_scope !== false })));
@@ -281,22 +282,28 @@ export default function Measurements({ route, navigation }) {
 
   const onKeepMine = useCallback(async () => {
     if (!conflict || !conflict.serverDetail) return;
-    // Three-way merge (base vs Field vs Office): apply Field-only changes, preserve Office-only changes.
-    // If a group changed on BOTH sides, keep the conflict for explicit review — never silently overwrite.
-    let mergedBody = null;
-    try {
-      const wd = await loadMeasurementWorkingDraft(scope);
-      if (wd && wd.base_body) {
-        const field = { structures: wd.structures, facets: wd.facets, edges: wd.edges, pens: wd.pens, summary: wd.summary };
-        const r = threeWayMergeMeasurement(wd.base_body, field, conflict.serverDetail);
-        if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }
-        mergedBody = { structures: r.merged.structures, facets: r.merged.facets, edges: r.merged.edges, penetrations: r.merged.pens, summary: r.merged.summary };
-      }
-    } catch (e) { mergedBody = null; }
-    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at, mergedBody);
+    // The transient working draft is intentionally cleared by Save. The durable mutation is therefore the
+    // only legal Base/Field lineage for conflict resolution. Legacy rows without it stay in review.
+    const mutation = await currentMeasurementMutation(conflict.revisionId);
+    const inputs = measurementConflictMergeInputs(mutation, conflict.serverDetail);
+    if (!inputs.ok) {
+      setConflict({ ...conflict, mergeUnavailable: inputs.reason });
+      Alert.alert("Review required", "This older saved change does not contain a trustworthy merge base. Use the Office version, then reapply your change.");
+      return;
+    }
+    const r = threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);
+    if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }
+    const mergedBody = buildMergedMeasurementBody(mutation.body, r.merged);
+    const decision = await rebaseMeasurementUpdate(
+      conflict.revisionId, conflict.serverDetail.updated_at, mergedBody, conflict.serverDetail
+    );
+    if (decision.action !== "keep_local") {
+      setConflict({ ...conflict, mergeUnavailable: decision.reason || "review_required" });
+      return;
+    }
     setConflict(null);
     await load();
-  }, [conflict, scope, load]);
+  }, [conflict, load]);
 
   // Failed-sync recovery: preserve local work and re-attempt the durable mutation on demand.
   const onRetrySync = useCallback(async () => {
@@ -457,6 +464,15 @@ export default function Measurements({ route, navigation }) {
     }
     const body = buildBody(markComplete);
     if (existing) {
+      const pending = await currentMeasurementMutation(existing.id);
+      const base = chooseDurableMeasurementBase(existing, pending && pending.state !== "synced" ? pending : null);
+      if (!base.ok) {
+        Alert.alert("Cannot safely save", "This older local edit has no trustworthy Office base. Use the Office version, reopen it, and reapply the change.");
+        return;
+      }
+      const writeToken = pending && pending.state !== "synced" && pending.ifMatch
+        ? pending.ifMatch
+        : (existing.if_match || base.baseToken);
       const optimistic = {
         id: existing.id, updated_at: existing.if_match, status: markComplete ? "field_complete" : existing.status,
         editable: true, source: existing.source, revision_number: existing.revision_number,
@@ -468,7 +484,8 @@ export default function Measurements({ route, navigation }) {
       await cacheMeasurementDetail(optimistic);
       await queueMutation({
         kind: "measurement_update", method: "put", path: `/mobile/measurements/${existing.id}`,
-        body, ifMatch: existing.if_match, label: "Roof measurement",
+        body, ifMatch: writeToken, baseBody: base.baseBody, baseToken: base.baseToken,
+        label: "Roof measurement",
       });
     } else {
       const draft = localDraft

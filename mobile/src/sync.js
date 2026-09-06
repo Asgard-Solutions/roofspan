@@ -13,7 +13,7 @@ import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
-import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";
+import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
@@ -256,13 +256,13 @@ async function _reconcileMeasurementAcks(processed) {
       // A newer local edit is still pending — NEVER retire its drafts.
       if (stored.kind === "measurement_update") {
         // Rebase the newer update onto the fresh authoritative token so it applies cleanly.
-        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at, rev);
       } else if (stored.kind === "measurement") {
         // P0 data-loss fix: a newer CREATE generation superseded this acknowledged create. Convert it into
         // an UPDATE of the just-created revision so the newer body is actually applied (an idempotent
         // create replay would otherwise silently return the original record and the second edit would be
         // lost). Draft is rebased onto the new revision and retired only after the update's OWN ack.
-        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);
+        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at, rev);
         if (res && res.converted) {
           if (measScope) await mutateCache(measWorkingKey(measScope), (cur) => rebaseWorkingDraftToRevision(cur, { oldClientId: m.client_id, revisionId, ifMatch: rev.updated_at }));
           _rerunRequested = true;   // automatically run the converted update on the next pass
@@ -600,13 +600,20 @@ export async function resolveMeasurementConflictUseOffice(revisionId, scope, ser
 // Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer Office
 // version (adopt its updated_at as If-Match). When a 3-way-merged body is supplied, apply it so Office-only
 // changes are preserved and only Field-changed fields override. Re-triggers sync after the durable rebase.
-export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {
+export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody, newBaseDetail) {
   const id = `measurement-update:${String(revisionId)}`;
   const all = await loadAllMutations();
   const m = all.find((x) => x.client_id === id);
   if (!m) return { action: "noop" };
-  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;
-  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });
+  const base = measurementDocumentFromRevision(newBaseDetail);
+  if (!mergedBody || !base || newIfMatch == null || newIfMatch === "") {
+    return { action: "review_required", reason: "missing_or_untrusted_base" };
+  }
+  await saveMutation({
+    ...m, body: mergedBody, ifMatch: newIfMatch,
+    base_body: base, base_token: String(newIfMatch),
+    state: "pending", error: null, errorCode: null, serverValue: null,
+  });
   _emit({ type: "queued" });
   runSync().catch(() => {});
   return { action: "keep_local" };

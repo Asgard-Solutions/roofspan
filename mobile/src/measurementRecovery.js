@@ -126,6 +126,17 @@ function threeWayMergeMeasurement(base, field, office) {
     else if (fCh) ms[k] = fs[k]; else ms[k] = (k in os ? os[k] : bs[k]);
   }
   merged.summary = ms;
+  // Hidden/import metadata is part of the backend's full-document replacement contract too. Merge it
+  // independently so a Field roof-line edit cannot revert an Office-only provider/report/note change.
+  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {
+    const has = (obj) => Object.prototype.hasOwnProperty.call(obj, key);
+    if (!has(base) && !has(field) && !has(office)) continue;
+    const bv = JSON.stringify(base[key]), fv = JSON.stringify(field[key]), ov = JSON.stringify(office[key]);
+    const fCh = bv !== fv, oCh = bv !== ov;
+    if (fCh && oCh && fv !== ov) { conflicts.push(key); merged[key] = field[key]; }
+    else if (fCh) merged[key] = field[key];
+    else merged[key] = has(office) ? office[key] : base[key];
+  }
   return { merged, conflicts, clean: conflicts.length === 0 };
 }
 

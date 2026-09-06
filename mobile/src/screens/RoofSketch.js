@@ -11,6 +11,7 @@ import { loadSketchDraft, saveSketchDraftStrict, clearSketchDraft, cacheSketchDe
 import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, currentMeasurementMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
 import { conflictReview } from "../roofSketchConflict";
 import * as RECON from "../roofProposalReconcile";
+import { chooseDurableMeasurementBase } from "../measurementReconcile";
 import RoofSketchCanvas from "../components/RoofSketchCanvas";
 import SketchInspector from "../components/SketchInspector";
 import SketchConflictReview from "../components/SketchConflictReview";
@@ -285,11 +286,24 @@ export default function RoofSketch({ route }) {
     if (!ed || editingBlockedRef.current || !row || !row.canAccept || !row.relational_id) return;
     const rec = { target_type: row.target_type, metric: row.metric, target_id: row.sketch_id };
     const res = await cache.measurement(revision_id);
-    const current = res && res.data ? res.data : measDetail;
+    const authoritative = res && res.data ? res.data : measDetail;
+    const pending = await currentMeasurementMutation(revision_id);
+    const current = pending && pending.state !== "synced" && pending.body
+      ? { ...authoritative, ...pending.body, id: revision_id, updated_at: pending.ifMatch }
+      : authoritative;
+    const base = chooseDurableMeasurementBase(authoritative, pending && pending.state !== "synced" ? pending : null);
+    if (!base.ok) {
+      Alert.alert("Review required", "This older local measurement change has no trustworthy Office base. Resolve it before accepting another proposed value.");
+      return;
+    }
     const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });
     if (upd.changed) {
       await cacheMeasurementDetail(upd.nextDetail);
-      await queueMutation({ kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`, body: upd.body, ifMatch: upd.ifMatch, label: "Roof measurement" });
+      await queueMutation({
+        kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`,
+        body: upd.body, ifMatch: pending && pending.state !== "synced" ? pending.ifMatch : upd.ifMatch,
+        baseBody: base.baseBody, baseToken: base.baseToken, label: "Roof measurement",
+      });
     }
     ed.commit(RECON.acceptProposalDecision(ed.document, rec, row.relational_id, row.proposed));
     settle();
