@@ -6,6 +6,7 @@ import { makeScope, scopedKey } from "./scope";
 import queue from "./queue";
 import { planExpectedVersionFloor, reconcileDraftWrite } from "./roofSketchAck";
 import { applyResolutionInTx } from "./roofSketchConflict";
+import { buildConvertedUpdateMutation } from "./measurementReconcile";
 
 let _db = null;
 let _inst = "none";
@@ -78,6 +79,37 @@ export async function saveMutation(m) {
   });
 }
 
+// Superseded CREATE → UPDATE conversion (P0 data-loss fix). When Office acknowledges a create but a NEWER
+// create generation is still pending under the same idempotency key, convert that newer row into a PUT of
+// the just-created revision so its body is actually applied (an idempotent create replay would otherwise
+// silently return the original record). Writes the new update row DURABLY, then removes the original create
+// — atomic within one serialized transaction; scoped to this account.
+export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const row = await d.getFirstAsync(
+      "SELECT json FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      oldClientId, scope
+    );
+    if (!row) return { converted: false, reason: "gone" };
+    const m = JSON.parse(row.json);
+    if (m.kind !== "measurement" || m.state !== "pending") return { converted: false, reason: "not_pending_create" };
+    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch);
+    const gen = Number(m.mutation_generation) || 1;
+    // Durably WRITE the new update row BEFORE deleting the original create (single atomic txn).
+    await d.runAsync(
+      "INSERT OR REPLACE INTO pending_mutations (client_id, json, state, scope, mutation_generation) VALUES (?, ?, ?, ?, ?)",
+      converted.client_id, JSON.stringify(converted), converted.state, scope, gen
+    );
+    await d.runAsync(
+      "DELETE FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+      oldClientId, scope
+    );
+    return { converted: true, newClientId: converted.client_id, ifMatch: newIfMatch };
+  });
+}
+
 // Generation-guarded writeback for network results (spec §A6/§A7). ATOMIC conditional UPDATE at the SQL
 // boundary — applies the processed row ONLY if the stored row still carries the same generation that was
 // sent (COALESCE handles legacy NULL as 1, §A8). It NEVER inserts a missing row, so a late result can
@@ -109,6 +141,21 @@ export async function markCleanIfNoPending(cacheKey, value) {
       scope
     );
     if (row && Number(row.c) > 0) return false;   // current work exists -> do NOT advance last_sync
+    await putCache(cacheKey, value);
+    return true;
+  });
+}
+
+// Global "fully converged" marker: advances the given cache key ONLY when NO unsettled mutation remains
+// in ANY scope — pending, failed, conflict, or locked all block advancement (spec: last_fully_converged_at).
+// Serialized like markCleanIfNoPending so a mutation queued concurrently can't slip between check + write.
+export async function markConvergedIfClean(cacheKey, value) {
+  return _serialize(async () => {
+    const d = await db();
+    const row = await d.getFirstAsync(
+      "SELECT COUNT(*) AS c FROM pending_mutations WHERE state IN ('pending','failed','conflict','locked')"
+    );
+    if (row && Number(row.c) > 0) return false;   // unsettled work exists -> do NOT mark converged
     await putCache(cacheKey, value);
     return true;
   });

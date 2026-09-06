@@ -8,6 +8,7 @@ from core import require_roles, FIELD_ROLES, log_action
 from schemas_sketch import SketchWriteIn, SketchOut
 from services import measurement_sketches as svc
 from services import mobile_authz as mauthz
+from services import office_outbox
 from models import MeasurementRevision, MeasurementSet, Lead
 
 router = APIRouter(prefix="/api/measurements", tags=["measurement-sketches"])
@@ -51,7 +52,7 @@ async def get_sketch(revision_id: str, structure_id: str, user: User = Depends(r
 @router.put("/{revision_id}/sketches/{structure_id}", response_model=SketchOut)
 async def put_sketch(revision_id: str, structure_id: str, payload: SketchWriteIn, request: Request,
                      user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    await _scope(db, revision_id, user)
+    rev = await _scope(db, revision_id, user)
     existed = await svc.get_sketch(db, revision_id, structure_id)
     try:
         out = await svc.save_sketch(db, revision_id, structure_id, edit_mode=payload.edit_mode,
@@ -61,6 +62,7 @@ async def put_sketch(revision_id: str, structure_id: str, payload: SketchWriteIn
         await log_action(db, user=user, action="measurement.sketch.conflict", entity_type="measurement_sketch", entity_id=structure_id, detail={"revision_id": revision_id}, request=request)
         raise HTTPException(status_code=409, detail={"message": "This roof sketch changed on the server since your copy.", "server": _jsonable(c.server)})
     await log_action(db, user=user, action="measurement.sketch.update" if existed else "measurement.sketch.create", entity_type="measurement_sketch", entity_id=structure_id, detail={"revision_id": revision_id, "document_version": out["document_version"]}, request=request)
+    await office_outbox.emit_for_revision(db, rev, "measurement.sketch", structure_id=structure_id, sketch_document_version=out["document_version"])
     await db.commit()
     return out
 

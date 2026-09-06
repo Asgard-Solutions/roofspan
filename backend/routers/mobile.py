@@ -54,16 +54,20 @@ async def require_min_mobile_version(x_roofspan_app_version: str | None = Header
 router.dependencies.append(Depends(require_min_mobile_version))
 
 
-async def _reserve_idem(db: AsyncSession, key: str | None, entity_type: str):
-    """Atomically reserve an Idempotency-Key. Returns existing entity_id on replay, else None."""
+async def _reserve_idem(db: AsyncSession, key: str | None, entity_type: str, fingerprint: str | None = None):
+    """Atomically reserve an Idempotency-Key. Returns existing entity_id on replay, else None. When a
+    request fingerprint is supplied, REUSING one key with a DIFFERENT body is rejected (409) rather than
+    silently replaying the old result as though the new body were accepted (P0 data-loss guard)."""
     if not key:
         return None, False
     existing = await db.get(IdempotencyKey, key)
     if existing:
         if existing.entity_type != entity_type:
             raise HTTPException(status_code=409, detail="Idempotency-Key already used for a different operation")
+        if fingerprint is not None and existing.request_fingerprint and existing.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="Idempotency-Key reused with a different request body")
         return existing.entity_id, True
-    db.add(IdempotencyKey(key=key, entity_type=entity_type, entity_id="pending"))
+    db.add(IdempotencyKey(key=key, entity_type=entity_type, entity_id="pending", request_fingerprint=fingerprint))
     try:
         await db.flush()
     except IntegrityError:
@@ -71,6 +75,15 @@ async def _reserve_idem(db: AsyncSession, key: str | None, entity_type: str):
         existing = await db.get(IdempotencyKey, key)
         return (existing.entity_id if existing else None), True
     return None, False
+
+
+def _request_fingerprint(payload) -> str:
+    import hashlib, json as _json
+    try:
+        body = payload.model_dump(mode="json")
+    except Exception:
+        body = payload.dict() if hasattr(payload, "dict") else {}
+    return hashlib.sha256(_json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class MobileVisitIn(BaseModel):
@@ -249,7 +262,8 @@ async def _assert_measurement_scope(db: AsyncSession, payload_or_set, user):
 
 @router.post("/measurements", status_code=201)
 async def create_measurement(payload: MeasurementRevisionIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_measurement")
+    fp = _request_fingerprint(payload)
+    prior, replay = await _reserve_idem(db, idempotency_key, "mobile_measurement", fingerprint=fp)
     if replay and prior and prior != "pending":
         rev = await db.get(MeasurementRevision, prior)
         if rev:
@@ -262,6 +276,7 @@ async def create_measurement(payload: MeasurementRevisionIn, request: Request, i
         k = await db.get(IdempotencyKey, idempotency_key)
         if k:
             k.entity_id = str(rev.id)
+            k.request_fingerprint = fp
     out = await meas_svc.build_out(db, rev)
     await log_action(db, user=user, action="measurement.create", entity_type="measurement_revision", entity_id=rev.id, detail={"via": "mobile", "revision": rev.revision_number}, request=request)
     await db.commit()

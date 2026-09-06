@@ -42,5 +42,23 @@ ok(!plan.settle.some((m) => m.client_id === "c-pending") && !plan.failures.some(
 // the settled synced create's draft is then retired by the caller
 ok(retireCreateDraft({ client_id: "c-syncedcreate" }, plan.settle[0].client_id) === null, "the settled synced create's matching draft is retired on restart (not the local draft shown)");
 
+// AC (P0): a superseded CREATE ack is CONVERTED into an update of the new revision (newer body applied,
+// not lost to an idempotent replay). Verify the pure transform + working-draft rebase.
+const { buildConvertedUpdateMutation, rebaseWorkingDraftToRevision } = require("../measurementReconcile");
+const createRow = { kind: "measurement", method: "POST", path: "/mobile/measurements", client_id: "draft-C1", idempotency_key: "draft-C1", body: { lead_id: "L1", facets: [{ facet_label: "F1", area_sqft: 950 }] }, mutation_generation: 2, state: "pending", local_edit_generation: 5 };
+const conv = buildConvertedUpdateMutation(createRow, "R1", "t-updated");
+ok(conv.kind === "measurement_update" && conv.method === "PUT" && conv.path === "/mobile/measurements/R1", "superseded create → PUT /mobile/measurements/{new revision id}");
+ok(conv.client_id === "measurement-update:R1" && conv.idempotency_key === "measurement-update:R1", "converted mutation gets a revision-stable update client_id (new idempotency key)");
+ok(conv.ifMatch === "t-updated" && conv.state === "pending" && conv.server_id === "R1", "converted mutation carries If-Match = ack.updated_at and is pending");
+ok(conv.body.facets[0].area_sqft === 950 && conv.mutation_generation === 2 && conv.local_edit_generation === 5, "converted mutation PRESERVES the newer body + generation (no edit lost)");
+ok(conv.serverValue === null && conv.error === null && conv.attempts === 0, "converted mutation resets network/result fields so it runs fresh");
+
+const wd = { working: true, base: null, local_client_id: "draft-C1", structures: [{ ref: "s1" }], facets: [], edges: [], pens: [], summary: {} };
+const reb = rebaseWorkingDraftToRevision(wd, { oldClientId: "draft-C1", revisionId: "R1", ifMatch: "t-updated" });
+ok(reb.base && reb.base.id === "R1" && reb.base.if_match === "t-updated" && reb.local_client_id === null, "the create's working draft is rebased onto the new revision id + token");
+ok(reb.structures[0].ref === "s1", "rebasing the working draft preserves its edited content");
+const otherWd = { working: true, local_client_id: "draft-OTHER", structures: [{ ref: "z" }], facets: [], edges: [], pens: [], summary: {} };
+ok(rebaseWorkingDraftToRevision(otherWd, { oldClientId: "draft-C1", revisionId: "R1", ifMatch: "t" }) === otherWd, "a working draft for a DIFFERENT create is never rebased");
+
 if (failures) { console.error(`\nMEASUREMENT ACCEPTANCE: ${failures} failure(s)`); process.exit(1); }
 console.log("\nMEASUREMENT ACCEPTANCE: all passed");

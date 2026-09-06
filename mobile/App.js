@@ -27,12 +27,23 @@ import Inspection from "./src/screens/Inspection";
 import Measurements from "./src/screens/Measurements";
 import RoofSketch from "./src/screens/RoofSketch";
 import More from "./src/screens/More";
+import Diagnostics from "./src/screens/Diagnostics";
 
 const Tab = createBottomTabNavigator();
 const LeadStack = createNativeStackNavigator();
 const JobStack = createNativeStackNavigator();
 const MapStack = createNativeStackNavigator();
+const MoreStack = createNativeStackNavigator();
 const PairStack = createNativeStackNavigator();
+
+function MoreNav() {
+  return (
+    <MoreStack.Navigator>
+      <MoreStack.Screen name="MoreHome" component={More} options={{ title: "More" }} />
+      <MoreStack.Screen name="Diagnostics" component={Diagnostics} options={{ title: "Sync Diagnostics" }} />
+    </MoreStack.Navigator>
+  );
+}
 
 function MapNav() {
   return (
@@ -134,7 +145,7 @@ function MainApp() {
         <Tab.Screen name="LeadsTab" component={LeadsNav} options={{ title: "Leads", headerShown: false }} />
         <Tab.Screen name="Map" component={MapNav} options={{ title: "My Area", headerShown: false }} />
         <Tab.Screen name="JobsTab" component={JobsNav} options={{ title: "Jobs", headerShown: false }} />
-        <Tab.Screen name="More" component={More} />
+        <Tab.Screen name="More" component={MoreNav} options={{ title: "More", headerShown: false }} />
       </Tab.Navigator>
     </View>
   );

@@ -112,10 +112,15 @@ async def resolve_measurement_set(db: AsyncSession, *, inspection_id=None, prope
     inspection_id, property_id, lead_id = await _enrich_scope_from_lead(
         db, inspection_id=inspection_id, property_id=property_id, lead_id=lead_id
     )
-    conds = []
-    if inspection_id: conds.append(MeasurementSet.inspection_id == inspection_id)
-    if property_id: conds.append(MeasurementSet.property_id == property_id)
-    if lead_id: conds.append(MeasurementSet.lead_id == lead_id)
+    # lead_id is the PRIMARY business key: when a lead exists, match ONLY by lead_id so a new lead can never
+    # resolve to an older lead's measurement history via a shared property/inspection. Property/inspection
+    # are broad alternatives ONLY when there is no lead (they still backfill as validated links below).
+    if lead_id:
+        conds = [MeasurementSet.lead_id == lead_id]
+    else:
+        conds = []
+        if inspection_id: conds.append(MeasurementSet.inspection_id == inspection_id)
+        if property_id: conds.append(MeasurementSet.property_id == property_id)
     if not conds:
         if not create:
             return None

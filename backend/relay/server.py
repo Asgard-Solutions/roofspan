@@ -133,6 +133,22 @@ async def _send(ws: WebSocket, frame: dict):
     await ws.send_text(P.dumps(frame))
 
 
+class DeviceConn:
+    """A paired Mobile WebSocket wrapped with a send lock so the request/response loop and an async
+    Office->Field broadcast never interleave writes on the same socket."""
+
+    def __init__(self, ws: WebSocket):
+        self.ws = ws
+        self._lock = asyncio.Lock()
+
+    async def send_text(self, s: str):
+        async with self._lock:
+            await self.ws.send_text(s)
+
+    async def send(self, frame: dict):
+        await self.send_text(P.dumps(frame))
+
+
 async def _require_control_plane_ready(ws: WebSocket) -> bool:
     """Reject Relay authentication cleanly until the central CP schema/key bootstrap is ready."""
     status = cp_readiness.snapshot()
@@ -235,6 +251,13 @@ async def installation_ws(ws: WebSocket):
             frame_type = frame.get("type")
             if frame_type == P.T_RESPONSE:
                 hub.resolve(installation_id, frame.get("request_id"), frame)
+            elif frame_type == P.T_MEASUREMENT_CHANGED:
+                # Office->Field invalidation pushed UP the tunnel by the loopback connector. Fan it out
+                # to every paired device for this installation, then ACK so the connector can retire the
+                # durable outbox event (it retries until it sees this acceptance).
+                delivered = await hub.broadcast(installation_id, frame)
+                async with conn.send_lock:
+                    await _send(ws, P.broadcast_ack(event_id=frame.get("event_id"), delivered=delivered))
             elif frame_type == P.T_PING:
                 await _send(ws, {"type": P.T_PONG, "ts": frame.get("ts")})
             elif frame_type == P.T_BYE:
@@ -255,6 +278,7 @@ async def mobile_ws(ws: WebSocket):
         return
 
     installation_id = device_id = None
+    device_conn_key = None
     try:
         hello = P.loads(await ws.receive_text())
         if hello.get("type") != P.T_HELLO or hello.get("protocol") != P.PROTOCOL_VERSION:
@@ -317,13 +341,19 @@ async def mobile_ws(ws: WebSocket):
                 "protocol": P.PROTOCOL_VERSION,
             },
         )
+        # Register this paired device so Office->Field invalidations fan out to it. All post-ready sends
+        # go through the DeviceConn's lock so the request/response loop and an async broadcast never
+        # interleave writes on the same socket.
+        dc = DeviceConn(ws)
+        device_conn_key = uuidlib.uuid4().hex
+        hub.register_device(installation_id, device_conn_key, dc)
         seen: set[str] = set()
 
         while True:
             frame = P.loads(await ws.receive_text())
             frame_type = frame.get("type")
             if frame_type == P.T_PING:
-                await _send(ws, {"type": P.T_PONG, "ts": frame.get("ts")})
+                await dc.send({"type": P.T_PONG, "ts": frame.get("ts")})
                 continue
             if frame_type == P.T_BYE:
                 break
@@ -331,16 +361,14 @@ async def mobile_ws(ws: WebSocket):
                 continue
             request_id = frame.get("request_id") or uuidlib.uuid4().hex
             if request_id in seen:
-                await _send(
-                    ws,
+                await dc.send(
                     {"type": P.T_ERROR, "request_id": request_id, "code": "duplicate_request"},
                 )
                 continue
             seen.add(request_id)
             oversize = _too_large(frame)
             if oversize:
-                await _send(
-                    ws,
+                await dc.send(
                     {"type": P.T_ERROR, "request_id": request_id, "code": oversize},
                 )
                 continue
@@ -359,8 +387,7 @@ async def mobile_ws(ws: WebSocket):
             try:
                 response = await hub.route(installation_id, request_frame, REQUEST_TIMEOUT)
                 status = response.get("status")
-                await _send(
-                    ws,
+                await dc.send(
                     {
                         "type": P.T_RESPONSE,
                         "request_id": request_id,
@@ -370,18 +397,15 @@ async def mobile_ws(ws: WebSocket):
                     },
                 )
             except RelayUnavailable:
-                await _send(
-                    ws,
+                await dc.send(
                     {"type": P.T_ERROR, "request_id": request_id, "code": "tunnel_unavailable"},
                 )
             except RelayPayloadTooLarge:
-                await _send(
-                    ws,
+                await dc.send(
                     {"type": P.T_ERROR, "request_id": request_id, "code": "payload_too_large"},
                 )
             except TimeoutError:
-                await _send(
-                    ws,
+                await dc.send(
                     {"type": P.T_ERROR, "request_id": request_id, "code": "request_timeout"},
                 )
             log.info(
@@ -397,6 +421,9 @@ async def mobile_ws(ws: WebSocket):
         pass
     except Exception as exc:  # noqa: BLE001
         log.warning("relay mobile ws error: %s", str(exc)[:200])
+    finally:
+        if installation_id and device_conn_key:
+            hub.unregister_device(installation_id, device_conn_key)
 
 
 

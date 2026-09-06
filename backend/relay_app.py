@@ -24,6 +24,13 @@ except Exception:  # noqa: BLE001
 async def on_startup():
     # Production must NOT silently run memory mode / lack a unique node id — fail clearly.
     relay_config.require_production_config()
+    # The relay authenticates installations/devices against the Control Plane DB, so a standalone relay
+    # node must initialize CP schema/readiness too (idempotent; safe to run alongside the Office backend).
+    try:
+        from control_plane.bootstrap import init_control_plane
+        await init_control_plane()
+    except Exception:  # noqa: BLE001 - readiness stays "starting"; auth fails closed until it succeeds
+        pass
     from relay.hub import hub
     await hub.startup()
 

@@ -1,0 +1,52 @@
+name: Repo path safety (Windows-checkout compatible)
+
+# Rejects any tracked path that a Windows checkout cannot create: control
+# characters, Windows-reserved characters (< > : " | ? *), or a trailing
+# dot/space on any path segment. Prevents corrupt paths (e.g. control-char
+# binaries) from re-entering the repository and breaking Windows clones/CI.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  path-safety:
+    name: Tracked paths are Windows-safe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tracked paths
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+
+          # -z gives NUL-separated raw byte paths (octal-escaping disabled).
+          raw = subprocess.check_output(["git", "ls-files", "-z"])
+          paths = [p for p in raw.split(b"\x00") if p]
+
+          reserved = set('<>:"|?*')
+          bad = []
+          for pb in paths:
+              disp = pb.decode("utf-8", "backslashreplace")
+              # Any control character (0x00-0x1F, 0x7F) is illegal on Windows.
+              if any(b < 0x20 or b == 0x7F for b in pb):
+                  bad.append((disp, "control character"))
+                  continue
+              # Reserved characters illegal in Windows filenames.
+              if any(ch in reserved for ch in disp):
+                  bad.append((disp, "windows-reserved character"))
+                  continue
+              # No path segment may end in a dot or space on Windows.
+              for seg in disp.split("/"):
+                  if seg and (seg[-1] in ". "):
+                      bad.append((disp, "segment ends with dot/space"))
+                      break
+
+          if bad:
+              print("Unsafe tracked path(s) found:")
+              for disp, why in bad:
+                  print(f"  - {disp!r}: {why}")
+              sys.exit(1)
+          print(f"OK: {len(paths)} tracked paths are Windows-safe.")
+          PY

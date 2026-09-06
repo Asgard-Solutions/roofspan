@@ -6,22 +6,31 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
 import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
-import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
+import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
+import { countStates, deriveSyncStatus } from "./syncStatus";
+import { sketchRefreshDecision } from "./sketchRefreshDecision";
 import { cache } from "./cache";
 import { api } from "./api";
 import { setRelayEventHandler } from "./transport";
 
 const LAST_SYNC = "last_sync_at";
+// Separate, honest sync-status timestamps (spec): a push ATTEMPT vs a successful PUSH vs a successful
+// PULL vs FULL convergence. Only last_fully_converged_at requires an empty-of-issues queue.
+const LAST_PUSH_ATTEMPT = "last_push_attempt_at";
+const LAST_PUSH_OK = "last_successful_push_at";
+const LAST_PULL_OK = "last_successful_pull_at";
+const LAST_CONVERGED = "last_fully_converged_at";
+const DIAG_KEY = "sync_diag";           // persisted, scoped diagnostics ring + timestamps (survive restart)
 const _listeners = new Set();
 
 export function onSyncChange(cb) { _listeners.add(cb); return () => _listeners.delete(cb); }
@@ -82,8 +91,9 @@ export async function runSync() {
     await _reviveRetryablePhotos();                 // let transiently-failed photos rejoin the queue
     const pending = await loadPending();            // active scope only
     if (pending.length > 0) {
+      await putCache(LAST_PUSH_ATTEMPT, new Date().toISOString());  // a Field→Office push cycle is starting
+      _diag.recordPushAttempt();
       const processed = await queue.processQueue(pending, send);
-      _diag.recordPush();   // a push cycle ran (Field→Office write attempts completed)
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
@@ -91,6 +101,12 @@ export async function runSync() {
       await _reconcileSketchAcks(processed);
       await _reconcileFieldAcks(processed);
       await _reconcileMeasurementAcks(processed);
+      // A successful PUSH = at least one mutation acknowledged (reached 'synced') this cycle.
+      if (processed.some((m) => m.state === "synced")) {
+        await putCache(LAST_PUSH_OK, new Date().toISOString());
+        _diag.recordPushSuccess();
+      }
+      await _persistDiag();
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -100,7 +116,10 @@ export async function runSync() {
       (m) => m.state === "failed" && !queue.isPermanentFailure(m) && (m.attempts || 0) < MAX_AUTO_PHOTO_ATTEMPTS
     );
     if (pendingLeft || retryablePhotoLeft) _scheduleRetry();
-    else { _resetBackoff(); await _markSynced(); }  // last_sync_at only when no current work remains
+    else _resetBackoff();
+    // last_fully_converged_at advances ONLY when NO pending/failed/conflict/locked mutation remains
+    // (never with unresolved issues — no more "Last synced just now / 1 failed" confusion).
+    await _markConverged();
   } finally {
     _running = false;
     _emit({ type: "sync_end" });
@@ -108,12 +127,34 @@ export async function runSync() {
   }
 }
 
-// Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
-async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
+// Atomic convergence marker: advances last_fully_converged_at ONLY if the queue holds no pending, failed,
+// conflict, or locked mutation at write time (spec). Never advances while any issue remains.
+async function _markConverged() { return markConvergedIfClean(LAST_CONVERGED, new Date().toISOString()); }
 
-// Device sync diagnostics: last PULL and last PUSH tracked separately + a bounded per-mutation log.
+// Device sync diagnostics: last PULL and last PUSH (attempt vs success) tracked separately + a bounded
+// per-mutation ring. Persisted to scoped SQLite so it SURVIVES the app kill/restart it diagnoses.
 const _diag = createDiagnostics();
 export function syncDiagnostics() { return _diag.snapshot(); }
+async function _persistDiag() { try { await putCache(DIAG_KEY, _diag.snapshot()); } catch (e) { /* best effort */ } }
+
+function _pathCategoryFor(m) {
+  const k = String(m.kind || ""); const cid = String(m.client_id || "");
+  if (k.startsWith("measurement") || cid.startsWith("measurement")) {
+    return cid.includes("sketch") || k.includes("sketch") ? "/api/measurements/sketches" : "/api/measurements";
+  }
+  if (k.includes("sketch") || cid.includes("sketch")) return "/api/measurements/sketches";
+  if (k.startsWith("photo")) return "/api/photos";
+  if (k.startsWith("lead")) return "/api/mobile/leads";
+  if (k.startsWith("visit")) return "/api/visits";
+  if (k.startsWith("inspection")) return "/api/inspections";
+  return "/api";
+}
+function _recoveryActionFor(m) {
+  if (m.state === "conflict") return "conflict";
+  if (m.state === "synced") return "retire";
+  if (m.state === "failed") return "none";
+  return null;
+}
 function _recordMutationDiag(m) {
   if (!m) return;
   const sv = m.serverValue || null;
@@ -123,7 +164,12 @@ function _recordMutationDiag(m) {
   _diag.recordMutation({
     clientId: m.client_id, kind: m.kind, state: m.state,
     httpResult: m.errorCode != null ? m.errorCode : (m.state === "synced" ? "ok" : m.state),
-    revisionId, serverToken, cacheSource: sv ? "server_ack" : null, error: m.error || null,
+    httpStatus: m.status != null ? m.status : (m.httpStatus != null ? m.httpStatus : null),
+    relayErrorCode: m.errorCode != null ? m.errorCode : null,
+    pathCategory: _pathCategoryFor(m),
+    mutationGeneration: m.mutation_generation != null ? m.mutation_generation : m.local_edit_generation,
+    revisionId, serverToken, cacheSource: sv ? "server_ack" : null,
+    recoveryAction: _recoveryActionFor(m), error: m.error || null,
   });
 }
 
@@ -207,9 +253,21 @@ async function _reconcileMeasurementAcks(processed) {
     // b. scoped measurement-list cache: insert/update this revision, preserving all others.
     if (measScope) await mutateCache(measScopeKey(measScope), (cur) => upsertRevision(cur, rev));
     if (superseded) {
-      // A newer local edit is still pending — NEVER retire its drafts; only advance its authoritative
-      // token so it applies cleanly against the freshly-acknowledged server version.
-      if (stored.kind === "measurement_update") await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+      // A newer local edit is still pending — NEVER retire its drafts.
+      if (stored.kind === "measurement_update") {
+        // Rebase the newer update onto the fresh authoritative token so it applies cleanly.
+        await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);
+      } else if (stored.kind === "measurement") {
+        // P0 data-loss fix: a newer CREATE generation superseded this acknowledged create. Convert it into
+        // an UPDATE of the just-created revision so the newer body is actually applied (an idempotent
+        // create replay would otherwise silently return the original record and the second edit would be
+        // lost). Draft is rebased onto the new revision and retired only after the update's OWN ack.
+        const res = await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);
+        if (res && res.converted) {
+          if (measScope) await mutateCache(measWorkingKey(measScope), (cur) => rebaseWorkingDraftToRevision(cur, { oldClientId: m.client_id, revisionId, ifMatch: rev.updated_at }));
+          _rerunRequested = true;   // automatically run the converted update on the next pass
+        }
+      }
       touched = true;
       continue;
     }
@@ -241,6 +299,8 @@ export async function refreshLead(scope, trigger = "manual") {
   catch (e) { return { refreshed: false, offline: true }; }   // offline → cached copy stays; retry next trigger
   _coordinator.markRefreshed(scope);
   _diag.recordPull();   // a successful Office→Field read completed for this lead
+  try { await putCache(LAST_PULL_OK, new Date().toISOString()); } catch (e) { /* best effort */ }
+  await _persistDiag();
   const all = await loadAllMutations();
   let changed = false;
   for (const rev of (wm && wm.revisions) || []) {
@@ -253,9 +313,27 @@ export async function refreshLead(scope, trigger = "manual") {
       try { const d = await cache.measurement(rev.revision_id); if (d && d.data) changed = true; } catch (e) { /* offline */ }
     }
     for (const sk of rev.sketches || []) {
-      let skCached = null; try { skCached = await getCache(sketchDetailKey(rev.revision_id, sk.structure_id)); } catch (e) {}
-      const skVer = skCached && skCached.document_version != null ? Number(skCached.document_version) : null;
-      if (skVer != null && skVer !== Number(sk.document_version)) { noteCasFloor(rev.revision_id, sk.structure_id, Number(sk.document_version)); changed = true; }
+      const structureId = sk.structure_id;
+      let skCached = null; try { skCached = await getCache(sketchDetailKey(rev.revision_id, structureId)); } catch (e) {}
+      const localVersion = skCached && skCached.document_version != null ? Number(skCached.document_version) : null;
+      const officeVersion = Number(sk.document_version) || 0;
+      const hasActiveMutation = !!all.find((m) => m.client_id === sketchUpdateMutationId(rev.revision_id, structureId) && (m.state === "pending" || m.state === "failed" || m.state === "conflict"));
+      let localDraft = null; try { localDraft = await getCache(sketchDraftKey(rev.revision_id, structureId)); } catch (e) {}
+      const hasDraft = !!(localDraft && localDraft.document);
+      const contentDiffers = hasDraft && skCached && skCached.document
+        && JSON.stringify(localDraft.document) !== JSON.stringify(skCached.document);
+      const decision = sketchRefreshDecision({ officeVersion, localVersion, hasDraft, hasActiveMutation, contentDiffers });
+      if (decision === "pull") {
+        // Office CREATED the first sketch — pull + cache so the row flips to "Edit Roof Sketch" now.
+        try { const d = await cache.sketch(rev.revision_id, structureId); if (d && d.data) changed = true; } catch (e) { /* offline → retry next trigger */ }
+      } else if (decision === "floor_and_pull") {
+        noteCasFloor(rev.revision_id, structureId, officeVersion);   // never let a stale local CAS overwrite Office
+        try { const d = await cache.sketch(rev.revision_id, structureId); if (d && d.data) changed = true; } catch (e) { /* offline */ }
+        changed = true;
+      } else if (decision === "review") {
+        // Same version, divergent local draft, no active mutation → explicit review (editor-open resolves).
+        _emit({ type: "sketch_review", revisionId: rev.revision_id, structureId, documentVersion: officeVersion });
+      }
     }
   }
   if (changed) _emit({ type: "measurement_reconciled" });
@@ -404,7 +482,9 @@ export async function resolveFieldConflictMerge(client_id, choices) {
   return plan;
 }
 
-export async function lastSyncAt() { return getCache(LAST_SYNC); }
+// Back-compat: the "last synced" chip must reflect FULL convergence (advances only when no pending/failed/
+// conflict/locked remain) — never a push that left failures behind.
+export async function lastSyncAt() { return getCache(LAST_CONVERGED); }
 export async function syncNow() { _resetBackoff(); refreshActiveLeads("manual").catch(() => {}); return runSync(); }
 
 // B3B2: whether the sync engine is actively processing right now (drives the "Synchronizing…" status).
@@ -496,15 +576,37 @@ export async function discardMeasurementUpdate(revisionId) {
   return { action: "use_office" };
 }
 
-// Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer
-// Office version (adopt its updated_at as If-Match) so the local values re-attempt cleanly. Never reports
-// Synced until Office acknowledges; sync is re-triggered only after the durable rebase.
-export async function rebaseMeasurementUpdate(revisionId, newIfMatch) {
+// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
+// Serialized so all actions land together: confirm the pending update still matches, remove that exact
+// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
+// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
+// authoritative Office revision, and update the scoped list.
+export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
+  const id = `measurement-update:${String(revisionId)}`;
+  await _removeMutation(id);                                   // remove the reviewed conflict mutation
+  if (serverDetail && serverDetail.id != null) {
+    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
+  }
+  if (scope) {
+    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
+    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
+    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
+  }
+  _emit({ type: "queued" });
+  _emit({ type: "measurement_reconciled" });
+  return { action: "use_office" };
+}
+
+// Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer Office
+// version (adopt its updated_at as If-Match). When a 3-way-merged body is supplied, apply it so Office-only
+// changes are preserved and only Field-changed fields override. Re-triggers sync after the durable rebase.
+export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {
   const id = `measurement-update:${String(revisionId)}`;
   const all = await loadAllMutations();
   const m = all.find((x) => x.client_id === id);
   if (!m) return { action: "noop" };
-  await saveMutation({ ...m, ifMatch: newIfMatch, state: "pending", error: null });
+  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;
+  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });
   _emit({ type: "queued" });
   runSync().catch(() => {});
   return { action: "keep_local" };
@@ -559,24 +661,41 @@ export async function replacePhoto(client_id, photo) {
   return updated;
 }
 
-// Simple salesperson-facing status derived from the durable queue.
+// Salesperson-facing GLOBAL sync status. Reports each mutation state SEPARATELY (never lumps failed into
+// "waiting to sync") and surfaces the four honest timestamps. `waiting` now means ONLY pending (in-flight)
+// work; failed / conflict / locked are their own counts with their own messaging.
 export async function pendingSummary() {
   const all = await loadAllMutations();
-  const by = { pending: 0, failed: 0, conflict: 0, synced: 0, locked: 0 };
-  for (const m of all) by[m.state] = (by[m.state] || 0) + 1;
-  const last = await getCache(LAST_SYNC);
-  const waiting = by.pending + by.failed;
-  let label = "All changes synced";
-  if (by.conflict > 0) label = `${by.conflict} sync issue${by.conflict > 1 ? "s" : ""} to review`;
-  else if (by.locked > 0) label = `${by.locked} locked revision sketch${by.locked > 1 ? "es" : ""} — new revision needed`;
-  else if (_running) label = "Synchronizing…";
-  else if (waiting > 0) label = `${waiting} change${waiting > 1 ? "s" : ""} waiting to sync`;
-  return { items: all, counts: by, waiting, lastSyncAt: last, label, syncing: _running };
+  const counts = countStates(all);
+  const status = deriveSyncStatus(counts, { syncing: _running });
+
+  const [pushAttempt, pushOk, pullOk, converged] = await Promise.all([
+    getCache(LAST_PUSH_ATTEMPT), getCache(LAST_PUSH_OK), getCache(LAST_PULL_OK), getCache(LAST_CONVERGED),
+  ]);
+
+  return {
+    items: all, counts,
+    pending_count: status.pending_count,
+    failed_count: status.failed_count,
+    conflict_count: status.conflict_count,
+    locked_count: status.locked_count,
+    waiting: status.waiting,       // back-compat: now == pending_count (never includes failed)
+    fully_converged: status.fully_converged,
+    last_push_attempt_at: pushAttempt || null,
+    last_successful_push_at: pushOk || null,
+    last_successful_pull_at: pullOk || null,
+    last_fully_converged_at: converged || null,
+    lastSyncAt: converged || null, // back-compat alias — only advances on FULL convergence
+    label: status.label, syncing: _running,
+  };
 }
 
 // Auto-sync triggers. A device having internet does NOT guarantee Office is reachable, so a failed
 // attempt simply leaves work pending (the queue never drops it) and we retry on the next trigger.
 export function startAutoSync() {
+  // Restore persisted diagnostics FIRST so the record of what happened before an app kill/restart is
+  // available even before the first new sync pass writes anything.
+  getCache(DIAG_KEY).then((s) => _diag.hydrate(s)).catch(() => {});
   // One-time startup recovery for phones stuck in the pre-fix state, BEFORE the first sync pass. Best-effort;
   // never blocks sync. Heals synced-but-undrained creates/updates + orphaned drafts; preserves conflicts/failures.
   recoverMeasurementsOnStartup().catch(() => {}).finally(() => { runSync().catch(() => {}); });

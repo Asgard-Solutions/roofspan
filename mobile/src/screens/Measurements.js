@@ -1,10 +1,11 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
+import { canonicalFingerprint, threeWayMergeMeasurement } from "../measurementRecovery";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import RoofThumbnail from "../components/RoofThumbnail";
@@ -70,12 +71,15 @@ export default function Measurements({ route, navigation }) {
   const [showGutters, setShowGutters] = useState(false);
 
   const autosaveTimer = useRef(null);
+  // Bumping wdEpoch recreates a FRESH (unsealed) working-draft store after a Use-Office resolution, so a
+  // sealed store can never block the rep's subsequent edits on the adopted Office copy.
+  const [wdEpoch, setWdEpoch] = useState(0);
   // #13/#2: serialized working-draft store with a Save seal — a late/in-flight autosave can never
   // resurrect the working draft once Save has staged the mutation and cleared the draft.
   const wdStore = useMemo(() => createMeasurementWorkingDraftStore({
     put: (v) => saveMeasurementWorkingDraft(scope, v),
     clear: () => clearMeasurementWorkingDraft(scope),
-  }), [scope]);
+  }), [scope, wdEpoch]);
   const wdStoreRef = useRef(wdStore);
   wdStoreRef.current = wdStore;
   const baselineRef = useRef("");          // JSON of the last hydrated form — autosave only fires on real edits
@@ -88,9 +92,18 @@ export default function Measurements({ route, navigation }) {
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
     if (readonly) return true;
+    // base_fingerprint = the COMPLETE canonical fingerprint of the authoritative baseline the rep opened
+    // from. Startup recovery clears a content-bearing draft ONLY when the draft still fingerprints equal to
+    // this — so an edit to ANY persisted field (material, notes, plane assignment, diameter, geometry, …)
+    // is preserved even if the app is killed before Save (P0 data-loss guard).
+    let baseFp = null;
+    try { baseFp = canonicalFingerprint(JSON.parse(baselineRef.current)); } catch (e) { baseFp = null; }
+    let baseBody = null;
+    try { baseBody = JSON.parse(baselineRef.current); } catch (e) { baseBody = null; }
     return await wdStoreRef.current.persist({
       working: true, base: existing ? { ...existing } : null,
       local_client_id: localDraft ? localDraft.client_id : null,
+      base_fingerprint: baseFp, base_body: baseBody,
       structures, facets, edges, pens, summary, updated_at: new Date().toISOString(),
     });
   }, [scope, readonly, existing, localDraft, structures, facets, edges, pens, summary]);
@@ -257,18 +270,33 @@ export default function Measurements({ route, navigation }) {
 
   const onUseOffice = useCallback(async () => {
     if (!conflict) return;
-    await discardMeasurementUpdate(conflict.revisionId);
-    if (conflict.serverDetail) await cacheMeasurementDetail(conflict.serverDetail);
+    // Atomic Use-Office: seal the store so no late autosave resurrects the local draft, then run the
+    // generation-checked transition that clears the saved + working drafts and adopts Office.
+    await wdStoreRef.current.sealAndClear();
+    await resolveMeasurementConflictUseOffice(conflict.revisionId, scope, conflict.serverDetail);
     setConflict(null);
+    setWdEpoch((e) => e + 1);   // fresh, unsealed store for future edits on the adopted Office copy
     await load();
-  }, [conflict, load]);
+  }, [conflict, scope, load]);
 
   const onKeepMine = useCallback(async () => {
     if (!conflict || !conflict.serverDetail) return;
-    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at);
+    // Three-way merge (base vs Field vs Office): apply Field-only changes, preserve Office-only changes.
+    // If a group changed on BOTH sides, keep the conflict for explicit review — never silently overwrite.
+    let mergedBody = null;
+    try {
+      const wd = await loadMeasurementWorkingDraft(scope);
+      if (wd && wd.base_body) {
+        const field = { structures: wd.structures, facets: wd.facets, edges: wd.edges, pens: wd.pens, summary: wd.summary };
+        const r = threeWayMergeMeasurement(wd.base_body, field, conflict.serverDetail);
+        if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }
+        mergedBody = { structures: r.merged.structures, facets: r.merged.facets, edges: r.merged.edges, penetrations: r.merged.pens, summary: r.merged.summary };
+      }
+    } catch (e) { mergedBody = null; }
+    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at, mergedBody);
     setConflict(null);
     await load();
-  }, [conflict, load]);
+  }, [conflict, scope, load]);
 
   // Failed-sync recovery: preserve local work and re-attempt the durable mutation on demand.
   const onRetrySync = useCallback(async () => {
@@ -279,10 +307,12 @@ export default function Measurements({ route, navigation }) {
   // Failed EXISTING revision → adopt the authoritative Office copy (drop the local update).
   const onFailedUseOffice = useCallback(async () => {
     if (!existing) return;
-    await discardMeasurementUpdate(existing.id);
+    await wdStoreRef.current.sealAndClear();
+    await resolveMeasurementConflictUseOffice(existing.id, scope, existing);
     setFailure(null);
+    setWdEpoch((e) => e + 1);
     await load();
-  }, [existing, load]);
+  }, [existing, scope, load]);
 
   // Failed CREATE (no Office copy yet) → remove the local change entirely.
   const onFailedRemoveLocal = useCallback(async () => {

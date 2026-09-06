@@ -30,6 +30,11 @@ def node_channel(node_id: str) -> str:
     return f"relay:node:{node_id}"
 
 
+def broadcast_channel() -> str:
+    """Shared Pub/Sub channel every relay node subscribes to for Office->Field invalidation fan-out."""
+    return "relay:broadcast"
+
+
 class MemoryRegistry:
     """SYNC single-process registry (legacy unit tests). Newest live tunnel replaces a stale one."""
 

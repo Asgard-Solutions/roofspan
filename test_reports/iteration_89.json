@@ -1,0 +1,22 @@
+{
+  "summary": "P0 backend fingerprint-guard verification on POST /api/mobile/measurements. 4/4 tests passed: (1) same Idempotency-Key + same body replay returns same revision id with replayed=true; (2) same Idempotency-Key + DIFFERENT body returns 409 'Idempotency-Key reused with a different request body' and does NOT silently echo the original 201; (3) normal lifecycle regression (201 create → 200 update with rotated updated_at → 409 stale with detail.server → 422 invalid); (4) cross-operation reuse still returns 409 'already used for a different operation'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_idempotency_fingerprint.py",
+    "/app/test_reports/pytest/iteration_89.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routers/mobile.py::_reserve_idem correctly compares fingerprints only when both the request and the stored record have one (existing.request_fingerprint truthy AND fingerprint is not None). This gracefully migrates pre-existing IdempotencyKey rows with a NULL request_fingerprint from before migration b3c4d5e6f7a8 — but note: if a legacy key exists without a fingerprint and is replayed with a differing body, the guard silently succeeds. Acceptable for the migration window; consider a follow-up to backfill or expire legacy rows once traffic has rolled over.",
+    "_request_fingerprint uses json.dumps(sort_keys=True, default=str). This is stable for scalar payloads, but list ordering (e.g., structures[]/facets[]) is significant — a client that reorders equivalent lists will produce a different fingerprint and get 409 rather than a replay. Documented tradeoff; matches the P0 goal (reject anything that looks different) and is fine given RN client controls the payload."
+  ],
+  "updated_files": ["/app/backend/tests/test_idempotency_fingerprint.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "1 TEST_ property + several mobile measurement revisions and 1 lead created via public REACT_APP_BACKEND_URL. All prefixed TEST_; no cleanup performed (scoped and safe).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "P0 idempotency fingerprint guard suite lives at /app/backend/tests/test_idempotency_fingerprint.py. Exercises: same-body replay parity, different-body 409, lifecycle regression (create/update/stale/invalid), and cross-operation 409. Uses public BASE_URL and Owner login. Fingerprint is sha256 over model_dump(mode='json') sorted-keys; list order is significant. Legacy IdempotencyKey rows with NULL request_fingerprint remain replay-safe (guard is skipped when stored fingerprint is falsy).",
+  "rca of the issue": "No issue found — server contract behaves as described in the review request."
+}

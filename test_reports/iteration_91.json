@@ -1,0 +1,24 @@
+{
+  "summary": "Iteration 91 — verified P0 (Use Office atomic transition) + P1 (Keep My Changes three-way merge) mobile logic and backend measurement lifecycle regression. All 7 three-way merge assertions pass; the full `yarn test:measurements` suite (ack reconcile, recovery, canonical completeness, sync coordinator, acceptance, diagnostics, three-way merge) passes end-to-end. Backend lifecycle regression: 4/4 pytest cases pass (POST 201 create, PUT If-Match 200 with rotated updated_at, stale If-Match 409 with detail.server, invalid body 422).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_measurement_lifecycle_iter91.py",
+    "/app/test_reports/pytest/iter91_lifecycle.xml",
+    "/app/mobile/src/tests/measurement_three_way_merge.node.test.js"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Three-way merge granularity is per-collection-item + per-summary-key — correctly flags conflicts only when the SAME group changed on both sides; disjoint edits merge cleanly.",
+    "onUseOffice path correctly seals the store, atomically transitions cache, clears saved + working draft, and recreates wdEpoch so late autosaves cannot resurrect discarded local values.",
+    "persistWorking now stores base_body + base_fingerprint — required snapshot for the 3-way merge on Keep My Changes."
+  ],
+  "updated_files": ["/app/backend/tests/test_measurement_lifecycle_iter91.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Created ephemeral properties (TEST_iter91 *) and measurement revisions via /api/mobile/measurements for lifecycle asserts. No user seeding.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Mobile measurement suite is stable at 100%. Reuse `yarn test:measurements` (npm workspaces — do NOT create /app/mobile/yarn.lock; delete if generated). Backend regression file at /app/backend/tests/test_measurement_lifecycle_iter91.py can be re-run standalone. Measurement PUT endpoint returns 409 detail as an object containing `server` current revision — good for the Use-Office flow.",
+  "rca of the issue": "N/A — no regressions. P0 fix confirmed: Use Office no longer leaves the local working draft alive to re-take priority on next load; store recreation + wdEpoch bump prevents late-autosave resurrection. P1 fix confirmed: Keep My Changes now performs three-way merge (base vs Field vs Office) — disjoint edits both survive, only same-group conflicts are flagged for review, preventing the previous whole-doc clobber of unrelated Office fields."
+}

@@ -45,6 +45,7 @@ class RelayHub:
         self._registry = registry
         self._transport = transport
         self._installs: dict[str, InstallationConn] = {}
+        self._devices: dict[str, dict[str, object]] = {}  # installation_id -> {conn_key: DeviceConn}
         self._cross_pending: dict[str, asyncio.Future] = {}  # correlation_id -> future (this node is origin)
         self._hb_task: asyncio.Task | None = None
         self._started = False
@@ -59,6 +60,7 @@ class RelayHub:
         if self._transport is not None:
             await self._transport.start()
             await self._transport.subscribe(R.node_channel(self.node_id), self._on_envelope)
+            await self._transport.subscribe(R.broadcast_channel(), self._on_broadcast)
             self._hb_task = asyncio.create_task(self._heartbeat_loop())
             log.info("relay hub started node=%s (multi-node, valkey)", self.node_id)
         else:
@@ -107,6 +109,65 @@ class RelayHub:
 
     def is_connected(self, installation_id: str) -> bool:
         return installation_id in self._installs
+
+    # ---- paired mobile device presence (for Office->Field broadcast) -------
+    def register_device(self, installation_id: str, conn_key: str, device_conn) -> None:
+        self._devices.setdefault(installation_id, {})[conn_key] = device_conn
+
+    def unregister_device(self, installation_id: str, conn_key: str) -> None:
+        conns = self._devices.get(installation_id)
+        if conns is not None:
+            conns.pop(conn_key, None)
+            if not conns:
+                self._devices.pop(installation_id, None)
+
+    def device_count(self, installation_id: str) -> int:
+        return len(self._devices.get(installation_id, {}))
+
+    async def _deliver_local(self, installation_id: str, frame: dict) -> int:
+        """Push a frame to every LOCALLY-connected paired device for this installation. Best-effort:
+        a failed send never blocks the others (a dropped device just misses this event and recovers
+        via the watermark endpoint on its next trigger)."""
+        conns = list(self._devices.get(installation_id, {}).values())
+        if not conns:
+            return 0
+        text = P.dumps(frame)
+        delivered = 0
+        for dc in conns:
+            try:
+                await dc.send_text(text)
+                delivered += 1
+            except Exception:  # noqa: BLE001 - one bad device must not stop fan-out
+                pass
+        return delivered
+
+    async def broadcast(self, installation_id: str, frame: dict) -> int:
+        """Fan an Office->Field invalidation to all paired devices for this installation.
+
+        Delivers to LOCAL devices immediately, then (multi-node) publishes ONCE to the shared broadcast
+        channel so every OTHER node delivers to its own local devices. The originating node drops its own
+        echo in ``_on_broadcast`` (origin match) so a device on the origin node is never double-delivered.
+        Returns the count delivered locally."""
+        delivered = await self._deliver_local(installation_id, frame)
+        if self._transport is not None:
+            env = E.build_broadcast(self.node_id, installation_id, frame)
+            raw = P.dumps(env)
+            if len(raw.encode("utf-8")) <= C.MAX_ENVELOPE_BYTES:
+                try:
+                    await self._transport.publish(R.broadcast_channel(), raw)
+                except Exception as e:  # noqa: BLE001 - transport bounce: local devices already got it
+                    log.warning("relay broadcast publish failed: %s", str(e)[:160])
+        return delivered
+
+    async def _on_broadcast(self, raw: str) -> None:
+        try:
+            env = E.validate_broadcast(P.loads(raw))
+        except Exception as e:  # noqa: BLE001 - malformed broadcasts are dropped safely
+            log.warning("relay: dropped malformed broadcast envelope: %s", str(e)[:160])
+            return
+        if env["origin_node"] == self.node_id:
+            return  # our OWN echo — already delivered locally in broadcast(); never deliver twice
+        await self._deliver_local(env["installation_id"], env["frame"])
 
     def resolve(self, installation_id: str, request_id: str, response: dict) -> None:
         """Called when a LOCAL installation tunnel returns a response for a routed request."""

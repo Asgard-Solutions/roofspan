@@ -19,19 +19,43 @@ const { measScopeFromBody } = require("./measurementReconcile");
 function _num(v) { if (v === "" || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
 function _cmp(a, b) { const x = JSON.stringify(a), y = JSON.stringify(b); return x < y ? -1 : (x > y ? 1 : 0); }
 function _structures(list) {
-  return (list || []).map((s) => ({ name: s.name || "", type: s.structure_type || "main_house", scope: s.included_in_scope !== false, stories: _num(s.stories), height: _num(s.approx_height_ft), attach: s.attachment || null }))
-    .sort(_cmp);
+  return (list || []).map((s) => ({
+    name: s.name || "", type: s.structure_type || "main_house", scope: s.included_in_scope !== false,
+    stories: _num(s.stories), height: _num(s.approx_height_ft), attach: s.attachment || null,
+    notes: s.notes || "",
+  })).sort(_cmp);
 }
 function _facets(list) {
-  return (list || []).map((f) => ({ label: f.facet_label || "", pitch: _num(f.pitch_rise), area: _num(f.area_sqft), w: _num(f.width_ft), l: _num(f.length_ft), off: _num(f.position_offset_ft) }))
-    .sort(_cmp);
+  return (list || []).map((f) => ({
+    label: f.facet_label || "", pitch: _num(f.pitch_rise), area: _num(f.area_sqft),
+    w: _num(f.width_ft), l: _num(f.length_ft), off: _num(f.position_offset_ft),
+    structure: _rel(f.structure_id != null ? f.structure_id : f.structure_ref),   // roof-plane → structure assignment
+    material: f.roof_material || f.material || "",                                  // roof material
+    azimuth: _num(f.orientation_azimuth != null ? f.orientation_azimuth : f.azimuth), // orientation
+    geometry: _geom(f.geometry),                                                    // geometry
+    notes: f.notes || "",                                                           // roof-plane notes
+  })).sort(_cmp);
 }
 function _edges(list) {
-  return (list || []).map((e) => ({ type: e.edge_type || "", len: Math.round((_num(e.length_ft) || 0) * 100) / 100 })).sort(_cmp);
+  return (list || []).map((e) => ({
+    type: e.edge_type || "", len: Math.round((_num(e.length_ft) || 0) * 100) / 100,
+    label: e.label || "", notes: e.notes || "",                                     // roof-line label + notes
+    plane: _rel(e.facet_id != null ? e.facet_id : e.facet_ref),                     // primary plane assignment
+    plane2: _rel(e.facet_id_secondary != null ? e.facet_id_secondary : e.facet_ref_secondary), // secondary plane
+  })).sort(_cmp);
 }
 function _pens(list) {
-  return (list || []).filter((p) => (parseInt(p.quantity, 10) || 0) > 0).map((p) => ({ type: p.pen_type || "", qty: parseInt(p.quantity, 10) || 0 })).sort(_cmp);
+  return (list || []).filter((p) => (parseInt(p.quantity, 10) || 0) > 0).map((p) => ({
+    type: p.pen_type || "", qty: parseInt(p.quantity, 10) || 0,
+    plane: _rel(p.facet_id != null ? p.facet_id : p.facet_ref),                     // penetration → plane assignment
+    diameter: _num(p.diameter_in), w: _num(p.width_in), l: _num(p.length_in),       // dimensions
+    notes: p.notes || "",                                                           // penetration notes
+  })).sort(_cmp);
 }
+// Stable relationship identity (a temporary React key is ignored; a real id/ref reference is significant).
+function _rel(v) { return v == null ? null : String(v); }
+// Geometry is a nested business value (vertices/points/path) — compared verbatim after a stable stringify.
+function _geom(g) { if (g == null) return null; try { return JSON.parse(JSON.stringify(g)); } catch (e) { return null; } }
 function _summary(sm) {
   sm = sm || {};
   const out = {};
@@ -63,6 +87,48 @@ function canonicalEqual(a, b) {
   return JSON.stringify(canonicalMeasurement(a)) === JSON.stringify(canonicalMeasurement(b));
 }
 
+// One shared, COMPLETE canonical fingerprint over every persisted measurement field + stable relationship,
+// generated from the same edit-shape payload the backend receives (temporary React keys ignored). Recorded
+// as base_fingerprint when a working draft is created so auto-clear can prove "no net edit" exactly.
+function canonicalFingerprint(payload) {
+  return JSON.stringify(canonicalMeasurement(payload));
+}
+
+// Three-way merge (base vs Field vs Office) at collection + summary-key granularity: a side that DIDN'T
+// change a group keeps the other side's value; a group changed ONLY in Field overrides Office; a group
+// changed ONLY in Office is preserved; a group changed on BOTH sides (differently) is a conflict flagged
+// for explicit review (Field value kept in `merged`, name pushed to `conflicts`). Preserves ORIGINAL
+// element arrays (full fidelity) — canonical forms are used only for equality.
+function _listFor(kind) { return kind === "structures" ? _structures : kind === "facets" ? _facets : kind === "edges" ? _edges : _pens; }
+function _listEq(a, b, kind) { const f = _listFor(kind); return JSON.stringify(f(a || [])) === JSON.stringify(f(b || [])); }
+function threeWayMergeMeasurement(base, field, office) {
+  base = base || {}; field = field || {}; office = office || {};
+  const merged = {}; const conflicts = [];
+  const pick = (key, b, f, o, label) => {
+    const fChanged = !_listEq(b, f, key), oChanged = !_listEq(b, o, key);
+    if (fChanged && oChanged && !_listEq(f, o, key)) { conflicts.push(label); return f; }   // both → review (keep Field)
+    if (fChanged) return f;                                                                  // Field-only → Field
+    return o !== undefined ? o : b;                                                          // Office-only / none → Office
+  };
+  merged.structures = pick("structures", base.structures, field.structures, office.structures, "structures");
+  merged.facets = pick("facets", base.facets, field.facets, office.facets, "facets");
+  merged.edges = pick("edges", base.edges, field.edges, office.edges, "edges");
+  const bP = base.pens != null ? base.pens : base.penetrations;
+  const fP = field.pens != null ? field.pens : field.penetrations;
+  const oP = office.pens != null ? office.pens : office.penetrations;
+  merged.pens = pick("pens", bP, fP, oP, "penetrations");
+  const bs = base.summary || {}, fs = field.summary || {}, os = office.summary || {};
+  const ms = {};
+  for (const k of new Set([...Object.keys(bs), ...Object.keys(fs), ...Object.keys(os)])) {
+    const bv = JSON.stringify(bs[k]), fv = JSON.stringify(fs[k]), ov = JSON.stringify(os[k]);
+    const fCh = bv !== fv, oCh = bv !== ov;
+    if (fCh && oCh && fv !== ov) { conflicts.push("summary." + k); ms[k] = fs[k]; }
+    else if (fCh) ms[k] = fs[k]; else ms[k] = (k in os ? os[k] : bs[k]);
+  }
+  merged.summary = ms;
+  return { merged, conflicts, clean: conflicts.length === 0 };
+}
+
 // The working-draft cache key encodes its measurement scope: measurement_working:measurement_scope:{kind}:{id}
 function parseWorkingScope(name) {
   const m = /measurement_scope:(lead|property|inspection):(.+)$/.exec(String(name || ""));
@@ -87,10 +153,22 @@ function classifyOrphanWorkingDraft({ wd, hasActiveMutation, baseRevision } = {}
   if (!wd || !wd.working) return { action: "keep", reason: "not_working" };
   if (hasActiveMutation) return { action: "keep", reason: "active_mutation" };
   if (!workingDraftHasContent(wd)) return { action: "clear", reason: "empty" };
+  const baseTok = wd.base && wd.base.if_match != null ? String(wd.base.if_match) : null;
+  const serverTok = baseRevision && baseRevision.updated_at != null ? String(baseRevision.updated_at) : null;
+  const tokenMatches = baseTok == null || serverTok == null || baseTok === serverTok;
+  // STRONGEST path: a complete base_fingerprint recorded at draft creation proves whether ANY persisted
+  // field changed since the rep opened it — no net edit AND the base token still matches AND no active
+  // mutation → the draft is obsolete and safe to clear.
+  if (wd.base_fingerprint != null) {
+    if (canonicalFingerprint(wd) === wd.base_fingerprint && tokenMatches) return { action: "clear", reason: "unchanged_since_base" };
+    if (baseTok != null && serverTok != null && baseTok !== serverTok && baseRevision) {
+      return { action: "conflict", reason: "office_advanced", serverDetail: baseRevision };
+    }
+    return { action: "keep", reason: "edited" };
+  }
+  // Fallback (older drafts without a fingerprint): complete canonical equality against the base revision.
   if (baseRevision) {
     if (canonicalEqual(wd, baseRevision)) return { action: "clear", reason: "identical_to_base" };
-    const baseTok = wd.base && wd.base.if_match != null ? String(wd.base.if_match) : null;
-    const serverTok = baseRevision.updated_at != null ? String(baseRevision.updated_at) : null;
     if (baseTok != null && serverTok != null && baseTok !== serverTok) {
       return { action: "conflict", reason: "office_advanced", serverDetail: baseRevision };
     }
@@ -131,6 +209,8 @@ function planStartupRecovery(mutations) {
 module.exports = {
   canonicalMeasurement,
   canonicalEqual,
+  canonicalFingerprint,
+  threeWayMergeMeasurement,
   parseWorkingScope,
   parseUpdateRevisionId,
   classifyOrphanWorkingDraft,

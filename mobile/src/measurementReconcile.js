@@ -140,6 +140,36 @@ function resolveMeasurementView({ serverDetail, serverStale, optimistic, draft, 
   return { kind: "empty", detail: null, status: null, conflict: false, mutationState: "none" };
 }
 
+// Transform a superseded CREATE row into an UPDATE of the just-created server revision (P0 data-loss fix):
+// the newer local body must be APPLIED, not lost to an idempotent create replay. Preserves the newer body,
+// generation, scope and local_edit_generation; resets the network/result fields; becomes a PUT.
+function buildConvertedUpdateMutation(m, revisionId, ifMatch) {
+  const cid = `measurement-update:${String(revisionId)}`;
+  return {
+    ...m,
+    client_id: cid,
+    idempotency_key: cid,
+    kind: "measurement_update",
+    method: "PUT",
+    path: `/mobile/measurements/${String(revisionId)}`,
+    ifMatch,
+    server_id: String(revisionId),
+    serverValue: null,
+    error: null,
+    errorCode: null,
+    attempts: 0,
+    state: "pending",
+  };
+}
+
+// Rebase a create's working draft onto the newly-created server revision id + token, so continued editing
+// targets the real revision. Only touches the working draft that belongs to this create.
+function rebaseWorkingDraftToRevision(wd, { oldClientId, revisionId, ifMatch } = {}) {
+  if (!wd || !wd.working) return wd || null;
+  if (wd.local_client_id != null && oldClientId != null && wd.local_client_id !== oldClientId) return wd;
+  return { ...wd, base: { id: String(revisionId), if_match: ifMatch }, local_client_id: null };
+}
+
 module.exports = {
   STATUS,
   resolveMeasurementView,
@@ -149,4 +179,6 @@ module.exports = {
   isSupersededAck,
   retireCreateDraft,
   planMeasurementWorkingAck,
+  buildConvertedUpdateMutation,
+  rebaseWorkingDraftToRevision,
 };
