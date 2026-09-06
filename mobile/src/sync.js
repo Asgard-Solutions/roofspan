@@ -14,6 +14,8 @@ import { conflictReview, buildReviewedContext } from "./roofSketchConflict";
 import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketchCache";
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
 import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
+import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope } from "./measurementRecovery";
+import { cache } from "./cache";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -197,6 +199,74 @@ async function _reconcileMeasurementAcks(processed) {
   }
   // d. notify the open screen immediately so it adopts the authoritative revision without a poll.
   if (touched) _emit({ type: "measurement_reconciled" });
+}
+
+// One-time (idempotent) STARTUP RECOVERY for phones already stuck in the pre-fix bad state. Runs the same
+// serialized, generation-safe reconciliation over ALREADY-STORED rows/drafts. It NEVER wipes app data and
+// NEVER silently deletes unsynced work: it settles synced creates/updates whose drafts lingered, preserves
+// failed/conflict work and lists it for routing, and heals orphaned working drafts only when provably safe.
+let _measurementAttention = { conflicts: [], failures: [], recovered: 0, ranAt: null };
+export function measurementAttention() { return _measurementAttention; }
+
+export async function recoverMeasurementsOnStartup() {
+  const summary = { recovered: 0, conflicts: [], failures: [], ranAt: new Date().toISOString() };
+  let all;
+  try { all = await loadAllMutations(); } catch (e) { return summary; }
+
+  // 1) Settle every SYNCED measurement create/update whose local draft was never retired (the bad state),
+  //    and collect failed/conflict rows for explicit resolution (never auto-resolved, never deleted).
+  for (const m of all) {
+    if (m.kind !== "measurement" && m.kind !== "measurement_update") continue;
+    if (m.state === "conflict") { const it = recoveryAttentionItem(m); if (it) summary.conflicts.push(it); continue; }
+    if (m.state === "failed") { const it = recoveryAttentionItem(m); if (it) summary.failures.push(it); continue; }
+    if (m.state !== "synced") continue;
+    // Use serverValue, else locate the authoritative revision by server_id (read-through; skip if offline).
+    let rev = (m.serverValue && m.serverValue.id) ? m.serverValue : null;
+    if (!rev && m.server_id) {
+      try { const r = await cache.measurement(m.server_id); if (r && r.data && r.data.id) rev = r.data; } catch (e) { /* offline */ }
+    }
+    if (!rev) continue;                      // cannot locate authoritative revision → PRESERVE, do nothing
+    const revisionId = String(rev.id);
+    const measScope = measScopeFromBody(m.body);
+    await putCacheSerialized(measDetailKey(revisionId), rev);
+    if (measScope) await mutateCache(measScopeKey(measScope), (cur) => upsertRevision(cur, rev));
+    if (measScope) {
+      if (m.kind === "measurement") await mutateCache(measDraftKey(measScope), (cur) => retireCreateDraft(cur, m.client_id));
+      await mutateCache(measWorkingKey(measScope), (cur) => planMeasurementWorkingAck(cur, { kind: m.kind, clientId: m.client_id, revisionId }));
+    }
+    await _removeMutation(m.client_id);      // retire the settled mutation
+    summary.recovered += 1;
+  }
+
+  // 2) Orphaned working drafts: clear only when provably safe; surface a conflict when Office advanced.
+  let workingNames = [];
+  try { workingNames = await listCacheNames("measurement_working:"); } catch (e) { workingNames = []; }
+  for (const name of workingNames) {
+    let wd = null;
+    try { wd = await getCache(name); } catch (e) { continue; }
+    if (!wd || !wd.working) continue;
+    const scope = parseWorkingScope(name);
+    let activeMutation = null, baseRevision = null;
+    if (wd.base && wd.base.id) {
+      activeMutation = all.find((x) => x.client_id === `measurement-update:${wd.base.id}` && (x.state === "pending" || x.state === "failed" || x.state === "conflict")) || null;
+      try { baseRevision = await getCache(measDetailKey(wd.base.id)); } catch (e) { baseRevision = null; }
+    } else if (wd.local_client_id) {
+      activeMutation = all.find((x) => x.client_id === wd.local_client_id && (x.state === "pending" || x.state === "failed" || x.state === "conflict")) || null;
+    }
+    const decision = classifyOrphanWorkingDraft({ wd, hasActiveMutation: !!activeMutation, baseRevision });
+    if (decision.action === "clear") {
+      await mutateCache(name, () => null);   // safe: empty or identical-to-base (no real edit)
+      summary.recovered += 1;
+    } else if (decision.action === "conflict" && wd.base && wd.base.id) {
+      summary.conflicts.push({ kind: "conflict", mutationKind: "working_draft", revisionId: String(wd.base.id), scope, error: "Measurement changed in Office", serverDetail: decision.serverDetail });
+    }
+    // "keep" → never silently delete
+  }
+
+  _measurementAttention = summary;
+  if (summary.recovered) _emit({ type: "measurement_reconciled" });
+  _emit({ type: "measurement_recovery_done" });
+  return summary;
 }
 
 // B3C-style Property conflict surfacing: the durable Property/Visit/DNK mutation for ONE property that
@@ -434,9 +504,11 @@ export async function pendingSummary() {
 // Auto-sync triggers. A device having internet does NOT guarantee Office is reachable, so a failed
 // attempt simply leaves work pending (the queue never drops it) and we retry on the next trigger.
 export function startAutoSync() {
+  // One-time startup recovery for phones stuck in the pre-fix state, BEFORE the first sync pass. Best-effort;
+  // never blocks sync. Heals synced-but-undrained creates/updates + orphaned drafts; preserves conflicts/failures.
+  recoverMeasurementsOnStartup().catch(() => {}).finally(() => { runSync().catch(() => {}); });
   const unsubNet = NetInfo.addEventListener((state) => { if (state.isConnected) { _resetBackoff(); runSync().catch(() => {}); } });
   const appSub = AppState.addEventListener("change", (s) => { if (s === "active") { _resetBackoff(); runSync().catch(() => {}); } });
-  runSync().catch(() => {});
   return () => {
     _clearRetryTimer();
     try { unsubNet && unsubNet(); } catch (e) {}

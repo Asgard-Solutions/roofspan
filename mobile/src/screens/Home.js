@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { cache } from "../cache";
-import { pendingSummary, runSync, lastSyncAt } from "../sync";
+import { pendingSummary, runSync, lastSyncAt, measurementAttention, onSyncChange } from "../sync";
 import SyncStatusChip from "../components/SyncStatusChip";
 import { C, badge } from "../theme";
 
@@ -14,6 +14,7 @@ export default function Home({ navigation }) {
   const [sections, setSections] = useState([]);
   const [summary, setSummary] = useState({ counts: { pending: 0, failed: 0, conflict: 0 }, label: "All changes synced", waiting: 0 });
   const [last, setLast] = useState(null);
+  const [attention, setAttention] = useState({ conflicts: [], failures: [] });
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
@@ -25,10 +26,30 @@ export default function Home({ navigation }) {
     setSections((s.data && s.data.sections) || []);
     setSummary(await pendingSummary());
     setLast(await lastSyncAt());
+    setAttention(measurementAttention());
     setRefreshing(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Startup recovery reports conflicts/failures asynchronously — adopt them as soon as it finishes.
+  useFocusEffect(useCallback(() => {
+    const off = onSyncChange((e) => {
+      if (e && (e.type === "measurement_recovery_done" || e.type === "measurement_reconciled")) setAttention(measurementAttention());
+    });
+    return off;
+  }, []));
+
+  // Measurements that need explicit review after recovery (durable conflicts + failed syncs).
+  const reviewItems = [
+    ...((attention.conflicts) || []).map((x) => ({ ...x, tone: "conflict", label: "Conflict — review required" })),
+    ...((attention.failures) || []).map((x) => ({ ...x, tone: "failed", label: x.error || "Sync failed — retry needed" })),
+  ];
+  const goReview = (item) => {
+    const sc = item.scope || {};
+    if (sc.lead_id) navigation.navigate("LeadsTab", { screen: "LeadDetail", params: { id: sc.lead_id } }, { pop: true });
+    else navigation.navigate("Map");
+  };
 
   const open = leads.filter((l) => l.status !== "won" && l.status !== "lost" && l.status !== "archived");
   const needAction = open.filter((l) => ACTION_STATUSES.includes(l.status));
@@ -68,8 +89,19 @@ export default function Home({ navigation }) {
         <Action label="My Jobs" onPress={goJobs} testID="action-my-jobs" />
       </View>
 
-      <Text style={s.h2}>My area</Text>
-      {sections.length === 0 ? <Text style={s.empty}>No canvass area assigned yet.</Text> : (
+      {reviewItems.length > 0 && (
+        <View testID="home-meas-review">
+          <Text style={s.h2}>Measurements needing review</Text>
+          {reviewItems.slice(0, 6).map((item, i) => (
+            <TouchableOpacity key={`${item.tone}-${item.client_id || item.revisionId || i}`} style={[s.card, s.reviewCard]} onPress={() => goReview(item)} testID={`home-meas-review-${i}`}>
+              <Text style={[s.cardTitle, { color: "#991B1B", fontSize: 15 }]}>{item.tone === "conflict" ? "Conflict — review required" : "Sync failed — retry needed"}</Text>
+              <Text style={s.cardSub}>{item.label}{item.scope && item.scope.lead_id ? " · tap to open the lead" : ""}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      <Text style={s.h2}>My area</Text>      {sections.length === 0 ? <Text style={s.empty}>No canvass area assigned yet.</Text> : (
         <TouchableOpacity style={s.card} onPress={goMap} testID="home-area">
           <Text style={s.cardTitle}>{sections[0].name}{sections.length > 1 ? ` +${sections.length - 1} more` : ""}</Text>
           <Text style={s.cardSub}>{sections.reduce((n, x) => n + (x.property_count || 0), 0)} properties in your assigned area</Text>
@@ -118,6 +150,7 @@ const s = StyleSheet.create({
   action: { backgroundColor: "#fff", borderWidth: 2, borderColor: C.brand, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, flexGrow: 1, alignItems: "center" },
   actionText: { color: C.brand, fontWeight: "800" },
   card: { backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: C.line },
+  reviewCard: { borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" },
   cardTitle: { fontSize: 18, fontWeight: "700", color: C.ink },
   cardSub: { fontSize: 14, color: C.sub, marginTop: 2 },
   empty: { color: C.sub, fontStyle: "italic" },

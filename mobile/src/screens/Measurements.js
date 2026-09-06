@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange, removeMutation } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
@@ -276,6 +276,25 @@ export default function Measurements({ route, navigation }) {
     await load();
   }, [load]);
 
+  // Failed EXISTING revision → adopt the authoritative Office copy (drop the local update).
+  const onFailedUseOffice = useCallback(async () => {
+    if (!existing) return;
+    await discardMeasurementUpdate(existing.id);
+    setFailure(null);
+    await load();
+  }, [existing, load]);
+
+  // Failed CREATE (no Office copy yet) → remove the local change entirely.
+  const onFailedRemoveLocal = useCallback(async () => {
+    if (localDraft) {
+      await removeMutation(localDraft.client_id);
+      await clearMeasurementDraft(scope);
+      await wdStoreRef.current.sealAndClear();
+    }
+    setFailure(null);
+    navigation.goBack();
+  }, [localDraft, scope, navigation]);
+
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Live two-way sync while this screen is open: every 15s push any local pending edits up to Office, and
@@ -448,7 +467,12 @@ export default function Measurements({ route, navigation }) {
           <Text style={s.failT}>Sync failed — retry needed</Text>
           {failure.reason ? <Text style={s.failSub} testID="meas-sync-failed-reason">{failure.reason}</Text> : null}
           <Text style={s.failSafe}>Your changes are saved on this device and were not lost.</Text>
-          <TouchableOpacity style={s.failBtn} onPress={onRetrySync} testID="meas-sync-retry"><Text style={s.failBtnT}>Retry sync</Text></TouchableOpacity>
+          <View style={s.rowline}>
+            <TouchableOpacity style={s.failBtn} onPress={onRetrySync} testID="meas-sync-retry"><Text style={s.failBtnT}>Retry sync</Text></TouchableOpacity>
+            {existing
+              ? <TouchableOpacity style={[s.failBtn, s.failBtnAlt]} onPress={onFailedUseOffice} testID="meas-failed-use-office"><Text style={[s.failBtnT, { color: C.brand }]}>Use Office version</Text></TouchableOpacity>
+              : <TouchableOpacity style={[s.failBtn, s.failBtnAlt]} onPress={onFailedRemoveLocal} testID="meas-failed-remove-local"><Text style={[s.failBtnT, { color: C.danger }]}>Remove local change</Text></TouchableOpacity>}
+          </View>
         </View>
       )}
       {conflict && (
@@ -666,7 +690,8 @@ const s = StyleSheet.create({
   failT: { color: "#991B1B", fontWeight: "800", fontSize: 15 },
   failSub: { color: "#B91C1C", fontSize: 12, marginTop: 2 },
   failSafe: { color: "#7F1D1D", fontSize: 12, marginTop: 4, marginBottom: 8 },
-  failBtn: { alignSelf: "flex-start", backgroundColor: C.brand, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 16 },
+  failBtn: { alignSelf: "flex-start", backgroundColor: C.brand, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 16, marginRight: 8, marginTop: 2 },
+  failBtnAlt: { backgroundColor: "#fff", borderWidth: 1, borderColor: C.line },
   failBtnT: { color: "#fff", fontWeight: "800", fontSize: 13 },
   lockedBanner: { backgroundColor: "#F1F5F9", borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 12, marginBottom: 10 },
   lockedT: { color: C.ink, fontWeight: "800", fontSize: 15 },
