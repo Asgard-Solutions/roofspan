@@ -106,3 +106,20 @@ async def send_quote_email(*, to_email: str, quote: dict, company: dict, proposa
         html=_quote_html(quote, company, bool(site_plan_pdf)),
         attachments=attachments,
     )
+
+
+async def send_accept_notification(*, to_email: str, quote: dict, company: dict, acceptance_name: str,
+                                   accepted_at: str, ip: str | None = None) -> dict:
+    """Alert the assigned rep that a customer accepted a proposal online (no attachments)."""
+    number = quote.get("number", "")
+    comp = (company or {}).get("name") or "RoofSpan"
+    ip_line = f'<p style="color:#64748b;font-size:13px">Signed IP: {ip}</p>' if ip else ""
+    html = (
+        f'<div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:14px;line-height:1.5">'
+        f'<p>Good news — <b>{acceptance_name or "the customer"}</b> just accepted proposal '
+        f'<b>{number}</b> online for <b>{_money(quote.get("total"))}</b> on {accepted_at}.</p>'
+        f'<p>A job has been created. Follow up to schedule the work.</p>'
+        f'{ip_line}'
+        f'<p>— {comp}</p></div>'
+    )
+    return await send_email(to=to_email, subject=f"Proposal {number} accepted by {acceptance_name or 'customer'}", html=html)

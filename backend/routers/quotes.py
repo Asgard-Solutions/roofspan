@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig)
+from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig, Lead)
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_phase3 import (QuoteIn, QuoteUpdate, QuoteOut, QuoteAccept, QuoteAcceptResult, LineItemOut,
                             QuotePackageOut)
@@ -80,7 +80,41 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
     await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id,
                      detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None,
                              "via": "office" if user is not None else "public_link"}, request=request)
+    await _notify_rep_on_accept(db, q, request=request)
     return q, job
+
+
+async def _notify_rep_on_accept(db, q: Quote, *, request):
+    """Best-effort alert to the lead's assigned rep (falls back to quote creator). Routes through the
+    app-wide email transport (stubbed until a provider is configured). Never blocks acceptance."""
+    try:
+        rep_email = None
+        if q.lead_id:
+            lead = await db.get(Lead, q.lead_id)
+            if lead:
+                rep_email = lead.assigned_to
+                if not rep_email and lead.assigned_user_id:
+                    u = await db.get(User, lead.assigned_user_id)
+                    rep_email = u.email if u else None
+        rep_email = rep_email or q.created_by
+        if not rep_email:
+            return
+        row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+        company = (row.value if row and isinstance(row.value, dict) else {}) or {}
+        ip = None
+        if request is not None:
+            ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+            if ip and "," in ip:
+                ip = ip.split(",")[0].strip()
+        from services.email_sender import send_accept_notification
+        result = await send_accept_notification(
+            to_email=rep_email, quote={"number": q.number, "total": q.total}, company=company,
+            acceptance_name=q.acceptance_name or "", accepted_at=q.accepted_at.strftime("%b %d, %Y") if q.accepted_at else "",
+            ip=ip)
+        await log_action(db, user=None, action="quote.accept.notified", entity_type="quote", entity_id=q.id,
+                         detail={"to": rep_email, "stubbed": bool(result.get("stubbed"))}, request=request)
+    except Exception:
+        pass
 
 
 async def _quote_document_data(db: AsyncSession, q: Quote) -> dict:

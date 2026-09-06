@@ -1,6 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
-## Accept Online (customer share link) + Admin Quote-Expiration Default — DONE & VERIFIED (2026-06)
+## Signature Stamp on Accepted PDF + Notify Rep on Accept — DONE & VERIFIED (2026-06)
+- **Signature stamp** — the accepted proposal PDF (`services/proposal.py build_pdf`) now renders a signature block: "✓ Proposal Accepted", "Signed by {name} on {date}", and "Electronically signed and accepted online · IP {ip}". The IP is recovered from the existing `quote.accept` AuditLog entry via `proposal._acceptance_ip` (no schema change/migration) and surfaced as `quote.acceptance_ip` in `proposal_data`.
+- **Notify rep on accept** — `perform_quote_acceptance` now fires a best-effort `_notify_rep_on_accept`: resolves the recipient as the lead's `assigned_to` → assigned user's email → `quote.created_by`, and sends via the app-wide `email_sender.send_accept_notification` (stubbed until a provider is configured). Audit-logged `quote.accept.notified`. Never blocks acceptance (wrapped in try/except).
+- **Verified:** public accept with `X-Forwarded-For: 203.0.113.77` → proposal JSON `acceptance_ip=203.0.113.77`; regenerated proposal.pdf (pypdf text extract) contains "Proposal Accepted / Signed by Sam Signer / 203.0.113.77 / Electronically signed"; audit shows `quote.accept.notified`. Backend clean.
+
+
 Customers can review and accept a proposal from a public, no-login share link (auto-creates the Job, same as Office accept).
 - **Signed share token** — `core.create_proposal_share_token` / `verify_proposal_share_token` (JWT `type:proposal_share`, quote-scoped, 400-day exp; follows the existing tile-token pattern — NOT user auth). `GET /api/quotes/{id}/share-link` (FIELD roles) mints `{token, path:"/p/{token}"}`.
 - **Public endpoints** (`routers/public_proposals.py`, `public_router`, NO auth): `GET /api/public/proposals/{token}` returns the customer-safe `proposal_data` (no internal cost) + `share.{status,expired,can_accept,multi_package}` + `site_plan_available`; `POST /{token}/accept` ({acceptance_name, agreed, package_id}) validates name+agreement+expiry then runs the shared `perform_quote_acceptance` (refactored out of `accept_quote`; idempotent; creates the Job; `accepted_by="customer:{name}"`); `GET /{token}/proposal.pdf` + `/{token}/site-plan.pdf`. Accept blocked past `expiration_date` (viewable still).
