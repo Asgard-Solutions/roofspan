@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Apply and verify the current RoofSpan P0 hardening increment.
-
-Temporary implementation helper. The branch workflow runs this against a complete checkout, which lets
-us make narrowly asserted replacements without rewriting unrelated large source files through the GitHub
-contents API. It is removed before the pull request is merged.
-"""
+"""Apply and verify P0-4: durable three-way-merge bases for Field measurements."""
 from __future__ import annotations
 
 import subprocess
@@ -37,65 +32,163 @@ def run_expected_failure(*cmd: str) -> None:
     print(proc.stdout, flush=True)
     print(proc.stderr, flush=True)
     if proc.returncode == 0:
-        raise RuntimeError("Regression test unexpectedly passed before the P0-3 production change")
+        raise RuntimeError("Regression test unexpectedly passed before the P0-4 production change")
 
 
 # ---------------------------------------------------------------------------
-# RED: publication failure/timeout must be observable, and an installation
-# connection must receive no broadcast_ack until the full topology accepts it.
+# RED: after Save clears the transient working draft, the durable queue row
+# must still carry the exact Base document/token needed for a safe 3-way merge.
 # ---------------------------------------------------------------------------
 write(
-    "backend/tests/test_relay_broadcast.py",
-    '''"""Office->Field broadcast fan-out and acceptance semantics (network-free)."""\nimport asyncio\nimport json\n\nfrom relay import protocol as P\nfrom relay.hub import InstallationConn, RelayHub\nfrom relay.registry import AsyncMemoryRegistry\nfrom relay.transport import InProcessBus\n\n\nclass FakeDevice:\n    def __init__(self):\n        self.frames = []\n\n    async def send_text(self, s):\n        self.frames.append(json.loads(s))\n\n\nclass FakeSocket:\n    def __init__(self):\n        self.frames = []\n\n    async def send_text(self, s):\n        self.frames.append(json.loads(s))\n\n\nclass FailingTransport:\n    async def publish(self, channel, message):\n        raise RuntimeError("valkey unavailable")\n\n\nclass HangingTransport:\n    async def publish(self, channel, message):\n        await asyncio.Event().wait()\n\n\ndef _two_nodes():\n    bus = InProcessBus()\n    store = {}\n    hub_a = RelayHub("nodeA", registry=AsyncMemoryRegistry("nodeA", store=store), transport=bus)\n    hub_b = RelayHub("nodeB", registry=AsyncMemoryRegistry("nodeB", store=store), transport=bus)\n    return hub_a, hub_b\n\n\nFRAME = {"type": "measurement_changed", "event_id": "e1", "lead_id": "L1",\n         "measurement_set_id": "S1", "revision_id": "R1", "updated_at": "2026-06-01T00:00:00+00:00"}\n\n\ndef test_cross_node_delivery_is_accepted_once_published():\n    async def scenario():\n        a, b = _two_nodes()\n        await a.startup(); await b.startup()\n        dev = FakeDevice()\n        b.register_device("inst1", "k1", dev)\n        result = await a.broadcast("inst1", FRAME)\n        await asyncio.sleep(0.05)\n        assert result.accepted is True\n        assert result.delivered_local == 0\n        assert len(dev.frames) == 1\n        assert dev.frames[0]["event_id"] == "e1"\n        await a.shutdown(); await b.shutdown()\n    asyncio.run(scenario())\n\n\ndef test_origin_echo_dedupe():\n    async def scenario():\n        a, b = _two_nodes()\n        await a.startup(); await b.startup()\n        dev_a = FakeDevice()\n        a.register_device("inst1", "k1", dev_a)\n        result = await a.broadcast("inst1", FRAME)\n        await asyncio.sleep(0.05)\n        assert result.accepted is True\n        assert result.delivered_local == 1\n        assert len(dev_a.frames) == 1\n        await a.shutdown(); await b.shutdown()\n    asyncio.run(scenario())\n\n\ndef test_both_nodes_have_devices():\n    async def scenario():\n        a, b = _two_nodes()\n        await a.startup(); await b.startup()\n        dev_a, dev_b = FakeDevice(), FakeDevice()\n        a.register_device("inst1", "ka", dev_a)\n        b.register_device("inst1", "kb", dev_b)\n        result = await a.broadcast("inst1", FRAME)\n        await asyncio.sleep(0.05)\n        assert result.accepted is True\n        assert result.delivered_local == 1\n        assert len(dev_a.frames) == 1\n        assert len(dev_b.frames) == 1\n        await a.shutdown(); await b.shutdown()\n    asyncio.run(scenario())\n\n\ndef test_single_node_memory_mode_accepts_after_local_processing():\n    async def scenario():\n        hub = RelayHub("solo")\n        dev = FakeDevice()\n        hub.register_device("i", "k", dev)\n        result = await hub.broadcast("i", FRAME)\n        assert result.accepted is True\n        assert result.delivered_local == 1\n        assert len(dev.frames) == 1\n    asyncio.run(scenario())\n\n\ndef test_unregister_stops_delivery_but_single_node_still_accepts():\n    async def scenario():\n        hub = RelayHub("solo2")\n        dev = FakeDevice()\n        hub.register_device("i", "k", dev)\n        hub.unregister_device("i", "k")\n        result = await hub.broadcast("i", FRAME)\n        assert result.accepted is True\n        assert result.delivered_local == 0\n        assert dev.frames == []\n        assert hub.device_count("i") == 0\n    asyncio.run(scenario())\n\n\ndef test_publish_failure_is_not_accepted_even_after_local_delivery():\n    async def scenario():\n        hub = RelayHub("fail", transport=FailingTransport())\n        dev = FakeDevice()\n        hub.register_device("i", "k", dev)\n        result = await hub.broadcast("i", FRAME)\n        assert result.accepted is False\n        assert result.reason == "publish_failed"\n        assert result.delivered_local == 1\n        assert len(dev.frames) == 1\n    asyncio.run(scenario())\n\n\ndef test_publish_timeout_is_not_accepted():\n    async def scenario():\n        hub = RelayHub("hang", transport=HangingTransport(), broadcast_publish_timeout=0.01)\n        result = await hub.broadcast("i", FRAME)\n        assert result.accepted is False\n        assert result.reason == "publish_timeout"\n        assert result.delivered_local == 0\n    asyncio.run(scenario())\n\n\ndef test_failed_cross_node_publish_sends_no_broadcast_ack():\n    async def scenario():\n        hub = RelayHub("fail-ack", transport=FailingTransport())\n        dev = FakeDevice()\n        hub.register_device("i", "k", dev)\n        ws = FakeSocket()\n        conn = InstallationConn("i", ws)\n        result = await hub.broadcast_and_ack("i", FRAME, conn)\n        assert result.accepted is False\n        assert result.delivered_local == 1\n        assert ws.frames == []\n    asyncio.run(scenario())\n\n\ndef test_accepted_broadcast_sends_one_ack_with_stable_event_id():\n    async def scenario():\n        hub = RelayHub("ok-ack")\n        ws = FakeSocket()\n        conn = InstallationConn("i", ws)\n        result = await hub.broadcast_and_ack("i", FRAME, conn)\n        assert result.accepted is True\n        assert len(ws.frames) == 1\n        assert ws.frames[0]["type"] == P.T_BROADCAST_ACK\n        assert ws.frames[0]["event_id"] == "e1"\n    asyncio.run(scenario())\n''',
+    "mobile/src/tests/measurement_durable_merge_base.node.test.js",
+    '''"use strict";\nconst assert = require("assert");\nconst Q = require("../queue");\nconst M = require("../measurementReconcile");\nconst R = require("../measurementRecovery");\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction detail() {\n  return {\n    id: "R1", updated_at: "2026-09-06T10:00:00Z", source: "office",\n    provider: "provider-a", report_id: "report-a", reported_area_sqft: 1000, notes: "base notes",\n    structures: [{ id: "S1", name: "House", structure_type: "main_house", included_in_scope: true }],\n    facets: [{ id: "F1", structure_id: "S1", facet_label: "F1", pitch_rise: 6, area_sqft: 100 }],\n    edges: [{ id: "E1", facet_id: "F1", edge_type: "ridge", length_ft: 40 }],\n    penetrations: [], summary: { total_area_sqft: 100 },\n  };\n}\n\n(function durable_row_survives_working_draft_clear_and_merges_disjoint_changes() {\n  const baseDetail = detail();\n  const baseBody = M.measurementDocumentFromRevision(baseDetail);\n  const fieldBody = { ...clone(baseBody), lead_id: "L1", source: "field", mark_field_complete: false };\n  fieldBody.edges[0].length_ft = 45;\n  const mutation = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1",\n    body: fieldBody, ifMatch: baseDetail.updated_at, baseBody, baseToken: baseDetail.updated_at,\n  });\n  assert.deepStrictEqual(mutation.base_body, baseBody);\n  assert.strictEqual(mutation.base_token, baseDetail.updated_at);\n\n  const office = clone(baseDetail);\n  office.updated_at = "2026-09-06T10:05:00Z";\n  office.facets[0].area_sqft = 110;\n  office.notes = "Office-only note";\n  const inputs = M.measurementConflictMergeInputs({ ...mutation, state: "conflict" }, office);\n  assert.strictEqual(inputs.ok, true);\n  const merged = R.threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);\n  assert.strictEqual(merged.clean, true);\n  const next = M.buildMergedMeasurementBody(mutation.body, merged.merged);\n  assert.strictEqual(next.facets[0].area_sqft, 110, "Office-only plane change must survive");\n  assert.strictEqual(next.edges[0].length_ft, 45, "Field-only roof-line change must survive");\n  assert.strictEqual(next.notes, "Office-only note", "Office-only hidden metadata must survive");\n  assert.strictEqual(next.lead_id, "L1", "routing scope remains from the Field mutation");\n})();\n\n(function repeated_local_save_keeps_the_original_pending_base() {\n  const base = detail();\n  const original = M.measurementDocumentFromRevision(base);\n  const pending = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1", body: original,\n    ifMatch: base.updated_at, baseBody: original, baseToken: base.updated_at,\n  });\n  const optimistic = clone(base);\n  optimistic.updated_at = base.updated_at;\n  optimistic.facets[0].area_sqft = 999;\n  const chosen = M.chooseDurableMeasurementBase(optimistic, pending);\n  assert.strictEqual(chosen.ok, true);\n  assert.deepStrictEqual(chosen.baseBody, original);\n  assert.strictEqual(chosen.baseToken, base.updated_at);\n})();\n\n(function legacy_or_mismatched_rows_cannot_blindly_keep_mine() {\n  const base = detail();\n  const body = M.measurementDocumentFromRevision(base);\n  const legacy = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1",\n    body, ifMatch: base.updated_at,\n  });\n  assert.strictEqual(M.measurementConflictMergeInputs({ ...legacy, state: "conflict" }, base).ok, false);\n  assert.strictEqual(M.chooseDurableMeasurementBase(base, legacy).ok, false);\n\n  const mismatch = { ...legacy, base_body: body, base_token: "older-token" };\n  const result = M.measurementConflictMergeInputs(mismatch, base);\n  assert.strictEqual(result.ok, false);\n  assert.strictEqual(result.reason, "base_token_mismatch");\n})();\n\n(function superseded_create_conversion_uses_the_acknowledged_server_as_its_new_base() {\n  const server = detail();\n  server.updated_at = "2026-09-06T10:10:00Z";\n  const newerCreate = Q.makeMutation({ kind: "measurement", method: "post", path: "/mobile/measurements", body: { lead_id: "L1", structures: [] } });\n  const converted = M.buildConvertedUpdateMutation(newerCreate, "R1", server.updated_at, server);\n  assert.strictEqual(converted.kind, "measurement_update");\n  assert.strictEqual(converted.base_token, server.updated_at);\n  assert.deepStrictEqual(converted.base_body, M.measurementDocumentFromRevision(server));\n  assert.deepStrictEqual(converted.body, newerCreate.body);\n})();\n\nconsole.log("measurement durable merge-base tests passed");\n''',
 )
-
-run_expected_failure("pytest", "-q", "backend/tests/test_relay_broadcast.py")
+replace_once(
+    "mobile/package.json",
+    "node src/tests/measurement_three_way_merge.node.test.js && node src/tests/sync_status.node.test.js",
+    "node src/tests/measurement_three_way_merge.node.test.js && node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/sync_status.node.test.js",
+)
+run_expected_failure("node", "mobile/src/tests/measurement_durable_merge_base.node.test.js")
 
 # ---------------------------------------------------------------------------
-# GREEN: model broadcast acceptance explicitly. Multi-node mode requires the
-# shared broker to accept publication; otherwise no ack is written upstream.
+# GREEN: persist a complete Base in every measurement_update, preserve it when
+# local edits coalesce, and consume only a trusted durable Base on conflict.
 # ---------------------------------------------------------------------------
 replace_once(
-    "backend/relay/config.py",
-    'REQUEST_TIMEOUT = float(os.environ.get("RELAY_REQUEST_TIMEOUT", "30"))\n',
-    'REQUEST_TIMEOUT = float(os.environ.get("RELAY_REQUEST_TIMEOUT", "30"))\n'
-    'BROADCAST_PUBLISH_TIMEOUT = float(os.environ.get("RELAY_BROADCAST_PUBLISH_TIMEOUT", "5"))\n',
+    "mobile/src/queue.js",
+    '''function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {''',
+    '''function makeMutation({ kind, method, path, body, ifMatch = null, baseBody = null, baseToken = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {''',
 )
 replace_once(
-    "backend/relay/hub.py",
-    "import asyncio\nimport logging\n",
-    "import asyncio\nimport logging\nfrom dataclasses import dataclass\n",
-)
-replace_once(
-    "backend/relay/hub.py",
-    '''class RelayPayloadTooLarge(Exception):\n    """Cross-node envelope exceeds the relay payload ceiling; rejected before publish."""\n\n\nclass InstallationConn:''',
-    '''class RelayPayloadTooLarge(Exception):\n    """Cross-node envelope exceeds the relay payload ceiling; rejected before publish."""\n\n\n@dataclass(frozen=True)\nclass BroadcastResult:\n    """Whether Relay accepted responsibility for an Office invalidation."""\n\n    delivered_local: int\n    accepted: bool\n    reason: str | None = None\n\n\nclass InstallationConn:''',
-)
-replace_once(
-    "backend/relay/hub.py",
-    '''class RelayHub:\n    def __init__(self, node_id: str, registry=None, transport=None):\n        self.node_id = node_id\n        self._registry = registry\n        self._transport = transport\n''',
-    '''class RelayHub:\n    def __init__(self, node_id: str, registry=None, transport=None, broadcast_publish_timeout=None):\n        self.node_id = node_id\n        self._registry = registry\n        self._transport = transport\n        self._broadcast_publish_timeout = (\n            C.BROADCAST_PUBLISH_TIMEOUT\n            if broadcast_publish_timeout is None\n            else max(0.001, float(broadcast_publish_timeout))\n        )\n''',
-)
-old_broadcast = '''    async def broadcast(self, installation_id: str, frame: dict) -> int:\n        """Fan an Office->Field invalidation to all paired devices for this installation.\n\n        Delivers to LOCAL devices immediately, then (multi-node) publishes ONCE to the shared broadcast\n        channel so every OTHER node delivers to its own local devices. The originating node drops its own\n        echo in ``_on_broadcast`` (origin match) so a device on the origin node is never double-delivered.\n        Returns the count delivered locally."""\n        delivered = await self._deliver_local(installation_id, frame)\n        if self._transport is not None:\n            env = E.build_broadcast(self.node_id, installation_id, frame)\n            raw = P.dumps(env)\n            if len(raw.encode("utf-8")) <= C.MAX_ENVELOPE_BYTES:\n                try:\n                    await self._transport.publish(R.broadcast_channel(), raw)\n                except Exception as e:  # noqa: BLE001 - transport bounce: local devices already got it\n                    log.warning("relay broadcast publish failed: %s", str(e)[:160])\n        return delivered\n'''
-new_broadcast = '''    async def broadcast(self, installation_id: str, frame: dict) -> BroadcastResult:\n        """Fan an Office->Field invalidation and report topology-wide acceptance.\n\n        Local device sends are best-effort. In multi-node mode the durable Office event may be retired only\n        after the shared broker accepts the publication; a broker failure/timeout leaves it unacknowledged so\n        the connector retries after the lease expires.\n        """\n        delivered = await self._deliver_local(installation_id, frame)\n        if self._transport is None:\n            return BroadcastResult(delivered_local=delivered, accepted=True)\n\n        env = E.build_broadcast(self.node_id, installation_id, frame)\n        raw = P.dumps(env)\n        if len(raw.encode("utf-8")) > C.MAX_ENVELOPE_BYTES:\n            log.warning("relay broadcast rejected: envelope exceeds configured ceiling")\n            return BroadcastResult(delivered_local=delivered, accepted=False, reason="payload_too_large")\n        try:\n            await asyncio.wait_for(\n                self._transport.publish(R.broadcast_channel(), raw),\n                timeout=self._broadcast_publish_timeout,\n            )\n        except asyncio.CancelledError:\n            raise\n        except TimeoutError:\n            log.warning("relay broadcast publish timed out")\n            return BroadcastResult(delivered_local=delivered, accepted=False, reason="publish_timeout")\n        except Exception as e:  # noqa: BLE001 - leave Office event unacked for lease-expiry retry\n            log.warning("relay broadcast publish failed: %s", str(e)[:160])\n            return BroadcastResult(delivered_local=delivered, accepted=False, reason="publish_failed")\n        return BroadcastResult(delivered_local=delivered, accepted=True)\n\n    async def broadcast_and_ack(\n        self, installation_id: str, frame: dict, conn: InstallationConn\n    ) -> BroadcastResult:\n        """Acknowledge upstream only after ``broadcast`` accepted the full configured topology."""\n        result = await self.broadcast(installation_id, frame)\n        if not result.accepted:\n            return result\n        ack = P.broadcast_ack(\n            event_id=frame.get("event_id"),\n            delivered=result.delivered_local,\n        )\n        async with conn.send_lock:\n            await conn.ws.send_text(P.dumps(ack))\n        return result\n'''
-replace_once("backend/relay/hub.py", old_broadcast, new_broadcast)
-replace_once(
-    "backend/relay/server.py",
-    '''                # Office->Field invalidation pushed UP the tunnel by the loopback connector. Fan it out\n                # to every paired device for this installation, then ACK so the connector can retire the\n                # durable outbox event (it retries until it sees this acceptance).\n                delivered = await hub.broadcast(installation_id, frame)\n                async with conn.send_lock:\n                    await _send(ws, P.broadcast_ack(event_id=frame.get("event_id"), delivered=delivered))\n''',
-    '''                # Fan out and ACK only after the configured Relay topology accepts responsibility. A\n                # failed/timeout cross-node publication intentionally sends no ACK, so the Office lease\n                # expires and the stable event is retried.\n                await hub.broadcast_and_ack(installation_id, frame, conn)\n''',
+    "mobile/src/queue.js",
+    '''    body: body || {},\n    ifMatch,\n    label,''',
+    '''    body: body || {},\n    ifMatch,\n    // Durable 3-way-merge lineage for full-document measurement PUTs. This survives Save clearing the\n    // transient working draft and is never sent to the backend.\n    base_body: baseBody == null ? null : JSON.parse(JSON.stringify(baseBody)),\n    base_token: baseToken == null ? null : String(baseToken),\n    label,''',
 )
 
+helpers = '''\n// Extract the complete editable measurement document from an authoritative revision detail. Routing and\n// command fields stay on the mutation body; these are the values that must participate in conflict merge.\nfunction _cloneJson(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }\nfunction measurementDocumentFromRevision(src) {\n  if (!src || typeof src !== "object") return null;\n  const out = {\n    structures: _cloneJson(src.structures || []),\n    facets: _cloneJson(src.facets || []),\n    edges: _cloneJson(src.edges || []),\n    penetrations: _cloneJson(src.penetrations != null ? src.penetrations : (src.pens || [])),\n    summary: _cloneJson(src.summary || {}),\n  };\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    if (Object.prototype.hasOwnProperty.call(src, key)) out[key] = _cloneJson(src[key]);\n  }\n  return out;\n}\n\n// Coalescing rule: once a measurement_update is pending, every later local edit retains that row's ORIGINAL\n// base. Falling back to the current optimistic cache would manufacture a false base and permit data loss.\nfunction chooseDurableMeasurementBase(authoritative, pending) {\n  if (pending && pending.kind === "measurement_update") {\n    if (!pending.base_body || pending.base_token == null || pending.base_token === "") {\n      return { ok: false, reason: "missing_durable_base" };\n    }\n    return { ok: true, baseBody: _cloneJson(pending.base_body), baseToken: String(pending.base_token) };\n  }\n  const token = authoritative && (authoritative.base_token || authoritative.updated_at || authoritative.if_match);\n  const body = authoritative && authoritative.base_body\n    ? _cloneJson(authoritative.base_body)\n    : measurementDocumentFromRevision(authoritative);\n  if (!body || token == null || token === "") return { ok: false, reason: "missing_authoritative_base" };\n  return { ok: true, baseBody: body, baseToken: String(token) };\n}\n\n// A Keep-Mine merge is legal only when the durable base token is exactly the token used by the failed PUT.\n// Legacy rows are preserved for explicit review rather than blindly re-sending an entire stale snapshot.\nfunction measurementConflictMergeInputs(mutation, serverDetail) {\n  if (!mutation || mutation.kind !== "measurement_update") return { ok: false, reason: "not_measurement_update" };\n  if (!mutation.base_body || mutation.base_token == null || mutation.base_token === "") {\n    return { ok: false, reason: "missing_durable_base" };\n  }\n  if (String(mutation.base_token) !== String(mutation.ifMatch || "")) {\n    return { ok: false, reason: "base_token_mismatch" };\n  }\n  const office = measurementDocumentFromRevision(serverDetail);\n  if (!office || !serverDetail || serverDetail.updated_at == null) {\n    return { ok: false, reason: "missing_office_detail" };\n  }\n  return {\n    ok: true,\n    base: _cloneJson(mutation.base_body),\n    field: _cloneJson(mutation.body || {}),\n    office,\n    officeToken: String(serverDetail.updated_at),\n  };\n}\n\nfunction buildMergedMeasurementBody(fieldBody, merged) {\n  const next = _cloneJson(fieldBody || {}) || {};\n  next.structures = _cloneJson(merged.structures || []);\n  next.facets = _cloneJson(merged.facets || []);\n  next.edges = _cloneJson(merged.edges || []);\n  next.penetrations = _cloneJson(merged.pens != null ? merged.pens : (merged.penetrations || []));\n  next.summary = _cloneJson(merged.summary || {});\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    if (Object.prototype.hasOwnProperty.call(merged, key)) next[key] = _cloneJson(merged[key]);\n  }\n  return next;\n}\n'''
+replace_once(
+    "mobile/src/measurementReconcile.js",
+    '''function measScopeFromBody(body) {\n  if (!body) return null;\n  if (body.lead_id) return { lead_id: body.lead_id };\n  if (body.property_id) return { property_id: body.property_id };\n  if (body.inspection_id) return { inspection_id: body.inspection_id };\n  return null;\n}\n\n// A newer local edit''',
+    '''function measScopeFromBody(body) {\n  if (!body) return null;\n  if (body.lead_id) return { lead_id: body.lead_id };\n  if (body.property_id) return { property_id: body.property_id };\n  if (body.inspection_id) return { inspection_id: body.inspection_id };\n  return null;\n}\n''' + helpers + '''\n// A newer local edit''',
+)
+replace_once(
+    "mobile/src/measurementReconcile.js",
+    '''function buildConvertedUpdateMutation(m, revisionId, ifMatch) {\n  const cid = `measurement-update:${String(revisionId)}`;''',
+    '''function buildConvertedUpdateMutation(m, revisionId, ifMatch, serverBase) {\n  const cid = `measurement-update:${String(revisionId)}`;\n  const authoritativeBase = measurementDocumentFromRevision(serverBase);''',
+)
+replace_once(
+    "mobile/src/measurementReconcile.js",
+    '''    path: `/mobile/measurements/${String(revisionId)}`,\n    ifMatch,\n    server_id:''',
+    '''    path: `/mobile/measurements/${String(revisionId)}`,\n    ifMatch,\n    base_body: authoritativeBase,\n    base_token: ifMatch == null ? null : String(ifMatch),\n    server_id:''',
+)
+replace_once(
+    "mobile/src/measurementReconcile.js",
+    '''  measScopeFromBody,\n  isSupersededAck,''',
+    '''  measScopeFromBody,\n  measurementDocumentFromRevision,\n  chooseDurableMeasurementBase,\n  measurementConflictMergeInputs,\n  buildMergedMeasurementBody,\n  isSupersededAck,''',
+)
+
+replace_once(
+    "mobile/src/measurementRecovery.js",
+    '''  merged.summary = ms;\n  return { merged, conflicts, clean: conflicts.length === 0 };''',
+    '''  merged.summary = ms;\n  // Hidden/import metadata is part of the backend's full-document replacement contract too. Merge it\n  // independently so a Field roof-line edit cannot revert an Office-only provider/report/note change.\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    const has = (obj) => Object.prototype.hasOwnProperty.call(obj, key);\n    if (!has(base) && !has(field) && !has(office)) continue;\n    const bv = JSON.stringify(base[key]), fv = JSON.stringify(field[key]), ov = JSON.stringify(office[key]);\n    const fCh = bv !== fv, oCh = bv !== ov;\n    if (fCh && oCh && fv !== ov) { conflicts.push(key); merged[key] = field[key]; }\n    else if (fCh) merged[key] = field[key];\n    else merged[key] = has(office) ? office[key] : base[key];\n  }\n  return { merged, conflicts, clean: conflicts.length === 0 };''',
+)
+
+replace_once(
+    "mobile/src/storage.js",
+    '''import { buildConvertedUpdateMutation } from "./measurementReconcile";''',
+    '''import { buildConvertedUpdateMutation, measurementDocumentFromRevision } from "./measurementReconcile";''',
+)
+replace_once(
+    "mobile/src/storage.js",
+    '''export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch) {''',
+    '''export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch, serverBase) {''',
+)
+replace_once(
+    "mobile/src/storage.js",
+    '''    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch);''',
+    '''    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch, serverBase);''',
+)
+replace_once(
+    "mobile/src/storage.js",
+    '''export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch) {''',
+    '''export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch, serverBase) {''',
+)
+replace_once(
+    "mobile/src/storage.js",
+    '''    if (String(m.ifMatch || "") === String(newIfMatch || "")) return { updated: false, reason: "already_rebased" };\n    m.ifMatch = newIfMatch;\n    await d.runAsync(''',
+    '''    const base = measurementDocumentFromRevision(serverBase);\n    if (!base || newIfMatch == null || newIfMatch === "") return { updated: false, reason: "missing_authoritative_base" };\n    m.ifMatch = newIfMatch;\n    m.base_body = base;\n    m.base_token = String(newIfMatch);\n    await d.runAsync(''',
+)
+
+replace_once(
+    "mobile/src/sync.js",
+    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";''',
+    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";''',
+)
+replace_once(
+    "mobile/src/sync.js",
+    '''await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);''',
+    '''await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at, rev);''',
+)
+replace_once(
+    "mobile/src/sync.js",
+    '''await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);''',
+    '''await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at, rev);''',
+)
+replace_once(
+    "mobile/src/sync.js",
+    '''export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {\n  const id = `measurement-update:${String(revisionId)}`;\n  const all = await loadAllMutations();\n  const m = all.find((x) => x.client_id === id);\n  if (!m) return { action: "noop" };\n  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;\n  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });\n  _emit({ type: "queued" });\n  runSync().catch(() => {});\n  return { action: "keep_local" };\n}''',
+    '''export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody, newBaseDetail) {\n  const id = `measurement-update:${String(revisionId)}`;\n  const all = await loadAllMutations();\n  const m = all.find((x) => x.client_id === id);\n  if (!m) return { action: "noop" };\n  const base = measurementDocumentFromRevision(newBaseDetail);\n  if (!mergedBody || !base || newIfMatch == null || newIfMatch === "") {\n    return { action: "review_required", reason: "missing_or_untrusted_base" };\n  }\n  await saveMutation({\n    ...m, body: mergedBody, ifMatch: newIfMatch,\n    base_body: base, base_token: String(newIfMatch),\n    state: "pending", error: null, errorCode: null, serverValue: null,\n  });\n  _emit({ type: "queued" });\n  runSync().catch(() => {});\n  return { action: "keep_local" };\n}''',
+)
+
+replace_once(
+    "mobile/src/screens/Measurements.js",
+    '''import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";''',
+    '''import { resolveMeasurementView, measurementSyncState, measurementDocumentFromRevision, chooseDurableMeasurementBase, measurementConflictMergeInputs, buildMergedMeasurementBody } from "../measurementReconcile";''',
+)
+replace_once(
+    "mobile/src/screens/Measurements.js",
+    '''        provider: full.provider ?? null, report_id: full.report_id ?? null,\n        reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,\n      });''',
+    '''        provider: full.provider ?? null, report_id: full.report_id ?? null,\n        reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,\n        base_body: measurementDocumentFromRevision(full), base_token: full.updated_at,\n      });''',
+)
+replace_once(
+    "mobile/src/screens/Measurements.js",
+    '''    if (existing) {\n      const optimistic = {''',
+    '''    if (existing) {\n      const pending = await currentMeasurementMutation(existing.id);\n      const base = chooseDurableMeasurementBase(existing, pending && pending.state !== "synced" ? pending : null);\n      if (!base.ok) {\n        Alert.alert("Cannot safely save", "This older local edit has no trustworthy Office base. Use the Office version, reopen it, and reapply the change.");\n        return;\n      }\n      const writeToken = pending && pending.state !== "synced" && pending.ifMatch\n        ? pending.ifMatch\n        : (existing.if_match || base.baseToken);\n      const optimistic = {''',
+)
+replace_once(
+    "mobile/src/screens/Measurements.js",
+    '''        body, ifMatch: existing.if_match, label: "Roof measurement",\n      });''',
+    '''        body, ifMatch: writeToken, baseBody: base.baseBody, baseToken: base.baseToken,\n        label: "Roof measurement",\n      });''',
+)
+replace_once(
+    "mobile/src/screens/Measurements.js",
+    '''  const onKeepMine = useCallback(async () => {\n    if (!conflict || !conflict.serverDetail) return;\n    // Three-way merge (base vs Field vs Office): apply Field-only changes, preserve Office-only changes.\n    // If a group changed on BOTH sides, keep the conflict for explicit review — never silently overwrite.\n    let mergedBody = null;\n    try {\n      const wd = await loadMeasurementWorkingDraft(scope);\n      if (wd && wd.base_body) {\n        const field = { structures: wd.structures, facets: wd.facets, edges: wd.edges, pens: wd.pens, summary: wd.summary };\n        const r = threeWayMergeMeasurement(wd.base_body, field, conflict.serverDetail);\n        if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }\n        mergedBody = { structures: r.merged.structures, facets: r.merged.facets, edges: r.merged.edges, penetrations: r.merged.pens, summary: r.merged.summary };\n      }\n    } catch (e) { mergedBody = null; }\n    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at, mergedBody);\n    setConflict(null);\n    await load();\n  }, [conflict, scope, load]);''',
+    '''  const onKeepMine = useCallback(async () => {\n    if (!conflict || !conflict.serverDetail) return;\n    // The transient working draft is intentionally cleared by Save. The durable mutation is therefore the\n    // only legal Base/Field lineage for conflict resolution. Legacy rows without it stay in review.\n    const mutation = await currentMeasurementMutation(conflict.revisionId);\n    const inputs = measurementConflictMergeInputs(mutation, conflict.serverDetail);\n    if (!inputs.ok) {\n      setConflict({ ...conflict, mergeUnavailable: inputs.reason });\n      Alert.alert("Review required", "This older saved change does not contain a trustworthy merge base. Use the Office version, then reapply your change.");\n      return;\n    }\n    const r = threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);\n    if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }\n    const mergedBody = buildMergedMeasurementBody(mutation.body, r.merged);\n    const decision = await rebaseMeasurementUpdate(\n      conflict.revisionId, conflict.serverDetail.updated_at, mergedBody, conflict.serverDetail\n    );\n    if (decision.action !== "keep_local") {\n      setConflict({ ...conflict, mergeUnavailable: decision.reason || "review_required" });\n      return;\n    }\n    setConflict(null);\n    await load();\n  }, [conflict, load]);''',
+)
+
+replace_once(
+    "mobile/src/screens/RoofSketch.js",
+    '''import * as RECON from "../roofProposalReconcile";''',
+    '''import * as RECON from "../roofProposalReconcile";\nimport { chooseDurableMeasurementBase } from "../measurementReconcile";''',
+)
+replace_once(
+    "mobile/src/screens/RoofSketch.js",
+    '''    const res = await cache.measurement(revision_id);\n    const current = res && res.data ? res.data : measDetail;\n    const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });\n    if (upd.changed) {\n      await cacheMeasurementDetail(upd.nextDetail);\n      await queueMutation({ kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`, body: upd.body, ifMatch: upd.ifMatch, label: "Roof measurement" });\n    }''',
+    '''    const res = await cache.measurement(revision_id);\n    const authoritative = res && res.data ? res.data : measDetail;\n    const pending = await currentMeasurementMutation(revision_id);\n    const current = pending && pending.state !== "synced" && pending.body\n      ? { ...authoritative, ...pending.body, id: revision_id, updated_at: pending.ifMatch }\n      : authoritative;\n    const base = chooseDurableMeasurementBase(authoritative, pending && pending.state !== "synced" ? pending : null);\n    if (!base.ok) {\n      Alert.alert("Review required", "This older local measurement change has no trustworthy Office base. Resolve it before accepting another proposed value.");\n      return;\n    }\n    const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });\n    if (upd.changed) {\n      await cacheMeasurementDetail(upd.nextDetail);\n      await queueMutation({\n        kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`,\n        body: upd.body, ifMatch: pending && pending.state !== "synced" ? pending.ifMatch : upd.ifMatch,\n        baseBody: base.baseBody, baseToken: base.baseToken, label: "Roof measurement",\n      });\n    }''',
+)
+
+run("npm", "--prefix", "mobile", "run", "test:measurements")
+run("node", "mobile/src/tests/roof_proposal_reconcile.node.test.js")
 run(
-    "pytest", "-q",
-    "backend/tests/test_relay_broadcast.py",
-    "backend/tests/test_relay_multinode.py",
+    "node", "-e",
+    "const b=require('@babel/core'); for (const f of ['mobile/src/screens/Measurements.js','mobile/src/screens/RoofSketch.js','mobile/src/sync.js','mobile/src/storage.js']) b.transformFileSync(f,{presets:['babel-preset-expo']}); console.log('P0-4 Babel parse passed');",
 )
 run(
-    "python", "-m", "py_compile",
-    "backend/relay/config.py", "backend/relay/hub.py", "backend/relay/server.py",
+    "npx", "expo", "export", "--platform", "android", "--output-dir", "/tmp/roofspan-p0-4-export",
+    cwd="mobile",
 )
 
 Path("/tmp/p0_commit_message").write_text(
-    "fix: gate relay acknowledgements on broadcast acceptance\n",
+    "fix: persist measurement conflict merge base\n",
     encoding="utf-8",
 )
