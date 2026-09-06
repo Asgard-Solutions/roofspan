@@ -109,6 +109,7 @@ class CompanyProfile(BaseModel):
     primary_color: str = "#0f172a"
     proposal_footer_text: str = ""
     proposal_terms_text: str = ""
+    quote_expiration_days: int = 30
 
 
 class AuditOut(BaseModel):

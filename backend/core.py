@@ -170,6 +170,31 @@ def require_roles(*roles: str):
     return checker
 
 
+# ---- Customer-facing proposal share token (capability token; not user auth) ----
+def create_proposal_share_token(quote_id: str) -> str:
+    """Signed, quote-scoped capability token for a public 'accept online' share link. It only
+    authorizes viewing/accepting that one proposal (never exposes internal cost) and expires far in
+    the future — accept eligibility is separately governed by the quote's own expiration date."""
+    payload = {
+        "type": "proposal_share",
+        "sub": str(quote_id),
+        "exp": datetime.now(timezone.utc) + timedelta(days=400),
+    }
+    return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
+
+
+def verify_proposal_share_token(token: str) -> str:
+    """Return the quote_id from a proposal share token, or raise HTTP 404 (a bad/expired link should
+    look like 'not found' to the public)."""
+    try:
+        payload = jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=404, detail="This proposal link is invalid or has expired.")
+    if payload.get("type") != "proposal_share" or not payload.get("sub"):
+        raise HTTPException(status_code=404, detail="This proposal link is invalid or has expired.")
+    return str(payload["sub"])
+
+
 # ---- Audit ----
 async def log_action(
     db: AsyncSession,

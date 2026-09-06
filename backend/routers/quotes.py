@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
 from fastapi.responses import StreamingResponse
@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig)
+from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig, Lead)
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_phase3 import (QuoteIn, QuoteUpdate, QuoteOut, QuoteAccept, QuoteAcceptResult, LineItemOut,
                             QuotePackageOut)
@@ -35,6 +35,86 @@ async def _lead_site_plan_png(db: AsyncSession, lead_id) -> bytes | None:
     return None
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
+
+
+async def _default_quote_exp_days(db: AsyncSession) -> int:
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+    cfg = row.value if row else {}
+    try:
+        return int((cfg or {}).get("quote_expiration_days") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id, accepted_by, notes, request, user=None):
+    """Shared accept logic for both the Office (authed) and public share-link (no-auth) flows.
+    Idempotent: an already-accepted quote returns its existing Job."""
+    existing_job = (await db.execute(select(Job).where(Job.quote_id == q.id))).scalar_one_or_none()
+    if q.status == "accepted" and existing_job:
+        return q, existing_job
+    accepted_total = q.total
+    if q.multi_package:
+        if not package_id:
+            raise HTTPException(status_code=400, detail="Select a package to accept for this multi-option quote")
+        pkg = await db.get(QuotePackage, package_id)
+        if not pkg or pkg.quote_id != q.id:
+            raise HTTPException(status_code=404, detail="Package not found on this quote")
+        q.accepted_package_id = pkg.id
+        accepted_total = pkg.total
+        q.subtotal, q.tax, q.total = pkg.subtotal, pkg.tax, pkg.total
+    q.status = "accepted"
+    q.accepted_at = datetime.now(timezone.utc)
+    q.accepted_by = accepted_by
+    q.acceptance_name = acceptance_name
+    if notes:
+        q.terms = (q.terms or "") + f"\n[Acceptance] {notes}"
+    job = existing_job
+    if not job:
+        number = await next_number(db, "job", "JOB")
+        job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created",
+                  total=accepted_total, scope=f"From quote {q.number}", created_by=accepted_by)
+        db.add(job)
+        await db.flush()
+    await db.commit()
+    await db.refresh(q)
+    await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id,
+                     detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None,
+                             "via": "office" if user is not None else "public_link"}, request=request)
+    await _notify_rep_on_accept(db, q, request=request)
+    return q, job
+
+
+async def _notify_rep_on_accept(db, q: Quote, *, request):
+    """Best-effort alert to the lead's assigned rep (falls back to quote creator). Routes through the
+    app-wide email transport (stubbed until a provider is configured). Never blocks acceptance."""
+    try:
+        rep_email = None
+        if q.lead_id:
+            lead = await db.get(Lead, q.lead_id)
+            if lead:
+                rep_email = lead.assigned_to
+                if not rep_email and lead.assigned_user_id:
+                    u = await db.get(User, lead.assigned_user_id)
+                    rep_email = u.email if u else None
+        rep_email = rep_email or q.created_by
+        if not rep_email:
+            return
+        row = (await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))).scalar_one_or_none()
+        company = (row.value if row and isinstance(row.value, dict) else {}) or {}
+        ip = None
+        if request is not None:
+            ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+            if ip and "," in ip:
+                ip = ip.split(",")[0].strip()
+        from services.email_sender import send_accept_notification
+        result = await send_accept_notification(
+            to_email=rep_email, quote={"number": q.number, "total": q.total}, company=company,
+            acceptance_name=q.acceptance_name or "", accepted_at=q.accepted_at.strftime("%b %d, %Y") if q.accepted_at else "",
+            ip=ip)
+        await log_action(db, user=None, action="quote.accept.notified", entity_type="quote", entity_id=q.id,
+                         detail={"to": rep_email, "stubbed": bool(result.get("stubbed"))}, request=request)
+    except Exception:
+        pass
 
 
 async def _quote_document_data(db: AsyncSession, q: Quote) -> dict:
@@ -178,8 +258,14 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
         customer_id = customer_id or (str(est.customer_id) if est.customer_id else None)
         property_id = property_id or (str(est.property_id) if est.property_id else None)
     number = await next_number(db, "quote", "QUO")
+    issue_dt = payload.issue_date or datetime.now(timezone.utc)
+    exp_dt = payload.expiration_date
+    if exp_dt is None:
+        days = await _default_quote_exp_days(db)
+        if days and days > 0:
+            exp_dt = issue_dt + timedelta(days=days)
     q = Quote(number=number, estimate_id=est_id, lead_id=lead_id, customer_id=customer_id, property_id=property_id,
-              status="draft", issue_date=payload.issue_date or datetime.now(timezone.utc), expiration_date=payload.expiration_date,
+              status="draft", issue_date=issue_dt, expiration_date=exp_dt,
               tax_rate=tax_rate, terms=payload.terms, created_by=user.email, multi_package=payload.multi_package)
     db.add(q)
     await db.flush()
@@ -194,6 +280,79 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
     await db.refresh(q)
     await log_action(db, user=user, action="quote.create", entity_type="quote", entity_id=q.id, detail={"number": number, "total": q.total}, request=request)
     return await _out(db, q)
+
+
+@router.get("/{quote_id}/site-plan")
+async def quote_site_plan_meta(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Whether a saved combined site-plan PDF is attachable to this quote (via its lead)."""
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    from routers.measurements import _latest_site_plan_rev
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    if not rev:
+        return {"available": False}
+    sp = rev.site_plan or {}
+    return {"available": True, "assets_updated_at": sp.get("assets_updated_at")}
+
+
+@router.get("/{quote_id}/site-plan.pdf")
+async def quote_site_plan_pdf(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Stream the lead's latest saved combined site-plan PDF as a standalone attachment."""
+    from services import object_storage
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    from routers.measurements import _latest_site_plan_rev
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    key = (rev.site_plan or {}).get("pdf_key") if rev else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved site plan for this quote's lead")
+    data = object_storage.get_object(key)
+    return StreamingResponse(iter([data]), media_type="application/pdf",
+                             headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
+
+
+@router.post("/{quote_id}/send")
+async def send_quote(quote_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Email the customer their proposal with the proposal PDF + latest saved site-plan PDF attached.
+    Email delivery routes through the app-wide transport (stubbed until a provider is configured)."""
+    from services import object_storage
+    from services.email_sender import send_quote_email, EmailNotConfigured
+    from routers.measurements import _latest_site_plan_rev
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    cust = await db.get(Customer, q.customer_id) if q.customer_id else None
+    to_email = getattr(cust, "email", None) if cust else None
+    if not to_email:
+        raise HTTPException(status_code=400, detail="This proposal's customer has no email address on file.")
+    data = await _proposal.proposal_data(db, q)
+    data["site_plan_png"] = await _lead_site_plan_png(db, q.lead_id)
+    proposal_pdf = _proposal.build_pdf(data)
+    site_plan_pdf = None
+    rev = await _latest_site_plan_rev(db, q.lead_id)
+    key = (rev.site_plan or {}).get("pdf_key") if rev else None
+    if key:
+        try:
+            site_plan_pdf = object_storage.get_object(key)
+        except Exception:
+            site_plan_pdf = None
+    try:
+        result = await send_quote_email(to_email=to_email, quote=data["quote"], company=data["company"],
+                                        proposal_pdf=proposal_pdf, site_plan_pdf=site_plan_pdf)
+    except EmailNotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not send the proposal email: {e}")
+    stubbed = bool(result.get("stubbed"))
+    await log_action(db, user=user, action="quote.send", entity_type="quote", entity_id=q.id,
+                     detail={"to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed,
+                             "site_plan_attached": bool(site_plan_pdf)}, request=request)
+    return {"ok": True, "to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed,
+            "site_plan_attached": bool(site_plan_pdf),
+            "message": ("Email delivery isn't switched on yet, so nothing was sent — use Download PDF for now."
+                        if stubbed else f"Proposal emailed to {to_email}.")}
 
 
 @router.get("/{quote_id}/document")
@@ -282,39 +441,20 @@ async def accept_quote(quote_id: str, payload: QuoteAccept, request: Request, us
     q = await db.get(Quote, quote_id)
     if not q:
         raise HTTPException(status_code=404, detail="Quote not found")
-    existing_job = (await db.execute(select(Job).where(Job.quote_id == q.id))).scalar_one_or_none()
-    if q.status == "accepted" and existing_job:
-        return QuoteAcceptResult(quote=await _out(db, q), job_id=str(existing_job.id))
-
-    accepted_total = q.total
-    if q.multi_package:
-        if not payload.package_id:
-            raise HTTPException(status_code=400, detail="Select a package to accept for this multi-option quote")
-        pkg = await db.get(QuotePackage, payload.package_id)
-        if not pkg or pkg.quote_id != q.id:
-            raise HTTPException(status_code=404, detail="Package not found on this quote")
-        q.accepted_package_id = pkg.id
-        accepted_total = pkg.total
-        q.subtotal, q.tax, q.total = pkg.subtotal, pkg.tax, pkg.total
-
-    q.status = "accepted"
-    q.accepted_at = datetime.now(timezone.utc)
-    q.accepted_by = user.email
-    q.acceptance_name = payload.acceptance_name
-    if payload.notes:
-        q.terms = (q.terms or "") + f"\n[Acceptance] {payload.notes}"
-
-    job = existing_job
-    if not job:
-        number = await next_number(db, "job", "JOB")
-        job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created", total=accepted_total,
-                  scope=f"From quote {q.number}", created_by=user.email)
-        db.add(job)
-        await db.flush()
-    await db.commit()
-    await db.refresh(q)
-    await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id, detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None}, request=request)
+    q, job = await perform_quote_acceptance(db, q, acceptance_name=payload.acceptance_name, package_id=payload.package_id,
+                                            accepted_by=user.email, notes=payload.notes, request=request, user=user)
     return QuoteAcceptResult(quote=await _out(db, q), job_id=str(job.id))
+
+
+@router.get("/{quote_id}/share-link")
+async def quote_share_link(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Mint a customer-facing 'accept online' share link (signed, quote-scoped token)."""
+    from core import create_proposal_share_token
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    token = create_proposal_share_token(str(q.id))
+    return {"token": token, "path": f"/p/{token}"}
 
 
 @router.post("/{quote_id}/decline", response_model=QuoteOut)

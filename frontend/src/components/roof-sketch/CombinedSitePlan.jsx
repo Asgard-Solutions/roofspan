@@ -1,9 +1,37 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { combineStructuresSitePlan, resolveFacetBoundary, generateSketchGeometry } from "@roofspan/roof-sketch-core";
 import { Button } from "@/components/ui/button";
-import { RotateCcw, Download, CheckCircle2 } from "lucide-react";
+import { RotateCcw, Download, CheckCircle2, AlertTriangle, RefreshCw, History as HistoryIcon, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+
+// Deterministic FNV-1a hash of the measurement values that drive the site plan, so we can tell
+// whether measurements changed since the plan was last saved (nudge the rep to re-save).
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+const num = (v) => (v == null || v === "" ? "" : Number(v));
+function measurementFingerprint(facets, edges, penetrations, offsets) {
+  const f = [...facets].map((x) => [x.id, x.structure_id, num(x.width_ft), num(x.length_ft), num(x.area_sqft), num(x.pitch_rise), num(x.position_offset_ft)].join(":")).sort();
+  const e = [...edges].map((x) => [x.id, x.type, num(x.length_ft), num(x.confirmed_length_ft), x.facet_id, x.facet_id_secondary].join(":")).sort();
+  const p = [...penetrations].map((x) => [x.id, x.facet_id, x.type].join(":")).sort();
+  const o = Object.keys(offsets || {}).sort().map((k) => `${k}:${(offsets[k] || {}).dx}:${(offsets[k] || {}).dy}`);
+  return fnv1a(JSON.stringify({ f, e, p, o }));
+}
+function relativeTime(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "saved";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 45) return "saved just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `saved ${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `saved ${h}h ago`;
+  const d = Math.round(h / 24);
+  return d <= 30 ? `saved ${d}d ago` : `saved ${new Date(t).toLocaleDateString()}`;
+}
 
 const NICE_FT = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000];
 function niceScaleFeet(scale) { // scale = viewBox units per foot; aim for a ~110-unit bar
@@ -157,12 +185,77 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     catch (e) { toast.error("Could not export the site plan as PNG"); }
   }, []);
 
-  const savedAt = sitePlan && (sitePlan.pdf_key || sitePlan.assets_updated_at) ? sitePlan.assets_updated_at : null;
+  const [localSaved, setLocalSaved] = useState(null); // in-place re-save override {assets_updated_at, fingerprint}
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [resaving, setResaving] = useState(false);
+  const [thumbs, setThumbs] = useState({}); // {version: objectURL} for the version-compare previews
+  // A newer save from the parent (worksheet Save) supersedes any local in-place override.
+  useEffect(() => { setLocalSaved(null); }, [sitePlan?.assets_updated_at]);
+  const savedAt = localSaved?.assets_updated_at || (sitePlan && (sitePlan.pdf_key || sitePlan.assets_updated_at) ? sitePlan.assets_updated_at : null);
+  const currentFingerprint = useMemo(() => measurementFingerprint(facets, edges, penetrations, offsets), [facets, edges, penetrations, offsets]);
+  const savedFingerprint = localSaved?.fingerprint || (sitePlan && sitePlan.fingerprint) || null;
+  const planStale = !!(savedAt && savedFingerprint && savedFingerprint !== currentFingerprint);
+  // Re-render every 60s so the relative "saved Xm ago" label stays fresh while the worksheet is open.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!savedAt) return;
+    const id = setInterval(() => setTick((n) => n + 1), 60000);
+    return () => clearInterval(id);
+  }, [savedAt]);
   const downloadSaved = useCallback(async () => {
     if (!revisionId) return;
     try { const res = await api.get(`/measurements/${revisionId}/site-plan.pdf`, { responseType: "blob" }); downloadBlob(res.data, "site-plan.pdf"); }
     catch (e) { toast.error("No saved site plan yet — save the worksheet first"); }
   }, [revisionId]);
+  const fetchHistory = useCallback(async () => {
+    if (!revisionId) return;
+    try { const res = await api.get(`/measurements/${revisionId}/site-plan-history`); setHistory(res.data.versions || []); }
+    catch (e) { /* history is best-effort */ }
+  }, [revisionId]);
+  useEffect(() => { if (savedAt) fetchHistory(); }, [savedAt, fetchHistory]);
+  const downloadVersion = useCallback(async (v) => {
+    if (!revisionId) return;
+    try { const res = await api.get(`/measurements/${revisionId}/site-plan-v/${v}.pdf`, { responseType: "blob" }); downloadBlob(res.data, `site-plan-v${v}.pdf`); }
+    catch (e) { toast.error("Could not download that version"); }
+  }, [revisionId]);
+  const deleteVersion = useCallback(async (v) => {
+    if (!revisionId) return;
+    if (!window.confirm(`Delete site-plan version v${v}? This can't be undone.`)) return;
+    try { const res = await api.delete(`/measurements/${revisionId}/site-plan-v/${v}`); setHistory(res.data.versions || []); toast.success(`Deleted v${v}`); }
+    catch (e) { toast.error("Could not delete that version"); }
+  }, [revisionId]);
+  const restoreVersion = useCallback(async (v) => {
+    if (!revisionId) return;
+    try {
+      const res = await api.post(`/measurements/${revisionId}/site-plan-v/${v}/restore`);
+      const versions = res.data.versions || [];
+      setHistory(versions);
+      if (versions[0]) setLocalSaved({ assets_updated_at: versions[0].assets_updated_at, fingerprint: versions[0].fingerprint });
+      toast.success(`Restored v${v} as the current site plan`);
+    } catch (e) { toast.error("Could not restore that version"); }
+  }, [revisionId]);
+  const saveLabel = useCallback(async (v, label) => {
+    if (!revisionId) return;
+    try { const res = await api.patch(`/measurements/${revisionId}/site-plan-v/${v}`, { label }); setHistory(res.data.versions || []); }
+    catch (e) { toast.error("Could not save the note"); }
+  }, [revisionId]);
+  // Version-compare thumbnails: fetch each version's stored image as a blob when the panel opens.
+  const thumbUrlsRef = useRef({});
+  const loadThumbs = useCallback(async () => {
+    if (!revisionId) return;
+    const next = {};
+    for (const h of history) {
+      if (!h.has_image) continue;
+      try { const res = await api.get(`/measurements/${revisionId}/site-plan-v/${h.version}.png`, { responseType: "blob" }); next[h.version] = URL.createObjectURL(res.data); }
+      catch (e) { /* thumbnail is best-effort */ }
+    }
+    Object.values(thumbUrlsRef.current).forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) {} });
+    thumbUrlsRef.current = next;
+    setThumbs(next);
+  }, [revisionId, history]);
+  useEffect(() => { if (historyOpen) loadThumbs(); }, [historyOpen, loadThumbs]);
+  useEffect(() => () => { Object.values(thumbUrlsRef.current).forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) {} }); }, []);
 
   // Build a standalone SVG string for one structure's own roof sketch (for the per-structure PDF pages).
   const structurePng = useCallback(async (sid, label) => {
@@ -287,22 +380,33 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
     catch (e) { toast.error("Could not export the site plan as PDF"); }
   }, [buildPdfDoc]);
 
+  // Rasterize + build the PDF packet and persist it to the revision. Shared by the worksheet-save
+  // auto-save and the in-place "re-save" button on the drift nudge.
+  const saveAssets = useCallback(async ({ silent = false } = {}) => {
+    if (!revisionId || !combined || !combined.ok) return false;
+    if (!silent) setResaving(true);
+    try {
+      const c = await rasterize();
+      const image_base64 = c.toDataURL("image/jpeg", 0.85);
+      const pdf = await buildPdfDoc();
+      const pdf_base64 = pdf ? pdf.output("datauristring") : null;
+      const res = await api.put(`/measurements/${revisionId}/site-plan-assets`, { image_base64, pdf_base64, fingerprint: currentFingerprint });
+      setLocalSaved({ assets_updated_at: res.data?.assets_updated_at || new Date().toISOString(), fingerprint: currentFingerprint });
+      fetchHistory();
+      if (!silent) toast.success("Site plan re-saved");
+      return true;
+    } catch (e) {
+      if (!silent) toast.error("Could not re-save the site plan");
+      else console.warn("Site plan auto-save failed (worksheet save already succeeded):", e);
+      return false;
+    } finally { if (!silent) setResaving(false); }
+  }, [revisionId, combined, buildPdfDoc, currentFingerprint, fetchHistory]);
+
   // Auto-save the browser-rendered site plan (PNG for proposal embedding + full PDF packet) to the lead
   // whenever the worksheet is saved, so it's attachable/emailable without a manual export.
   useEffect(() => {
     if (!saveNonce || !revisionId || !combined || !combined.ok) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const c = await rasterize();
-        const image_base64 = c.toDataURL("image/jpeg", 0.85);
-        const pdf = await buildPdfDoc();
-        const pdf_base64 = pdf ? pdf.output("datauristring") : null;
-        if (cancelled) return;
-        await api.put(`/measurements/${revisionId}/site-plan-assets`, { image_base64, pdf_base64 });
-      } catch (e) { console.warn("Site plan auto-save failed (worksheet save already succeeded):", e); }
-    })();
-    return () => { cancelled = true; };
+    saveAssets({ silent: true });
   }, [saveNonce, revisionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!combined || !combined.ok || !view) {
@@ -322,8 +426,31 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           {propertyAddress ? <span className="ml-1 text-slate-400" data-testid="site-plan-address">· {propertyAddress}</span> : null}
           {savedAt ? (
             <button type="button" onClick={downloadSaved} data-testid="site-plan-saved-badge"
-              className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100">
-              <CheckCircle2 className="h-3 w-3" />Site plan saved · download
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+              title={`Site plan saved ${new Date(savedAt).toLocaleString()} — click to download`}>
+              <CheckCircle2 className="h-3 w-3" />Site plan {relativeTime(savedAt)} · download
+            </button>
+          ) : null}
+          {planStale ? (
+            editable ? (
+              <button type="button" onClick={() => saveAssets({ silent: false })} disabled={resaving} data-testid="site-plan-stale-nudge"
+                className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                title="Measurements changed since the site plan was last saved. Click to re-save the stored plan & PDF in place.">
+                <RefreshCw className={`h-3 w-3 ${resaving ? "animate-spin" : ""}`} />{resaving ? "Re-saving…" : "Measurements changed — re-save"}
+              </button>
+            ) : (
+              <span data-testid="site-plan-stale-nudge"
+                className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+                title="Measurements changed since the site plan was last saved.">
+                <AlertTriangle className="h-3 w-3" />Measurements changed since last save
+              </span>
+            )
+          ) : null}
+          {savedAt && history.length > 1 ? (
+            <button type="button" onClick={() => setHistoryOpen((o) => !o)} data-testid="site-plan-history-toggle"
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+              title="Show previously saved versions of this site plan">
+              <HistoryIcon className="h-3 w-3" />History ({history.length})
             </button>
           ) : null}
         </div>
@@ -342,6 +469,53 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
           <Button size="sm" variant="outline" onClick={exportPdf} data-testid="site-plan-export-pdf"><Download className="mr-1 h-3.5 w-3.5" />PDF</Button>
         </div>
       </div>
+      {historyOpen && history.length > 0 && (
+        <div className="mb-2 rounded-md border border-slate-200 bg-slate-50 p-2" data-testid="site-plan-history-panel">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Saved versions</div>
+          <ul className="divide-y divide-slate-100">
+            {history.map((h, i) => (
+              <li key={h.version} className="flex items-center justify-between gap-2 py-1.5 text-xs" data-testid={`site-plan-history-row-${h.version}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  {thumbs[h.version]
+                    ? <img src={thumbs[h.version]} alt={`v${h.version} preview`} data-testid={`site-plan-history-thumb-${h.version}`}
+                        className="h-10 w-16 flex-shrink-0 rounded border border-slate-200 bg-white object-cover" />
+                    : <div className="flex h-10 w-16 flex-shrink-0 items-center justify-center rounded border border-dashed border-slate-200 bg-white text-[9px] text-slate-300">{h.has_image ? "…" : "no img"}</div>}
+                  <div className="min-w-0">
+                    <div className="truncate text-slate-600">
+                      v{h.version}{i === 0 ? <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700">latest</span> : null}
+                      <span className="ml-2 text-slate-400">{relativeTime(h.assets_updated_at)}</span>
+                    </div>
+                    {editable ? (
+                      <input defaultValue={h.label || ""} placeholder="Add a note…" data-testid={`site-plan-history-label-${h.version}`}
+                        onBlur={(e) => { if ((e.target.value || "").trim() !== (h.label || "")) saveLabel(h.version, e.target.value); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                        className="mt-0.5 h-6 w-40 rounded border border-transparent bg-transparent px-1 text-[11px] text-slate-500 hover:border-slate-200 focus:border-slate-300 focus:bg-white focus:outline-none" />
+                    ) : (h.label ? <div className="mt-0.5 text-[11px] italic text-slate-400" data-testid={`site-plan-history-label-${h.version}`}>{h.label}</div> : null)}
+                  </div>
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-3">
+                  <button type="button" onClick={() => downloadVersion(h.version)} disabled={!h.has_pdf} data-testid={`site-plan-history-download-${h.version}`}
+                    className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-800 disabled:opacity-40">
+                    <Download className="h-3 w-3" />download
+                  </button>
+                  {editable && i !== 0 && (
+                    <button type="button" onClick={() => restoreVersion(h.version)} data-testid={`site-plan-history-restore-${h.version}`}
+                      className="inline-flex items-center gap-1 text-slate-500 hover:text-emerald-700" title={`Make v${h.version} the current site plan`}>
+                      <Undo2 className="h-3 w-3" />restore
+                    </button>
+                  )}
+                  {editable && history.length > 1 && (
+                    <button type="button" onClick={() => deleteVersion(h.version)} data-testid={`site-plan-history-delete-${h.version}`}
+                      className="inline-flex items-center gap-1 text-slate-400 hover:text-red-600" title={`Delete version v${h.version}`}>
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {editable && (
         <div className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
           <span>Prepared for:</span>

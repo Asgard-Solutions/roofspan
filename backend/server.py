@@ -103,6 +103,8 @@ app.include_router(estimating_router.router)
 from routers import takeoff as takeoff_router
 app.include_router(takeoff_router.router)
 app.include_router(quotes.router)
+from routers import public_proposals as public_proposals_router
+app.include_router(public_proposals_router.public_router)
 from routers import inventory_ops as inventory_ops_router
 app.include_router(inventory_ops_router.router)
 app.include_router(invoices.router)

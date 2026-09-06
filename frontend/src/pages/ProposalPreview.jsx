@@ -6,7 +6,7 @@ import { money } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, Loader2, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Download, Loader2, CheckCircle2, Map, Mail, Share2 } from "lucide-react";
 
 function Items({ lines, subtotal, tax, total, testid }) {
   return (
@@ -42,6 +42,8 @@ export default function ProposalPreview() {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sitePlan, setSitePlan] = useState(null);
+  const [emailing, setEmailing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,6 +52,7 @@ export default function ProposalPreview() {
     finally { setLoading(false); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get(`/quotes/${id}/site-plan`).then((r) => setSitePlan(r.data)).catch(() => setSitePlan(null)); }, [id]);
 
   const download = async () => {
     try {
@@ -57,6 +60,34 @@ export default function ProposalPreview() {
       const url = URL.createObjectURL(res.data);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
+  const downloadSitePlan = async () => {
+    try {
+      const res = await api.get(`/quotes/${id}/site-plan.pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data); const a = document.createElement("a");
+      a.href = url; a.download = "site-plan.pdf"; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast.error("No saved site plan for this proposal yet"); }
+  };
+
+  const emailToCustomer = async () => {
+    setEmailing(true);
+    try {
+      const { data } = await api.post(`/quotes/${id}/send`);
+      if (data.stubbed) toast.info(data.message || "Email delivery isn't switched on yet — use Download PDF.");
+      else toast.success(data.message || "Proposal emailed.");
+    } catch (e) { toast.error(apiError(e)); } finally { setEmailing(false); }
+  };
+
+  const shareLink = async () => {
+    try {
+      const { data } = await api.get(`/quotes/${id}/share-link`);
+      const url = `${window.location.origin}${data.path}`;
+      try { await navigator.clipboard.writeText(url); toast.success("Share link copied to clipboard"); }
+      catch (e) { toast.info("Share link ready"); }
+      window.prompt("Customer accept-online link (copy and send to your customer):", url);
     } catch (e) { toast.error(apiError(e)); }
   };
 
@@ -68,7 +99,12 @@ export default function ProposalPreview() {
     <div className="space-y-4" data-testid="proposal-preview">
       <div className="flex items-center justify-between">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)}><ArrowLeft className="h-4 w-4" /> Back</Button>
-        <Button size="sm" onClick={download} data-testid="proposal-download-pdf"><Download className="h-4 w-4" /> Download PDF</Button>
+        <div className="flex items-center gap-2">
+          {sitePlan?.available && <Button variant="outline" size="sm" onClick={downloadSitePlan} data-testid="proposal-site-plan-pdf"><Map className="h-4 w-4" /> Site Plan PDF</Button>}
+          <Button variant="outline" size="sm" onClick={shareLink} data-testid="proposal-share-link"><Share2 className="h-4 w-4" /> Share Link</Button>
+          <Button variant="outline" size="sm" onClick={emailToCustomer} disabled={emailing} data-testid="proposal-email-customer">{emailing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />} Email to Customer</Button>
+          <Button size="sm" onClick={download} data-testid="proposal-download-pdf"><Download className="h-4 w-4" /> Download PDF</Button>
+        </div>
       </div>
 
       <div className="mx-auto max-w-3xl rounded-lg border border-border bg-white p-8 shadow-sm">

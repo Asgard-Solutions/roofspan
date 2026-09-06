@@ -10,7 +10,15 @@ import io
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Quote, QuoteLineItem, QuotePackage, Customer, Property, AppConfig
+from models import Quote, QuoteLineItem, QuotePackage, Customer, Property, AppConfig, AuditLog
+
+
+async def _acceptance_ip(db: AsyncSession, quote_id) -> str | None:
+    """Recover the IP recorded on the quote.accept audit entry (stamped on the accepted PDF)."""
+    row = (await db.execute(
+        select(AuditLog).where(AuditLog.action == "quote.accept", AuditLog.entity_id == str(quote_id))
+        .order_by(AuditLog.timestamp.desc()).limit(1))).scalar_one_or_none()
+    return row.ip_address if row else None
 
 
 def _money(v) -> str:
@@ -60,6 +68,7 @@ async def proposal_data(db: AsyncSession, quote: Quote) -> dict:
             "terms": quote.terms, "multi_package": quote.multi_package,
             "accepted_at": _dt(quote.accepted_at), "accepted_by": quote.accepted_by,
             "acceptance_name": quote.acceptance_name,
+            "acceptance_ip": (await _acceptance_ip(db, quote.id)) if quote.accepted_at else None,
             "accepted_package_id": str(quote.accepted_package_id) if quote.accepted_package_id else None,
         },
         "customer": {"name": cust.name if cust else None} if cust else None,
@@ -153,9 +162,16 @@ def build_pdf(data: dict) -> bytes:
         story.append(Paragraph((q.get("terms") or c.get("proposal_terms_text") or "").replace("\n", "<br/>"), small))
 
     if q.get("accepted_at"):
-        story.append(Spacer(1, 10))
-        acc = f"Accepted by {q.get('acceptance_name') or q.get('accepted_by') or 'customer'} on {q['accepted_at']}"
-        story.append(Paragraph(acc, ParagraphStyle("acc", parent=body, textColor=colors.HexColor("#16A34A"))))
+        story.append(Spacer(1, 12))
+        green = colors.HexColor("#16A34A")
+        sig = ParagraphStyle("sig", parent=body, textColor=green)
+        sigsmall = ParagraphStyle("sigsmall", parent=small, textColor=colors.HexColor("#15803D"))
+        story.append(Paragraph("✓ Proposal Accepted", ParagraphStyle("acch", parent=styles["Heading4"], textColor=green)))
+        story.append(Paragraph(f"Signed by <b>{q.get('acceptance_name') or q.get('accepted_by') or 'customer'}</b> on {q['accepted_at']}", sig))
+        stamp = ["Electronically signed and accepted online"]
+        if q.get("acceptance_ip"):
+            stamp.append(f"IP address: {q['acceptance_ip']}")
+        story.append(Paragraph(" · ".join(stamp), sigsmall))
 
     if c.get("proposal_footer_text"):
         story.append(Spacer(1, 16))
