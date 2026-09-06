@@ -326,6 +326,43 @@ async def list_measurements(lead_id: str | None = Query(None), property_id: str 
     return await meas_svc.list_revisions_for_set(db, s.id)
 
 
+@router.get("/measurements/watermark")
+async def measurements_watermark(lead_id: str | None = Query(None), property_id: str | None = Query(None), inspection_id: str | None = Query(None),
+                                 user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Lightweight change watermark for the LEAD-AWARE Field sync coordinator: per-revision updated_at +
+    per-structure sketch document_version, so Field can tell whether its cached copy is current WITHOUT
+    downloading the full business documents (or guessing from local-draft presence)."""
+    if mauthz.is_sales(user) and not lead_id and not property_id:
+        raise HTTPException(status_code=422, detail="lead_id or property_id is required")
+    if lead_id:
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        await mauthz.assert_lead_access(db, lead, user)
+    if property_id:
+        await mauthz.assert_property_access(db, property_id, user)
+    stmt = select(MeasurementSet)
+    if inspection_id:
+        stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
+    elif lead_id:
+        stmt = stmt.where(MeasurementSet.lead_id == lead_id)
+    elif property_id:
+        stmt = stmt.where(MeasurementSet.property_id == property_id)
+    s = (await db.execute(stmt)).scalars().first()
+    if not s:
+        return {"measurement_set_id": None, "revisions": []}
+    revs = (await db.execute(select(MeasurementRevision).where(MeasurementRevision.set_id == s.id).order_by(MeasurementRevision.revision_number.desc()))).scalars().all()
+    out = []
+    for rev in revs:
+        sk = await sketch_svc.list_sketches(db, str(rev.id))
+        out.append({
+            "revision_id": str(rev.id), "revision_number": rev.revision_number, "status": rev.status,
+            "updated_at": rev.updated_at,
+            "sketches": [{"structure_id": str(x["structure_id"]), "document_version": x["document_version"], "updated_at": x.get("updated_at")} for x in (sk or [])],
+        })
+    return {"measurement_set_id": str(s.id), "revisions": out}
+
+
 @router.get("/measurements/{revision_id}")
 async def get_measurement(revision_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     rev = await db.get(MeasurementRevision, revision_id)
@@ -333,10 +370,7 @@ async def get_measurement(revision_id: str, user: User = Depends(require_roles(*
         raise HTTPException(status_code=404, detail="Measurement revision not found")
     s = await db.get(MeasurementSet, rev.set_id)
     await _assert_measurement_scope(db, s, user)
-    return await meas_svc.build_out(db, rev)
-
-
-# ---- Field roof sketches (Plan 1 Task 3): mirror Office, same service, salesperson-scoped ----
+    return await meas_svc.build_out(db, rev)# ---- Field roof sketches (Plan 1 Task 3): mirror Office, same service, salesperson-scoped ----
 @router.get("/measurements/{revision_id}/sketches")
 async def mobile_list_sketches(revision_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     rev = await db.get(MeasurementRevision, revision_id)

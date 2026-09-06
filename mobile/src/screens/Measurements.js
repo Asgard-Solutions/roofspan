@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert, AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange, removeMutation } from "../sync";
+import { queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, onSyncChange, removeMutation, refreshLead, registerActiveLead } from "../sync";
 import { cache, cacheMeasurementDetail, loadMeasurementDraft, saveMeasurementDraft, clearMeasurementDraft, saveMeasurementWorkingDraft, loadMeasurementWorkingDraft, clearMeasurementWorkingDraft } from "../cache";
 import { getCache } from "../storage";
 import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";
@@ -296,6 +296,12 @@ export default function Measurements({ route, navigation }) {
   }, [localDraft, scope, navigation]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Lead-aware sync: on focus, register this scope as active and pull the canonical Office copy immediately.
+  useFocusEffect(useCallback(() => {
+    registerActiveLead(scope);
+    refreshLead(scope, "measurements_focus").catch(() => {});
+  }, [scope]));
 
   // Live two-way sync while this screen is open: every 15s push any local pending edits up to Office, and
   // — only when the rep is NOT mid-edit — pull the latest Office copy down so both apps show the same

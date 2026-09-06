@@ -15,7 +15,10 @@ import { sketchDraftKey, sketchDetailKey, sketchUpdateMutationId } from "./sketc
 import { detailKey as measDetailKey, scopeKey as measScopeKey, draftKey as measDraftKey, workingKey as measWorkingKey } from "./measurementCache";
 import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck } from "./measurementReconcile";
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope } from "./measurementRecovery";
+import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { cache } from "./cache";
+import { api } from "./api";
+import { setRelayEventHandler } from "./transport";
 
 const LAST_SYNC = "last_sync_at";
 const _listeners = new Set();
@@ -176,6 +179,7 @@ async function _reconcileMeasurementAcks(processed) {
   for (const m of acks) {
     const rev = m.serverValue;                 // validated: authoritative revision detail (has id + updated_at)
     const revisionId = String(rev.id);
+    _coordinator.noteRevisionWatermark(revisionId, rev.updated_at);
     const stored = byId.get(m.client_id) || null;
     const superseded = isSupersededAck(stored, m);
     const measScope = measScopeFromBody(m.body);
@@ -199,6 +203,56 @@ async function _reconcileMeasurementAcks(processed) {
   }
   // d. notify the open screen immediately so it adopts the authoritative revision without a poll.
   if (touched) _emit({ type: "measurement_reconciled" });
+}
+
+// ---- Central, LEAD-AWARE measurement sync (screen-independent) --------------------------------------
+const _coordinator = createMeasurementSyncCoordinator();
+export function registerActiveLead(scope) { return _coordinator.registerActiveLead(scope); }
+
+// Refresh ONE lead's measurements + sketch watermarks from Office (canonical copy), coalesced by trigger.
+// Uses the lightweight watermark endpoint to decide currency, then read-throughs only the stale revisions
+// that have NO active local mutation (never clobbers unsynced optimistic work). Emits change events so any
+// open screen reloads — synchronization no longer depends on which screen is mounted.
+export async function refreshLead(scope, trigger = "manual") {
+  if (!scope) return { refreshed: false };
+  _coordinator.registerActiveLead(scope);
+  if (!_coordinator.shouldRefresh(trigger, scope)) return { refreshed: false, skipped: true };
+  let wm = null;
+  try { const r = await api.get("/mobile/measurements/watermark", { params: scope }); wm = r && r.data; }
+  catch (e) { return { refreshed: false, offline: true }; }   // offline → cached copy stays; retry next trigger
+  _coordinator.markRefreshed(scope);
+  const all = await loadAllMutations();
+  let changed = false;
+  for (const rev of (wm && wm.revisions) || []) {
+    _coordinator.noteRevisionWatermark(rev.revision_id, rev.updated_at);
+    for (const sk of rev.sketches || []) _coordinator.noteSketchWatermark(rev.revision_id, sk.structure_id, sk.document_version);
+    let cached = null; try { cached = await getCache(measDetailKey(rev.revision_id)); } catch (e) { /* best effort */ }
+    const cachedTok = cached && cached.updated_at != null ? String(cached.updated_at) : null;
+    const activeMut = all.find((m) => m.client_id === `measurement-update:${rev.revision_id}` && (m.state === "pending" || m.state === "failed" || m.state === "conflict"));
+    if (!activeMut && cachedTok !== String(rev.updated_at)) {
+      try { const d = await cache.measurement(rev.revision_id); if (d && d.data) changed = true; } catch (e) { /* offline */ }
+    }
+    for (const sk of rev.sketches || []) {
+      let skCached = null; try { skCached = await getCache(sketchDetailKey(rev.revision_id, sk.structure_id)); } catch (e) {}
+      const skVer = skCached && skCached.document_version != null ? Number(skCached.document_version) : null;
+      if (skVer != null && skVer !== Number(sk.document_version)) { noteCasFloor(rev.revision_id, sk.structure_id, Number(sk.document_version)); changed = true; }
+    }
+  }
+  if (changed) _emit({ type: "measurement_reconciled" });
+  _emit({ type: "measurement_changed", scope });
+  return { refreshed: true, changed };
+}
+
+export async function refreshActiveLeads(trigger = "manual") {
+  for (const scope of _coordinator.activeLeads()) { try { await refreshLead(scope, trigger); } catch (e) { /* per-lead best effort */ } }
+}
+
+// Office reported a measurement/sketch changed (relay `measurement_changed`): adopt the watermark, mark the
+// lead dirty, and pull the canonical copy immediately (the event carries no business document by design).
+export async function handleOfficeInvalidation(evt) {
+  const parsed = _coordinator.invalidate(evt);
+  if (parsed && parsed.leadScope) { try { await refreshLead(parsed.leadScope, "office_invalidation"); } catch (e) {} }
+  return parsed;
 }
 
 // One-time (idempotent) STARTUP RECOVERY for phones already stuck in the pre-fix bad state. Runs the same
@@ -332,7 +386,7 @@ export async function resolveFieldConflictMerge(client_id, choices) {
 }
 
 export async function lastSyncAt() { return getCache(LAST_SYNC); }
-export async function syncNow() { _resetBackoff(); return runSync(); }
+export async function syncNow() { _resetBackoff(); refreshActiveLeads("manual").catch(() => {}); return runSync(); }
 
 // B3B2: whether the sync engine is actively processing right now (drives the "Synchronizing…" status).
 export function isSyncing() { return _running; }
@@ -507,10 +561,14 @@ export function startAutoSync() {
   // One-time startup recovery for phones stuck in the pre-fix state, BEFORE the first sync pass. Best-effort;
   // never blocks sync. Heals synced-but-undrained creates/updates + orphaned drafts; preserves conflicts/failures.
   recoverMeasurementsOnStartup().catch(() => {}).finally(() => { runSync().catch(() => {}); });
-  const unsubNet = NetInfo.addEventListener((state) => { if (state.isConnected) { _resetBackoff(); runSync().catch(() => {}); } });
-  const appSub = AppState.addEventListener("change", (s) => { if (s === "active") { _resetBackoff(); runSync().catch(() => {}); } });
+  // Office-to-Field near-real-time convergence: a relay `measurement_changed` invalidation pulls the
+  // canonical copy for the affected lead immediately (screen-independent).
+  setRelayEventHandler((evt) => { if (evt && evt.type === "measurement_changed") handleOfficeInvalidation(evt).catch(() => {}); });
+  const unsubNet = NetInfo.addEventListener((state) => { if (state.isConnected) { _resetBackoff(); refreshActiveLeads("connectivity").catch(() => {}); runSync().catch(() => {}); } });
+  const appSub = AppState.addEventListener("change", (s) => { if (s === "active") { _resetBackoff(); refreshActiveLeads("foreground").catch(() => {}); runSync().catch(() => {}); } });
   return () => {
     _clearRetryTimer();
+    try { setRelayEventHandler(null); } catch (e) {}
     try { unsubNet && unsubNet(); } catch (e) {}
     try { appSub && appSub.remove && appSub.remove(); } catch (e) {}
   };
