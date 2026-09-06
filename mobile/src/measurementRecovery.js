@@ -94,6 +94,41 @@ function canonicalFingerprint(payload) {
   return JSON.stringify(canonicalMeasurement(payload));
 }
 
+// Three-way merge (base vs Field vs Office) at collection + summary-key granularity: a side that DIDN'T
+// change a group keeps the other side's value; a group changed ONLY in Field overrides Office; a group
+// changed ONLY in Office is preserved; a group changed on BOTH sides (differently) is a conflict flagged
+// for explicit review (Field value kept in `merged`, name pushed to `conflicts`). Preserves ORIGINAL
+// element arrays (full fidelity) — canonical forms are used only for equality.
+function _listFor(kind) { return kind === "structures" ? _structures : kind === "facets" ? _facets : kind === "edges" ? _edges : _pens; }
+function _listEq(a, b, kind) { const f = _listFor(kind); return JSON.stringify(f(a || [])) === JSON.stringify(f(b || [])); }
+function threeWayMergeMeasurement(base, field, office) {
+  base = base || {}; field = field || {}; office = office || {};
+  const merged = {}; const conflicts = [];
+  const pick = (key, b, f, o, label) => {
+    const fChanged = !_listEq(b, f, key), oChanged = !_listEq(b, o, key);
+    if (fChanged && oChanged && !_listEq(f, o, key)) { conflicts.push(label); return f; }   // both → review (keep Field)
+    if (fChanged) return f;                                                                  // Field-only → Field
+    return o !== undefined ? o : b;                                                          // Office-only / none → Office
+  };
+  merged.structures = pick("structures", base.structures, field.structures, office.structures, "structures");
+  merged.facets = pick("facets", base.facets, field.facets, office.facets, "facets");
+  merged.edges = pick("edges", base.edges, field.edges, office.edges, "edges");
+  const bP = base.pens != null ? base.pens : base.penetrations;
+  const fP = field.pens != null ? field.pens : field.penetrations;
+  const oP = office.pens != null ? office.pens : office.penetrations;
+  merged.pens = pick("pens", bP, fP, oP, "penetrations");
+  const bs = base.summary || {}, fs = field.summary || {}, os = office.summary || {};
+  const ms = {};
+  for (const k of new Set([...Object.keys(bs), ...Object.keys(fs), ...Object.keys(os)])) {
+    const bv = JSON.stringify(bs[k]), fv = JSON.stringify(fs[k]), ov = JSON.stringify(os[k]);
+    const fCh = bv !== fv, oCh = bv !== ov;
+    if (fCh && oCh && fv !== ov) { conflicts.push("summary." + k); ms[k] = fs[k]; }
+    else if (fCh) ms[k] = fs[k]; else ms[k] = (k in os ? os[k] : bs[k]);
+  }
+  merged.summary = ms;
+  return { merged, conflicts, clean: conflicts.length === 0 };
+}
+
 // The working-draft cache key encodes its measurement scope: measurement_working:measurement_scope:{kind}:{id}
 function parseWorkingScope(name) {
   const m = /measurement_scope:(lead|property|inspection):(.+)$/.exec(String(name || ""));
@@ -175,6 +210,7 @@ module.exports = {
   canonicalMeasurement,
   canonicalEqual,
   canonicalFingerprint,
+  threeWayMergeMeasurement,
   parseWorkingScope,
   parseUpdateRevisionId,
   classifyOrphanWorkingDraft,

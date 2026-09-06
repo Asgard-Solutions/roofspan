@@ -508,15 +508,37 @@ export async function discardMeasurementUpdate(revisionId) {
   return { action: "use_office" };
 }
 
-// Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer
-// Office version (adopt its updated_at as If-Match) so the local values re-attempt cleanly. Never reports
-// Synced until Office acknowledges; sync is re-triggered only after the durable rebase.
-export async function rebaseMeasurementUpdate(revisionId, newIfMatch) {
+// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
+// Serialized so all actions land together: confirm the pending update still matches, remove that exact
+// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
+// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
+// authoritative Office revision, and update the scoped list.
+export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
+  const id = `measurement-update:${String(revisionId)}`;
+  await _removeMutation(id);                                   // remove the reviewed conflict mutation
+  if (serverDetail && serverDetail.id != null) {
+    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
+  }
+  if (scope) {
+    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
+    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
+    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
+  }
+  _emit({ type: "queued" });
+  _emit({ type: "measurement_reconciled" });
+  return { action: "use_office" };
+}
+
+// Measurement conflict resolution — KEEP MINE: rebase the pending measurement_update onto the newer Office
+// version (adopt its updated_at as If-Match). When a 3-way-merged body is supplied, apply it so Office-only
+// changes are preserved and only Field-changed fields override. Re-triggers sync after the durable rebase.
+export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {
   const id = `measurement-update:${String(revisionId)}`;
   const all = await loadAllMutations();
   const m = all.find((x) => x.client_id === id);
   if (!m) return { action: "noop" };
-  await saveMutation({ ...m, ifMatch: newIfMatch, state: "pending", error: null });
+  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;
+  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });
   _emit({ type: "queued" });
   runSync().catch(() => {});
   return { action: "keep_local" };
