@@ -313,14 +313,7 @@ async def list_measurements(lead_id: str | None = Query(None), property_id: str 
         await mauthz.assert_lead_access(db, lead, user)
     if property_id:
         await mauthz.assert_property_access(db, property_id, user)
-    stmt = select(MeasurementSet)
-    if inspection_id:
-        stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
-    elif lead_id:
-        stmt = stmt.where(MeasurementSet.lead_id == lead_id)
-    elif property_id:
-        stmt = stmt.where(MeasurementSet.property_id == property_id)
-    s = (await db.execute(stmt)).scalars().first()
+    s = await meas_svc.find_measurement_set(db, inspection_id=inspection_id, lead_id=lead_id, property_id=property_id)
     if not s:
         return []
     return await meas_svc.list_revisions_for_set(db, s.id)
@@ -341,14 +334,7 @@ async def measurements_watermark(lead_id: str | None = Query(None), property_id:
         await mauthz.assert_lead_access(db, lead, user)
     if property_id:
         await mauthz.assert_property_access(db, property_id, user)
-    stmt = select(MeasurementSet)
-    if inspection_id:
-        stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
-    elif lead_id:
-        stmt = stmt.where(MeasurementSet.lead_id == lead_id)
-    elif property_id:
-        stmt = stmt.where(MeasurementSet.property_id == property_id)
-    s = (await db.execute(stmt)).scalars().first()
+    s = await meas_svc.find_measurement_set(db, inspection_id=inspection_id, lead_id=lead_id, property_id=property_id)
     if not s:
         return {"measurement_set_id": None, "revisions": []}
     revs = (await db.execute(select(MeasurementRevision).where(MeasurementRevision.set_id == s.id).order_by(MeasurementRevision.revision_number.desc()))).scalars().all()

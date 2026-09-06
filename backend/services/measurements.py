@@ -8,12 +8,12 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     MeasurementSet, MeasurementRevision, MeasurementStructure, MeasurementFacet,
-    MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo,
+    MeasurementEdge, MeasurementPenetration, MeasurementSummary, Photo, Inspection, Lead,
 )
 from measurement_extension_models import MeasurementRevisionExtension
 from takeoff_models import EstimateTakeoff
@@ -88,23 +88,65 @@ async def _save_extension(
 
 
 # ---------------- set / revision creation ----------------
-async def get_or_create_set(db: AsyncSession, *, inspection_id=None, property_id=None, lead_id=None, created_by=None) -> MeasurementSet:
-    stmt = select(MeasurementSet)
-    if inspection_id:
-        stmt = stmt.where(MeasurementSet.inspection_id == inspection_id)
-    elif property_id:
-        stmt = stmt.where(MeasurementSet.property_id == property_id)
-    elif lead_id:
-        stmt = stmt.where(MeasurementSet.lead_id == lead_id)
-    else:
+async def _enrich_scope_from_lead(db: AsyncSession, *, inspection_id, property_id, lead_id):
+    """Resolve the inspection (and property) FROM the lead when appropriate, so all supplied identifiers
+    are matched — not just the first one. Deterministic: earliest inspection wins."""
+    if lead_id and not inspection_id:
+        insp = (await db.execute(
+            select(Inspection).where(Inspection.lead_id == lead_id).order_by(Inspection.created_at.asc(), Inspection.id.asc())
+        )).scalars().first()
+        if insp:
+            inspection_id = insp.id
+    if lead_id and not property_id:
+        lead = await db.get(Lead, lead_id)
+        if lead and lead.property_id:
+            property_id = lead.property_id
+    return inspection_id, property_id, lead_id
+
+
+async def resolve_measurement_set(db: AsyncSession, *, inspection_id=None, property_id=None, lead_id=None, created_by=None, create=True) -> MeasurementSet | None:
+    """CANONICAL measurement-set resolver shared by Office and Field. Matches ALL supplied identifiers
+    (never stops at the first key), resolves the inspection from the lead when appropriate, returns a
+    DETERMINISTIC current set (earliest created_at, then id — never an unordered .first()), and backfills
+    any missing lead/property/inspection links on the chosen set. Creates a new set only when create=True."""
+    inspection_id, property_id, lead_id = await _enrich_scope_from_lead(
+        db, inspection_id=inspection_id, property_id=property_id, lead_id=lead_id
+    )
+    conds = []
+    if inspection_id: conds.append(MeasurementSet.inspection_id == inspection_id)
+    if property_id: conds.append(MeasurementSet.property_id == property_id)
+    if lead_id: conds.append(MeasurementSet.lead_id == lead_id)
+    if not conds:
+        if not create:
+            return None
         raise HTTPException(status_code=400, detail="A measurement needs an inspection_id, property_id or lead_id")
-    existing = (await db.execute(stmt.order_by(MeasurementSet.created_at.asc()))).scalars().first()
-    if existing:
-        return existing
+    # Match ANY supplied identifier; deterministic ordering picks the canonical (oldest) set.
+    canonical = (await db.execute(
+        select(MeasurementSet).where(or_(*conds)).order_by(MeasurementSet.created_at.asc(), MeasurementSet.id.asc())
+    )).scalars().first()
+    if canonical:
+        # Backfill missing links so every identifier resolves to this one canonical set going forward.
+        changed = False
+        if inspection_id and canonical.inspection_id is None: canonical.inspection_id = inspection_id; changed = True
+        if property_id and canonical.property_id is None: canonical.property_id = property_id; changed = True
+        if lead_id and canonical.lead_id is None: canonical.lead_id = lead_id; changed = True
+        if changed: await db.flush()
+        return canonical
+    if not create:
+        return None
     s = MeasurementSet(inspection_id=inspection_id, property_id=property_id, lead_id=lead_id, created_by=created_by)
     db.add(s)
     await db.flush()
     return s
+
+
+# Backwards-compatible names used across the codebase.
+async def get_or_create_set(db: AsyncSession, *, inspection_id=None, property_id=None, lead_id=None, created_by=None) -> MeasurementSet:
+    return await resolve_measurement_set(db, inspection_id=inspection_id, property_id=property_id, lead_id=lead_id, created_by=created_by, create=True)
+
+
+async def find_measurement_set(db: AsyncSession, *, inspection_id=None, property_id=None, lead_id=None) -> MeasurementSet | None:
+    return await resolve_measurement_set(db, inspection_id=inspection_id, property_id=property_id, lead_id=lead_id, create=False)
 
 
 async def _next_revision_number(db: AsyncSession, set_id) -> int:
