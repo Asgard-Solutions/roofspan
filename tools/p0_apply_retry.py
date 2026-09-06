@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run P0-6 while excluding the existing live-server-only lifecycle probe."""
+"""Run P0-6 while excluding the existing live-server-only lifecycle probe (focused rerun)."""
 from pathlib import Path
 import subprocess
 
