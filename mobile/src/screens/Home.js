@@ -55,7 +55,7 @@ export default function Home({ navigation }) {
   const needAction = open.filter((l) => ACTION_STATUSES.includes(l.status));
   const today = new Date().toDateString();
   const todayJobs = jobs.filter((j) => j.scheduled_start && new Date(j.scheduled_start).toDateString() === today);
-  const hasIssues = (summary.counts.conflict || 0) > 0 || (summary.counts.failed || 0) > 0;
+  const hasIssues = (summary.counts.conflict || 0) > 0 || (summary.counts.failed || 0) > 0 || (summary.counts.locked || 0) > 0;
   // RN7: navigate() no longer goes back to an existing screen (it pushes). Pass { pop: true } to
   // preserve the RN6 behavior for these tab shortcuts so they return to the target's root/instance
   // instead of stacking a duplicate on top of a deep nested stack.

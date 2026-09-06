@@ -146,6 +146,21 @@ export async function markCleanIfNoPending(cacheKey, value) {
   });
 }
 
+// Global "fully converged" marker: advances the given cache key ONLY when NO unsettled mutation remains
+// in ANY scope — pending, failed, conflict, or locked all block advancement (spec: last_fully_converged_at).
+// Serialized like markCleanIfNoPending so a mutation queued concurrently can't slip between check + write.
+export async function markConvergedIfClean(cacheKey, value) {
+  return _serialize(async () => {
+    const d = await db();
+    const row = await d.getFirstAsync(
+      "SELECT COUNT(*) AS c FROM pending_mutations WHERE state IN ('pending','failed','conflict','locked')"
+    );
+    if (row && Number(row.c) > 0) return false;   // unsettled work exists -> do NOT mark converged
+    await putCache(cacheKey, value);
+    return true;
+  });
+}
+
 // B3B1 (durable, generation-safe): floor a still-pending Roof Sketch mutation's expected_version to at
 // least the acknowledged server version, operating on the CURRENT stored row INSIDE the serialization
 // boundary. Preserves the row's document, local_edit_generation and mutation_generation; NEVER

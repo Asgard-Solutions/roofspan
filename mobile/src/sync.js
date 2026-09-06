@@ -6,7 +6,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { AppState } from "react-native";
 import queue from "./queue";
 import { send } from "./api";
-import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
+import { enqueue, saveMutation, saveMutationIfCurrent, markCleanIfNoPending, markConvergedIfClean, loadPending, loadAllMutations, putCache, putCacheSerialized, getCache, mutateCache, listCacheNames, floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope, removeMutation as _removeMutation, removeFailedMutations as _removeFailed, rebasePendingMeasurementIfMatch, convertSupersededCreateToUpdate } from "./storage";
 import { applySketchAck } from "./roofSketchAck";
 import { reconcilePropertyDetail, reconcileCanvassFeatures, propertyIdForMutation, resolveConflictPlan, mergeConflictResolution } from "./fieldReconcile";
 import { noteVersion as noteCasFloor } from "./roofSketchCasFloor";
@@ -17,11 +17,18 @@ import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScope
 import { classifyOrphanWorkingDraft, recoveryAttentionItem, parseWorkingScope, planStartupRecovery } from "./measurementRecovery";
 import { createMeasurementSyncCoordinator } from "./measurementSyncCoordinator";
 import { createDiagnostics } from "./syncDiagnostics";
+import { countStates, deriveSyncStatus } from "./syncStatus";
 import { cache } from "./cache";
 import { api } from "./api";
 import { setRelayEventHandler } from "./transport";
 
 const LAST_SYNC = "last_sync_at";
+// Separate, honest sync-status timestamps (spec): a push ATTEMPT vs a successful PUSH vs a successful
+// PULL vs FULL convergence. Only last_fully_converged_at requires an empty-of-issues queue.
+const LAST_PUSH_ATTEMPT = "last_push_attempt_at";
+const LAST_PUSH_OK = "last_successful_push_at";
+const LAST_PULL_OK = "last_successful_pull_at";
+const LAST_CONVERGED = "last_fully_converged_at";
 const _listeners = new Set();
 
 export function onSyncChange(cb) { _listeners.add(cb); return () => _listeners.delete(cb); }
@@ -82,6 +89,7 @@ export async function runSync() {
     await _reviveRetryablePhotos();                 // let transiently-failed photos rejoin the queue
     const pending = await loadPending();            // active scope only
     if (pending.length > 0) {
+      await putCache(LAST_PUSH_ATTEMPT, new Date().toISOString());  // a Field→Office push cycle is starting
       const processed = await queue.processQueue(pending, send);
       _diag.recordPush();   // a push cycle ran (Field→Office write attempts completed)
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
@@ -91,6 +99,8 @@ export async function runSync() {
       await _reconcileSketchAcks(processed);
       await _reconcileFieldAcks(processed);
       await _reconcileMeasurementAcks(processed);
+      // A successful PUSH = at least one mutation acknowledged (reached 'synced') this cycle.
+      if (processed.some((m) => m.state === "synced")) await putCache(LAST_PUSH_OK, new Date().toISOString());
     }
     // Decide completion from AUTHORITATIVE CURRENT storage, NOT the stale processed[] (spec §A2/§A5).
     // A superseded newer mutation (e.g. B replacing an acknowledged A) must keep the queue non-synced.
@@ -100,7 +110,10 @@ export async function runSync() {
       (m) => m.state === "failed" && !queue.isPermanentFailure(m) && (m.attempts || 0) < MAX_AUTO_PHOTO_ATTEMPTS
     );
     if (pendingLeft || retryablePhotoLeft) _scheduleRetry();
-    else { _resetBackoff(); await _markSynced(); }  // last_sync_at only when no current work remains
+    else _resetBackoff();
+    // last_fully_converged_at advances ONLY when NO pending/failed/conflict/locked mutation remains
+    // (never with unresolved issues — no more "Last synced just now / 1 failed" confusion).
+    await _markConverged();
   } finally {
     _running = false;
     _emit({ type: "sync_end" });
@@ -108,8 +121,9 @@ export async function runSync() {
   }
 }
 
-// Atomic clean-marker: only advances last_sync_at if no pending work exists at write time (spec §0).
-async function _markSynced() { return markCleanIfNoPending(LAST_SYNC, new Date().toISOString()); }
+// Atomic convergence marker: advances last_fully_converged_at ONLY if the queue holds no pending, failed,
+// conflict, or locked mutation at write time (spec). Never advances while any issue remains.
+async function _markConverged() { return markConvergedIfClean(LAST_CONVERGED, new Date().toISOString()); }
 
 // Device sync diagnostics: last PULL and last PUSH tracked separately + a bounded per-mutation log.
 const _diag = createDiagnostics();
@@ -253,6 +267,7 @@ export async function refreshLead(scope, trigger = "manual") {
   catch (e) { return { refreshed: false, offline: true }; }   // offline → cached copy stays; retry next trigger
   _coordinator.markRefreshed(scope);
   _diag.recordPull();   // a successful Office→Field read completed for this lead
+  try { await putCache(LAST_PULL_OK, new Date().toISOString()); } catch (e) { /* best effort */ }
   const all = await loadAllMutations();
   let changed = false;
   for (const rev of (wm && wm.revisions) || []) {
@@ -416,7 +431,9 @@ export async function resolveFieldConflictMerge(client_id, choices) {
   return plan;
 }
 
-export async function lastSyncAt() { return getCache(LAST_SYNC); }
+// Back-compat: the "last synced" chip must reflect FULL convergence (advances only when no pending/failed/
+// conflict/locked remain) — never a push that left failures behind.
+export async function lastSyncAt() { return getCache(LAST_CONVERGED); }
 export async function syncNow() { _resetBackoff(); refreshActiveLeads("manual").catch(() => {}); return runSync(); }
 
 // B3B2: whether the sync engine is actively processing right now (drives the "Synchronizing…" status).
@@ -593,19 +610,33 @@ export async function replacePhoto(client_id, photo) {
   return updated;
 }
 
-// Simple salesperson-facing status derived from the durable queue.
+// Salesperson-facing GLOBAL sync status. Reports each mutation state SEPARATELY (never lumps failed into
+// "waiting to sync") and surfaces the four honest timestamps. `waiting` now means ONLY pending (in-flight)
+// work; failed / conflict / locked are their own counts with their own messaging.
 export async function pendingSummary() {
   const all = await loadAllMutations();
-  const by = { pending: 0, failed: 0, conflict: 0, synced: 0, locked: 0 };
-  for (const m of all) by[m.state] = (by[m.state] || 0) + 1;
-  const last = await getCache(LAST_SYNC);
-  const waiting = by.pending + by.failed;
-  let label = "All changes synced";
-  if (by.conflict > 0) label = `${by.conflict} sync issue${by.conflict > 1 ? "s" : ""} to review`;
-  else if (by.locked > 0) label = `${by.locked} locked revision sketch${by.locked > 1 ? "es" : ""} — new revision needed`;
-  else if (_running) label = "Synchronizing…";
-  else if (waiting > 0) label = `${waiting} change${waiting > 1 ? "s" : ""} waiting to sync`;
-  return { items: all, counts: by, waiting, lastSyncAt: last, label, syncing: _running };
+  const counts = countStates(all);
+  const status = deriveSyncStatus(counts, { syncing: _running });
+
+  const [pushAttempt, pushOk, pullOk, converged] = await Promise.all([
+    getCache(LAST_PUSH_ATTEMPT), getCache(LAST_PUSH_OK), getCache(LAST_PULL_OK), getCache(LAST_CONVERGED),
+  ]);
+
+  return {
+    items: all, counts,
+    pending_count: status.pending_count,
+    failed_count: status.failed_count,
+    conflict_count: status.conflict_count,
+    locked_count: status.locked_count,
+    waiting: status.waiting,       // back-compat: now == pending_count (never includes failed)
+    fully_converged: status.fully_converged,
+    last_push_attempt_at: pushAttempt || null,
+    last_successful_push_at: pushOk || null,
+    last_successful_pull_at: pullOk || null,
+    last_fully_converged_at: converged || null,
+    lastSyncAt: converged || null, // back-compat alias — only advances on FULL convergence
+    label: status.label, syncing: _running,
+  };
 }
 
 // Auto-sync triggers. A device having internet does NOT guarantee Office is reachable, so a failed
