@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply and verify P0-4: durable three-way-merge bases for Field measurements."""
+"""Apply and verify P0-5: generation-safe, atomic Use Office resolution."""
 from __future__ import annotations
 
 import subprocess
@@ -13,7 +13,7 @@ def replace_once(path: str, old: str, new: str) -> None:
     text = target.read_text(encoding="utf-8")
     count = text.count(old)
     if count != 1:
-        raise RuntimeError(f"{path}: expected exactly one replacement, found {count}: {old[:120]!r}")
+        raise RuntimeError(f"{path}: expected exactly one replacement, found {count}: {old[:140]!r}")
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
@@ -32,163 +32,561 @@ def run_expected_failure(*cmd: str) -> None:
     print(proc.stdout, flush=True)
     print(proc.stderr, flush=True)
     if proc.returncode == 0:
-        raise RuntimeError("Regression test unexpectedly passed before the P0-4 production change")
+        raise RuntimeError("Regression test unexpectedly passed before the P0-5 production change")
 
 
 # ---------------------------------------------------------------------------
-# RED: after Save clears the transient working draft, the durable queue row
-# must still carry the exact Base document/token needed for a safe 3-way merge.
+# RED: prove exact-generation success, stale rejection, full-document adoption,
+# rollback on write failure, seal-without-clear, and runtime wiring contracts.
 # ---------------------------------------------------------------------------
 write(
-    "mobile/src/tests/measurement_durable_merge_base.node.test.js",
-    '''"use strict";\nconst assert = require("assert");\nconst Q = require("../queue");\nconst M = require("../measurementReconcile");\nconst R = require("../measurementRecovery");\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction detail() {\n  return {\n    id: "R1", updated_at: "2026-09-06T10:00:00Z", source: "office",\n    provider: "provider-a", report_id: "report-a", reported_area_sqft: 1000, notes: "base notes",\n    structures: [{ id: "S1", name: "House", structure_type: "main_house", included_in_scope: true }],\n    facets: [{ id: "F1", structure_id: "S1", facet_label: "F1", pitch_rise: 6, area_sqft: 100 }],\n    edges: [{ id: "E1", facet_id: "F1", edge_type: "ridge", length_ft: 40 }],\n    penetrations: [], summary: { total_area_sqft: 100 },\n  };\n}\n\n(function durable_row_survives_working_draft_clear_and_merges_disjoint_changes() {\n  const baseDetail = detail();\n  const baseBody = M.measurementDocumentFromRevision(baseDetail);\n  const fieldBody = { ...clone(baseBody), lead_id: "L1", source: "field", mark_field_complete: false };\n  fieldBody.edges[0].length_ft = 45;\n  const mutation = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1",\n    body: fieldBody, ifMatch: baseDetail.updated_at, baseBody, baseToken: baseDetail.updated_at,\n  });\n  assert.deepStrictEqual(mutation.base_body, baseBody);\n  assert.strictEqual(mutation.base_token, baseDetail.updated_at);\n\n  const office = clone(baseDetail);\n  office.updated_at = "2026-09-06T10:05:00Z";\n  office.facets[0].area_sqft = 110;\n  office.notes = "Office-only note";\n  const inputs = M.measurementConflictMergeInputs({ ...mutation, state: "conflict" }, office);\n  assert.strictEqual(inputs.ok, true);\n  const merged = R.threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);\n  assert.strictEqual(merged.clean, true);\n  const next = M.buildMergedMeasurementBody(mutation.body, merged.merged);\n  assert.strictEqual(next.facets[0].area_sqft, 110, "Office-only plane change must survive");\n  assert.strictEqual(next.edges[0].length_ft, 45, "Field-only roof-line change must survive");\n  assert.strictEqual(next.notes, "Office-only note", "Office-only hidden metadata must survive");\n  assert.strictEqual(next.lead_id, "L1", "routing scope remains from the Field mutation");\n})();\n\n(function repeated_local_save_keeps_the_original_pending_base() {\n  const base = detail();\n  const original = M.measurementDocumentFromRevision(base);\n  const pending = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1", body: original,\n    ifMatch: base.updated_at, baseBody: original, baseToken: base.updated_at,\n  });\n  const optimistic = clone(base);\n  optimistic.updated_at = base.updated_at;\n  optimistic.facets[0].area_sqft = 999;\n  const chosen = M.chooseDurableMeasurementBase(optimistic, pending);\n  assert.strictEqual(chosen.ok, true);\n  assert.deepStrictEqual(chosen.baseBody, original);\n  assert.strictEqual(chosen.baseToken, base.updated_at);\n})();\n\n(function legacy_or_mismatched_rows_cannot_blindly_keep_mine() {\n  const base = detail();\n  const body = M.measurementDocumentFromRevision(base);\n  const legacy = Q.makeMutation({\n    kind: "measurement_update", method: "put", path: "/mobile/measurements/R1",\n    body, ifMatch: base.updated_at,\n  });\n  assert.strictEqual(M.measurementConflictMergeInputs({ ...legacy, state: "conflict" }, base).ok, false);\n  assert.strictEqual(M.chooseDurableMeasurementBase(base, legacy).ok, false);\n\n  const mismatch = { ...legacy, base_body: body, base_token: "older-token" };\n  const result = M.measurementConflictMergeInputs(mismatch, base);\n  assert.strictEqual(result.ok, false);\n  assert.strictEqual(result.reason, "base_token_mismatch");\n})();\n\n(function superseded_create_conversion_uses_the_acknowledged_server_as_its_new_base() {\n  const server = detail();\n  server.updated_at = "2026-09-06T10:10:00Z";\n  const newerCreate = Q.makeMutation({ kind: "measurement", method: "post", path: "/mobile/measurements", body: { lead_id: "L1", structures: [] } });\n  const converted = M.buildConvertedUpdateMutation(newerCreate, "R1", server.updated_at, server);\n  assert.strictEqual(converted.kind, "measurement_update");\n  assert.strictEqual(converted.base_token, server.updated_at);\n  assert.deepStrictEqual(converted.base_body, M.measurementDocumentFromRevision(server));\n  assert.deepStrictEqual(converted.body, newerCreate.body);\n})();\n\nconsole.log("measurement durable merge-base tests passed");\n''',
+    "mobile/src/tests/measurement_conflict_transition.node.test.js",
+    r'''"use strict";
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const C = require("../measurementConflict");
+const K = require("../measurementCache");
+const { createMeasurementWorkingDraftStore } = require("../measurementWorkingDraft");
+
+function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
+function officeDetail(token = "office-v7") {
+  return {
+    id: "R1", set_id: "SET1", revision_number: 4, status: "draft", editable: true,
+    source: "office", updated_at: token, created_at: "2026-09-06T10:00:00Z",
+    lead_id: "L1", property_id: "P1", inspection_id: "I1",
+    provider: "eagleview", report_id: "EV-1", reported_area_sqft: 1800, notes: "Office wins",
+    structures: [{ id: "S1", name: "House", structure_type: "main_house" }],
+    facets: [{ id: "F1", structure_id: "S1", facet_label: "F1", area_sqft: 1800 }],
+    edges: [{ id: "E1", facet_id: "F1", edge_type: "ridge", length_ft: 52 }],
+    penetrations: [], summary: null, totals: { total_area_sqft: 1800 },
+  };
+}
+function mutation({ generation = 2, state = "conflict" } = {}) {
+  return {
+    client_id: "measurement-update:R1", kind: "measurement_update", state,
+    mutation_generation: generation, ifMatch: "field-v1",
+    body: { lead_id: "L1", structures: [], facets: [], edges: [], penetrations: [], summary: {} },
+  };
+}
+function initialState(row = mutation()) {
+  const scope = { lead_id: "L1" };
+  return {
+    mutations: { [row.client_id]: clone(row) },
+    caches: {
+      [K.detailKey("R1")]: { id: "R1", updated_at: "field-v1", facets: [{ area_sqft: 1000 }] },
+      [K.draftKey(scope)]: { local_draft: true },
+      [K.workingKey(scope)]: { working: true, facets: [{ area_sqft: 1000 }] },
+      [K.scopeKey(scope)]: [{ id: "R0", revision_number: 3 }, { id: "R1", revision_number: 4, total_area_sqft: 1000 }],
+    },
+  };
+}
+function makeExecutor(scratch, failKey = null) {
+  return {
+    readMutation: async (clientId) => clone(scratch.mutations[clientId] || null),
+    readCache: async (key) => clone(Object.prototype.hasOwnProperty.call(scratch.caches, key) ? scratch.caches[key] : null),
+    writeCache: async (key, value) => {
+      if (key === failKey) throw new Error("injected cache failure");
+      scratch.caches[key] = clone(value);
+    },
+    deleteMutation: async (clientId, generation, expectedState) => {
+      const row = scratch.mutations[clientId];
+      if (!row || Number(row.mutation_generation || 1) !== Number(generation) || row.state !== expectedState) return 0;
+      delete scratch.mutations[clientId];
+      return 1;
+    },
+  };
+}
+async function atomic(state, callback, failKey = null) {
+  const scratch = clone(state);
+  const result = await callback(makeExecutor(scratch, failKey));
+  state.mutations = scratch.mutations;
+  state.caches = scratch.caches;
+  return result;
+}
+
+async function main() {
+  const scope = { lead_id: "L1" };
+
+  // Exact reviewed generation: remove only that row and adopt the complete Office document everywhere.
+  {
+    const state = initialState();
+    const built = C.buildMeasurementUseOfficeReview(mutation(), scope, officeDetail());
+    assert.strictEqual(built.ok, true);
+    const result = await atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, built.reviewed));
+    assert.strictEqual(result.action, "use_office");
+    assert.deepStrictEqual(state.mutations, {});
+    assert.deepStrictEqual(state.caches[K.detailKey("R1")], officeDetail());
+    assert.strictEqual(state.caches[K.draftKey(scope)], null);
+    assert.strictEqual(state.caches[K.workingKey(scope)], null);
+    const list = state.caches[K.scopeKey(scope)];
+    assert.strictEqual(list.length, 2);
+    assert.deepStrictEqual(list.find((x) => x.id === "R1"), officeDetail());
+  }
+
+  // A newer local generation landed after review: the old choice is stale and NOTHING changes.
+  {
+    const reviewed = C.buildMeasurementUseOfficeReview(mutation({ generation: 2 }), scope, officeDetail()).reviewed;
+    const state = initialState(mutation({ generation: 3 }));
+    const before = clone(state);
+    await assert.rejects(
+      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed)),
+      (e) => e && e.__stale === "mutation_generation_changed",
+    );
+    assert.deepStrictEqual(state, before);
+  }
+
+  // State/revision drift is stale rather than a broad delete.
+  {
+    const reviewed = C.buildMeasurementUseOfficeReview(mutation({ state: "conflict" }), scope, officeDetail()).reviewed;
+    const state = initialState(mutation({ state: "pending" }));
+    const before = clone(state);
+    await assert.rejects(
+      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed)),
+      (e) => e && e.__stale === "mutation_state_changed",
+    );
+    assert.deepStrictEqual(state, before);
+  }
+
+  // Any cache failure aborts the entire logical transaction, including mutation deletion.
+  {
+    const state = initialState();
+    const before = clone(state);
+    const reviewed = C.buildMeasurementUseOfficeReview(mutation(), scope, officeDetail()).reviewed;
+    await assert.rejects(
+      () => atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, reviewed), K.workingKey(scope)),
+      /injected cache failure/,
+    );
+    assert.deepStrictEqual(state, before);
+  }
+
+  // A partial screen model is never accepted as the authoritative Office revision.
+  {
+    const partial = { id: "R1", updated_at: "office-v7", status: "draft", editable: true };
+    const result = C.buildMeasurementUseOfficeReview(mutation(), scope, partial);
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, "office_revision_incomplete");
+  }
+
+  // Failed updates use the same exact-state transition once a full Office revision is fetched.
+  {
+    const failed = mutation({ state: "failed", generation: 9 });
+    const built = C.buildMeasurementUseOfficeReview(failed, scope, officeDetail("office-v9"));
+    assert.strictEqual(built.ok, true);
+    const state = initialState(failed);
+    const result = await atomic(state, (tx) => C.applyMeasurementResolutionInTx(tx, built.reviewed));
+    assert.strictEqual(result.action, "use_office");
+    assert.deepStrictEqual(state.caches[K.detailKey("R1")], officeDetail("office-v9"));
+  }
+
+  // Use Office seals/drains autosaves without clearing outside the atomic storage transaction.
+  {
+    let slot = { working: true };
+    let clears = 0;
+    const store = createMeasurementWorkingDraftStore({
+      put: async (v) => { slot = v; return true; },
+      clear: async () => { clears += 1; slot = null; },
+    });
+    await store.seal();
+    assert.strictEqual(store.isSealed(), true);
+    assert.deepStrictEqual(slot, { working: true });
+    assert.strictEqual(clears, 0);
+    assert.strictEqual(await store.persist({ working: true, newer: true }), false);
+  }
+
+  // Static wiring guard: real storage is exclusive/generation-guarded; UI fetches full Office data and
+  // carries the reviewed mutation generation instead of passing its partial `existing` object.
+  {
+    const storage = fs.readFileSync(path.join(__dirname, "..", "storage.js"), "utf8");
+    const sync = fs.readFileSync(path.join(__dirname, "..", "sync.js"), "utf8");
+    const screen = fs.readFileSync(path.join(__dirname, "..", "screens", "Measurements.js"), "utf8");
+    assert(storage.includes("withExclusiveTransactionAsync"));
+    assert(storage.includes("applyMeasurementResolutionInTx"));
+    assert(storage.includes("COALESCE(mutation_generation, 1) = ? AND state = ?"));
+    assert(sync.includes("fetchOfficeMeasurementRevision"));
+    assert(sync.includes("prepareMeasurementUseOfficeReview"));
+    assert(screen.includes("mutationGeneration"));
+    assert(screen.includes("wdStoreRef.current.seal()"));
+    assert(!screen.includes("resolveMeasurementConflictUseOffice(existing.id, scope, existing)"));
+  }
+
+  console.log("measurement conflict transition tests passed");
+}
+main().catch((e) => { console.error(e); process.exit(1); });
+''',
 )
 replace_once(
     "mobile/package.json",
-    "node src/tests/measurement_three_way_merge.node.test.js && node src/tests/sync_status.node.test.js",
-    "node src/tests/measurement_three_way_merge.node.test.js && node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/sync_status.node.test.js",
+    "node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/sync_status.node.test.js",
+    "node src/tests/measurement_durable_merge_base.node.test.js && node src/tests/measurement_conflict_transition.node.test.js && node src/tests/sync_status.node.test.js",
 )
-run_expected_failure("node", "mobile/src/tests/measurement_durable_merge_base.node.test.js")
+run_expected_failure("node", "mobile/src/tests/measurement_conflict_transition.node.test.js")
 
 # ---------------------------------------------------------------------------
-# GREEN: persist a complete Base in every measurement_update, preserve it when
-# local edits coalesce, and consume only a trusted durable Base on conflict.
+# GREEN: pure reviewed-transition contract, exclusive SQLite implementation,
+# full Office fetch, exact generation/state stamps in the screen, and seal-only
+# autosave protection before the transaction owns draft clearing.
 # ---------------------------------------------------------------------------
-replace_once(
-    "mobile/src/queue.js",
-    '''function makeMutation({ kind, method, path, body, ifMatch = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {''',
-    '''function makeMutation({ kind, method, path, body, ifMatch = null, baseBody = null, baseToken = null, label = "", scope = null, photo = null, clientId = null, mutationGeneration = 1, localEditGeneration = null }) {''',
-)
-replace_once(
-    "mobile/src/queue.js",
-    '''    body: body || {},\n    ifMatch,\n    label,''',
-    '''    body: body || {},\n    ifMatch,\n    // Durable 3-way-merge lineage for full-document measurement PUTs. This survives Save clearing the\n    // transient working draft and is never sent to the backend.\n    base_body: baseBody == null ? null : JSON.parse(JSON.stringify(baseBody)),\n    base_token: baseToken == null ? null : String(baseToken),\n    label,''',
+write(
+    "mobile/src/measurementConflict.js",
+    r'''"use strict";
+/* Pure decision layer for atomic Field measurement Use-Office resolution. */
+const K = require("./measurementCache");
+const { measScopeFromBody, upsertRevision } = require("./measurementReconcile");
+
+const RESOLVABLE_STATES = new Set(["pending", "conflict", "failed"]);
+function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
+function revisionIdFromClientId(clientId) {
+  const value = String(clientId || "");
+  return value.startsWith("measurement-update:") ? value.slice("measurement-update:".length) : null;
+}
+function isFullOfficeRevision(value, expectedRevisionId = null) {
+  if (!value || typeof value !== "object") return false;
+  const id = value.id == null ? null : String(value.id);
+  if (!id || (expectedRevisionId != null && id !== String(expectedRevisionId))) return false;
+  if (value.updated_at == null || value.updated_at === "") return false;
+  for (const key of ["structures", "facets", "edges", "penetrations"]) {
+    if (!Object.prototype.hasOwnProperty.call(value, key) || !Array.isArray(value[key])) return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, "summary")) return false;
+  if (value.summary !== null && (typeof value.summary !== "object" || Array.isArray(value.summary))) return false;
+  return true;
+}
+function buildMeasurementUseOfficeReview(mutation, scope, serverDetail) {
+  if (!mutation || mutation.kind !== "measurement_update") return { ok: false, reason: "not_measurement_update" };
+  if (!RESOLVABLE_STATES.has(mutation.state)) return { ok: false, reason: "mutation_not_resolvable" };
+  const revisionId = revisionIdFromClientId(mutation.client_id);
+  if (!revisionId) return { ok: false, reason: "revision_missing" };
+  const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
+  if (!Number.isFinite(generation) || generation < 1) return { ok: false, reason: "generation_invalid" };
+  if (!isFullOfficeRevision(serverDetail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
+  let listKey;
+  try {
+    listKey = K.scopeKey(scope);
+    const mutationScope = measScopeFromBody(mutation.body);
+    if (!mutationScope || K.scopeKey(mutationScope) !== listKey) return { ok: false, reason: "scope_mismatch" };
+  } catch (e) {
+    return { ok: false, reason: "scope_missing" };
+  }
+  return {
+    ok: true,
+    reviewed: {
+      clientId: String(mutation.client_id), revisionId,
+      mutationGeneration: generation, expectedState: mutation.state,
+      detailKey: K.detailKey(revisionId), draftKey: K.draftKey(scope),
+      workingKey: K.workingKey(scope), listKey,
+      serverDetail: clone(serverDetail),
+    },
+  };
+}
+function stale(reason) {
+  const error = new Error(reason);
+  error.__stale = reason;
+  throw error;
+}
+function validateLiveMutation(reviewed, live) {
+  if (!live) stale("mutation_missing");
+  if (String(live.client_id || "") !== reviewed.clientId) stale("mutation_client_changed");
+  if (live.kind !== "measurement_update") stale("mutation_kind_changed");
+  if (revisionIdFromClientId(live.client_id) !== reviewed.revisionId) stale("mutation_revision_changed");
+  if (Number(live.mutation_generation == null ? 1 : live.mutation_generation) !== Number(reviewed.mutationGeneration)) {
+    stale("mutation_generation_changed");
+  }
+  if (live.state !== reviewed.expectedState) stale("mutation_state_changed");
+  try {
+    const liveScope = measScopeFromBody(live.body);
+    if (!liveScope || K.scopeKey(liveScope) !== reviewed.listKey) stale("mutation_scope_changed");
+  } catch (e) {
+    if (e && e.__stale) throw e;
+    stale("mutation_scope_changed");
+  }
+}
+async function applyMeasurementResolutionInTx(tx, reviewed) {
+  if (!tx || !reviewed || !isFullOfficeRevision(reviewed.serverDetail, reviewed.revisionId)) {
+    throw new Error("invalid_measurement_resolution");
+  }
+  const live = await tx.readMutation(reviewed.clientId);
+  validateLiveMutation(reviewed, live);
+  const removed = await tx.deleteMutation(
+    reviewed.clientId, reviewed.mutationGeneration, reviewed.expectedState,
+  );
+  if (removed !== 1) stale("mutation_guard_missed");
+
+  const currentList = await tx.readCache(reviewed.listKey);
+  await tx.writeCache(reviewed.detailKey, reviewed.serverDetail);
+  await tx.writeCache(reviewed.draftKey, null);
+  await tx.writeCache(reviewed.workingKey, null);
+  await tx.writeCache(reviewed.listKey, upsertRevision(currentList, reviewed.serverDetail));
+  return { action: "use_office", revisionId: reviewed.revisionId, serverDetail: clone(reviewed.serverDetail) };
+}
+
+module.exports = {
+  revisionIdFromClientId,
+  isFullOfficeRevision,
+  buildMeasurementUseOfficeReview,
+  validateLiveMutation,
+  applyMeasurementResolutionInTx,
+};
+''',
 )
 
-helpers = '''\n// Extract the complete editable measurement document from an authoritative revision detail. Routing and\n// command fields stay on the mutation body; these are the values that must participate in conflict merge.\nfunction _cloneJson(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }\nfunction measurementDocumentFromRevision(src) {\n  if (!src || typeof src !== "object") return null;\n  const out = {\n    structures: _cloneJson(src.structures || []),\n    facets: _cloneJson(src.facets || []),\n    edges: _cloneJson(src.edges || []),\n    penetrations: _cloneJson(src.penetrations != null ? src.penetrations : (src.pens || [])),\n    summary: _cloneJson(src.summary || {}),\n  };\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    if (Object.prototype.hasOwnProperty.call(src, key)) out[key] = _cloneJson(src[key]);\n  }\n  return out;\n}\n\n// Coalescing rule: once a measurement_update is pending, every later local edit retains that row's ORIGINAL\n// base. Falling back to the current optimistic cache would manufacture a false base and permit data loss.\nfunction chooseDurableMeasurementBase(authoritative, pending) {\n  if (pending && pending.kind === "measurement_update") {\n    if (!pending.base_body || pending.base_token == null || pending.base_token === "") {\n      return { ok: false, reason: "missing_durable_base" };\n    }\n    return { ok: true, baseBody: _cloneJson(pending.base_body), baseToken: String(pending.base_token) };\n  }\n  const token = authoritative && (authoritative.base_token || authoritative.updated_at || authoritative.if_match);\n  const body = authoritative && authoritative.base_body\n    ? _cloneJson(authoritative.base_body)\n    : measurementDocumentFromRevision(authoritative);\n  if (!body || token == null || token === "") return { ok: false, reason: "missing_authoritative_base" };\n  return { ok: true, baseBody: body, baseToken: String(token) };\n}\n\n// A Keep-Mine merge is legal only when the durable base token is exactly the token used by the failed PUT.\n// Legacy rows are preserved for explicit review rather than blindly re-sending an entire stale snapshot.\nfunction measurementConflictMergeInputs(mutation, serverDetail) {\n  if (!mutation || mutation.kind !== "measurement_update") return { ok: false, reason: "not_measurement_update" };\n  if (!mutation.base_body || mutation.base_token == null || mutation.base_token === "") {\n    return { ok: false, reason: "missing_durable_base" };\n  }\n  if (String(mutation.base_token) !== String(mutation.ifMatch || "")) {\n    return { ok: false, reason: "base_token_mismatch" };\n  }\n  const office = measurementDocumentFromRevision(serverDetail);\n  if (!office || !serverDetail || serverDetail.updated_at == null) {\n    return { ok: false, reason: "missing_office_detail" };\n  }\n  return {\n    ok: true,\n    base: _cloneJson(mutation.base_body),\n    field: _cloneJson(mutation.body || {}),\n    office,\n    officeToken: String(serverDetail.updated_at),\n  };\n}\n\nfunction buildMergedMeasurementBody(fieldBody, merged) {\n  const next = _cloneJson(fieldBody || {}) || {};\n  next.structures = _cloneJson(merged.structures || []);\n  next.facets = _cloneJson(merged.facets || []);\n  next.edges = _cloneJson(merged.edges || []);\n  next.penetrations = _cloneJson(merged.pens != null ? merged.pens : (merged.penetrations || []));\n  next.summary = _cloneJson(merged.summary || {});\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    if (Object.prototype.hasOwnProperty.call(merged, key)) next[key] = _cloneJson(merged[key]);\n  }\n  return next;\n}\n'''
 replace_once(
-    "mobile/src/measurementReconcile.js",
-    '''function measScopeFromBody(body) {\n  if (!body) return null;\n  if (body.lead_id) return { lead_id: body.lead_id };\n  if (body.property_id) return { property_id: body.property_id };\n  if (body.inspection_id) return { inspection_id: body.inspection_id };\n  return null;\n}\n\n// A newer local edit''',
-    '''function measScopeFromBody(body) {\n  if (!body) return null;\n  if (body.lead_id) return { lead_id: body.lead_id };\n  if (body.property_id) return { property_id: body.property_id };\n  if (body.inspection_id) return { inspection_id: body.inspection_id };\n  return null;\n}\n''' + helpers + '''\n// A newer local edit''',
-)
-replace_once(
-    "mobile/src/measurementReconcile.js",
-    '''function buildConvertedUpdateMutation(m, revisionId, ifMatch) {\n  const cid = `measurement-update:${String(revisionId)}`;''',
-    '''function buildConvertedUpdateMutation(m, revisionId, ifMatch, serverBase) {\n  const cid = `measurement-update:${String(revisionId)}`;\n  const authoritativeBase = measurementDocumentFromRevision(serverBase);''',
-)
-replace_once(
-    "mobile/src/measurementReconcile.js",
-    '''    path: `/mobile/measurements/${String(revisionId)}`,\n    ifMatch,\n    server_id:''',
-    '''    path: `/mobile/measurements/${String(revisionId)}`,\n    ifMatch,\n    base_body: authoritativeBase,\n    base_token: ifMatch == null ? null : String(ifMatch),\n    server_id:''',
-)
-replace_once(
-    "mobile/src/measurementReconcile.js",
-    '''  measScopeFromBody,\n  isSupersededAck,''',
-    '''  measScopeFromBody,\n  measurementDocumentFromRevision,\n  chooseDurableMeasurementBase,\n  measurementConflictMergeInputs,\n  buildMergedMeasurementBody,\n  isSupersededAck,''',
-)
-
-replace_once(
-    "mobile/src/measurementRecovery.js",
-    '''  merged.summary = ms;\n  return { merged, conflicts, clean: conflicts.length === 0 };''',
-    '''  merged.summary = ms;\n  // Hidden/import metadata is part of the backend's full-document replacement contract too. Merge it\n  // independently so a Field roof-line edit cannot revert an Office-only provider/report/note change.\n  for (const key of ["provider", "report_id", "reported_area_sqft", "notes"]) {\n    const has = (obj) => Object.prototype.hasOwnProperty.call(obj, key);\n    if (!has(base) && !has(field) && !has(office)) continue;\n    const bv = JSON.stringify(base[key]), fv = JSON.stringify(field[key]), ov = JSON.stringify(office[key]);\n    const fCh = bv !== fv, oCh = bv !== ov;\n    if (fCh && oCh && fv !== ov) { conflicts.push(key); merged[key] = field[key]; }\n    else if (fCh) merged[key] = field[key];\n    else merged[key] = has(office) ? office[key] : base[key];\n  }\n  return { merged, conflicts, clean: conflicts.length === 0 };''',
+    "mobile/src/measurementWorkingDraft.js",
+    '''    // Save path: seal first (blocks every concurrent/late autosave), then clear the draft slot.\n    sealAndClear() {''',
+    '''    // Conflict-resolution preflight: seal synchronously and drain any already-queued persist, but DO\n    // NOT clear. The exclusive SQLite transition owns mutation deletion + both draft clears atomically.\n    seal() {\n      sealed = true;\n      return run(async () => true);\n    },\n    // Save path: seal first (blocks every concurrent/late autosave), then clear the draft slot.\n    sealAndClear() {''',
 )
 
 replace_once(
     "mobile/src/storage.js",
-    '''import { buildConvertedUpdateMutation } from "./measurementReconcile";''',
-    '''import { buildConvertedUpdateMutation, measurementDocumentFromRevision } from "./measurementReconcile";''',
+    '''import { applyResolutionInTx } from "./roofSketchConflict";''',
+    '''import { applyResolutionInTx } from "./roofSketchConflict";\nimport { applyMeasurementResolutionInTx } from "./measurementConflict";''',
 )
-replace_once(
-    "mobile/src/storage.js",
-    '''export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch) {''',
-    '''export async function convertSupersededCreateToUpdate(oldClientId, newRevisionId, newIfMatch, serverBase) {''',
-)
-replace_once(
-    "mobile/src/storage.js",
-    '''    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch);''',
-    '''    const converted = buildConvertedUpdateMutation(m, newRevisionId, newIfMatch, serverBase);''',
-)
-replace_once(
-    "mobile/src/storage.js",
-    '''export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch) {''',
-    '''export async function rebasePendingMeasurementIfMatch(client_id, newIfMatch, serverBase) {''',
-)
-replace_once(
-    "mobile/src/storage.js",
-    '''    if (String(m.ifMatch || "") === String(newIfMatch || "")) return { updated: false, reason: "already_rebased" };\n    m.ifMatch = newIfMatch;\n    await d.runAsync(''',
-    '''    const base = measurementDocumentFromRevision(serverBase);\n    if (!base || newIfMatch == null || newIfMatch === "") return { updated: false, reason: "missing_authoritative_base" };\n    m.ifMatch = newIfMatch;\n    m.base_body = base;\n    m.base_token = String(newIfMatch);\n    await d.runAsync(''',
-)
+append_storage = r'''
+
+// P0-5: measurement Use-Office uses one EXCLUSIVE transaction, mirroring the proven Roof Sketch path.
+// Every row is freshly read inside the transaction; the guarded delete must match the exact reviewed
+// generation AND state. Any stale decision or cache write failure rolls back mutation + all cache writes.
+function _measurementResolutionTxExecutor(txn, scope, now) {
+  return {
+    readMutation: async (clientId) => {
+      const raw = await txn.getFirstAsync(
+        "SELECT json, mutation_generation FROM pending_mutations WHERE client_id = ? AND (scope = ? OR scope IS NULL)",
+        clientId, scope,
+      );
+      return raw ? { ...JSON.parse(raw.json), mutation_generation: raw.mutation_generation == null ? 1 : raw.mutation_generation } : null;
+    },
+    readCache: async (key) => {
+      const row = await txn.getFirstAsync("SELECT json FROM cache WHERE key = ?", scopedKey(scope, key));
+      return row ? JSON.parse(row.json) : null;
+    },
+    writeCache: async (key, value) => {
+      await txn.runAsync(
+        "INSERT OR REPLACE INTO cache (key, json, updated_at) VALUES (?, ?, ?)",
+        scopedKey(scope, key), JSON.stringify(value), now,
+      );
+    },
+    deleteMutation: async (clientId, generation, expectedState) => {
+      const result = await txn.runAsync(
+        "DELETE FROM pending_mutations WHERE client_id = ? AND COALESCE(mutation_generation, 1) = ? AND state = ? AND (scope = ? OR scope IS NULL)",
+        clientId, generation, expectedState, scope,
+      );
+      return (result && (result.changes != null ? result.changes : result.rowsAffected)) || 0;
+    },
+  };
+}
+
+export async function resolveMeasurementConflictTransition(reviewed) {
+  return _serialize(async () => {
+    const d = await db();
+    const scope = getScope();
+    const now = new Date().toISOString();
+    let decision = null;
+    try {
+      await d.withExclusiveTransactionAsync(async (txn) => {
+        decision = await applyMeasurementResolutionInTx(
+          _measurementResolutionTxExecutor(txn, scope, now), reviewed,
+        );
+      });
+    } catch (e) {
+      if (e && e.__stale) return { action: "stale", reason: e.__stale };
+      throw e;
+    }
+    return decision;
+  });
+}
+'''
+storage_path = ROOT / "mobile/src/storage.js"
+storage_path.write_text(storage_path.read_text(encoding="utf-8") + append_storage, encoding="utf-8")
 
 replace_once(
     "mobile/src/sync.js",
-    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision } from "./measurementReconcile";''',
+    '''floorPendingSketchExpectedVersion, resolveSketchConflictTransition, getScope,''',
+    '''floorPendingSketchExpectedVersion, resolveSketchConflictTransition, resolveMeasurementConflictTransition, getScope,''',
+)
+replace_once(
+    "mobile/src/sync.js",
     '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";''',
+    '''import { upsertRevision, retireCreateDraft, planMeasurementWorkingAck, measScopeFromBody, isSupersededAck, rebaseWorkingDraftToRevision, measurementDocumentFromRevision } from "./measurementReconcile";\nimport { buildMeasurementUseOfficeReview, isFullOfficeRevision } from "./measurementConflict";''',
 )
 replace_once(
     "mobile/src/sync.js",
-    '''await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at);''',
-    '''await rebasePendingMeasurementIfMatch(m.client_id, rev.updated_at, rev);''',
-)
-replace_once(
-    "mobile/src/sync.js",
-    '''await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at);''',
-    '''await convertSupersededCreateToUpdate(m.client_id, revisionId, rev.updated_at, rev);''',
-)
-replace_once(
-    "mobile/src/sync.js",
-    '''export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody) {\n  const id = `measurement-update:${String(revisionId)}`;\n  const all = await loadAllMutations();\n  const m = all.find((x) => x.client_id === id);\n  if (!m) return { action: "noop" };\n  const body = mergedBody ? { ...m.body, ...mergedBody } : m.body;\n  await saveMutation({ ...m, body, ifMatch: newIfMatch, state: "pending", error: null });\n  _emit({ type: "queued" });\n  runSync().catch(() => {});\n  return { action: "keep_local" };\n}''',
-    '''export async function rebaseMeasurementUpdate(revisionId, newIfMatch, mergedBody, newBaseDetail) {\n  const id = `measurement-update:${String(revisionId)}`;\n  const all = await loadAllMutations();\n  const m = all.find((x) => x.client_id === id);\n  if (!m) return { action: "noop" };\n  const base = measurementDocumentFromRevision(newBaseDetail);\n  if (!mergedBody || !base || newIfMatch == null || newIfMatch === "") {\n    return { action: "review_required", reason: "missing_or_untrusted_base" };\n  }\n  await saveMutation({\n    ...m, body: mergedBody, ifMatch: newIfMatch,\n    base_body: base, base_token: String(newIfMatch),\n    state: "pending", error: null, errorCode: null, serverValue: null,\n  });\n  _emit({ type: "queued" });\n  runSync().catch(() => {});\n  return { action: "keep_local" };\n}''',
+    r'''// Atomic, generation-checked USE-OFFICE conflict transition (mirrors the roof-sketch conflict transaction).
+// Serialized so all actions land together: confirm the pending update still matches, remove that exact
+// mutation, clear the saved draft AND the content-bearing WORKING draft (the P0 leak: otherwise load()
+// re-prioritizes the local values the rep just discarded), clear/replace the optimistic detail with the
+// authoritative Office revision, and update the scoped list.
+export async function resolveMeasurementConflictUseOffice(revisionId, scope, serverDetail) {
+  const id = `measurement-update:${String(revisionId)}`;
+  await _removeMutation(id);                                   // remove the reviewed conflict mutation
+  if (serverDetail && serverDetail.id != null) {
+    await putCacheSerialized(measDetailKey(String(serverDetail.id)), serverDetail);  // cache authoritative Office
+  }
+  if (scope) {
+    await mutateCache(measDraftKey(scope), () => null);        // clear saved draft
+    await mutateCache(measWorkingKey(scope), () => null);      // clear content-bearing working draft (the fix)
+    if (serverDetail && serverDetail.id != null) await mutateCache(measScopeKey(scope), (cur) => upsertRevision(cur, serverDetail));
+  }
+  _emit({ type: "queued" });
+  _emit({ type: "measurement_reconciled" });
+  return { action: "use_office" };
+}''',
+    r'''// Fetch the full authoritative revision WITHOUT mutating caches before the atomic Use-Office transition.
+export async function fetchOfficeMeasurementRevision(revisionId) {
+  try {
+    const response = await api.get(`/mobile/measurements/${String(revisionId)}`);
+    const detail = response && response.data;
+    if (!isFullOfficeRevision(detail, revisionId)) return { ok: false, reason: "office_revision_incomplete" };
+    return { ok: true, detail };
+  } catch (e) {
+    return { ok: false, reason: "office_fetch_failed" };
+  }
+}
+
+// Freeze the exact mutation generation/state the rep reviewed. A newer save or sync state transition
+// between rendering and tapping Use Office returns stale before storage is touched.
+export async function prepareMeasurementUseOfficeReview(revisionId, scope, serverDetail, observed = null) {
+  const mutation = await currentMeasurementMutation(revisionId);
+  if (!mutation) return { ok: false, reason: "mutation_missing" };
+  if (observed) {
+    const generation = Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation);
+    if (String(mutation.client_id || "") !== String(observed.clientId || "")
+        || generation !== Number(observed.mutationGeneration)
+        || mutation.state !== observed.expectedState) {
+      return { ok: false, reason: "review_stale" };
+    }
+  }
+  return buildMeasurementUseOfficeReview(mutation, scope, serverDetail);
+}
+
+// Apply the reviewed choice as ONE exclusive, generation-checked SQLite transaction.
+export async function resolveMeasurementConflictUseOffice(reviewed) {
+  const decision = await resolveMeasurementConflictTransition(reviewed);
+  _emit({ type: "queued" });
+  if (decision.action === "use_office") _emit({ type: "measurement_reconciled" });
+  return decision;
+}''',
 )
 
 replace_once(
     "mobile/src/screens/Measurements.js",
-    '''import { resolveMeasurementView, measurementSyncState } from "../measurementReconcile";''',
-    '''import { resolveMeasurementView, measurementSyncState, measurementDocumentFromRevision, chooseDurableMeasurementBase, measurementConflictMergeInputs, buildMergedMeasurementBody } from "../measurementReconcile";''',
+    '''queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead''',
+    '''queueMutation, isSyncing, syncNow, currentMeasurementMutation, currentMeasurementCreate, discardMeasurementUpdate, rebaseMeasurementUpdate, fetchOfficeMeasurementRevision, prepareMeasurementUseOfficeReview, resolveMeasurementConflictUseOffice, onSyncChange, removeMutation, refreshLead, registerActiveLead''',
 )
 replace_once(
     "mobile/src/screens/Measurements.js",
-    '''        provider: full.provider ?? null, report_id: full.report_id ?? null,\n        reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,\n      });''',
-    '''        provider: full.provider ?? null, report_id: full.report_id ?? null,\n        reported_area_sqft: full.reported_area_sqft ?? null, notes: full.notes ?? null,\n        base_body: measurementDocumentFromRevision(full), base_token: full.updated_at,\n      });''',
+    '''function penForEdit(row) {\n  const ref = row.ref || row.id || row._k || uid();\n  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };\n}\n''',
+    '''function penForEdit(row) {\n  const ref = row.ref || row.id || row._k || uid();\n  return { ...row, ref, _k: row._k || row.id || ref, facet_ref: row.facet_ref || row.facet_id || "" };\n}\n\nfunction conflictDescriptor(mutation, revisionId, serverDetail) {\n  if (!mutation) return null;\n  return {\n    serverDetail, revisionId: String(revisionId), clientId: mutation.client_id,\n    mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),\n    expectedState: mutation.state,\n  };\n}\n''',
 )
 replace_once(
     "mobile/src/screens/Measurements.js",
-    '''    if (existing) {\n      const optimistic = {''',
-    '''    if (existing) {\n      const pending = await currentMeasurementMutation(existing.id);\n      const base = chooseDurableMeasurementBase(existing, pending && pending.state !== "synced" ? pending : null);\n      if (!base.ok) {\n        Alert.alert("Cannot safely save", "This older local edit has no trustworthy Office base. Use the Office version, reopen it, and reapply the change.");\n        return;\n      }\n      const writeToken = pending && pending.state !== "synced" && pending.ifMatch\n        ? pending.ifMatch\n        : (existing.if_match || base.baseToken);\n      const optimistic = {''',
+    '''  const autosaveTimer = useRef(null);''',
+    '''  const autosaveTimer = useRef(null);\n  const resolvingOfficeRef = useRef(false);''',
 )
 replace_once(
     "mobile/src/screens/Measurements.js",
-    '''        body, ifMatch: existing.if_match, label: "Roof measurement",\n      });''',
-    '''        body, ifMatch: writeToken, baseBody: base.baseBody, baseToken: base.baseToken,\n        label: "Roof measurement",\n      });''',
+    '''setConflict(pend && pend.state === "conflict" && wd.base ? { serverDetail: pend.serverValue, revisionId: wd.base.id } : null);''',
+    '''setConflict(pend && pend.state === "conflict" && wd.base ? conflictDescriptor(pend, wd.base.id, pend.serverValue) : null);''',
 )
 replace_once(
     "mobile/src/screens/Measurements.js",
-    '''  const onKeepMine = useCallback(async () => {\n    if (!conflict || !conflict.serverDetail) return;\n    // Three-way merge (base vs Field vs Office): apply Field-only changes, preserve Office-only changes.\n    // If a group changed on BOTH sides, keep the conflict for explicit review — never silently overwrite.\n    let mergedBody = null;\n    try {\n      const wd = await loadMeasurementWorkingDraft(scope);\n      if (wd && wd.base_body) {\n        const field = { structures: wd.structures, facets: wd.facets, edges: wd.edges, pens: wd.pens, summary: wd.summary };\n        const r = threeWayMergeMeasurement(wd.base_body, field, conflict.serverDetail);\n        if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }\n        mergedBody = { structures: r.merged.structures, facets: r.merged.facets, edges: r.merged.edges, penetrations: r.merged.pens, summary: r.merged.summary };\n      }\n    } catch (e) { mergedBody = null; }\n    await rebaseMeasurementUpdate(conflict.revisionId, conflict.serverDetail.updated_at, mergedBody);\n    setConflict(null);\n    await load();\n  }, [conflict, scope, load]);''',
-    '''  const onKeepMine = useCallback(async () => {\n    if (!conflict || !conflict.serverDetail) return;\n    // The transient working draft is intentionally cleared by Save. The durable mutation is therefore the\n    // only legal Base/Field lineage for conflict resolution. Legacy rows without it stay in review.\n    const mutation = await currentMeasurementMutation(conflict.revisionId);\n    const inputs = measurementConflictMergeInputs(mutation, conflict.serverDetail);\n    if (!inputs.ok) {\n      setConflict({ ...conflict, mergeUnavailable: inputs.reason });\n      Alert.alert("Review required", "This older saved change does not contain a trustworthy merge base. Use the Office version, then reapply your change.");\n      return;\n    }\n    const r = threeWayMergeMeasurement(inputs.base, inputs.field, inputs.office);\n    if (!r.clean) { setConflict({ ...conflict, mergeConflicts: r.conflicts }); return; }\n    const mergedBody = buildMergedMeasurementBody(mutation.body, r.merged);\n    const decision = await rebaseMeasurementUpdate(\n      conflict.revisionId, conflict.serverDetail.updated_at, mergedBody, conflict.serverDetail\n    );\n    if (decision.action !== "keep_local") {\n      setConflict({ ...conflict, mergeUnavailable: decision.reason || "review_required" });\n      return;\n    }\n    setConflict(null);\n    await load();\n  }, [conflict, load]);''',
+    '''setConflict(view.conflict ? { serverDetail: view.serverDetail, revisionId: head.id } : null);''',
+    '''setConflict(view.conflict ? conflictDescriptor(pendingUpdate, head.id, view.serverDetail) : null);''',
 )
+old_handlers = r'''  const onUseOffice = useCallback(async () => {
+    if (!conflict) return;
+    // Atomic Use-Office: seal the store so no late autosave resurrects the local draft, then run the
+    // generation-checked transition that clears the saved + working drafts and adopts Office.
+    await wdStoreRef.current.sealAndClear();
+    await resolveMeasurementConflictUseOffice(conflict.revisionId, scope, conflict.serverDetail);
+    setConflict(null);
+    setWdEpoch((e) => e + 1);   // fresh, unsealed store for future edits on the adopted Office copy
+    await load();
+  }, [conflict, scope, load]);
+'''
+new_handlers = r'''  const adoptOfficeVersion = useCallback(async (revisionId, observed) => {
+    if (!revisionId || resolvingOfficeRef.current) return { action: "noop" };
+    resolvingOfficeRef.current = true;
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+    // Seal immediately and drain any in-flight autosave. Do NOT clear here: the exclusive SQLite
+    // transaction owns mutation deletion, both draft clears, detail replacement, and list replacement.
+    await wdStoreRef.current.seal();
+    let decision = { action: "noop" };
+    try {
+      const fetched = await fetchOfficeMeasurementRevision(revisionId);
+      if (!fetched.ok) {
+        Alert.alert("Office version unavailable", "RoofSpan could not retrieve the complete Office measurement. Your local work was preserved.");
+        return { action: "preserved", reason: fetched.reason };
+      }
+      const prepared = await prepareMeasurementUseOfficeReview(revisionId, scope, fetched.detail, observed);
+      if (!prepared.ok) {
+        Alert.alert("Measurement changed again", "Your local measurement changed after this review opened. Nothing was discarded; review the latest version again.");
+        return { action: "stale", reason: prepared.reason };
+      }
+      decision = await resolveMeasurementConflictUseOffice(prepared.reviewed);
+      if (decision.action === "use_office") {
+        setConflict(null);
+        setFailure(null);
+      } else if (decision.action === "stale") {
+        Alert.alert("Measurement changed again", "A newer local edit was preserved. Review the latest version before choosing again.");
+      }
+      return decision;
+    } catch (e) {
+      Alert.alert("Could not use Office version", "The local change was preserved because the atomic update did not complete.");
+      return { action: "preserved", reason: "transition_failed" };
+    } finally {
+      // The old store remains sealed; create a fresh store for whatever the latest persisted state contains.
+      resolvingOfficeRef.current = false;
+      setWdEpoch((e) => e + 1);
+      await load();
+    }
+  }, [scope, load]);
 
+  const onUseOffice = useCallback(async () => {
+    if (!conflict) return;
+    await adoptOfficeVersion(conflict.revisionId, {
+      clientId: conflict.clientId,
+      mutationGeneration: conflict.mutationGeneration,
+      expectedState: conflict.expectedState,
+    });
+  }, [conflict, adoptOfficeVersion]);
+'''
+replace_once("mobile/src/screens/Measurements.js", old_handlers, new_handlers)
 replace_once(
-    "mobile/src/screens/RoofSketch.js",
-    '''import * as RECON from "../roofProposalReconcile";''',
-    '''import * as RECON from "../roofProposalReconcile";\nimport { chooseDurableMeasurementBase } from "../measurementReconcile";''',
-)
-replace_once(
-    "mobile/src/screens/RoofSketch.js",
-    '''    const res = await cache.measurement(revision_id);\n    const current = res && res.data ? res.data : measDetail;\n    const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });\n    if (upd.changed) {\n      await cacheMeasurementDetail(upd.nextDetail);\n      await queueMutation({ kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`, body: upd.body, ifMatch: upd.ifMatch, label: "Roof measurement" });\n    }''',
-    '''    const res = await cache.measurement(revision_id);\n    const authoritative = res && res.data ? res.data : measDetail;\n    const pending = await currentMeasurementMutation(revision_id);\n    const current = pending && pending.state !== "synced" && pending.body\n      ? { ...authoritative, ...pending.body, id: revision_id, updated_at: pending.ifMatch }\n      : authoritative;\n    const base = chooseDurableMeasurementBase(authoritative, pending && pending.state !== "synced" ? pending : null);\n    if (!base.ok) {\n      Alert.alert("Review required", "This older local measurement change has no trustworthy Office base. Resolve it before accepting another proposed value.");\n      return;\n    }\n    const upd = RECON.buildAcceptedMeasurementUpdate(current, { targetType: row.target_type, relationalId: row.relational_id, metric: row.metric, proposedValue: row.proposed });\n    if (upd.changed) {\n      await cacheMeasurementDetail(upd.nextDetail);\n      await queueMutation({\n        kind: "measurement_update", method: "put", path: `/mobile/measurements/${revision_id}`,\n        body: upd.body, ifMatch: pending && pending.state !== "synced" ? pending.ifMatch : upd.ifMatch,\n        baseBody: base.baseBody, baseToken: base.baseToken, label: "Roof measurement",\n      });\n    }''',
+    "mobile/src/screens/Measurements.js",
+    r'''  // Failed EXISTING revision → adopt the authoritative Office copy (drop the local update).
+  const onFailedUseOffice = useCallback(async () => {
+    if (!existing) return;
+    await wdStoreRef.current.sealAndClear();
+    await resolveMeasurementConflictUseOffice(existing.id, scope, existing);
+    setFailure(null);
+    setWdEpoch((e) => e + 1);
+    await load();
+  }, [existing, scope, load]);''',
+    r'''  // Failed EXISTING revision → fetch the complete Office document, then use the same atomic,
+  // exact-generation transition as a 409 conflict. The partial screen model is never authoritative.
+  const onFailedUseOffice = useCallback(async () => {
+    if (!existing) return;
+    const mutation = await currentMeasurementMutation(existing.id);
+    if (!mutation) { await load(); return; }
+    await adoptOfficeVersion(existing.id, {
+      clientId: mutation.client_id,
+      mutationGeneration: Number(mutation.mutation_generation == null ? 1 : mutation.mutation_generation),
+      expectedState: mutation.state,
+    });
+  }, [existing, adoptOfficeVersion, load]);''',
 )
 
 run("npm", "--prefix", "mobile", "run", "test:measurements")
-run("node", "mobile/src/tests/roof_proposal_reconcile.node.test.js")
 run(
     "node", "-e",
-    "const b=require('@babel/core'); for (const f of ['mobile/src/screens/Measurements.js','mobile/src/screens/RoofSketch.js','mobile/src/sync.js','mobile/src/storage.js']) b.transformFileSync(f,{presets:['babel-preset-expo']}); console.log('P0-4 Babel parse passed');",
+    "const b=require('@babel/core'); for (const f of ['mobile/src/measurementConflict.js','mobile/src/measurementWorkingDraft.js','mobile/src/storage.js','mobile/src/sync.js','mobile/src/screens/Measurements.js']) b.transformFileSync(f,{presets:['babel-preset-expo']}); console.log('P0-5 Babel parse passed');",
 )
 run(
-    "npx", "expo", "export", "--platform", "android", "--output-dir", "/tmp/roofspan-p0-4-export",
+    "npx", "expo", "export", "--platform", "android", "--output-dir", "/tmp/roofspan-p0-5-export",
     cwd="mobile",
 )
 
 Path("/tmp/p0_commit_message").write_text(
-    "fix: persist measurement conflict merge base\n",
+    "fix: make measurement use-office atomic\n",
     encoding="utf-8",
 )
