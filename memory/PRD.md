@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — Reorder Suggestions ABC PO Now Resolvable/Submittable (or flagged) — FIXED & VERIFIED (2026-06)
+- Bug: `ReorderSuggestions.jsx` created POs with `integration_provider='abc_supply'` but only sent generic material info — no ABC item number, UOM, Ship-To, or branch — so `abc-submit` rejected them ("ABC-shaped paperweights").
+- Fix (server-side in `routers/purchasing.py create_po`): when the PO is ABC, resolve each line's ABC identity from `Material.abc_item_number/abc_uom` → fallback to the linked `AbcCatalogItem` (item number, UOM, description, family, image), and apply the ABC integration's default Ship-To/branch. If ANY line is unmappable OR defaults are missing, the PO is downgraded to a standard manual draft (no partial ABC identity) and returns a clear `abc_setup_warning` (new `POOut` field) describing exactly what to fix. `ReorderSuggestions.jsx` surfaces that warning as a toast.
+- Verified: testing_agent iteration_97 = backend 100% (4/4, `backend/tests/test_abc_po_setup_warning.py`: mapped+defaults → submittable ABC PO with full line identity; unmapped material → standard draft + warning; missing defaults → standard draft + warning; non-ABC PO regression intact) + frontend smoke (reorder dialog + warning-toast wiring).
+
 ## P0 — ABC Supply deliveryService Enum Corrected + Centralized — FIXED & VERIFIED (2026-06)
 - Bug: `AbcOrderPanel.jsx` hardcoded OTB (Boom/Rooftop) and WCL (Will Call) which are NOT in ABC's current published `deliveryService` enum. Correct enum: COM=Common Carrier, CPU=Customer Pickup, EXP=Express Pickup, OTR=Our Truck Roof, OTG=Our Truck Ground, OTW=Our Truck Window, TPC=Third-Party Carrier.
 - Fix: single source of truth in `integrations/abc_supply/orders.py` (`DELIVERY_SERVICES`, `DELIVERY_SERVICE_CODES`, `DEFAULT_DELIVERY_SERVICE='OTG'`, `is_valid_delivery_service()`). New `GET /api/purchase-orders/abc/delivery-services` returns `{services:[{code,label}], default}`. `abc_submit` rejects an invalid `delivery_service` → `validation_failed`. Frontend `AbcOrderPanel.jsx` now fetches the enum on open (removed the hardcoded list), so UI/backend cannot drift.

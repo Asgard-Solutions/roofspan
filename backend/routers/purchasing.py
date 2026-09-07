@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory
+from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory, AbcCatalogItem
 
 
 async def record_status(db: AsyncSession, po: PurchaseOrder, normalized: str, *, provider: str | None = None,
@@ -115,10 +115,60 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
         supplier = await _find_or_create_supplier(db, payload.supplier_name)
     number = await next_number(db, "po", "PO")
     total = round(sum((it.quantity or 0) * (it.unit_cost or 0) for it in payload.items), 2)
+
+    # ABC identity resolution (server-side): an ABC PO is only useful if EVERY line carries its ABC
+    # catalog identity (item number + UOM) and the PO has a Ship-To + branch. Reorder Suggestions only
+    # sends general material info, so resolve each material's ABC mapping (Material.abc_* -> AbcCatalogItem)
+    # and apply the integration's default Ship-To/branch. If anything required is missing we DO NOT create
+    # an unsubmittable ABC PO — we fall back to a standard draft and flag exactly what needs fixing.
+    is_abc_request = payload.integration_provider == "abc_supply"
+    provider = payload.integration_provider
+    po_ship_to = payload.abc_ship_to_number
+    po_branch = payload.abc_branch_number
+    line_abc: list[dict | None] = [None] * len(payload.items)
+    abc_setup_warning = None
+    if is_abc_request:
+        from routers import abc_supply as abc_router
+        row = await abc_router._get_or_create(db)
+        po_ship_to = po_ship_to or row.default_ship_to_number
+        po_branch = po_branch or row.default_branch_number
+        unresolved = []
+        for idx, it in enumerate(payload.items):
+            item_no = (it.abc_item_number or "").strip() or None
+            uom, pdesc, pfamily, pimg = it.abc_uom, it.abc_product_description, it.abc_product_family, it.abc_product_image_url
+            if not item_no and it.material_id:
+                m = await db.get(Material, it.material_id)
+                if m and m.abc_item_number:
+                    item_no, uom = m.abc_item_number, (uom or m.abc_uom)
+                if not item_no and m:
+                    cat = (await db.execute(select(AbcCatalogItem).where(AbcCatalogItem.material_id == m.id))).scalars().first()
+                    if cat:
+                        item_no = cat.abc_item_number
+                        uom = uom or cat.unit_of_measure
+                        pdesc = pdesc or cat.description
+                        pfamily = pfamily or cat.family_name
+                        pimg = pimg or cat.image_url
+            if item_no:
+                line_abc[idx] = {"abc_item_number": item_no, "abc_uom": uom or it.unit,
+                                 "abc_product_description": pdesc, "abc_product_family": pfamily,
+                                 "abc_product_image_url": pimg}
+            else:
+                unresolved.append((it.description or "an item").strip() or "an item")
+        missing = []
+        if unresolved:
+            shown = ", ".join(unresolved[:4]) + ("…" if len(unresolved) > 4 else "")
+            missing.append(f"{len(unresolved)} item(s) have no ABC Supply catalog mapping ({shown})")
+        if not po_ship_to or not po_branch:
+            missing.append("the ABC default Ship-To and branch are not set (configure them in Settings → ABC Supply)")
+        if missing:
+            abc_setup_warning = "Created as a standard draft PO — cannot order from ABC Supply yet because " + "; ".join(missing) + "."
+            provider, po_ship_to, po_branch = None, None, None
+            line_abc = [None] * len(payload.items)
+
     po = PurchaseOrder(number=number, supplier_id=supplier.id if supplier else None, job_id=payload.job_id,
                        status="draft", expected_date=payload.expected_date, total=total, notes=payload.notes, created_by=user.email,
-                       integration_provider=payload.integration_provider,
-                       abc_ship_to_number=payload.abc_ship_to_number, abc_branch_number=payload.abc_branch_number)
+                       integration_provider=provider,
+                       abc_ship_to_number=po_ship_to, abc_branch_number=po_branch)
     db.add(po)
     await db.flush()
     for idx, it in enumerate(payload.items):
@@ -126,21 +176,43 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
         if not desc and it.material_id:
             m = await db.get(Material, it.material_id)
             desc = m.name if m else ""
-        db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
-                          unit=it.unit, unit_cost=it.unit_cost, line_total=round((it.quantity or 0) * (it.unit_cost or 0), 2), sort=idx,
-                          integration_provider=it.integration_provider, abc_item_number=it.abc_item_number,
-                          abc_branch_number=it.abc_branch_number, abc_ship_to_number=it.abc_ship_to_number,
-                          abc_uom=it.abc_uom, abc_variation=it.abc_variation, abc_price=it.abc_price,
-                          abc_price_status=it.abc_price_status,
-                          abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
-                          abc_product_description=it.abc_product_description, abc_product_family=it.abc_product_family,
-                          abc_product_image_url=it.abc_product_image_url,
-                          pricing_source=it.pricing_source or ("abc" if it.abc_item_number else None)))
-    await record_status(db, po, "draft", source="roofspan", note="PO created", user_email=user.email)
+        line_total = round((it.quantity or 0) * (it.unit_cost or 0), 2)
+        abc = line_abc[idx]
+        if provider == "abc_supply" and abc:
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider="abc_supply", abc_item_number=abc["abc_item_number"],
+                              abc_branch_number=po_branch, abc_ship_to_number=po_ship_to, abc_uom=abc["abc_uom"],
+                              abc_variation=it.abc_variation, abc_price=it.abc_price,
+                              abc_price_status=it.abc_price_status or "unavailable",
+                              abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
+                              abc_product_description=abc["abc_product_description"], abc_product_family=abc["abc_product_family"],
+                              abc_product_image_url=abc["abc_product_image_url"], pricing_source="abc"))
+        elif is_abc_request:
+            # ABC PO was downgraded to a standard draft — never carry a partial ABC identity.
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider=None))
+        else:
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider=it.integration_provider, abc_item_number=it.abc_item_number,
+                              abc_branch_number=it.abc_branch_number, abc_ship_to_number=it.abc_ship_to_number,
+                              abc_uom=it.abc_uom, abc_variation=it.abc_variation, abc_price=it.abc_price,
+                              abc_price_status=it.abc_price_status,
+                              abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
+                              abc_product_description=it.abc_product_description, abc_product_family=it.abc_product_family,
+                              abc_product_image_url=it.abc_product_image_url,
+                              pricing_source=it.pricing_source or ("abc" if it.abc_item_number else None)))
+    note = "PO created" if not abc_setup_warning else "PO created as standard draft (ABC mapping/config incomplete)"
+    await record_status(db, po, "draft", source="roofspan", note=note, user_email=user.email)
     await db.commit()
     await db.refresh(po)
-    await log_action(db, user=user, action="po.create", entity_type="purchase_order", entity_id=po.id, detail={"number": number, "total": total}, request=request)
-    return await _out(db, po)
+    await log_action(db, user=user, action="po.create", entity_type="purchase_order", entity_id=po.id,
+                     detail={"number": number, "total": total, "abc_setup_warning": abc_setup_warning}, request=request)
+    result = await _out(db, po)
+    result.abc_setup_warning = abc_setup_warning
+    return result
 
 
 @router.post("/from-abc-template", response_model=POOut, status_code=201)
