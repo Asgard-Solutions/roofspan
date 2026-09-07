@@ -1,0 +1,25 @@
+{
+  "summary": "Added new backend suite backend/tests/test_abc_branch_delivery_services.py covering scenarios A-G for the ABC branch-level delivery-service availability check. All 11 new tests pass. Regression: reran the six critical ABC suites called out in the request (creation paths, orderability preflight, product availability preflight, delivery-services enum, mock strictness, place order contract) plus delivery appointment/instructions -- 118/118 pass (including the new suite). Frontend UI light check for G verified: with branch 18 the abc-delivery-service Select shows exactly 4 options (Our Truck Ground/Roof, Customer Pickup, Common Carrier) and with branch 409 exactly 4 options (Our Truck Ground, Customer Pickup, Express Pickup, Third-Party Carrier) with OTR correctly absent -- confirming the dropdown loads from GET /abc/branches/{branch}/delivery-services and does not fall back to all seven.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_branch_delivery_services.py"
+  ],
+  "action_items": [
+    "Consider adding a mock test-reset endpoint (or automatic per-run reset) for the TOGGLE branch counter in backend/integrations/abc_supply/mock_server.py. The counter is module-level and does not reset between test runs, so test_e_toggle_review_then_submit_blocks currently degrades to a pytest.skip if the counter has been exhausted (e.g. rerunning the file without a backend restart). Not blocking -- test still asserts the invariant when the counter is fresh -- but a reset hook would make CI deterministic."
+  ],
+  "critical_code_review_comments": [
+    "Branch-level delivery-service check in _abc_orderability_preflight makes a SECOND get_branch call at submit time even though the ship-to branch-status block already calls get_branch a few lines earlier. Minor: reuse `branch_detail` across both checks to cut one HTTP call per submit and one extra hit on the TOGGLE counter.",
+    "branch_delivery_service_codes returns None both for 'undeterminable' and 'empty list'; the submit path treats them identically (fail-closed retryable message), which is correct, but the endpoint at /abc/branches/{b}/delivery-services returns the same 502 for both. A branch that legitimately offers zero delivery services (unlikely but possible per spec) would be indistinguishable from a mock/transport failure. Consider explicit handling if this becomes real."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_branch_delivery_services.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11 new + 118/118 regression)", "frontend": "100% (branch-18 and branch-409 dropdown filtering verified)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test PO's created with notes prefix TEST_P0_BRANCH_DELIVERY_SVC / TEST_UI_FE. No permanent seed data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The mock TOGGLE branch's counter (_BRANCH_TOGGLE_CALLS in mock_server.py) is module-level; if you rerun test_abc_branch_delivery_services.py without restarting the backend the E-scenario will skip. Restart backend with `sudo supervisorctl restart backend` before rerunning. All other tests are hermetic. Frontend testid for the delivery-service Select is 'abc-delivery-service'; PO detail page trigger is 'po-abc-review'.",
+  "rca of the issue": "N/A - feature implementation verified working end-to-end. Branch 18 accepts OTG/OTR (both confirmed MOCK-CONF-*); branch 409 accepts EXP but rejects OTR with error 'ABC branch 409 does not currently support delivery service OTR. Select one of the services available for this branch.'; TOGGLE branch's final submit-time check correctly blocks even when review had OTR present; SVCERR returns retryable validation_failed and same submission_key recovers after switching to a healthy branch; GET /abc/branches/{b}/delivery-services returns branch-specific code sets (18={OTG,OTR,CPU,COM}, 409={OTG,EXP,CPU,TPC}, 700={CPU}, SVCERR->502)."
+}

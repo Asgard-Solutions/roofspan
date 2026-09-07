@@ -204,7 +204,8 @@ async def get_ship_to_contacts(number: str, authorization: str | None = Header(d
 
 # ---------------- Location API ----------------
 _BRANCH_DETAIL = {
-    "branch": {"number": "409", "name": "ABC Supply - Oklahoma City, OK", "storefront": "abc", "distance": 8, "status": "open", "type": "Branch"},
+    "branch": {"number": "409", "name": "ABC Supply - Oklahoma City, OK", "storefront": "abc", "distance": 8, "status": "open", "type": "Branch",
+               "deliveryServices": ["OTG", "EXP", "CPU", "TPC"]},  # NOTE: does NOT offer OTR
     "address": {"addressLine1": "3404 Kenilworth Ave", "addressLine2": "N/A", "addressLine3": "N/A", "city": "Oklahoma City", "state": "OK", "postal": "73102", "country": "USA"},
     "locale": {"lat": "35.46", "long": "-97.51", "timeZoneCode": "CT", "timeZoneDescription": "America/Chicago"},
     "contact": {"phones": ["4055551700 - ext 1234"], "emails": ["branch409@abcsupply.com"], "fax": "4055551701"},
@@ -213,7 +214,8 @@ _BRANCH_DETAIL = {
     "links": {"self": "https://partners-sb.abcsupply.com/api/location/v1/branches/409", "website": "https://www.abcsupply.com/location/409"},
 }
 _BRANCH_18 = {
-    "branch": {"number": "18", "name": "ABC Supply - Madison, WI", "storefront": "abc", "distance": 2, "status": "open", "type": "Branch"},
+    "branch": {"number": "18", "name": "ABC Supply - Madison, WI", "storefront": "abc", "distance": 2, "status": "open", "type": "Branch",
+               "deliveryServices": ["OTG", "OTR", "CPU", "COM"]},  # NOTE: does NOT offer EXP
     "address": {"addressLine1": "500 W Beltline Hwy", "addressLine2": "N/A", "addressLine3": "N/A", "city": "Madison", "state": "WI", "postal": "53719", "country": "USA"},
     "locale": {"lat": "43.06", "long": "-89.44", "timeZoneCode": "CT", "timeZoneDescription": "America/Chicago"},
     "contact": {"phones": ["6085551700"], "emails": ["branch18@abcsupply.com"], "fax": ""},
@@ -221,6 +223,14 @@ _BRANCH_18 = {
     "hoursOfOperation": [{"type": "DAILY", "days": "MON - FRI", "open": "7 AM", "close": "5 PM", "notes": ""}],
     "links": {"self": "https://partners-sb.abcsupply.com/api/location/v1/branches/18", "website": "https://www.abcsupply.com/location/18"},
 }
+# Per-branch delivery-service code sets used to exercise branch-varying availability (services vary by branch).
+_BRANCH_SERVICE_CODES = {
+    "18": ["OTG", "OTR", "CPU", "COM"],
+    "409": ["OTG", "EXP", "CPU", "TPC"],
+    "700": ["CPU"],  # pickup-only branch
+}
+# "TOGGLE" branch flips OTR off after the FIRST lookup, to simulate services changing between review & submit.
+_BRANCH_TOGGLE_CALLS: dict[str, int] = {}
 
 
 @router.get("/api/location/v1/branches")
@@ -232,8 +242,17 @@ async def search_branches(request: Request, authorization: str | None = Header(d
 @router.get("/api/location/v1/branches/{number}")
 async def get_branch(number: str, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
+    if number == "SVCERR":  # branch-services lookup failure
+        return JSONResponse(status_code=503, content={"message": "Branch service information is temporarily unavailable."})
+    if number == "TOGGLE":  # OTR available on the first call (review), gone on later calls (submit)
+        n = _BRANCH_TOGGLE_CALLS.get(number, 0)
+        _BRANCH_TOGGLE_CALLS[number] = n + 1
+        codes = ["OTG", "OTR", "CPU"] if n == 0 else ["OTG", "CPU"]
+        return {**_BRANCH_18, "branch": {**_BRANCH_18["branch"], "number": number, "deliveryServices": codes}}
     if number == "18":
         return _BRANCH_18
+    if number in _BRANCH_SERVICE_CODES:
+        return {**_BRANCH_DETAIL, "branch": {**_BRANCH_DETAIL["branch"], "number": number, "deliveryServices": _BRANCH_SERVICE_CODES[number]}}
     return {**_BRANCH_DETAIL, "branch": {**_BRANCH_DETAIL["branch"], "number": number}}
 
 

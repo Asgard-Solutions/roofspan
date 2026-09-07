@@ -41,6 +41,28 @@ async def abc_delivery_services(user: User = Depends(get_current_user)):
     return {"services": abc_orders.DELIVERY_SERVICES, "default": abc_orders.DEFAULT_DELIVERY_SERVICE}
 
 
+@router.get("/abc/branches/{branch}/delivery-services")
+async def abc_branch_delivery_services(branch: str, request: Request,
+                                       user: User = Depends(get_current_user),
+                                       db: AsyncSession = Depends(get_db)):
+    """Delivery services ACTUALLY offered by a specific ABC branch (services vary by branch). The UI uses
+    this to filter the dropdown; the backend re-validates authoritatively at submit. Fails (502) rather
+    than implying all seven codes are available when the branch's services cannot be determined."""
+    from integrations.abc_supply import orders as abc_orders, locations as abc_locations
+    from integrations.abc_supply.exceptions import AbcError, AbcTransportError
+    try:
+        client, _ = await _abc_client(db, request)
+        detail = await abc_locations.get_branch(client, branch)
+    except (AbcError, AbcTransportError):
+        raise HTTPException(status_code=502, detail=f"Could not load ABC services for branch {branch}. Try again shortly.")
+    codes = abc_locations.branch_delivery_service_codes(detail)
+    if not codes:
+        raise HTTPException(status_code=502, detail=f"ABC did not return delivery services for branch {branch}. Try again shortly.")
+    services = [s for s in abc_orders.DELIVERY_SERVICES if s["code"] in codes]
+    default = abc_orders.DEFAULT_DELIVERY_SERVICE if abc_orders.DEFAULT_DELIVERY_SERVICE in codes else (services[0]["code"] if services else None)
+    return {"branch": branch, "services": services, "default": default}
+
+
 
 
 async def _find_or_create_supplier(db: AsyncSession, name: str | None):
@@ -514,7 +536,8 @@ def _validate_appointment(d: dict) -> list[str]:
     return errs
 
 
-async def _abc_orderability_preflight(db: AsyncSession, request: Request, po: PurchaseOrder) -> list[str]:
+async def _abc_orderability_preflight(db: AsyncSession, request: Request, po: PurchaseOrder,
+                                      delivery_service: str | None = None) -> list[str]:
     """Revalidate ABC account + branch orderability immediately before submit (a PO can sit for days).
     Checks: Ship-To still exists; account is orderable (isSellable — false == credit hold); status active;
     the selected branch is still associated with the Ship-To and active. Product-at-branch suitability is
@@ -544,14 +567,27 @@ async def _abc_orderability_preflight(db: AsyncSession, request: Request, po: Pu
         branch_status = str(entry.get("status") or "").strip().lower()
     elif branches:
         errs.append(f"Branch {po.abc_branch_number} is no longer associated with ABC Ship-To {po.abc_ship_to_number}.")
-    if branch_status is None:
+    # Fetch the branch detail at most once and reuse it for BOTH the status check and the
+    # delivery-service availability check (services vary by branch; fail closed if undeterminable).
+    branch_detail = None
+    if branch_status is None or delivery_service:
         try:
-            b = await abc_locations.get_branch(client, po.abc_branch_number)
-            branch_status = str((b.get("branch") or {}).get("status") or "").strip().lower()
+            branch_detail = await abc_locations.get_branch(client, po.abc_branch_number)
         except (AbcError, AbcTransportError):
-            branch_status = None
+            branch_detail = None
+    if branch_status is None and isinstance(branch_detail, dict):
+        branch_status = str((branch_detail.get("branch") or {}).get("status") or "").strip().lower()
     if branch_status and branch_status not in ("active", "open"):
         errs.append(f"ABC branch {po.abc_branch_number} is {branch_status} and not available for ordering.")
+    if delivery_service:
+        if not isinstance(branch_detail, dict) or not branch_detail:
+            errs.append(f"Could not verify the delivery services offered by ABC branch {po.abc_branch_number} right now — try submitting again shortly.")
+            return errs
+        codes = abc_locations.branch_delivery_service_codes(branch_detail)
+        if not codes:
+            errs.append(f"Could not determine the delivery services offered by ABC branch {po.abc_branch_number}. Try submitting again shortly.")
+        elif delivery_service not in codes:
+            errs.append(f"ABC branch {po.abc_branch_number} does not currently support delivery service {delivery_service}. Select one of the services available for this branch.")
     return errs
 
 
@@ -709,7 +745,7 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     # Server-side orderability preflight against ABC, run immediately before submit (a PO can sit for
     # days). Confirms the Ship-To still exists + is sellable (not on credit hold), and the selected
     # branch is still associated + active. Never trusts stale UI data.
-    errors = errors + await _abc_orderability_preflight(db, request, po)
+    errors = errors + await _abc_orderability_preflight(db, request, po, delivery_service=payload.delivery_service)
     if errors:
         await db.commit()
         return {"status": "validation_failed", "errors": errors}
