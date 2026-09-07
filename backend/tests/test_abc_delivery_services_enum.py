@@ -146,8 +146,10 @@ class TestAbcSubmitDeliveryServiceValidation:
         errs = " ".join(data.get("errors") or []).lower()
         assert "delivery service" in errs or "delivery_service" in errs or "valid abc" in errs, data
 
-    @pytest.mark.parametrize("code", ["OTG", "OTR", "OTW", "CPU", "EXP", "COM", "TPC"])
+    @pytest.mark.parametrize("code", ["OTG", "OTR", "CPU", "COM"])
     def test_accept_valid_codes(self, owner_headers, code):
+        # Codes that are BOTH globally valid AND offered by the default branch (18: OTG/OTR/CPU/COM).
+        # Branch-level service availability is covered in test_abc_branch_delivery_services.py.
         po = _create_po(owner_headers)
         body = self._base_body()
         body["delivery_service"] = code

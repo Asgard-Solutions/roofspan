@@ -67,14 +67,26 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   useEffect(() => { if (open && po && !submitted) loadReview(); }, [open, po, submitted, loadReview]);
   useEffect(() => {
     if (!open) return;
+    const branch = poState?.abc_branch_number;
     (async () => {
       try {
-        const { data } = await api.get("/purchase-orders/abc/delivery-services");
-        setDeliveryServices(data.services || []);
-        if (data.default) setDeliveryService((cur) => cur || data.default);
-      } catch (e) { /* enum fetch failed; Select simply shows the current code */ }
+        // Services vary by branch — load ONLY the services the PO's branch supports. The backend
+        // re-validates authoritatively at submit; this dropdown filter is a convenience.
+        const url = branch ? `/purchase-orders/abc/branches/${encodeURIComponent(branch)}/delivery-services`
+                           : "/purchase-orders/abc/delivery-services";
+        const { data } = await api.get(url);
+        const svcs = data.services || [];
+        setDeliveryServices(svcs);
+        const codes = svcs.map((s) => s.code);
+        // If the current selection isn't offered by this branch, force a reselection (never silently submit).
+        setDeliveryService((cur) => (cur && codes.includes(cur)) ? cur : (data.default || ""));
+      } catch (e) {
+        // Branch service lookup failed — do NOT imply all seven services are available.
+        setDeliveryServices([]);
+        toast.error("Couldn't load the delivery services for this ABC branch. Try reopening; you may need to pick a service before submitting.");
+      }
     })();
-  }, [open]);
+  }, [open, poState?.abc_branch_number]);
   useEffect(() => { if (open && submitted) { refreshStatus(); loadActivity(); } /* eslint-disable-next-line */ }, [open, submitted]);
 
   const submit = async () => {

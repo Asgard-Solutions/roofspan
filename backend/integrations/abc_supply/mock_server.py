@@ -204,7 +204,8 @@ async def get_ship_to_contacts(number: str, authorization: str | None = Header(d
 
 # ---------------- Location API ----------------
 _BRANCH_DETAIL = {
-    "branch": {"number": "409", "name": "ABC Supply - Oklahoma City, OK", "storefront": "abc", "distance": 8, "status": "open", "type": "Branch"},
+    "branch": {"number": "409", "name": "ABC Supply - Oklahoma City, OK", "storefront": "abc", "distance": 8, "status": "open", "type": "Branch",
+               "deliveryServices": ["OTG", "EXP", "CPU", "TPC"]},  # NOTE: does NOT offer OTR
     "address": {"addressLine1": "3404 Kenilworth Ave", "addressLine2": "N/A", "addressLine3": "N/A", "city": "Oklahoma City", "state": "OK", "postal": "73102", "country": "USA"},
     "locale": {"lat": "35.46", "long": "-97.51", "timeZoneCode": "CT", "timeZoneDescription": "America/Chicago"},
     "contact": {"phones": ["4055551700 - ext 1234"], "emails": ["branch409@abcsupply.com"], "fax": "4055551701"},
@@ -213,7 +214,8 @@ _BRANCH_DETAIL = {
     "links": {"self": "https://partners-sb.abcsupply.com/api/location/v1/branches/409", "website": "https://www.abcsupply.com/location/409"},
 }
 _BRANCH_18 = {
-    "branch": {"number": "18", "name": "ABC Supply - Madison, WI", "storefront": "abc", "distance": 2, "status": "open", "type": "Branch"},
+    "branch": {"number": "18", "name": "ABC Supply - Madison, WI", "storefront": "abc", "distance": 2, "status": "open", "type": "Branch",
+               "deliveryServices": ["OTG", "OTR", "CPU", "COM"]},  # NOTE: does NOT offer EXP
     "address": {"addressLine1": "500 W Beltline Hwy", "addressLine2": "N/A", "addressLine3": "N/A", "city": "Madison", "state": "WI", "postal": "53719", "country": "USA"},
     "locale": {"lat": "43.06", "long": "-89.44", "timeZoneCode": "CT", "timeZoneDescription": "America/Chicago"},
     "contact": {"phones": ["6085551700"], "emails": ["branch18@abcsupply.com"], "fax": ""},
@@ -221,6 +223,14 @@ _BRANCH_18 = {
     "hoursOfOperation": [{"type": "DAILY", "days": "MON - FRI", "open": "7 AM", "close": "5 PM", "notes": ""}],
     "links": {"self": "https://partners-sb.abcsupply.com/api/location/v1/branches/18", "website": "https://www.abcsupply.com/location/18"},
 }
+# Per-branch delivery-service code sets used to exercise branch-varying availability (services vary by branch).
+_BRANCH_SERVICE_CODES = {
+    "18": ["OTG", "OTR", "CPU", "COM"],
+    "409": ["OTG", "EXP", "CPU", "TPC"],
+    "700": ["CPU"],  # pickup-only branch
+}
+# "TOGGLE" branch flips OTR off after the FIRST lookup, to simulate services changing between review & submit.
+_BRANCH_TOGGLE_CALLS: dict[str, int] = {}
 
 
 @router.get("/api/location/v1/branches")
@@ -232,8 +242,17 @@ async def search_branches(request: Request, authorization: str | None = Header(d
 @router.get("/api/location/v1/branches/{number}")
 async def get_branch(number: str, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
+    if number == "SVCERR":  # branch-services lookup failure
+        return JSONResponse(status_code=503, content={"message": "Branch service information is temporarily unavailable."})
+    if number == "TOGGLE":  # OTR available on the first call (review), gone on later calls (submit)
+        n = _BRANCH_TOGGLE_CALLS.get(number, 0)
+        _BRANCH_TOGGLE_CALLS[number] = n + 1
+        codes = ["OTG", "OTR", "CPU"] if n == 0 else ["OTG", "CPU"]
+        return {**_BRANCH_18, "branch": {**_BRANCH_18["branch"], "number": number, "deliveryServices": codes}}
     if number == "18":
         return _BRANCH_18
+    if number in _BRANCH_SERVICE_CODES:
+        return {**_BRANCH_DETAIL, "branch": {**_BRANCH_DETAIL["branch"], "number": number, "deliveryServices": _BRANCH_SERVICE_CODES[number]}}
     return {**_BRANCH_DETAIL, "branch": {**_BRANCH_DETAIL["branch"], "number": number}}
 
 
@@ -298,6 +317,20 @@ _MOCK_ITEMS = [
         "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
         "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
+    {  # priceable at any branch, but Product AVAILABILITY reports it NOT orderable at branch 18
+        "itemNumber": "MOCK-UNAVAIL-AT-18", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Priced-But-Unavailable-At-18 Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {  # priceable, but the Product AVAILABILITY endpoint returns a transport error (503) for it
+        "itemNumber": "MOCK-AVAIL-ERR", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Availability-Service-Error Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
+    },
 ]
 _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
     "MOCK-SHINGLE-ARCH-WW": 135.36,
@@ -305,7 +338,18 @@ _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
     "MOCK-ICEWATER-BARRIER": 112.0,
     "MOCK-REJECT": 9.99,
     "MOCK-TIMEOUT": 4.5,
+    "MOCK-UNAVAIL-AT-18": 75.0,
+    "MOCK-AVAIL-ERR": 50.0,
     # MOCK-DRIP-EDGE-DIM priced by length below; MOCK-RIDGE-CAP-NOPRICE intentionally 0.00 (unavailable)
+}
+
+# Product AVAILABILITY overrides (SEPARATE from pricing + from the product-search branchNumbers).
+#   list           -> item orderable only at these branch numbers (regardless of price availability)
+#   dict {br: [L]} -> dimensional item: available lengths per branch
+# Items absent from this map default to their catalog branchNumbers (non-dimensional).
+_AVAIL_OVERRIDE: dict = {
+    "MOCK-UNAVAIL-AT-18": ["409"],                          # priced everywhere, orderable only at 409
+    "MOCK-DRIP-EDGE-DIM": {"18": ["10", "12"], "409": ["10", "12"]},  # dimensional lengths per branch
 }
 
 
@@ -359,6 +403,35 @@ async def get_item_image(asset_id: str, authorization: str | None = Header(defau
     png = _b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
     from fastapi.responses import Response as _Resp
     return _Resp(content=png, media_type="image/png")
+
+
+@router.get("/api/product/v1/availability/items/{item_number}/branches")
+async def get_item_availability_mock(item_number: str, authorization: str | None = Header(default=None)):
+    """Product Availability API (source: get-item-availability). SEPARATE from pricing: an item can be
+    priced yet not currently available at a branch. Returns orderable branches + dimensional variations."""
+    _require_bearer(authorization)
+    if item_number == "MOCK-AVAIL-ERR":  # simulate the availability service being unreachable
+        return JSONResponse(status_code=503, content={"message": "Product availability service is temporarily unavailable."})
+    it = next((x for x in _MOCK_ITEMS if x["itemNumber"] == item_number), None)
+    if it is None:
+        return {"itemNumber": item_number, "branches": []}
+    override = _AVAIL_OVERRIDE.get(item_number)
+    if isinstance(override, dict):  # dimensional: available lengths per branch
+        branches = [{"number": bnum, "isDimensional": True, "variations": [
+            {"size": f"{lv} ft", "conversionFactor": 1.0, "type": "standard",
+             "length": {"value": str(lv), "uom": "ft", "uomCode": "ft", "description": f"{lv} foot"}} for lv in lengths]}
+            for bnum, lengths in override.items()]
+        return {"itemNumber": item_number, "branches": branches}
+    branch_nums = override if isinstance(override, list) else it["branchNumbers"]
+    is_dim = bool(it.get("isDimensional"))
+    branches = []
+    for bnum in branch_nums:
+        entry = {"number": bnum, "isDimensional": is_dim, "variations": []}
+        if is_dim:
+            entry["variations"] = [{"size": "10 ft", "conversionFactor": 1.0, "type": "standard",
+                                    "length": {"value": "10", "uom": "ft", "uomCode": "ft", "description": "10 foot"}}]
+        branches.append(entry)
+    return {"itemNumber": item_number, "branches": branches}
 
 
 # Full-catalog retrieval for sync (GET /api/product/v1/items). Includes a synthetic DISCONTINUED item so
