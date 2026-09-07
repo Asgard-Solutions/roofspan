@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P1 — Submit-Time ABC Account/Branch Orderability Preflight — FIXED & VERIFIED (2026-06)
+- Bug: a PO can sit for days before submit; RoofSpan never revalidated ABC orderability at submit time. ABC's `isSellable=false` means credit hold (cannot order); Ship-To/branch may also go inactive or become unassociated.
+- Fix: new server-side `_abc_orderability_preflight` in `abc_submit` (run immediately before placing the order, BEFORE the durable submission record is created). Fetches the Ship-To from ABC and blocks submit (`validation_failed` + clear error) when: Ship-To missing; status not active; `isSellable is False` (credit hold); selected branch no longer associated; or branch status not active/open. Fails closed on transport error (retryable message). Product-at-branch suitability stays covered by the mandatory fresh pricing. Mock `get_ship_to` extended (CREDITHOLD*/9999999/NOBRANCH*/MISSING* + isSellable) to exercise scenarios.
+- Verified: testing_agent iteration_101 = backend 100% (6/6 new `test_abc_orderability_preflight.py` — happy path, credit hold, inactive Ship-To, branch unassociated, missing Ship-To, no-stuck-pending retry — plus 32/32 regression across ABC suites).
+
 ## P1 — Confirmed ABC PO Cannot Be Falsely Cancelled Locally — FIXED & VERIFIED (2026-06)
 - Bug: the generic status endpoint let a user set an ABC PO to `cancelled` even after it had an ABC confirmation number. ABC's Order API has NO cancellation endpoint, so RoofSpan would read "Cancelled" while ABC kept processing/delivering — a dangerous false-authority divergence.
 - Fix: `set_status` (`routers/purchasing.py`) returns HTTP 409 (PO unchanged) when `status=='cancelled'` AND `integration_provider=='abc_supply'` AND `external_confirmation_number` is set, with guidance to contact the ABC branch (ABC status stays authoritative). Frontend `PurchaseOrderDetail.jsx` hides the normal Cancel button for a confirmed ABC PO (`abcLocked`) and shows a `po-abc-cancel-blocked` "Contact ABC branch to cancel/change" info button instead. Draft ABC POs (no confirmation) and non-ABC POs cancel normally.

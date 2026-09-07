@@ -490,6 +490,47 @@ def _validate_appointment(d: dict) -> list[str]:
     return errs
 
 
+async def _abc_orderability_preflight(db: AsyncSession, request: Request, po: PurchaseOrder) -> list[str]:
+    """Revalidate ABC account + branch orderability immediately before submit (a PO can sit for days).
+    Checks: Ship-To still exists; account is orderable (isSellable — false == credit hold); status active;
+    the selected branch is still associated with the Ship-To and active. Product-at-branch suitability is
+    already enforced by the mandatory fresh pricing (unavailable lines block submit). Read-only, best-effort:
+    a hard transport failure surfaces as a clear retry message rather than a silent pass."""
+    from integrations.abc_supply import accounts as abc_accounts, locations as abc_locations
+    from integrations.abc_supply.exceptions import AbcError, AbcTransportError
+    if not po.abc_ship_to_number or not po.abc_branch_number:
+        return ["This ABC order is missing a Ship-To or branch. Re-create it so RoofSpan can resolve the ABC defaults."]
+    try:
+        client, _ = await _abc_client(db, request)
+        ship_to = await abc_accounts.get_ship_to(client, po.abc_ship_to_number)
+    except (AbcError, AbcTransportError):
+        return [f"Could not verify the ABC Ship-To {po.abc_ship_to_number} with ABC just now — try submitting again shortly."]
+    if not isinstance(ship_to, dict) or not ship_to.get("number"):
+        return [f"ABC Ship-To {po.abc_ship_to_number} no longer exists at ABC. Choose a current Ship-To."]
+    errs = []
+    status = str(ship_to.get("status") or "").strip().lower()
+    if status and status not in ("active", "open"):
+        errs.append(f"ABC Ship-To {po.abc_ship_to_number} is {status} and cannot place orders.")
+    if ship_to.get("isSellable") is False:
+        errs.append(f"ABC Ship-To {po.abc_ship_to_number} is on credit hold (not sellable) and cannot place orders — contact ABC.")
+    branches = ship_to.get("branches") or []
+    entry = next((b for b in branches if str(b.get("number")) == str(po.abc_branch_number)), None)
+    branch_status = None
+    if entry:
+        branch_status = str(entry.get("status") or "").strip().lower()
+    elif branches:
+        errs.append(f"Branch {po.abc_branch_number} is no longer associated with ABC Ship-To {po.abc_ship_to_number}.")
+    if branch_status is None:
+        try:
+            b = await abc_locations.get_branch(client, po.abc_branch_number)
+            branch_status = str((b.get("branch") or {}).get("status") or "").strip().lower()
+        except (AbcError, AbcTransportError):
+            branch_status = None
+    if branch_status and branch_status not in ("active", "open"):
+        errs.append(f"ABC branch {po.abc_branch_number} is {branch_status} and not available for ordering.")
+    return errs
+
+
 def _build_delivery_appointment(d: dict) -> tuple[dict | None, str | None]:
     """Build the ABC `deliveryAppointment` object from the normalized delivery override.
     Returns (appointment | None, overflow_instructions | None). ABC caps
@@ -641,6 +682,10 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     errors = errors + _validate_delivery(delivery)
     if not abc_orders.is_valid_delivery_service(payload.delivery_service):
         errors = errors + [f"Delivery service '{payload.delivery_service}' is not a valid ABC code."]
+    # Server-side orderability preflight against ABC, run immediately before submit (a PO can sit for
+    # days). Confirms the Ship-To still exists + is sellable (not on credit hold), and the selected
+    # branch is still associated + active. Never trusts stale UI data.
+    errors = errors + await _abc_orderability_preflight(db, request, po)
     if errors:
         await db.commit()
         return {"status": "validation_failed", "errors": errors}

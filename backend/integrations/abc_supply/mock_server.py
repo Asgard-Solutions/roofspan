@@ -128,7 +128,7 @@ _BILL_TO = {
     "soldTo": {"number": "116660", "name": "EASY ROOFING", "status": "active", "links": {"self": ""}},
 }
 _SHIP_TO_ACTIVE = {
-    "name": "EASY ROOFING - JOB SITE", "number": "1163698", "status": "active",
+    "name": "EASY ROOFING - JOB SITE", "number": "1163698", "status": "active", "isSellable": True,
     "address": {"line1": "123 JOB ST", "line2": "", "line3": "", "city": "MADISON", "state": "WI", "postal": "53719", "country": "USA"},
     "contacts": {"links": {"self": "https://partners-sb.abcsupply.com/api/account/v1/shiptos/1163698/contacts"}},
     "billTo": {"number": "116660", "name": "EASY ROOFING", "status": "active", "links": {"self": ""}},
@@ -171,6 +171,15 @@ async def get_ship_to(number: str, authorization: str | None = Header(default=No
     # Emulate ABC returning a Ship-To DETAIL without an embedded branch list for some accounts.
     if number == "2010466-2":
         return {k: v for k, v in _SHIP_TO_DETAIL_NOBRANCH.items() if k != "branches"}
+    # Orderability preflight scenarios (used by the submit-time revalidation):
+    if number == "9999999":  # retired / inactive ERP record
+        return {**_SHIP_TO_RETIRED, "number": number}
+    if number.startswith("CREDITHOLD"):  # account on credit hold -> cannot order
+        return {**_SHIP_TO_ACTIVE, "number": number, "isSellable": False}
+    if number.startswith("NOBRANCH"):  # selected branch no longer associated
+        return {**_SHIP_TO_ACTIVE, "number": number, "branches": [_OKC_BRANCH]}
+    if number.startswith("MISSING"):  # ship-to no longer exists at ABC
+        return {}
     return {**_SHIP_TO_ACTIVE, "number": number}
 
 
