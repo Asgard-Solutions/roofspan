@@ -476,13 +476,13 @@ def _validate_comments(order: dict, lines: list) -> str | None:
         lc = ln.get("comments")
         if lc is None:
             continue
-        if not isinstance(lc, list):
-            return "Invalid line comments: expected an array of {code, description} objects."
-        for c in lc:
-            if not isinstance(c, dict) or not str(c.get("description") or "").strip():
-                return "Invalid line comment entry: each comment needs a code and description."
-            if c.get("code") not in _VALID_ORDER_COMMENT_CODES:
-                return f"Invalid line comment code '{c.get('code')}': must be one of H, F, D."
+        # ABC contract: a line-item comment is a single {code, description} object, not a string or list.
+        if not isinstance(lc, dict):
+            return "Invalid line comment: expected a {code, description} object."
+        if not str(lc.get("description") or "").strip():
+            return "Invalid line comment: each comment needs a code and description."
+        if lc.get("code") not in _VALID_ORDER_COMMENT_CODES:
+            return f"Invalid line comment code '{lc.get('code')}': must be one of H, F, D."
     return None
 
 

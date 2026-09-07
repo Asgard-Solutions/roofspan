@@ -2,8 +2,8 @@
 
 ## P0 — ABC Supply Order Comments Contract (orderComments array) — FIXED & VERIFIED (2026-06)
 - Bug: `backend/routers/purchasing.py abc_submit` sent `order["comments"] = <string>` and per-line `ol["comments"] = <string>`. ABC's production API requires `orderComments` as an ARRAY of `{code, description}` objects (code ∈ H=header / F=footer / D=detail); line items likewise need `{code, description}` object arrays. The bare-string shape passed our mock but violated ABC's contract.
-- Fix: order-level note → `order["orderComments"] = [{"code":"H","description":note[:1000]}]`; per-line note → `ol["comments"] = [{"code":"D","description":note[:500]}]`. Tightened the ABC mock (`integrations/abc_supply/mock_server.py` new `_validate_comments()` in `place_order_mock`) to return HTTP 400 for any bare `comments` string or an orderComments/line-comment entry with an invalid code or missing description — so regression to the old shape now fails fast.
-- Verified: testing_agent iteration_94 = backend 100% (12/12). New regression suite `backend/tests/test_abc_order_comments_contract.py` covers e2e submit (H order comment, D line comment, both, none → all confirmed) + direct mock rejection of every legacy/invalid shape.
+- Fix: order-level note → `order["orderComments"] = [{"code":"H","description":note[:1000]}]` (an ARRAY); per-line note → `ol["comments"] = {"code":"D","description":note[:500]}` (a single OBJECT — ABC's line comment is an object, not an array). Tightened the ABC mock (`integrations/abc_supply/mock_server.py` new `_validate_comments()` in `place_order_mock`) to return HTTP 400 for any bare `comments` string, a line comment that is not an object, or any entry with an invalid code / missing description — so regression to the old shape now fails fast.
+- Verified: 13/13 in `backend/tests/test_abc_order_comments_contract.py` (e2e submit for H order comment, D line comment, both, none → all confirmed; direct mock rejection of legacy string, invalid codes, line-comment-as-list).
 
 
 ## Office Update Install Fails 0x80070666 (1638) — Version Not Bumped — FIXED (2026-09)

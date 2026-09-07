@@ -212,14 +212,21 @@ class TestMockValidatorRejectsLegacyShape:
 
     def test_reject_line_comment_invalid_code(self, mock_bearer):
         order = self._base_order()
-        order["lines"][0]["comments"] = [{"code": "Z", "description": "bad"}]
+        order["lines"][0]["comments"] = {"code": "Z", "description": "bad"}
+        r = self._post(mock_bearer, order)
+        assert r.status_code == 400, r.text[:300]
+
+    def test_reject_line_comment_as_list(self, mock_bearer):
+        # ABC line comments are a single {code, description} object, NOT an array.
+        order = self._base_order()
+        order["lines"][0]["comments"] = [{"code": "D", "description": "should be an object"}]
         r = self._post(mock_bearer, order)
         assert r.status_code == 400, r.text[:300]
 
     def test_accept_correct_shape_H_order_D_line(self, mock_bearer):
         order = self._base_order()
         order["orderComments"] = [{"code": "H", "description": "Header note"}]
-        order["lines"][0]["comments"] = [{"code": "D", "description": "Detail note"}]
+        order["lines"][0]["comments"] = {"code": "D", "description": "Detail note"}
         r = self._post(mock_bearer, order)
         assert r.status_code == 200, r.text[:300]
         body = r.json()

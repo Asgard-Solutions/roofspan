@@ -564,8 +564,8 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
             length_value=length.get("value"), length_uom=length.get("uom"))
         lc = (line_comments.get(str(i.id)) or "").strip()
         if lc:
-            # ABC contract: a line-item comment is a {code, description} object ("D" = detail comment).
-            ol["comments"] = [{"code": "D", "description": lc[:500]}]
+            # ABC contract: a line-item comment is a single {code, description} object ("D" = detail comment).
+            ol["comments"] = {"code": "D", "description": lc[:500]}
         order_lines.append(ol)
     order = {"requestId": payload.submission_key, "purchaseOrder": po.number, "branchNumber": po.abc_branch_number,
              "deliveryService": payload.delivery_service, "typeCode": "SO", "currency": "USD", "shipTo": ship_to, "lines": order_lines}
