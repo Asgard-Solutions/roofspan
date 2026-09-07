@@ -767,6 +767,18 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     if order_comments:
         order["orderComments"] = order_comments
 
+    # Defense in depth: validate the payload we built against the SAME versioned ABC contract the mock
+    # enforces, so a builder regression is caught here instead of silently shipping a bad order to ABC.
+    from integrations.abc_supply.place_order_contract import validate_place_order
+    contract_errs = validate_place_order(order)
+    if contract_errs:
+        sub.status = "failed"
+        sub.last_error = "; ".join(contract_errs)
+        await db.commit()
+        await log_action(db, user=user, action="abc.order.contract_invalid", entity_type="purchase_order",
+                         entity_id=po.id, detail={"errors": contract_errs}, request=request)
+        return {"status": "validation_failed", "errors": contract_errs}
+
     client, _ = await _abc_client(db, request)
     try:
         result = await abc_orders.place_order(client, order)

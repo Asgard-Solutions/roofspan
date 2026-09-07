@@ -21,6 +21,7 @@ from fastapi import APIRouter, FastAPI, Request, Header, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 
 from .auth import verify_pkce
+from .place_order_contract import validate_place_order
 
 router = APIRouter()
 
@@ -463,63 +464,6 @@ def _order_record(conf: str, order_number: str, order: dict) -> dict:
     }
 
 
-_VALID_ORDER_COMMENT_CODES = {"H", "F", "D"}
-_VALID_APPT_TYPE_CODES = {"AT", "AM", "PM", "FS", "ST", "TR"}
-
-
-def _validate_appointment(order: dict) -> str | None:
-    """Enforce ABC's delivery appointment contract. Returns an error message, or None if valid.
-    The time window is a separate `deliveryAppointment` object with instructionsTypeCode +
-    From/To military times. The legacy `dates.deliveryAppointmentTime` field is rejected."""
-    dates = order.get("dates") or {}
-    if isinstance(dates, dict) and "deliveryAppointmentTime" in dates:
-        return "Invalid order: use a `deliveryAppointment` object, not `dates.deliveryAppointmentTime`."
-    appt = order.get("deliveryAppointment")
-    if appt is None:
-        return None
-    if not isinstance(appt, dict):
-        return "Invalid deliveryAppointment: expected an object with instructionsTypeCode."
-    code = appt.get("instructionsTypeCode")
-    if code not in _VALID_APPT_TYPE_CODES:
-        return f"Invalid deliveryAppointment instructionsTypeCode '{code}': must be one of AT, AM, PM, FS, ST, TR."
-    if code in ("ST", "TR") and not str(appt.get("fromTime") or "").strip():
-        return f"deliveryAppointment type '{code}' requires a fromTime."
-    if code == "TR" and not str(appt.get("toTime") or "").strip():
-        return "deliveryAppointment type 'TR' requires a toTime."
-    if str(appt.get("instructions") or "") and len(appt["instructions"]) > 255:
-        return "deliveryAppointment instructions must be 255 characters or fewer."
-    return None
-
-
-def _validate_comments(order: dict, lines: list) -> str | None:
-    """Enforce ABC's comment contract. Returns an error message, or None if valid.
-    Order-level: `orderComments` must be a list of {code in H/F/D, description}. A bare
-    `comments` string (the pre-fix shape) is rejected. Line-level: same {code, description} objects."""
-    if "comments" in order:
-        return "Invalid order: use `orderComments` array of {code, description}, not a `comments` string."
-    oc = order.get("orderComments")
-    if oc is not None:
-        if not isinstance(oc, list):
-            return "Invalid orderComments: expected an array of {code, description} objects."
-        for c in oc:
-            if not isinstance(c, dict) or not str(c.get("description") or "").strip():
-                return "Invalid orderComments entry: each comment needs a code and description."
-            if c.get("code") not in _VALID_ORDER_COMMENT_CODES:
-                return f"Invalid orderComments code '{c.get('code')}': must be one of H, F, D."
-    for ln in lines:
-        lc = ln.get("comments")
-        if lc is None:
-            continue
-        # ABC contract: a line-item comment is a single {code, description} object, not a string or list.
-        if not isinstance(lc, dict):
-            return "Invalid line comment: expected a {code, description} object."
-        if not str(lc.get("description") or "").strip():
-            return "Invalid line comment: each comment needs a code and description."
-        if lc.get("code") not in _VALID_ORDER_COMMENT_CODES:
-            return f"Invalid line comment code '{lc.get('code')}': must be one of H, F, D."
-    return None
-
-
 @router.post("/api/order/v2/orders")
 async def place_order_mock(request: Request, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
@@ -527,18 +471,15 @@ async def place_order_mock(request: Request, authorization: str | None = Header(
     order = body[0] if isinstance(body, list) and body else (body if isinstance(body, dict) else {})
     lines = order.get("lines") or []
     req_id = order.get("requestId")
-    # Contract validation: comments must match ABC's shape, not a bare string. This makes the mock
-    # reject the old `comments: "..."` payloads that would fail ABC's production contract.
-    comment_err = _validate_comments(order, lines)
-    if comment_err:
+    # Contract validation against the SINGLE shared, versioned ABC Place Order contract. The exact same
+    # validator is used by production payload construction, so the mock can never diverge from what
+    # RoofSpan actually sends — it rejects every historical wrong shape (bare `comments` string, list
+    # line comments, dates.deliveryAppointmentTime, bad delivery/appointment codes, etc.).
+    contract_errs = validate_place_order(order)
+    if contract_errs:
         return JSONResponse(status_code=400, content={
             "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
-            "orders": [{"requestId": req_id, "message": comment_err}]})
-    appt_err = _validate_appointment(order)
-    if appt_err:
-        return JSONResponse(status_code=400, content={
-            "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
-            "orders": [{"requestId": req_id, "message": appt_err}]})
+            "orders": [{"requestId": req_id, "message": contract_errs[0]}]})
     # Rejection scenario (documented error shape: 400 with per-order message).
     if any(l.get("itemNumber") == "MOCK-REJECT" for l in lines):
         return JSONResponse(status_code=400, content={

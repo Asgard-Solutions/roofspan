@@ -1,0 +1,27 @@
+{
+  "summary": "Verified P1 shared ABC Place Order contract. Ran unit contract suite (test_abc_place_order_contract.py: 15 tests), legacy direct-mock suite (test_abc_supply_p3.py: 7 tests), and all sibling ABC regression suites (order_comments, delivery_appointment, delivery_instructions_routing, delivery_services_enum, po_setup_warning, po_jobmaterialplan_body, cancel_guard, orderability_preflight = 83 tests) - all pass. Added new HTTP-level test file test_abc_mock_strictness_http.py (14 tests) that hits the real public REACT_APP_BACKEND_URL /api/abc-mock/api/order/v2/orders endpoint with OAuth token to independently confirm the mock server now uses the shared validate_place_order and rejects every historical wrong shape (WCL/OTB/ZZZ deliveryService, bare `comments` string, list/string line comments, dates.deliveryAppointmentTime, bad appointment code, ST-without-fromTime, TR-without-toTime, instructions>255, missing shipTo.number, purchaseOrder>20 chars) with HTTP 400 and returns 200+MOCK-CONF-* for a documented valid order. End-to-end abc-submit happy path validated via test_abc_supply_delivery_api.py (7 passed / 1 skipped) - proves production payload builder passes the same validator (defense-in-depth did not break happy path).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_place_order_contract.py",
+    "/app/backend/tests/test_abc_supply_p3.py",
+    "/app/backend/tests/test_abc_mock_strictness_http.py",
+    "/app/backend/integrations/abc_supply/place_order_contract.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "place_order_contract.py is clean, small (~120 lines), single-sourced from orders.DELIVERY_SERVICE_CODES, versioned (CONTRACT_VERSION='2025-05'). Good separation: _validate_structure / _validate_comments / _validate_appointment.",
+    "Both the mock (mock_server.place_order_mock) and production (routers/purchasing.py abc_submit) call the same validate_place_order, satisfying the 'cannot drift' invariant.",
+    "Minor: validate_place_order collects structural errors as a list but appends comment/appointment errors only as single strings at the end. Acceptable given the current mock returns first error; could be broadened later without breaking callers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_mock_strictness_http.py (new - independent HTTP-level regression suite for the mock strictness contract)"
+  ],
+  "success_rate": {"backend": "100% (127/127 across contract + regression + new HTTP suite; delivery API 7 passed / 1 pre-existing skip)", "frontend": "N/A (backend-only per request)"},
+  "test_credentials": "Used mock OAuth (/api/abc-mock/oauth2/v1/token, client_credentials); no owner login required for the mock-strictness suite.",
+  "seed_data_creation": "None - tests use uuid-based requestId and purchaseOrder to avoid collisions with in-memory mock state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Shared ABC Place Order contract lives at backend/integrations/abc_supply/place_order_contract.py. Unit tests: tests/test_abc_place_order_contract.py. HTTP-level mock-strictness tests I added: tests/test_abc_mock_strictness_http.py (hits /api/abc-mock/api/order/v2/orders via REACT_APP_BACKEND_URL after mock OAuth). Run ABC suites single-worker: pytest -o addopts=''. Do NOT weaken the contract - it rejects (by design) OTB/WCL, bare `comments`, dates.deliveryAppointmentTime, string/list line comments.",
+  "rca of the issue": "N/A - this iteration was verification of the P1 refactor, not a bug fix. All assertions from the review request confirmed: (a) unit contract accepts documented shapes and rejects every wrong shape enumerated; (b) mock now rejects the same shapes at HTTP layer (previously WCL/OTB would have passed); (c) end-to-end abc-submit still yields MOCK-CONF-* so defense-in-depth did not regress happy path; (d) all 8 sibling ABC regression suites still green."
+}
