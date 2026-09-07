@@ -176,6 +176,52 @@ def test_endpoint_requires_auth():
 
 # ---------- Regression: canvass-section endpoints still enforce isolation ----------
 
+# ---------- RT1–RT5 explicit permanent regression names ----------
+
+def test_RT1_no_canvass_assignment_returns_populated_or_valid_empty_state():
+    """RT1 (permanent): Sales user with ZERO canvass sections still gets a VALID FeatureCollection
+    (empty features). The endpoint must NOT 403/500 and must return type=FeatureCollection so the
+    client-side reducer keeps the master property dataset (offlineNoCache must remain false)."""
+    r = _get(f"{API}/mobile/map/properties", _tok(S["rep_zero"]))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["type"] == "FeatureCollection"
+    assert isinstance(d["features"], list)
+    assert d["features"] == []
+
+
+def test_RT_authorization_map_endpoint_does_not_widen_scope():
+    """Authorization contract: the map endpoint MUST NOT widen a Sales user's visibility beyond
+    their authorized territories. Assertions:
+      1. Every property returned by /mobile/map/properties (as sales) is in the seeded authorized
+         territory (terr_a): the sales feature set is a subset of the management feature set,
+         and equals the seeded terr_a subset.
+      2. A property in a NON-authorized territory (terr_b) is NOT in the sales map AND is refused
+         on GET /api/properties/{id} (no cross-territory ID leak).
+    """
+    r_rep = _get(f"{API}/mobile/map/properties", _tok(S["rep"]))
+    assert r_rep.status_code == 200
+    rep_ids = {f["properties"]["id"] for f in r_rep.json()["features"]}
+
+    r_own = _get(f"{API}/mobile/map/properties", _tok(S["owner"]))
+    assert r_own.status_code == 200
+    own_ids = {f["properties"]["id"] for f in r_own.json()["features"]}
+
+    # (1) Sales set is a subset of management set — no elevation via the map endpoint.
+    assert rep_ids.issubset(own_ids), "sales map must be a subset of management map"
+    # And equals the seeded terr_a properties with coords (no cross-territory leak either way).
+    expected_rep = {S["p_owner"], S["p_tenant"], S["p_dnk"]}
+    assert rep_ids == expected_rep, (
+        f"sales map must equal exactly the authorized terr_a props with coords; got {rep_ids}, "
+        f"expected {expected_rep}")
+
+    # (2) terr_b property must NOT be on the sales map AND detail must be forbidden.
+    assert S["p_b"] not in rep_ids
+    forbidden = _get(f"{API}/properties/{S['p_b']}", _tok(S["rep"]))
+    assert forbidden.status_code in (403, 404), (
+        f"cross-territory property detail must be forbidden; got {forbidden.status_code}")
+
+
 def test_canvass_sections_isolation_regression():
     # rep_zero (sales, no sections) cannot access rep's section.
     r_forbidden = _get(f"{API}/mobile/canvass-sections/{S['sec']}/properties", _tok(S["rep_zero"]))

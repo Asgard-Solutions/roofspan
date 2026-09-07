@@ -151,6 +151,91 @@ const f5 = reducer(INIT, {
 });
 ok(f5.offlineNoCache === true, "no data + no cache is the ONLY state that shows offline-no-cache");
 
+// ---------- Explicit RT1–RT5 permanent-name assertions (release-readiness lock) ----------
+
+// RT1 — No canvass assignment. Sales user with zero sections; props endpoint returns non-empty FC
+// (mirrored client-side): reducer keeps features, sections=[], offlineNoCache remains false,
+// no path clears the master collection.
+const RT1 = reducer(INIT, {
+  type: "LOAD_RESULT", propsOk: true, features: feats3,
+  secOk: true, sections: [], cfgOk: true, cfg: { ok: 1 },
+});
+ok(RT1.features.length === 3, "RT1: zero-section sales keeps full property dataset");
+ok(RT1.sections.length === 0, "RT1: sections is empty overlay, not required to use the map");
+ok(RT1.offlineNoCache === false, "RT1: zero sections is a valid state (not offline-no-cache)");
+ok(RT1.cfg !== null, "RT1: map config still available for basemap");
+
+// RT2 — Canvass endpoint failure. map-config ok + props ok + canvass fails.
+// Whole map is NOT treated as failed; features retained; sections=[]; overlay shows empty.
+const RT2 = reducer(INIT, {
+  type: "LOAD_RESULT", propsOk: true, features: feats3,
+  secOk: false, cachedSections: [], cfgOk: true, cfg: { ok: 1 },
+});
+ok(RT2.features.length === 3, "RT2: canvass failure does NOT clear property dataset");
+ok(RT2.sections.length === 0, "RT2: sections overlay shows empty/unavailable");
+ok(RT2.cfg !== null, "RT2: basemap still renderable via map-config");
+ok(RT2.offlineNoCache === false, "RT2: canvass-only failure is not a blocked state");
+
+// RT3 — Property request failure with last-good CACHE_MAP_PROPS. Cached features load; the
+// failure path does NOT overwrite cache with empty; canvass independently available.
+const RT3 = reducer(INIT, {
+  type: "LOAD_RESULT", propsOk: false, cachedFeatures: feats3,
+  secOk: true, sections: [{ id: "s1", geometry: secGeo }], cfgOk: true, cfg: { ok: 1 },
+});
+ok(RT3.features.length === 3, "RT3: props failure -> cached CACHE_MAP_PROPS loads");
+ok(RT3.sections.length === 1, "RT3: canvass independently available");
+ok(RT3.cfg !== null, "RT3: basemap available");
+ok(RT3.offlineNoCache === false, "RT3: cache hit keeps map usable");
+// Static wiring check: loadMapProps catch path must NOT call putCache (never overwrite good cache
+// with an empty fallback). We assert this by inspecting MapScreen.js source.
+const fs = require("fs"); const path = require("path");
+const mapSrc = fs.readFileSync(path.join(__dirname, "..", "screens", "MapScreen.js"), "utf8");
+const loadMapPropsMatch = mapSrc.match(/const loadMapProps[\s\S]*?\n  \}, \[\]\);/);
+ok(!!loadMapPropsMatch, "RT3: loadMapProps callback located in MapScreen.js");
+ok(loadMapPropsMatch && !/catch[\s\S]*?putCache\s*\(\s*CACHE_MAP_PROPS/.test(loadMapPropsMatch[0]),
+  "RT3: loadMapProps catch path does NOT putCache (never overwrites CACHE_MAP_PROPS on failure)");
+
+// RT4 — Section selection with props inside AND outside the section.
+// Master collection unchanged; returning to all-properties requires NO refetch.
+const featsMixed = [
+  { type: "Feature", geometry: { type: "Point", coordinates: [1, 1] }, properties: { id: "in1" } },
+  { type: "Feature", geometry: { type: "Point", coordinates: [2, 2] }, properties: { id: "in2" } },
+  { type: "Feature", geometry: { type: "Point", coordinates: [9, 9] }, properties: { id: "out1" } },
+];
+let RT4 = reducer(INIT, {
+  type: "LOAD_RESULT", propsOk: true, features: featsMixed,
+  secOk: true, sections: [{ id: "s1", geometry: secGeo }], cfgOk: true, cfg: { ok: 1 },
+});
+const RT4_before = RT4.features;
+RT4 = reducer(RT4, { type: "SELECT_SECTION", id: "s1" });
+ok(RT4.selId === "s1", "RT4: SELECT_SECTION updates highlight");
+ok(RT4.features === RT4_before, "RT4: selecting a section is a pure setter (identity preserved)");
+ok(RT4.features.length === 3, "RT4: master collection STILL contains inside+outside properties");
+RT4 = reducer(RT4, { type: "SELECT_SECTION", id: null });
+ok(RT4.features === RT4_before, "RT4: clearing selection requires NO refetch (features untouched)");
+// Wiring assertion: selectSection is literally a setter.
+ok(/const selectSection\s*=\s*\(id\)\s*=>\s*setSelId\(id\)/.test(mapSrc),
+  "RT4: MapScreen.selectSection is a pure setSelId setter");
+
+// RT5 — Offline reopen after a successful online load. All three caches were populated;
+// on reopen with network unavailable, cached cfg + props + sections all load. Valid cache is
+// NOT cleared merely because network is down (catch paths read cache; never putCache empty).
+const RT5 = reducer(INIT, {
+  type: "LOAD_RESULT", propsOk: false, cachedFeatures: feats3,
+  secOk: false, cachedSections: [{ id: "s1", geometry: secGeo }],
+  cfgOk: false, cachedCfg: { cached: true },
+});
+ok(RT5.features.length === 3, "RT5: offline reopen restores property collection from CACHE_MAP_PROPS");
+ok(RT5.sections.length === 1, "RT5: offline reopen restores CACHE_SECTIONS");
+ok(RT5.cfg && RT5.cfg.cached === true, "RT5: offline reopen restores CACHE_MAP_CFG");
+ok(RT5.offlineNoCache === false, "RT5: cached data means we are NOT the offline-no-cache blocker");
+// Static wiring: neither loadMapProps' catch, nor load()'s cache-fallback branches call putCache
+// with an empty value.
+ok(!/catch[\s\S]{0,120}putCache\s*\(\s*CACHE_MAP_(PROPS|CFG)\s*,\s*\[\s*\]/.test(mapSrc),
+  "RT5: no catch path putCache's empty CACHE_MAP_PROPS/CFG");
+ok(!/catch[\s\S]{0,120}putCache\s*\(\s*CACHE_SECTIONS\s*,\s*\[\s*\]/.test(mapSrc),
+  "RT5: no catch path putCache's empty CACHE_SECTIONS");
+
 if (failures) { console.error(`\nMAP DATA FLOW: ${failures} FAILURE(S)`); process.exit(1); }
 console.log("\nMAP DATA FLOW: all passed");
 process.exit(0);
