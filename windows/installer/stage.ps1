@@ -52,6 +52,10 @@ Push-Location $feDirResolved
 try {
   yarn install --frozen-lockfile
   if ($LASTEXITCODE -ne 0) { throw "yarn install failed." }
+  # Desktop UI is served by its own local backend on the same origin (127.0.0.1:8001),
+  # so the frontend must use relative /api URLs. Force an empty backend base to override
+  # any stray .env and prevent an "undefined/api" base that renders a blank page.
+  $env:REACT_APP_BACKEND_URL = ""
   yarn build
   if ($LASTEXITCODE -ne 0) { throw "frontend yarn build failed." }
   if (-not (Test-Path ".\build\index.html")) { throw "frontend build did not produce build\index.html" }
