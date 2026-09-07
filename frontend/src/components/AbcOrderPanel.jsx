@@ -27,6 +27,9 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [deliveryServices, setDeliveryServices] = useState([]);
   const [orderComments, setOrderComments] = useState("");
   const [lineComments, setLineComments] = useState({});
+  // Explicit, user-driven acceptance of an ABC price change. Never inferred from the presence of
+  // price_changes — the rep must tick the box after seeing the latest pricing. Reset on every review.
+  const [priceChangesAccepted, setPriceChangesAccepted] = useState(false);
   // Local authoritative copy of the PO so the panel can transition to the submitted view
   // immediately after submit (refetched from the backend) without a close/reopen.
   const [poState, setPoState] = useState(po);
@@ -53,6 +56,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit-review`, {});
       setReview(data);
+      setPriceChangesAccepted(false);  // any new review invalidates a prior acceptance
       // Only seed the delivery editor from the server on the INITIAL load. A pricing refresh must never
       // clobber delivery/date/appointment fields the rep just typed; preserve local edits.
       setDelivery((cur) => (opts.preserveLocal && cur ? cur : (data.delivery || {})));
@@ -78,7 +82,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit`, {
         submission_key: subKey,
-        accept_price_changes: !!(review?.price_changes?.length),
+        accept_price_changes: (changes.length > 0 && priceChangesAccepted),
         delivery: delivery || { name: po.number },
         delivery_service: deliveryService,
         order_comments: orderComments || null,
@@ -92,7 +96,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         await refetchPO();
         onChanged && onChanged();
       }
-      else if (data.status === "price_changed") { toast.warning("ABC pricing changed — review the new prices."); setReview((r) => ({ ...r, price_changes: data.price_changes, previous_total: data.previous_total, updated_total: data.updated_total })); }
+      else if (data.status === "price_changed") { toast.warning("ABC pricing changed — review the new prices."); setPriceChangesAccepted(false); setReview((r) => ({ ...r, price_changes: data.price_changes, previous_total: data.previous_total, updated_total: data.updated_total })); }
       else if (data.status === "validation_failed") toast.error("Order cannot be submitted — resolve the listed issues.");
       else if (data.status === "unknown") toast.error("Submission status unknown — verify the ABC order.");
       else if (data.status === "failed") toast.error(data.message || "ABC did not accept this order.");
@@ -201,6 +205,10 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 <div className="mb-2 flex items-center gap-1 font-medium"><AlertTriangle className="h-4 w-4" /> ABC Supply pricing has changed</div>
                 {changes.map((c) => <div key={c.po_item_id} className="flex justify-between"><span>{c.description}</span><span className="tabular-nums">{money(c.previous_price)} → {money(c.current_price)} ({c.difference >= 0 ? "+" : ""}{money(c.difference)})</span></div>)}
                 <div className="mt-2 flex justify-between border-t border-amber-200 pt-2 font-medium"><span>Updated ABC Total</span><span className="tabular-nums">{money(review.updated_total)}</span></div>
+                <label className="mt-2 flex items-start gap-2 text-amber-900">
+                  <input type="checkbox" className="mt-0.5" checked={priceChangesAccepted} onChange={(e) => setPriceChangesAccepted(e.target.checked)} data-testid="abc-accept-price-changes" />
+                  <span>I've reviewed the updated ABC pricing and accept the changes.</span>
+                </label>
               </div>
             )}
             <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-delivery-review">
@@ -307,7 +315,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
           {!submitted && (
-            <Button onClick={submit} disabled={submitting || loading || (review && errors.length > 0) || unknown} data-testid="abc-submit-order">
+            <Button onClick={submit} disabled={submitting || loading || !review || errors.length > 0 || unknown || (changes.length > 0 && !priceChangesAccepted)} data-testid="abc-submit-order">
               {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : (changes.length ? <><Send className="h-4 w-4" /> Accept pricing &amp; submit</> : <><Send className="h-4 w-4" /> Submit to ABC Supply</>)}
             </Button>
           )}

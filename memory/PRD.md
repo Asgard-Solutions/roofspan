@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P2 — Stricter ABC Submit Gating + Explicit Price-Change Acceptance — FIXED & VERIFIED (2026-06)
+- Bug: `AbcOrderPanel` inferred price acceptance from `!!review?.price_changes?.length` and the Submit button wasn't defensively gated — a failed review (`review=null`) still allowed Submit.
+- Fix: explicit `priceChangesAccepted` state (set only by a user checkbox after seeing the latest pricing; reset on every review load/refresh and on any `price_changed` response). `submit()` sends `accept_price_changes = (changes.length>0 && priceChangesAccepted)`. Submit disabled unless a successful current review exists AND no errors AND not unknown AND (no price changes OR the box is ticked). Checkbox lives in the single price-change block (`abc-price-changes` / `abc-accept-price-changes`; duplicate testid removed).
+- Verified: testing_agent iteration_104 = frontend 100% (7/7): happy path enabled; null-review + errors disable Submit; price-change gates on the checkbox; refresh resets acceptance; submit sends accept_price_changes=true and confirms (MOCK-CONF-*).
+
 ## P2 — Refresh Pricing No Longer Wipes Unsaved Delivery Edits — FIXED & VERIFIED (2026-06)
 - Bug: `AbcOrderPanel.loadReview()` (used on open AND by "Refresh ABC Pricing") unconditionally did `setDelivery(data.delivery||{})`, so clicking Refresh wiped the requested date / appointment / delivery fields the rep had just typed.
 - Fix: `loadReview(opts={})` now seeds delivery from the server only on initial open; the Refresh button calls `loadReview({preserveLocal:true})` which updates ONLY pricing/review data and keeps the current local delivery edits. order/line comments were already separate state.
