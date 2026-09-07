@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend-only verification of the P2 loadReview({preserveLocal:true}) fix in AbcOrderPanel. Executed end-to-end Playwright flow on a submittable draft ABC PO (24a4a8af-a9a1-43f9-bd9a-3296e376535f, MOCK-SHINGLE-ARCH-WW line). (1) Regression: initial panel open populated the delivery editor from server (empty requested_date and appointment type as default). (2) Set requested_date=2026-07-15, appointment_type=Time Range (TR), appointment_from=09:00, appointment_to=12:00, order_comments='TEST_PRESERVE back gate'. Clicked Refresh ABC Pricing (data-testid abc-refresh-pricing). After refresh, ALL five fields remained intact (date/from/to/comments/type). Pricing/review re-fetched (total $1,353.60). (3) Clicked Submit — order confirmed at ABC mock with MOCK-CONF-10006 and 'Requested for 2026-07-15' visible in the ABC Supply Order confirmation dialog, proving the preserved delivery date was carried through submission.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AbcOrderPanel.jsx line 58: setDelivery((cur) => (opts.preserveLocal && cur ? cur : (data.delivery || {}))) is the correct minimal patch — preserves the entire local delivery object on refresh, seeds from server on initial open (cur is null). Clean.",
+    "loadReview is also wired to a useEffect that fires on `open && po && !submitted` (line 63) with no opts — correct initial-load path (preserveLocal falsy).",
+    "Only the Refresh button (line 221) passes {preserveLocal:true}; no other call site could accidentally wipe delivery. Contract is tight."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only per request)", "frontend": "100% (3/3 scenarios: preserve on refresh, initial-load regression, submit-after-refresh regression)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Reused existing draft ABC PO 24a4a8af-a9a1-43f9-bd9a-3296e376535f (submittable, MOCK-SHINGLE-ARCH-WW, review total $1,353.60). It is now consumed (submitted -> MOCK-CONF-10006). Other draft ABC POs still available: 1db389ed-9726-4b79-b127-8d0dff6bf4b0, 6e9a27f9-889d-4107-b80f-0f190662b4da, 4af3ee47-4308-4721-84d7-171a6c37dd28, 63a1be55-6911-40ae-a2d7-a681123d13e2, a97ec3e5-ab85-4acc-9aad-9717235df598, aa212c72-eef1-4c95-9725-d416e97e033a, 7d584ff9-561c-4ad7-a462-212115801fe1, 0056a525-d777-41d8-bd78-c7fedd7e0bbe.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "P2 preserve-local-delivery fix verified via UI on production preview URL. Panel testids stable: abc-refresh-pricing, abc-requested-date, abc-appointment-type (shadcn Select — appointment options: 'No appointment','Anytime','Morning','Afternoon','First Stop','Specific Time','Time Range'), abc-appointment-from, abc-appointment-to, abc-order-comments, abc-review-total, abc-submit-order. After successful submit, the ABC Supply Order confirmation dialog surfaces MOCK-CONF-* and echoes Requested-for date.",
+  "rca of the issue": "N/A - verification only. Original bug was loadReview() calling setDelivery(data.delivery||{}) unconditionally, so the Refresh ABC Pricing button (which reuses loadReview) wiped local edits. Fix: loadReview(opts={}) now does setDelivery((cur) => (opts.preserveLocal && cur ? cur : (data.delivery||{}))) and only the Refresh button passes preserveLocal:true. Verified end-to-end: local edits survive refresh AND flow through to ABC submission."
+}

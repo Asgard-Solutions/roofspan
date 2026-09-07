@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory
+from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory, AbcCatalogItem
 
 
 async def record_status(db: AsyncSession, po: PurchaseOrder, normalized: str, *, provider: str | None = None,
@@ -31,6 +31,16 @@ router = APIRouter(prefix="/api/purchase-orders", tags=["purchasing"])
 # in po.abc_order_status / po.abc_normalized_status and is never overwritten by these.
 VALID = ["draft", "ready_for_review", "ordered", "submitted", "acknowledged", "scheduled",
          "partially_received", "received", "backordered", "cancelled"]
+
+
+@router.get("/abc/delivery-services")
+async def abc_delivery_services(user: User = Depends(get_current_user)):
+    """ABC `deliveryService` enum — single source of truth so the UI and backend cannot drift.
+    Availability varies by branch (verify via the Locations API) and is subject to change."""
+    from integrations.abc_supply import orders as abc_orders
+    return {"services": abc_orders.DELIVERY_SERVICES, "default": abc_orders.DEFAULT_DELIVERY_SERVICE}
+
+
 
 
 async def _find_or_create_supplier(db: AsyncSession, name: str | None):
@@ -105,10 +115,60 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
         supplier = await _find_or_create_supplier(db, payload.supplier_name)
     number = await next_number(db, "po", "PO")
     total = round(sum((it.quantity or 0) * (it.unit_cost or 0) for it in payload.items), 2)
+
+    # ABC identity resolution (server-side): an ABC PO is only useful if EVERY line carries its ABC
+    # catalog identity (item number + UOM) and the PO has a Ship-To + branch. Reorder Suggestions only
+    # sends general material info, so resolve each material's ABC mapping (Material.abc_* -> AbcCatalogItem)
+    # and apply the integration's default Ship-To/branch. If anything required is missing we DO NOT create
+    # an unsubmittable ABC PO — we fall back to a standard draft and flag exactly what needs fixing.
+    is_abc_request = payload.integration_provider == "abc_supply"
+    provider = payload.integration_provider
+    po_ship_to = payload.abc_ship_to_number
+    po_branch = payload.abc_branch_number
+    line_abc: list[dict | None] = [None] * len(payload.items)
+    abc_setup_warning = None
+    if is_abc_request:
+        from routers import abc_supply as abc_router
+        row = await abc_router._get_or_create(db)
+        po_ship_to = po_ship_to or row.default_ship_to_number
+        po_branch = po_branch or row.default_branch_number
+        unresolved = []
+        for idx, it in enumerate(payload.items):
+            item_no = (it.abc_item_number or "").strip() or None
+            uom, pdesc, pfamily, pimg = it.abc_uom, it.abc_product_description, it.abc_product_family, it.abc_product_image_url
+            if not item_no and it.material_id:
+                m = await db.get(Material, it.material_id)
+                if m and m.abc_item_number:
+                    item_no, uom = m.abc_item_number, (uom or m.abc_uom)
+                if not item_no and m:
+                    cat = (await db.execute(select(AbcCatalogItem).where(AbcCatalogItem.material_id == m.id))).scalars().first()
+                    if cat:
+                        item_no = cat.abc_item_number
+                        uom = uom or cat.unit_of_measure
+                        pdesc = pdesc or cat.description
+                        pfamily = pfamily or cat.family_name
+                        pimg = pimg or cat.image_url
+            if item_no:
+                line_abc[idx] = {"abc_item_number": item_no, "abc_uom": uom or it.unit,
+                                 "abc_product_description": pdesc, "abc_product_family": pfamily,
+                                 "abc_product_image_url": pimg}
+            else:
+                unresolved.append((it.description or "an item").strip() or "an item")
+        missing = []
+        if unresolved:
+            shown = ", ".join(unresolved[:4]) + ("…" if len(unresolved) > 4 else "")
+            missing.append(f"{len(unresolved)} item(s) have no ABC Supply catalog mapping ({shown})")
+        if not po_ship_to or not po_branch:
+            missing.append("the ABC default Ship-To and branch are not set (configure them in Settings → ABC Supply)")
+        if missing:
+            abc_setup_warning = "Created as a standard draft PO — cannot order from ABC Supply yet because " + "; ".join(missing) + "."
+            provider, po_ship_to, po_branch = None, None, None
+            line_abc = [None] * len(payload.items)
+
     po = PurchaseOrder(number=number, supplier_id=supplier.id if supplier else None, job_id=payload.job_id,
                        status="draft", expected_date=payload.expected_date, total=total, notes=payload.notes, created_by=user.email,
-                       integration_provider=payload.integration_provider,
-                       abc_ship_to_number=payload.abc_ship_to_number, abc_branch_number=payload.abc_branch_number)
+                       integration_provider=provider,
+                       abc_ship_to_number=po_ship_to, abc_branch_number=po_branch)
     db.add(po)
     await db.flush()
     for idx, it in enumerate(payload.items):
@@ -116,21 +176,43 @@ async def create_po(payload: POIn, request: Request, user: User = Depends(requir
         if not desc and it.material_id:
             m = await db.get(Material, it.material_id)
             desc = m.name if m else ""
-        db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
-                          unit=it.unit, unit_cost=it.unit_cost, line_total=round((it.quantity or 0) * (it.unit_cost or 0), 2), sort=idx,
-                          integration_provider=it.integration_provider, abc_item_number=it.abc_item_number,
-                          abc_branch_number=it.abc_branch_number, abc_ship_to_number=it.abc_ship_to_number,
-                          abc_uom=it.abc_uom, abc_variation=it.abc_variation, abc_price=it.abc_price,
-                          abc_price_status=it.abc_price_status,
-                          abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
-                          abc_product_description=it.abc_product_description, abc_product_family=it.abc_product_family,
-                          abc_product_image_url=it.abc_product_image_url,
-                          pricing_source=it.pricing_source or ("abc" if it.abc_item_number else None)))
-    await record_status(db, po, "draft", source="roofspan", note="PO created", user_email=user.email)
+        line_total = round((it.quantity or 0) * (it.unit_cost or 0), 2)
+        abc = line_abc[idx]
+        if provider == "abc_supply" and abc:
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider="abc_supply", abc_item_number=abc["abc_item_number"],
+                              abc_branch_number=po_branch, abc_ship_to_number=po_ship_to, abc_uom=abc["abc_uom"],
+                              abc_variation=it.abc_variation, abc_price=it.abc_price,
+                              abc_price_status=it.abc_price_status or "unavailable",
+                              abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
+                              abc_product_description=abc["abc_product_description"], abc_product_family=abc["abc_product_family"],
+                              abc_product_image_url=abc["abc_product_image_url"], pricing_source="abc"))
+        elif is_abc_request:
+            # ABC PO was downgraded to a standard draft — never carry a partial ABC identity.
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider=None))
+        else:
+            db.add(POLineItem(po_id=po.id, material_id=it.material_id, description=desc, quantity=it.quantity,
+                              unit=it.unit, unit_cost=it.unit_cost, line_total=line_total, sort=idx,
+                              integration_provider=it.integration_provider, abc_item_number=it.abc_item_number,
+                              abc_branch_number=it.abc_branch_number, abc_ship_to_number=it.abc_ship_to_number,
+                              abc_uom=it.abc_uom, abc_variation=it.abc_variation, abc_price=it.abc_price,
+                              abc_price_status=it.abc_price_status,
+                              abc_price_timestamp=(datetime.now(timezone.utc) if it.abc_price is not None else None),
+                              abc_product_description=it.abc_product_description, abc_product_family=it.abc_product_family,
+                              abc_product_image_url=it.abc_product_image_url,
+                              pricing_source=it.pricing_source or ("abc" if it.abc_item_number else None)))
+    note = "PO created" if not abc_setup_warning else "PO created as standard draft (ABC mapping/config incomplete)"
+    await record_status(db, po, "draft", source="roofspan", note=note, user_email=user.email)
     await db.commit()
     await db.refresh(po)
-    await log_action(db, user=user, action="po.create", entity_type="purchase_order", entity_id=po.id, detail={"number": number, "total": total}, request=request)
-    return await _out(db, po)
+    await log_action(db, user=user, action="po.create", entity_type="purchase_order", entity_id=po.id,
+                     detail={"number": number, "total": total, "abc_setup_warning": abc_setup_warning}, request=request)
+    result = await _out(db, po)
+    result.abc_setup_warning = abc_setup_warning
+    return result
 
 
 @router.post("/from-abc-template", response_model=POOut, status_code=201)
@@ -381,23 +463,111 @@ def _normalize_delivery(d: dict | None) -> dict:
         "contact_name": d.get("contact_name"), "contact_phone": d.get("contact_phone"),
         "contact_email": d.get("contact_email"),
         "instructions": d.get("instructions"), "requested_date": d.get("requested_date"),
-        "appointment_time": d.get("appointment_time"),
+        # ABC deliveryAppointment: instructionsTypeCode + optional structured From/To military times.
+        "appointment_type": d.get("appointment_type"),
+        "appointment_from": d.get("appointment_from"),
+        "appointment_to": d.get("appointment_to"),
     }.items()}
 
 
-def _validate_delivery(d: dict) -> list[str]:
-    """Validate the PHYSICAL delivery override. The override is optional: when no address fields are
-    supplied the order falls back to the ABC Ship-To account's registered delivery address (the submit
-    builder omits ship_to.address). Only when the user provides a partial address do we require the full
-    set so we never send ABC an incomplete override."""
-    addr_fields = ("line1", "line2", "city", "state", "postal")
-    provided = any((d.get(f) or "").strip() for f in addr_fields)
-    if not provided:
+# ABC deliveryAppointment.instructionsTypeCode values (source: apidocs.abcsupply.com/place-orders).
+# AT = Anytime, AM = Morning, PM = Afternoon, FS = First Stop, ST = Specific Time, TR = Time Range.
+_APPT_TYPE_CODES = {"AT", "AM", "PM", "FS", "ST", "TR"}
+
+
+def _validate_appointment(d: dict) -> list[str]:
+    """Validate the ABC delivery appointment window. fromTime applies to ST/TR; toTime only to TR."""
+    code = (d.get("appointment_type") or "").strip().upper()
+    if not code:
         return []
+    if code not in _APPT_TYPE_CODES:
+        return [f"Delivery appointment type '{code}' is not a valid ABC code (AT, AM, PM, FS, ST, TR)."]
     errs = []
-    for field, label in (("line1", "street address"), ("city", "city"), ("state", "state"), ("postal", "ZIP code")):
-        if not (d.get(field) or "").strip():
-            errs.append(f"Delivery address is missing a {label}.")
+    if code in ("ST", "TR") and not (d.get("appointment_from") or "").strip():
+        errs.append("A From time is required for the selected delivery appointment type.")
+    if code == "TR" and not (d.get("appointment_to") or "").strip():
+        errs.append("A To time is required for a time-range delivery appointment.")
+    return errs
+
+
+async def _abc_orderability_preflight(db: AsyncSession, request: Request, po: PurchaseOrder) -> list[str]:
+    """Revalidate ABC account + branch orderability immediately before submit (a PO can sit for days).
+    Checks: Ship-To still exists; account is orderable (isSellable — false == credit hold); status active;
+    the selected branch is still associated with the Ship-To and active. Product-at-branch suitability is
+    already enforced by the mandatory fresh pricing (unavailable lines block submit). Read-only, best-effort:
+    a hard transport failure surfaces as a clear retry message rather than a silent pass."""
+    from integrations.abc_supply import accounts as abc_accounts, locations as abc_locations
+    from integrations.abc_supply.exceptions import AbcError, AbcTransportError
+    if not po.abc_ship_to_number or not po.abc_branch_number:
+        return ["This ABC order is missing a Ship-To or branch. Re-create it so RoofSpan can resolve the ABC defaults."]
+    try:
+        client, _ = await _abc_client(db, request)
+        ship_to = await abc_accounts.get_ship_to(client, po.abc_ship_to_number)
+    except (AbcError, AbcTransportError):
+        return [f"Could not verify the ABC Ship-To {po.abc_ship_to_number} with ABC just now — try submitting again shortly."]
+    if not isinstance(ship_to, dict) or not ship_to.get("number"):
+        return [f"ABC Ship-To {po.abc_ship_to_number} no longer exists at ABC. Choose a current Ship-To."]
+    errs = []
+    status = str(ship_to.get("status") or "").strip().lower()
+    if status and status not in ("active", "open"):
+        errs.append(f"ABC Ship-To {po.abc_ship_to_number} is {status} and cannot place orders.")
+    if ship_to.get("isSellable") is False:
+        errs.append(f"ABC Ship-To {po.abc_ship_to_number} is on credit hold (not sellable) and cannot place orders — contact ABC.")
+    branches = ship_to.get("branches") or []
+    entry = next((b for b in branches if str(b.get("number")) == str(po.abc_branch_number)), None)
+    branch_status = None
+    if entry:
+        branch_status = str(entry.get("status") or "").strip().lower()
+    elif branches:
+        errs.append(f"Branch {po.abc_branch_number} is no longer associated with ABC Ship-To {po.abc_ship_to_number}.")
+    if branch_status is None:
+        try:
+            b = await abc_locations.get_branch(client, po.abc_branch_number)
+            branch_status = str((b.get("branch") or {}).get("status") or "").strip().lower()
+        except (AbcError, AbcTransportError):
+            branch_status = None
+    if branch_status and branch_status not in ("active", "open"):
+        errs.append(f"ABC branch {po.abc_branch_number} is {branch_status} and not available for ordering.")
+    return errs
+
+
+def _build_delivery_appointment(d: dict) -> tuple[dict | None, str | None]:
+    """Build the ABC `deliveryAppointment` object from the normalized delivery override.
+    Returns (appointment | None, overflow_instructions | None). ABC caps
+    deliveryAppointment.instructions at 255 chars, so anything beyond 255 is returned as
+    overflow for the caller to route into orderComments (never silently dropped). Times are
+    local military time (e.g. 13:00); fromTime is sent for ST/TR, toTime only for TR."""
+    code = (d.get("appointment_type") or "").strip().upper()
+    instructions = (d.get("instructions") or "").strip()
+    if not code and not instructions:
+        return None, None
+    if not code:
+        code = "AT"  # instructions with no explicit window -> Anytime delivery.
+    appt: dict = {"instructionsTypeCode": code}
+    overflow = None
+    if instructions:
+        appt["instructions"] = instructions[:255]
+        if len(instructions) > 255:
+            overflow = instructions[255:]
+    if code in ("ST", "TR") and (d.get("appointment_from") or "").strip():
+        appt["fromTime"] = d["appointment_from"].strip()
+    if code == "TR" and (d.get("appointment_to") or "").strip():
+        appt["toTime"] = d["appointment_to"].strip()
+    return appt, overflow
+
+
+def _validate_delivery(d: dict) -> list[str]:
+    """Validate the PHYSICAL delivery override + the delivery appointment. The address override is
+    optional: when no address fields are supplied the order falls back to the ABC Ship-To account's
+    registered delivery address (the submit builder omits ship_to.address). Only when the user provides
+    a partial address do we require the full set so we never send ABC an incomplete override."""
+    errs = []
+    addr_fields = ("line1", "line2", "city", "state", "postal")
+    if any((d.get(f) or "").strip() for f in addr_fields):
+        for field, label in (("line1", "street address"), ("city", "city"), ("state", "state"), ("postal", "ZIP code")):
+            if not (d.get(field) or "").strip():
+                errs.append(f"Delivery address is missing a {label}.")
+    errs += _validate_appointment(d)
     return errs
 
 
@@ -510,6 +680,12 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     # Physical delivery address: default from the job/property, overlaid with any reviewed override.
     delivery = _normalize_delivery({**(await _default_delivery(db, po)), **(payload.delivery or {})})
     errors = errors + _validate_delivery(delivery)
+    if not abc_orders.is_valid_delivery_service(payload.delivery_service):
+        errors = errors + [f"Delivery service '{payload.delivery_service}' is not a valid ABC code."]
+    # Server-side orderability preflight against ABC, run immediately before submit (a PO can sit for
+    # days). Confirms the Ship-To still exists + is sellable (not on credit hold), and the selected
+    # branch is still associated + active. Never trusts stale UI data.
+    errors = errors + await _abc_orderability_preflight(db, request, po)
     if errors:
         await db.commit()
         return {"status": "validation_failed", "errors": errors}
@@ -564,19 +740,44 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
             length_value=length.get("value"), length_uom=length.get("uom"))
         lc = (line_comments.get(str(i.id)) or "").strip()
         if lc:
-            ol["comments"] = lc[:500]
+            # ABC contract: a line-item comment is a single {code, description} object ("D" = detail comment).
+            ol["comments"] = {"code": "D", "description": lc[:500]}
         order_lines.append(ol)
     order = {"requestId": payload.submission_key, "purchaseOrder": po.number, "branchNumber": po.abc_branch_number,
              "deliveryService": payload.delivery_service, "typeCode": "SO", "currency": "USD", "shipTo": ship_to, "lines": order_lines}
-    if (payload.order_comments or "").strip():
-        order["comments"] = payload.order_comments.strip()[:1000]
     dates = {}
     if delivery.get("requested_date"):
         dates["deliveryRequestedFor"] = delivery["requested_date"]
-    if delivery.get("appointment_time"):
-        dates["deliveryAppointmentTime"] = delivery["appointment_time"]
     if dates:
         order["dates"] = dates
+    # ABC contract: the time window + delivery instructions live in a separate `deliveryAppointment`
+    # object (NOT dates.deliveryAppointmentTime). Instructions over ABC's 255-char limit overflow into
+    # orderComments so a long delivery note is never lost.
+    appointment, instr_overflow = _build_delivery_appointment(delivery)
+    if appointment:
+        order["deliveryAppointment"] = appointment
+    # ABC contract: order-level comments are an array of {code, description} objects.
+    order_comments = []
+    if (payload.order_comments or "").strip():
+        # "H" = header comment (the RoofSpan order-level note).
+        order_comments.append({"code": "H", "description": payload.order_comments.strip()[:1000]})
+    if instr_overflow:
+        # "D" = detail comment carrying the remainder of a >255-char delivery instruction.
+        order_comments.append({"code": "D", "description": ("Delivery instructions (continued): " + instr_overflow)[:1000]})
+    if order_comments:
+        order["orderComments"] = order_comments
+
+    # Defense in depth: validate the payload we built against the SAME versioned ABC contract the mock
+    # enforces, so a builder regression is caught here instead of silently shipping a bad order to ABC.
+    from integrations.abc_supply.place_order_contract import validate_place_order
+    contract_errs = validate_place_order(order)
+    if contract_errs:
+        sub.status = "failed"
+        sub.last_error = "; ".join(contract_errs)
+        await db.commit()
+        await log_action(db, user=user, action="abc.order.contract_invalid", entity_type="purchase_order",
+                         entity_id=po.id, detail={"errors": contract_errs}, request=request)
+        return {"status": "validation_failed", "errors": contract_errs}
 
     client, _ = await _abc_client(db, request)
     try:
@@ -741,6 +942,14 @@ async def set_status(po_id: str, payload: POStatusIn, request: Request, user: Us
         raise HTTPException(status_code=404, detail="Purchase order not found")
     if payload.status not in VALID:
         raise HTTPException(status_code=422, detail=f"Status must be one of {VALID}")
+    # SAFETY: a confirmed ABC Supply order cannot be locally "cancelled" — ABC publishes NO order
+    # cancellation API, so a local cancel would falsely imply the ABC order stopped while ABC is still
+    # processing/delivering it. Keep the ABC status authoritative and direct the user to the branch.
+    if payload.status == "cancelled" and po.integration_provider == "abc_supply" and po.external_confirmation_number:
+        raise HTTPException(status_code=409, detail=(
+            f"This ABC Supply order is confirmed (#{po.external_confirmation_number}). ABC provides no "
+            "cancellation API, so RoofSpan cannot cancel it — contact the ABC branch to cancel or change "
+            "the order. The ABC order status remains authoritative."))
     if payload.status == "ordered" and not po.order_date:
         po.order_date = datetime.now(timezone.utc)
     po.status = payload.status

@@ -1,0 +1,25 @@
+{
+  "summary": "Verified P1 fix: server-side ABC orderability preflight in POST /purchase-orders/{id}/abc-submit. Wrote /app/backend/tests/test_abc_orderability_preflight.py with 6 tests covering the happy path, all four blocking scenarios (credit hold, inactive Ship-To, branch no longer associated, Ship-To missing) and a 'no stuck pending' retry test. All 6 pass. Re-ran the existing ABC contract suites (appointment contract, PO setup warning, cancel guard) single-worker — 32/32 still green, no regression.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_orderability_preflight.py",
+    "/app/test_reports/pytest/abc_preflight.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_abc_orderability_preflight is invoked in abc_submit BEFORE the durable AbcOrderSubmission is created, so a blocked submit leaves no 'pending' row — verified end-to-end by test_blocked_submit_leaves_no_stuck_pending_and_retry_works (same submission_key retried after fix -> confirmed).",
+    "Preflight uses isSellable is False (strict False check, not falsy) which correctly avoids blocking on missing/absent fields.",
+    "Branch-not-associated check first inspects Ship-To.branches; if the DETAIL omits branches it falls back to locations.get_branch — matches the real ABC behavior encoded in mock_server (2010466-2 case).",
+    "AbcError/AbcTransportError from get_ship_to short-circuits with a retryable message (does NOT silently pass) — good fail-closed behavior.",
+    "Minor: preflight message 'is on credit hold (not sellable)' is user-friendly; branch inactive uses raw ABC status string (e.g. 'inactive'/'closed') which is fine but could be normalized."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_orderability_preflight.py"],
+  "success_rate": {"backend": "100% (6/6 new + 32/32 regression)", "frontend": "n/a (backend-only per request)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Each test creates its own throwaway ABC PO via POST /api/purchase-orders (notes=TEST_P1_PREFLIGHT). No fixtures beyond ABC mock OAuth connect + defaults.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run the P1 preflight suite single-worker: pytest tests/test_abc_orderability_preflight.py -o addopts=''. The mock get_ship_to prefixes drive the negative paths: CREDITHOLD* -> isSellable=false, 9999999 -> status=inactive + empty branches, NOBRANCH* -> branches without 18, MISSING* -> {}. The PO's abc_ship_to_number is set at create time by passing it in the POST /api/purchase-orders body (create_po preserves the explicit value; the default only kicks in when omitted). submission_key must be a client-generated uuid4 hex.",
+  "rca of the issue": "n/a — implementation already correct; testing confirms P1 preflight blocks all four failure modes, returns status='validation_failed' with a clear error, does not place an ABC order, and does not create a durable pending AbcOrderSubmission so the same submission_key can retry cleanly once the account is fixed."
+}

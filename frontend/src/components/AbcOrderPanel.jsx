@@ -12,11 +12,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Loader2, Send, RefreshCw, AlertTriangle, CheckCircle2, XCircle, HelpCircle, Truck } from "lucide-react";
 
 const norm = { processing: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", shipped: "bg-violet-50 text-violet-700", delivered: "bg-green-50 text-green-700", invoiced: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
-const DELIVERY_SERVICES = [
-  { value: "OTG", label: "Our Truck — Ground Delivery" },
-  { value: "OTB", label: "Our Truck — Boom / Rooftop" },
-  { value: "WCL", label: "Will Call — Customer Pickup" },
-];
 
 export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [loading, setLoading] = useState(false);
@@ -29,8 +24,12 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [delivery, setDelivery] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const [deliveryService, setDeliveryService] = useState("OTG");
+  const [deliveryServices, setDeliveryServices] = useState([]);
   const [orderComments, setOrderComments] = useState("");
   const [lineComments, setLineComments] = useState({});
+  // Explicit, user-driven acceptance of an ABC price change. Never inferred from the presence of
+  // price_changes — the rep must tick the box after seeing the latest pricing. Reset on every review.
+  const [priceChangesAccepted, setPriceChangesAccepted] = useState(false);
   // Local authoritative copy of the PO so the panel can transition to the submitted view
   // immediately after submit (refetched from the backend) without a close/reopen.
   const [poState, setPoState] = useState(po);
@@ -51,18 +50,31 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try { const { data } = await api.get(`/integrations/abc/notifications/events/${po.id}`); setActivity(data); } catch (e) { /* none */ }
   }, [po?.id]);
 
-  const loadReview = useCallback(async () => {
+  const loadReview = useCallback(async (opts = {}) => {
     if (!po || submitted) return;
     setLoading(true); setReview(null);
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit-review`, {});
       setReview(data);
-      setDelivery(data.delivery || {});
+      setPriceChangesAccepted(false);  // any new review invalidates a prior acceptance
+      // Only seed the delivery editor from the server on the INITIAL load. A pricing refresh must never
+      // clobber delivery/date/appointment fields the rep just typed; preserve local edits.
+      setDelivery((cur) => (opts.preserveLocal && cur ? cur : (data.delivery || {})));
       setSubKey(crypto.randomUUID());
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   }, [po, submitted]);
 
   useEffect(() => { if (open && po && !submitted) loadReview(); }, [open, po, submitted, loadReview]);
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const { data } = await api.get("/purchase-orders/abc/delivery-services");
+        setDeliveryServices(data.services || []);
+        if (data.default) setDeliveryService((cur) => cur || data.default);
+      } catch (e) { /* enum fetch failed; Select simply shows the current code */ }
+    })();
+  }, [open]);
   useEffect(() => { if (open && submitted) { refreshStatus(); loadActivity(); } /* eslint-disable-next-line */ }, [open, submitted]);
 
   const submit = async () => {
@@ -70,7 +82,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit`, {
         submission_key: subKey,
-        accept_price_changes: !!(review?.price_changes?.length),
+        accept_price_changes: (changes.length > 0 && priceChangesAccepted),
         delivery: delivery || { name: po.number },
         delivery_service: deliveryService,
         order_comments: orderComments || null,
@@ -84,7 +96,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         await refetchPO();
         onChanged && onChanged();
       }
-      else if (data.status === "price_changed") { toast.warning("ABC pricing changed — review the new prices."); setReview((r) => ({ ...r, price_changes: data.price_changes, previous_total: data.previous_total, updated_total: data.updated_total })); }
+      else if (data.status === "price_changed") { toast.warning("ABC pricing changed — review the new prices."); setPriceChangesAccepted(false); setReview((r) => ({ ...r, price_changes: data.price_changes, previous_total: data.previous_total, updated_total: data.updated_total })); }
       else if (data.status === "validation_failed") toast.error("Order cannot be submitted — resolve the listed issues.");
       else if (data.status === "unknown") toast.error("Submission status unknown — verify the ABC order.");
       else if (data.status === "failed") toast.error(data.message || "ABC did not accept this order.");
@@ -193,6 +205,10 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 <div className="mb-2 flex items-center gap-1 font-medium"><AlertTriangle className="h-4 w-4" /> ABC Supply pricing has changed</div>
                 {changes.map((c) => <div key={c.po_item_id} className="flex justify-between"><span>{c.description}</span><span className="tabular-nums">{money(c.previous_price)} → {money(c.current_price)} ({c.difference >= 0 ? "+" : ""}{money(c.difference)})</span></div>)}
                 <div className="mt-2 flex justify-between border-t border-amber-200 pt-2 font-medium"><span>Updated ABC Total</span><span className="tabular-nums">{money(review.updated_total)}</span></div>
+                <label className="mt-2 flex items-start gap-2 text-amber-900">
+                  <input type="checkbox" className="mt-0.5" checked={priceChangesAccepted} onChange={(e) => setPriceChangesAccepted(e.target.checked)} data-testid="abc-accept-price-changes" />
+                  <span>I've reviewed the updated ABC pricing and accept the changes.</span>
+                </label>
               </div>
             )}
             <div className="rounded-md border border-border p-3 text-sm" data-testid="abc-delivery-review">
@@ -210,14 +226,14 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
             <div className="rounded-md border border-border p-3 text-sm space-y-3" data-testid="abc-order-options">
               <div className="flex items-center justify-between">
                 <span className="font-medium text-slate-700">Delivery & Order Options</span>
-                <Button size="sm" variant="ghost" onClick={loadReview} disabled={loading} data-testid="abc-refresh-pricing"><RefreshCw className="h-3.5 w-3.5" /> Refresh ABC Pricing</Button>
+                <Button size="sm" variant="ghost" onClick={() => loadReview({ preserveLocal: true })} disabled={loading} data-testid="abc-refresh-pricing"><RefreshCw className="h-3.5 w-3.5" /> Refresh ABC Pricing</Button>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Delivery Service</Label>
                   <Select value={deliveryService} onValueChange={setDeliveryService}>
                     <SelectTrigger data-testid="abc-delivery-service"><SelectValue /></SelectTrigger>
-                    <SelectContent>{DELIVERY_SERVICES.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
+                    <SelectContent>{deliveryServices.map((d) => <SelectItem key={d.code} value={d.code}>{d.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
@@ -226,8 +242,43 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 </div>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Delivery Appointment / Time Window (optional)</Label>
-                <Input placeholder="e.g. 09:00–12:00" value={delivery?.appointment_time || ""} onChange={(e) => setDelivery({ ...delivery, appointment_time: e.target.value })} data-testid="abc-appointment-time" />
+                <Label className="text-xs">Delivery Appointment (optional)</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Select
+                    value={delivery?.appointment_type || "none"}
+                    onValueChange={(v) => {
+                      const type = v === "none" ? "" : v;
+                      const next = { ...delivery, appointment_type: type };
+                      if (type !== "ST" && type !== "TR") next.appointment_from = "";
+                      if (type !== "TR") next.appointment_to = "";
+                      setDelivery(next);
+                    }}
+                  >
+                    <SelectTrigger data-testid="abc-appointment-type"><SelectValue placeholder="Type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No appointment</SelectItem>
+                      <SelectItem value="AT">Anytime</SelectItem>
+                      <SelectItem value="AM">Morning</SelectItem>
+                      <SelectItem value="PM">Afternoon</SelectItem>
+                      <SelectItem value="FS">First Stop</SelectItem>
+                      <SelectItem value="ST">Specific Time</SelectItem>
+                      <SelectItem value="TR">Time Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {(delivery?.appointment_type === "ST" || delivery?.appointment_type === "TR") && (
+                    <div className="space-y-1">
+                      <Input type="time" value={delivery?.appointment_from || ""} onChange={(e) => setDelivery({ ...delivery, appointment_from: e.target.value })} data-testid="abc-appointment-from" />
+                    </div>
+                  )}
+                  {delivery?.appointment_type === "TR" && (
+                    <div className="space-y-1">
+                      <Input type="time" value={delivery?.appointment_to || ""} onChange={(e) => setDelivery({ ...delivery, appointment_to: e.target.value })} data-testid="abc-appointment-to" />
+                    </div>
+                  )}
+                </div>
+                {(delivery?.appointment_type === "ST" || delivery?.appointment_type === "TR") && (
+                  <p className="text-xs text-slate-400">{delivery?.appointment_type === "TR" ? "From and To times (local)." : "From time (local)."}</p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Order Comments (optional)</Label>
@@ -264,7 +315,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
           {!submitted && (
-            <Button onClick={submit} disabled={submitting || loading || (review && errors.length > 0) || unknown} data-testid="abc-submit-order">
+            <Button onClick={submit} disabled={submitting || loading || !review || errors.length > 0 || unknown || (changes.length > 0 && !priceChangesAccepted)} data-testid="abc-submit-order">
               {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : (changes.length ? <><Send className="h-4 w-4" /> Accept pricing &amp; submit</> : <><Send className="h-4 w-4" /> Submit to ABC Supply</>)}
             </Button>
           )}

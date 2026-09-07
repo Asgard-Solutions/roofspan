@@ -21,6 +21,7 @@ from fastapi import APIRouter, FastAPI, Request, Header, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 
 from .auth import verify_pkce
+from .place_order_contract import validate_place_order
 
 router = APIRouter()
 
@@ -128,7 +129,7 @@ _BILL_TO = {
     "soldTo": {"number": "116660", "name": "EASY ROOFING", "status": "active", "links": {"self": ""}},
 }
 _SHIP_TO_ACTIVE = {
-    "name": "EASY ROOFING - JOB SITE", "number": "1163698", "status": "active",
+    "name": "EASY ROOFING - JOB SITE", "number": "1163698", "status": "active", "isSellable": True,
     "address": {"line1": "123 JOB ST", "line2": "", "line3": "", "city": "MADISON", "state": "WI", "postal": "53719", "country": "USA"},
     "contacts": {"links": {"self": "https://partners-sb.abcsupply.com/api/account/v1/shiptos/1163698/contacts"}},
     "billTo": {"number": "116660", "name": "EASY ROOFING", "status": "active", "links": {"self": ""}},
@@ -171,6 +172,15 @@ async def get_ship_to(number: str, authorization: str | None = Header(default=No
     # Emulate ABC returning a Ship-To DETAIL without an embedded branch list for some accounts.
     if number == "2010466-2":
         return {k: v for k, v in _SHIP_TO_DETAIL_NOBRANCH.items() if k != "branches"}
+    # Orderability preflight scenarios (used by the submit-time revalidation):
+    if number == "9999999":  # retired / inactive ERP record
+        return {**_SHIP_TO_RETIRED, "number": number}
+    if number.startswith("CREDITHOLD"):  # account on credit hold -> cannot order
+        return {**_SHIP_TO_ACTIVE, "number": number, "isSellable": False}
+    if number.startswith("NOBRANCH"):  # selected branch no longer associated
+        return {**_SHIP_TO_ACTIVE, "number": number, "branches": [_OKC_BRANCH]}
+    if number.startswith("MISSING"):  # ship-to no longer exists at ABC
+        return {}
     return {**_SHIP_TO_ACTIVE, "number": number}
 
 
@@ -461,6 +471,15 @@ async def place_order_mock(request: Request, authorization: str | None = Header(
     order = body[0] if isinstance(body, list) and body else (body if isinstance(body, dict) else {})
     lines = order.get("lines") or []
     req_id = order.get("requestId")
+    # Contract validation against the SINGLE shared, versioned ABC Place Order contract. The exact same
+    # validator is used by production payload construction, so the mock can never diverge from what
+    # RoofSpan actually sends — it rejects every historical wrong shape (bare `comments` string, list
+    # line comments, dates.deliveryAppointmentTime, bad delivery/appointment codes, etc.).
+    contract_errs = validate_place_order(order)
+    if contract_errs:
+        return JSONResponse(status_code=400, content={
+            "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
+            "orders": [{"requestId": req_id, "message": contract_errs[0]}]})
     # Rejection scenario (documented error shape: 400 with per-order message).
     if any(l.get("itemNumber") == "MOCK-REJECT" for l in lines):
         return JSONResponse(status_code=400, content={

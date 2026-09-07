@@ -1,0 +1,25 @@
+{
+  "summary": "P0 regression validated: create_po correctly handles JobMaterialPlan-style bodies where lines carry abc_item_number+abc_uom but PO omits abc_ship_to_number/abc_branch_number. Added test_abc_po_jobmaterialplan_body.py (3/3 pass) covering: (1) defaults auto-populate on PO+lines and abc-submit-review passes; (2) missing defaults -> standard-draft downgrade with abc_setup_warning; (3) explicit body ship_to/branch respected and not overwritten. Existing regression test_abc_po_setup_warning.py still 4/4. Frontend code inspection confirms JobMaterialPlan.jsx sends the exact JMP body shape tested and surfaces abc_setup_warning as toast.warning.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_po_jobmaterialplan_body.py",
+    "/app/backend/tests/test_abc_po_setup_warning.py",
+    "/app/test_reports/pytest/jmp_body_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "create_po ABC resolution block (purchasing.py L124-166) is clean and correctly handles all four PO-source variants (JMP: line-supplied identity, Reorder Suggestions: material_id resolution, mixed, explicit override). Good centralization.",
+    "Frontend JobMaterialPlan.jsx (L95-99) surfaces createdPo.abc_setup_warning per-PO as toast.warning with 9s duration — appropriate for a warning-not-error scenario.",
+    "Downgrade path (L191-195) correctly strips partial ABC identity from lines when the PO is downgraded, preventing the exact bug reported ('unsubmittable ABC PO'). Verified by test 2 assertions."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_po_jobmaterialplan_body.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7 across two ABC PO test files)", "frontend": "code-inspection only"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "test creates TEST_ materials via /api/materials + one ABC-mapped material via /api/integrations/abc/catalog/MOCK-SHINGLE-ARCH-WW/add-to-inventory. ABC defaults set to 1163698 / 18 and restored on teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend fix for JobMaterialPlan ABC PO ship_to/branch defaults is fully verified at the create_po choke point (7 backend contract tests: 4 pre-existing Reorder Suggestions cases + 3 new JMP-style cases). No frontend live testing performed — full JobMaterialPlan create-draft flow requires an accepted quote + shortage + supplier options with an ABC-integration-tagged supplier, which is expensive to seed. Frontend integration is a straightforward pass-through and matches the tested backend contract shape. Run ABC contract suites single-worker: pytest -o addopts='' ..."
+}

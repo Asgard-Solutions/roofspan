@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend-only verification of P2 strict ABC Submit gating + explicit price-change acceptance (AbcOrderPanel.jsx). Ran 5 Playwright scenarios on the production preview URL against real draft ABC POs, with route interception used to force price_changes / errors / null-review paths that the mock server does not organically produce. All scenarios PASS.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AbcOrderPanel.jsx", "issue": "Duplicate data-testid 'abc-price-changes' — two DOM elements share this testid when price_changes is non-empty (lines 203-209 render a smaller amber block AND lines 300-309 render the acceptance block). Both are visible amber panels showing similar info, so it is a cosmetic duplication AND breaks the '1 testid = 1 element' contract used by our page.locator queries.", "selector": "[data-testid=\"abc-price-changes\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional (LOW): remove or rename the older amber summary block at AbcOrderPanel.jsx lines 203-209 (the acceptance block at lines 300-309 already conveys the price changes + total + checkbox). Right now both render with the same data-testid whenever price_changes is present."
+  ],
+  "critical_code_review_comments": [
+    "AbcOrderPanel.jsx line 32: priceChangesAccepted state defaults to false. It is reset to false in loadReview() (line 59) on both initial load and Refresh, and again on 'price_changed' submit response (line 99). Correct on all three reset paths.",
+    "Submit disabled predicate (line 324) is comprehensive: submitting || loading || !review || errors.length>0 || unknown || (changes.length>0 && !priceChangesAccepted). Covers all requested defensive cases.",
+    "submit() sends accept_price_changes = (changes.length>0 && priceChangesAccepted) — verified via captured request body: {accept_price_changes: true} when changes present and box ticked.",
+    "Duplicate 'abc-price-changes' testid (lines 204 and 301). Recommend consolidating to a single block with the checkbox."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only per request)", "frontend": "100% (7/7 assertions: A1/A2/A3 happy path, B1a/B1b null-review, B2 errors, C1/C2/C3/C4 price-change gating, D1/D2 refresh reset, E1/E2/E3/E4 submit-with-acceptance)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Consumed draft ABC PO 1db389ed-9726-4b79-b127-8d0dff6bf4b0 (PO-1802 -> MOCK-CONF-10007 submitted with accept_price_changes=true after mocked price change). PO 6e9a27f9-889d-4107-b80f-0f190662b4da (PO-1797) was opened but NOT submitted (route-mocked review failures / errors only), so it remains a submittable draft. Remaining draft ABC POs available: 6e9a27f9-889d-4107-b80f-0f190662b4da, 4af3ee47-4308-4721-84d7-171a6c37dd28, 63a1be55-6911-40ae-a2d7-a681123d13e2, a97ec3e5-ab85-4acc-9aad-9717235df598, aa212c72-eef1-4c95-9725-d416e97e033a, 7d584ff9-561c-4ad7-a462-212115801fe1, 0056a525-d777-41d8-bd78-c7fedd7e0bbe.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Because the ABC mock server almost never emits organic price_changes on a fresh draft (fresh pricing matches stored pricing), the price_changed branch of the UI MUST be exercised via Playwright route interception on POST /api/purchase-orders/*/abc-submit-review (fetch original, inject a synthetic price_changes[] + previous_total + updated_total, fulfill). Same pattern works for defensive-gating tests (fulfill 500 for null-review, inject errors[] for validation_failed). The Submit request body can be captured via page.route on /abc-submit before continuing. Verified testids: abc-submit-order, abc-refresh-pricing, abc-accept-price-changes, abc-price-changes (currently duplicated), abc-order-errors, abc-review-total, abc-confirmation-number.",
+  "rca of the issue": "N/A — verification only. Prior implicit gating via !!review?.price_changes?.length allowed two subtle failure modes: (1) a review failure that left review=null did NOT block Submit (button-disabled predicate did not include !review), so a user could click Submit with no reviewed pricing; (2) if a price_changed submit response arrived, no explicit user confirmation was required beyond re-clicking Submit. The new predicate at AbcOrderPanel.jsx:324 plus the priceChangesAccepted state + reset points at lines 59 (every loadReview) and 99 (on price_changed) close both gaps. Verified end-to-end: null review => disabled; errors => disabled; price_changes & !accepted => disabled; ticking checkbox => enabled; refresh resets checkbox => disabled again; submit sends accept_price_changes=true and MOCK confirms."
+}

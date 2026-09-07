@@ -25,6 +25,26 @@ from .config import ORDER_PREFIX
 MAX_ORDER_LINES = 99
 PO_FIELD_MAX = 20
 
+# ABC `deliveryService` enum — the SINGLE source of truth shared by backend validation and the UI
+# (source: https://apidocs.abcsupply.com/place-orders/). Availability varies by branch and is subject
+# to change; verify per-branch via the Locations API. Order preserves the documented listing.
+DELIVERY_SERVICES = [
+    {"code": "OTG", "label": "Our Truck — Ground"},
+    {"code": "OTR", "label": "Our Truck — Roof"},
+    {"code": "OTW", "label": "Our Truck — Window"},
+    {"code": "CPU", "label": "Customer Pickup"},
+    {"code": "EXP", "label": "Express Pickup"},
+    {"code": "COM", "label": "Common Carrier"},
+    {"code": "TPC", "label": "Third-Party Carrier"},
+]
+DELIVERY_SERVICE_CODES = {s["code"] for s in DELIVERY_SERVICES}
+DEFAULT_DELIVERY_SERVICE = "OTG"
+
+
+def is_valid_delivery_service(code: str | None) -> bool:
+    return (code or "").strip().upper() in DELIVERY_SERVICE_CODES
+
+
 _STATUS_MAP = {
     "submitted": "processing", "accepted": "processing", "processing": "processing", "open": "processing",
     "scheduled": "scheduled", "shipped": "shipped", "delivered": "delivered",

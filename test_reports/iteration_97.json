@@ -1,0 +1,28 @@
+{
+  "summary": "P0 fix verified: POST /api/purchase-orders now resolves ABC identity server-side and downgrades to a standard draft with abc_setup_warning when mapping/config is incomplete. Wrote pytest suite /app/backend/tests/test_abc_po_setup_warning.py covering all 4 scenarios; all 4 tests pass (100%). Frontend smoke: reorder-suggestions-button opens reorder-dialog with 6 suggestion rows; toast surfacing of createdPo.abc_setup_warning is wired correctly in ReorderSuggestions.jsx (line 39-42).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_abc_po_setup_warning.py",
+    "/app/test_reports/pytest/abc_po_setup_warning.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "purchasing.py create_po: correctly clears line_abc + provider + ship_to/branch on downgrade so no partial ABC identity leaks. Good.",
+    "ReorderSuggestions.jsx sends integration_provider='abc_supply' at the PO level only when the supplier is ABC; abc_setup_warning is surfaced as toast.warning per-PO. Good.",
+    "POOut.abc_setup_warning is Optional[str] and only populated on the create response (not persisted on the PO). Acceptable since the toast is displayed inline; consider persisting or fetching via GET for audit trail if needed later.",
+    "Materials API (MaterialIn/MaterialPatch) has no abc_item_number field — only the catalog add-to-inventory flow creates the mapping. Not a bug for this fix, but worth noting for future manual mapping UX."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_po_setup_warning.py"],
+  "success_rate": {"backend": "100% (4/4)", "frontend": "smoke-only (button + dialog + suggestion rows verified; full toast E2E not run because seed data has no ABC-preferred-supplier suggestions — per review_request the UI check is limited to this)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test creates: 1 Material via /api/materials (TEST_plain_<uuid>) and 1 ABC-linked Material via /api/integrations/abc/catalog/MOCK-SHINGLE-ARCH-WW/add-to-inventory. ABC integration connected via mock OAuth flow; defaults set to Ship-To 1163698 / Branch 18. Test 3 temporarily clears defaults and restores.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_abc_po_setup_warning.py runs in ~3s and is idempotent (uses module-scoped ABC reconnect fixture matching other ABC contract tests). It restores defaults after Test 3 so subsequent ABC suites keep working. Full command: `python -m pytest tests/test_abc_po_setup_warning.py -v -o addopts=''` (bypass repo pytest.ini xdist because ABC reconnect is a shared singleton).",
+  "rca of the issue": "Root cause of the original P0 bug: ReorderSuggestions.jsx only forwarded generic Material fields (material_id, description, quantity, unit, unit_cost) but marked the PO integration_provider='abc_supply', producing an ABC PO whose lines had no abc_item_number and no ship_to/branch. abc-submit-review then rejected the PO ('missing ship_to/branch' or 'no orderable line'). Fix (in create_po): resolve each material's ABC identity from Material.abc_item_number/abc_uom or AbcCatalogItem row, and apply AbcIntegration.default_ship_to_number/default_branch_number. If any line has no ABC mapping OR defaults are missing, DO NOT create an unsubmittable ABC PO — downgrade to a standard draft (integration_provider=None, no partial ABC line identity) and return abc_setup_warning. UI shows warning as toast."
+}
