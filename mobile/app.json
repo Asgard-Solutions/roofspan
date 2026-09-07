@@ -8,13 +8,13 @@
     "scheme": "roofspan",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "io.roofspan.field"
     },
-    "assetBundlePatterns": ["**/*"],
-    "ios": { "supportsTablet": true, "bundleIdentifier": "io.roofspan.field" },
     "android": {
       "package": "io.roofspan.field",
       "adaptiveIcon": {
@@ -22,13 +22,23 @@
         "backgroundColor": "#000000"
       }
     },
-    "web": { "favicon": "./assets/favicon.png" },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
     "plugins": [
       "expo-secure-store",
       "expo-image-picker",
       "expo-dev-client",
       "@maplibre/maplibre-react-native",
-      ["expo-camera", { "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office." }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "RoofSpan uses the camera to scan the pairing QR code shown in RoofSpan Office."
+        }
+      ],
+      "expo-sqlite",
+      "expo-status-bar",
+      "expo-splash-screen"
     ],
     "extra": {
       "controlPlaneBase": "https://cp.roofspan.io",
