@@ -298,6 +298,20 @@ _MOCK_ITEMS = [
         "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
         "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
     },
+    {  # priceable at any branch, but Product AVAILABILITY reports it NOT orderable at branch 18
+        "itemNumber": "MOCK-UNAVAIL-AT-18", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Priced-But-Unavailable-At-18 Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
+    },
+    {  # priceable, but the Product AVAILABILITY endpoint returns a transport error (503) for it
+        "itemNumber": "MOCK-AVAIL-ERR", "familyId": "PFam_MOCK_TEST", "familyName": "Mock Test",
+        "isDimensional": False, "itemDescription": "Mock Availability-Service-Error Test Item", "status": "Active",
+        "uoms": [{"name": "Each", "code": "EA", "description": "stocking"}], "images": [],
+        "hierarchy": {"productGroup": {"label": "Test", "category": {"label": "Test"}}},
+        "supplierName": "MockBrand", "branchNumbers": ["18", "409"],
+    },
 ]
 _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
     "MOCK-SHINGLE-ARCH-WW": 135.36,
@@ -305,7 +319,18 @@ _PRICE_TABLE = {  # (itemNumber) -> unit price in the mock
     "MOCK-ICEWATER-BARRIER": 112.0,
     "MOCK-REJECT": 9.99,
     "MOCK-TIMEOUT": 4.5,
+    "MOCK-UNAVAIL-AT-18": 75.0,
+    "MOCK-AVAIL-ERR": 50.0,
     # MOCK-DRIP-EDGE-DIM priced by length below; MOCK-RIDGE-CAP-NOPRICE intentionally 0.00 (unavailable)
+}
+
+# Product AVAILABILITY overrides (SEPARATE from pricing + from the product-search branchNumbers).
+#   list           -> item orderable only at these branch numbers (regardless of price availability)
+#   dict {br: [L]} -> dimensional item: available lengths per branch
+# Items absent from this map default to their catalog branchNumbers (non-dimensional).
+_AVAIL_OVERRIDE: dict = {
+    "MOCK-UNAVAIL-AT-18": ["409"],                          # priced everywhere, orderable only at 409
+    "MOCK-DRIP-EDGE-DIM": {"18": ["10", "12"], "409": ["10", "12"]},  # dimensional lengths per branch
 }
 
 
@@ -359,6 +384,35 @@ async def get_item_image(asset_id: str, authorization: str | None = Header(defau
     png = _b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
     from fastapi.responses import Response as _Resp
     return _Resp(content=png, media_type="image/png")
+
+
+@router.get("/api/product/v1/availability/items/{item_number}/branches")
+async def get_item_availability_mock(item_number: str, authorization: str | None = Header(default=None)):
+    """Product Availability API (source: get-item-availability). SEPARATE from pricing: an item can be
+    priced yet not currently available at a branch. Returns orderable branches + dimensional variations."""
+    _require_bearer(authorization)
+    if item_number == "MOCK-AVAIL-ERR":  # simulate the availability service being unreachable
+        return JSONResponse(status_code=503, content={"message": "Product availability service is temporarily unavailable."})
+    it = next((x for x in _MOCK_ITEMS if x["itemNumber"] == item_number), None)
+    if it is None:
+        return {"itemNumber": item_number, "branches": []}
+    override = _AVAIL_OVERRIDE.get(item_number)
+    if isinstance(override, dict):  # dimensional: available lengths per branch
+        branches = [{"number": bnum, "isDimensional": True, "variations": [
+            {"size": f"{lv} ft", "conversionFactor": 1.0, "type": "standard",
+             "length": {"value": str(lv), "uom": "ft", "uomCode": "ft", "description": f"{lv} foot"}} for lv in lengths]}
+            for bnum, lengths in override.items()]
+        return {"itemNumber": item_number, "branches": branches}
+    branch_nums = override if isinstance(override, list) else it["branchNumbers"]
+    is_dim = bool(it.get("isDimensional"))
+    branches = []
+    for bnum in branch_nums:
+        entry = {"number": bnum, "isDimensional": is_dim, "variations": []}
+        if is_dim:
+            entry["variations"] = [{"size": "10 ft", "conversionFactor": 1.0, "type": "standard",
+                                    "length": {"value": "10", "uom": "ft", "uomCode": "ft", "description": "10 foot"}}]
+        branches.append(entry)
+    return {"itemNumber": item_number, "branches": branches}
 
 
 # Full-catalog retrieval for sync (GET /api/product/v1/items). Includes a synthetic DISCONTINUED item so

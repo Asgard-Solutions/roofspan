@@ -420,6 +420,30 @@ async def _validate_and_price(db: AsyncSession, po: PurchaseOrder, request: Requ
                 i.pricing_source = "abc"
         if apply_changes:
             po.total = round(sum(x.line_total for x in items), 2)
+
+        # Fresh product AVAILABILITY preflight — SEPARATE from pricing. ABC's Price Items docs state a
+        # price does NOT prove current availability; availability must come from the Product Availability
+        # API. Re-run here so the authoritative check happens immediately before submit (not stale UI data).
+        from integrations.abc_supply import products as abc_products
+        from integrations.abc_supply.exceptions import AbcTransportError
+        for i in abc_items:
+            try:
+                avail = await abc_products.get_item_availability(client, i.abc_item_number)
+            except (AbcError, AbcTransportError) as e:
+                # Availability service unreachable -> fail closed with a retryable message. The caller
+                # returns validation_failed BEFORE any durable submission is created or sent to ABC.
+                errors.append(f"Could not verify ABC product availability for item {i.abc_item_number} right now ({e.user_message}). Please try submitting again shortly.")
+                return errors, changes, abc_items, priced
+            entry = abc_products.availability_branch(avail, po.abc_branch_number)
+            if entry is None:
+                errors.append(f"ABC item {i.abc_item_number} is not currently available for ordering from branch {po.abc_branch_number}.")
+                continue
+            if _is_dimensional(i):
+                length_value = (i.abc_variation or {}).get("value")
+                if not abc_products.length_available(entry, length_value):
+                    luom = (i.abc_variation or {}).get("uom") or ""
+                    disp = f"{length_value}{(' ' + luom) if luom else ''}".strip()
+                    errors.append(f"ABC item {i.abc_item_number} is available at branch {po.abc_branch_number}, but the selected {disp} variation is not currently available.")
     return errors, changes, abc_items, priced
 
 

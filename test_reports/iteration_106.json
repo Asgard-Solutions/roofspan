@@ -1,0 +1,26 @@
+{
+  "summary": "Added new backend suite tests/test_abc_product_availability_preflight.py (7 tests) covering scenarios A-F of the ABC Product Availability preflight fix, plus a $0-price regression. Ran it together with the full ABC contract regression set (13 files, 142 tests) single-worker — 142/142 PASS. Availability check is properly performed via the Product Availability API separately from pricing, dimensional length gating works with no silent substitution, availability transport failures (503) fail closed with a retryable message and create NO durable pending AbcOrderSubmission, and a corrected/replacement PO can be submitted with the SAME submission_key to a confirmation (no stuck pending).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_product_availability_preflight.py",
+    "/app/test_reports/pytest/abc_availability_preflight.xml",
+    "/app/test_reports/pytest/abc_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "purchasing.py _validate_and_price catches AbcError/AbcTransportError from get_item_availability and returns early with a retryable error BEFORE the durable AbcOrderSubmission is created — this is the correct fail-closed placement (line ~432).",
+    "availability preflight is run inside _validate_and_price which is shared by abc-submit-review, review AND abc-submit, so UI review and the authoritative submit stay consistent.",
+    "Dimensional gating uses abc_products.length_available(entry, length_value) with the branch entry from availability_branch — no silent substitution when the selected length is missing; error string names the requested length explicitly.",
+    "Mock coverage is contract-faithful: _AVAIL_OVERRIDE distinguishes list (non-dim orderable branches) vs dict (dim lengths per branch); MOCK-AVAIL-ERR returns HTTP 503 to exercise the transport-error branch.",
+    "Nit (not blocking): _validate_and_price prices EVERY line before running availability — for large POs where an early line is unavailable this still pays the full pricing round-trip. Fine for correctness / mock scale; consider short-circuit or batching if real-ABC latency becomes an issue."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_product_availability_preflight.py"],
+  "success_rate": {"backend": "100% (142/142 ABC contract + preflight tests)", "frontend": "n/a (backend-only)"},
+  "test_credentials": "Owner from /app/memory/test_credentials.md (pjacobsen@asgardsolution.io / RoofSpan#Owner2026). ABC mock only.",
+  "seed_data_creation": "No persistent seed data; each test creates a fresh PO. Materials mapped via /api/integrations/abc/catalog/{item}/add-to-inventory (module-scoped fixtures) for MOCK-SHINGLE-ARCH-WW, MOCK-UNAVAIL-AT-18, MOCK-DRIP-EDGE-DIM, MOCK-AVAIL-ERR and (in the $0-price regression) MOCK-RIDGE-CAP-NOPRICE.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The 13-file ABC regression must be run from /app/backend with PYTHONPATH=/app/backend (test_abc_place_order_contract.py and test_abc_supply_p3.py import from `integrations.*`). Single-worker via `-o addopts=''` because the ABC integration is a singleton reconnect fixture shared across the suite. New suite adds 7 tests: A_available_confirms, B_priced_but_unavailable_blocks, C_dim_valid_length_confirms, D_dim_unavailable_length_blocks, E_availability_transport_error_fails_closed, F_recovery_after_failure, regression_zero_price_still_blocks. Result: 142 passed in ~163s.",
+  "rca of the issue": "Original gap: ABC pricing success was being treated as proof of orderable availability. Per ABC's Price Items docs, pricing is not real-time availability. Fix (already implemented by E1) adds a SEPARATE Product Availability API call in _validate_and_price for each ABC line: (a) blocks when the branch is not in the availability payload; (b) for dimensional items, blocks when the requested length is not among the branch's variations; (c) on AbcError/AbcTransportError, returns a retryable validation error BEFORE any durable AbcOrderSubmission is created and BEFORE any Place Order is sent. Preflight runs in abc-submit-review, review, and abc-submit for consistency. Validated end-to-end via mock (MOCK-UNAVAIL-AT-18, MOCK-DRIP-EDGE-DIM w/ lengths 10/12/99, MOCK-AVAIL-ERR 503). Not a proof of real ABC Sandbox behavior — mock + documented-contract only."
+}

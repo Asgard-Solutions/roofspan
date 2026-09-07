@@ -66,6 +66,46 @@ def item_available_at_branch(item: dict, branch_number: str | None) -> bool:
     return any(str(b.get("number")) == str(branch_number) for b in branches)
 
 
+# --- Product Availability API (source: https://apidocs.abcsupply.com/get-item-availability/) ---
+# CRITICAL: availability is SEPARATE from pricing. ABC's Price Items docs state a price does NOT prove
+# the item is currently available at the branch. Real-time orderability + dimensional variations come
+# from this API. Endpoint: GET {PRODUCT_PREFIX}/availability/items/{itemNumber}/branches ->
+#   {"branches": [{"number", "isDimensional", "variations": [{"length": {"value","uom",...}}]}]}
+async def get_item_availability(client: AbcClient, item_number: str) -> dict:
+    data = await client.get_json(f"{PRODUCT_PREFIX}/availability/items/{item_number}/branches")
+    return data if isinstance(data, dict) else {"branches": []}
+
+
+def availability_branch(availability: dict, branch_number: str | None) -> dict | None:
+    """Return the availability entry for the selected branch, or None if the item is not orderable there."""
+    if not branch_number:
+        return None
+    for b in availability.get("branches") or []:
+        if str(b.get("number")) == str(branch_number):
+            return b
+    return None
+
+
+def length_available(branch_entry: dict, length_value) -> bool:
+    """True if the branch offers the requested dimensional length. Never silently substitutes a length:
+    the requested value must match an available variation (string or numeric compare)."""
+    if length_value is None or str(length_value).strip() == "":
+        return True
+    want = str(length_value).strip()
+    for v in branch_entry.get("variations") or []:
+        lv = (v.get("length") or {}).get("value")
+        if lv is None:
+            continue
+        if str(lv).strip() == want:
+            return True
+        try:
+            if float(lv) == float(length_value):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 def primary_image_href(item: dict) -> str | None:
     for img in item.get("images") or []:
         if img.get("type") == "PrimaryProductImage" and img.get("href"):
