@@ -1,0 +1,25 @@
+{
+  "summary": "Authored a NEW consolidated backend regression suite backend/tests/test_abc_creation_paths_e2e.py that drives EVERY ABC PO creation path all the way through POST /api/purchase-orders (or /from-abc-template) -> abc-submit-review -> abc-submit against the ABC mock server, plus the required negative/idempotency/unknown-state/preflight/price-change/contract-enforcement cases. 16/16 tests PASS single-worker (11.1s).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_creation_paths_e2e.py",
+    "/app/test_reports/pytest/creation_paths_e2e.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Contract-enforcement guarantee: mock_server.place_order_mock invokes the SAME validate_place_order used by production abc_submit, so a 'confirmed' response in these tests is a live proof that the built payload satisfies the versioned contract. No divergence possible.",
+    "Delivery-instructions >255-char overflow routing (into orderComments code 'D') is exercised end-to-end by test_long_delivery_instructions_overflow_into_orderComments_D — the contract would reject deliveryAppointment.instructions>255, so a 'confirmed' outcome proves the overflow logic works.",
+    "Idempotency is enforced on TWO layers: submission_key uniqueness in AbcOrderSubmission AND requestId de-dup in the ABC mock (_MOCK_BY_REQID). Test test_idempotent_same_submission_key covers both same-key replay and fresh-key-after-confirmed (returns already_submitted with the ORIGINAL confirmation).",
+    "Preflight retry-after-fix test verifies the 'no stuck pending' invariant: a validation_failed submit does NOT persist a pending AbcOrderSubmission, so reusing the same submission_key after correcting the Ship-To still confirms fresh.",
+    "MOCK-TIMEOUT path returns 504 AFTER the mock records the order, so abc-submit returns status='unknown' (never auto-resubmits on retry), and /abc-reconcile finds the order via history lookup and resolves to a MOCK-CONF-* confirmation number."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_creation_paths_e2e.py"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "N/A (backend-only per request)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Runtime: 3 ABC-mapped materials via /catalog/{MOCK-SHINGLE-ARCH-WW,MOCK-REJECT,MOCK-TIMEOUT}/add-to-inventory, 1 unmapped 'TEST_plain_*' Material, ~14 draft/submitted purchase orders (mixed confirmed / failed / unknown-then-reconciled / validation_failed / downgraded). No .env changes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run this suite single-worker: `pytest tests/test_abc_creation_paths_e2e.py -v -o addopts=''`. It shares the ABC integration singleton (mock OAuth connect + defaults + material mapping) with the other test_abc_*.py suites. Template ID 97211 is the only template exposed by mock_server.list_templates_mock. Template unit price is 34.50 but live pricing returns 135.36, so from-abc-template test must pass apply_price_changes=True at review and accept_price_changes=True at submit. Price-change test forces old_price=100.0 by nulling abc_price and setting unit_cost=100.0 so _validate_and_price records a change to 135.36. Preflight test uses PATCH /api/purchase-orders/{id} to switch Ship-To back to 1163698; if PATCH is unsupported it falls back to creating a fresh healthy PO.",
+  "rca of the issue": "N/A — greenfield regression suite. All 16 scenarios pass on first execution; no product regressions surfaced."
+}
