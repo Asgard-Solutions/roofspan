@@ -226,8 +226,43 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                 </div>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Delivery Appointment / Time Window (optional)</Label>
-                <Input placeholder="e.g. 09:00–12:00" value={delivery?.appointment_time || ""} onChange={(e) => setDelivery({ ...delivery, appointment_time: e.target.value })} data-testid="abc-appointment-time" />
+                <Label className="text-xs">Delivery Appointment (optional)</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Select
+                    value={delivery?.appointment_type || "none"}
+                    onValueChange={(v) => {
+                      const type = v === "none" ? "" : v;
+                      const next = { ...delivery, appointment_type: type };
+                      if (type !== "ST" && type !== "TR") next.appointment_from = "";
+                      if (type !== "TR") next.appointment_to = "";
+                      setDelivery(next);
+                    }}
+                  >
+                    <SelectTrigger data-testid="abc-appointment-type"><SelectValue placeholder="Type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No appointment</SelectItem>
+                      <SelectItem value="AT">Anytime</SelectItem>
+                      <SelectItem value="AM">Morning</SelectItem>
+                      <SelectItem value="PM">Afternoon</SelectItem>
+                      <SelectItem value="FS">First Stop</SelectItem>
+                      <SelectItem value="ST">Specific Time</SelectItem>
+                      <SelectItem value="TR">Time Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {(delivery?.appointment_type === "ST" || delivery?.appointment_type === "TR") && (
+                    <div className="space-y-1">
+                      <Input type="time" value={delivery?.appointment_from || ""} onChange={(e) => setDelivery({ ...delivery, appointment_from: e.target.value })} data-testid="abc-appointment-from" />
+                    </div>
+                  )}
+                  {delivery?.appointment_type === "TR" && (
+                    <div className="space-y-1">
+                      <Input type="time" value={delivery?.appointment_to || ""} onChange={(e) => setDelivery({ ...delivery, appointment_to: e.target.value })} data-testid="abc-appointment-to" />
+                    </div>
+                  )}
+                </div>
+                {(delivery?.appointment_type === "ST" || delivery?.appointment_type === "TR") && (
+                  <p className="text-xs text-slate-400">{delivery?.appointment_type === "TR" ? "From and To times (local)." : "From time (local)."}</p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Order Comments (optional)</Label>

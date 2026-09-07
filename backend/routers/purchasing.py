@@ -381,23 +381,65 @@ def _normalize_delivery(d: dict | None) -> dict:
         "contact_name": d.get("contact_name"), "contact_phone": d.get("contact_phone"),
         "contact_email": d.get("contact_email"),
         "instructions": d.get("instructions"), "requested_date": d.get("requested_date"),
-        "appointment_time": d.get("appointment_time"),
+        # ABC deliveryAppointment: instructionsTypeCode + optional structured From/To military times.
+        "appointment_type": d.get("appointment_type"),
+        "appointment_from": d.get("appointment_from"),
+        "appointment_to": d.get("appointment_to"),
     }.items()}
 
 
-def _validate_delivery(d: dict) -> list[str]:
-    """Validate the PHYSICAL delivery override. The override is optional: when no address fields are
-    supplied the order falls back to the ABC Ship-To account's registered delivery address (the submit
-    builder omits ship_to.address). Only when the user provides a partial address do we require the full
-    set so we never send ABC an incomplete override."""
-    addr_fields = ("line1", "line2", "city", "state", "postal")
-    provided = any((d.get(f) or "").strip() for f in addr_fields)
-    if not provided:
+# ABC deliveryAppointment.instructionsTypeCode values (source: apidocs.abcsupply.com/place-orders).
+# AT = Anytime, AM = Morning, PM = Afternoon, FS = First Stop, ST = Specific Time, TR = Time Range.
+_APPT_TYPE_CODES = {"AT", "AM", "PM", "FS", "ST", "TR"}
+
+
+def _validate_appointment(d: dict) -> list[str]:
+    """Validate the ABC delivery appointment window. fromTime applies to ST/TR; toTime only to TR."""
+    code = (d.get("appointment_type") or "").strip().upper()
+    if not code:
         return []
+    if code not in _APPT_TYPE_CODES:
+        return [f"Delivery appointment type '{code}' is not a valid ABC code (AT, AM, PM, FS, ST, TR)."]
     errs = []
-    for field, label in (("line1", "street address"), ("city", "city"), ("state", "state"), ("postal", "ZIP code")):
-        if not (d.get(field) or "").strip():
-            errs.append(f"Delivery address is missing a {label}.")
+    if code in ("ST", "TR") and not (d.get("appointment_from") or "").strip():
+        errs.append("A From time is required for the selected delivery appointment type.")
+    if code == "TR" and not (d.get("appointment_to") or "").strip():
+        errs.append("A To time is required for a time-range delivery appointment.")
+    return errs
+
+
+def _build_delivery_appointment(d: dict) -> dict | None:
+    """Build the ABC `deliveryAppointment` object from the normalized delivery override.
+    Returns None when there is no appointment intent. Times are passed through as local
+    military time (e.g. 13:00); fromTime is sent for ST/TR, toTime only for TR."""
+    code = (d.get("appointment_type") or "").strip().upper()
+    instructions = (d.get("instructions") or "").strip()
+    if not code and not instructions:
+        return None
+    if not code:
+        code = "AT"  # instructions with no explicit window -> Anytime delivery.
+    appt: dict = {"instructionsTypeCode": code}
+    if instructions:
+        appt["instructions"] = instructions[:255]
+    if code in ("ST", "TR") and (d.get("appointment_from") or "").strip():
+        appt["fromTime"] = d["appointment_from"].strip()
+    if code == "TR" and (d.get("appointment_to") or "").strip():
+        appt["toTime"] = d["appointment_to"].strip()
+    return appt
+
+
+def _validate_delivery(d: dict) -> list[str]:
+    """Validate the PHYSICAL delivery override + the delivery appointment. The address override is
+    optional: when no address fields are supplied the order falls back to the ABC Ship-To account's
+    registered delivery address (the submit builder omits ship_to.address). Only when the user provides
+    a partial address do we require the full set so we never send ABC an incomplete override."""
+    errs = []
+    addr_fields = ("line1", "line2", "city", "state", "postal")
+    if any((d.get(f) or "").strip() for f in addr_fields):
+        for field, label in (("line1", "street address"), ("city", "city"), ("state", "state"), ("postal", "ZIP code")):
+            if not (d.get(field) or "").strip():
+                errs.append(f"Delivery address is missing a {label}.")
+    errs += _validate_appointment(d)
     return errs
 
 
@@ -576,10 +618,12 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     dates = {}
     if delivery.get("requested_date"):
         dates["deliveryRequestedFor"] = delivery["requested_date"]
-    if delivery.get("appointment_time"):
-        dates["deliveryAppointmentTime"] = delivery["appointment_time"]
     if dates:
         order["dates"] = dates
+    # ABC contract: the time window is a separate `deliveryAppointment` object, NOT dates.deliveryAppointmentTime.
+    appointment = _build_delivery_appointment(delivery)
+    if appointment:
+        order["deliveryAppointment"] = appointment
 
     client, _ = await _abc_client(db, request)
     try:

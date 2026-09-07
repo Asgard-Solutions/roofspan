@@ -455,6 +455,31 @@ def _order_record(conf: str, order_number: str, order: dict) -> dict:
 
 
 _VALID_ORDER_COMMENT_CODES = {"H", "F", "D"}
+_VALID_APPT_TYPE_CODES = {"AT", "AM", "PM", "FS", "ST", "TR"}
+
+
+def _validate_appointment(order: dict) -> str | None:
+    """Enforce ABC's delivery appointment contract. Returns an error message, or None if valid.
+    The time window is a separate `deliveryAppointment` object with instructionsTypeCode +
+    From/To military times. The legacy `dates.deliveryAppointmentTime` field is rejected."""
+    dates = order.get("dates") or {}
+    if isinstance(dates, dict) and "deliveryAppointmentTime" in dates:
+        return "Invalid order: use a `deliveryAppointment` object, not `dates.deliveryAppointmentTime`."
+    appt = order.get("deliveryAppointment")
+    if appt is None:
+        return None
+    if not isinstance(appt, dict):
+        return "Invalid deliveryAppointment: expected an object with instructionsTypeCode."
+    code = appt.get("instructionsTypeCode")
+    if code not in _VALID_APPT_TYPE_CODES:
+        return f"Invalid deliveryAppointment instructionsTypeCode '{code}': must be one of AT, AM, PM, FS, ST, TR."
+    if code in ("ST", "TR") and not str(appt.get("fromTime") or "").strip():
+        return f"deliveryAppointment type '{code}' requires a fromTime."
+    if code == "TR" and not str(appt.get("toTime") or "").strip():
+        return "deliveryAppointment type 'TR' requires a toTime."
+    if str(appt.get("instructions") or "") and len(appt["instructions"]) > 255:
+        return "deliveryAppointment instructions must be 255 characters or fewer."
+    return None
 
 
 def _validate_comments(order: dict, lines: list) -> str | None:
@@ -500,6 +525,11 @@ async def place_order_mock(request: Request, authorization: str | None = Header(
         return JSONResponse(status_code=400, content={
             "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
             "orders": [{"requestId": req_id, "message": comment_err}]})
+    appt_err = _validate_appointment(order)
+    if appt_err:
+        return JSONResponse(status_code=400, content={
+            "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
+            "orders": [{"requestId": req_id, "message": appt_err}]})
     # Rejection scenario (documented error shape: 400 with per-order message).
     if any(l.get("itemNumber") == "MOCK-REJECT" for l in lines):
         return JSONResponse(status_code=400, content={

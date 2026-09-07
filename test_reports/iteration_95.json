@@ -1,0 +1,24 @@
+{
+  "summary": "P0 ABC delivery appointment contract verified end-to-end. Added 23-test pytest suite (all passing) that validates (a) the RoofSpan payload builder produces a proper deliveryAppointment object for TR/ST/AT/AM/PM/FS and never sends dates.deliveryAppointmentTime, (b) validation rejects ST-without-from, TR-without-to, and unknown codes, (c) the ABC mock server rejects the legacy dates.deliveryAppointmentTime and malformed deliveryAppointment shapes with HTTP 400 while accepting correct shapes. Frontend UI verified in Playwright: the AbcOrderPanel exposes a Type dropdown (abc-appointment-type) with the 7 options (No appointment / AT / AM / PM / FS / ST / TR), TR reveals both abc-appointment-from and abc-appointment-to, ST reveals only abc-appointment-from, AM/AT/PM/FS reveal neither, and the legacy freeform abc-appointment-time input is fully removed. A live UI submit with TR + 09:00-12:00 returned MOCK-CONF-10017 with the panel switching to the submitted view.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_delivery_appointment_contract.py",
+    "/app/test_reports/pytest/iter95_appointment.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_build_delivery_appointment (backend/routers/purchasing.py) defaults an implicit code of 'AT' when the user only entered free-text delivery instructions with no appointment_type; this is a small implicit behavior change that is safe (AT=Anytime is the neutral choice) but worth calling out because it means ANY order with instructions will now carry a deliveryAppointment.instructionsTypeCode=AT even if the user did not explicitly ask for an appointment.",
+    "AbcOrderPanel.jsx sends the raw delivery object including empty appointment_from/appointment_to strings from prior selections when user later switches to AT/AM/PM/FS. Backend _build_delivery_appointment strips them (only ST/TR read those keys) so no functional impact, but the payload contains stale fields; consider clearing appointment_from/to when appointment_type changes away from ST/TR for cleanliness."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_delivery_appointment_contract.py"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (all UI assertions passed; submit confirmed MOCK-CONF-10017)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (owner)",
+  "seed_data_creation": "Two throwaway ABC POs created via API (notes prefixed TEST_UI_APPT / TEST_UI_APPT2); backend tests create ~10 additional TEST_P0_APPT POs per run. All are draft/submitted MOCK orders in the mock environment.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The new appointment contract is covered by backend/tests/test_abc_delivery_appointment_contract.py (23 tests, ~6s runtime, parallel-safe). To rerun UI, log in as owner, open a draft ABC PO, click 'Review & submit in ABC', pick a Type in the dropdown data-testid='abc-appointment-type'; the from/to time inputs use data-testids abc-appointment-from and abc-appointment-to and only render conditionally. The submit endpoint POST /api/purchase-orders/{po_id}/abc-submit takes delivery.appointment_type/appointment_from/appointment_to (military HH:MM) and never dates.deliveryAppointmentTime. The mock server enforces this shape and returns HTTP 400 for the legacy field or bad shapes.",
+  "rca of the issue": "N/A - implementation was correct. Only observation: TR selection carries stale appointment_from/appointment_to values in the DOM state when user toggles type; harmless because the backend builder ignores them for non-ST/TR codes."
+}
