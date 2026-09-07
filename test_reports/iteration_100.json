@@ -1,0 +1,22 @@
+{
+  "summary": "Verified P1 fix: cancelling a confirmed ABC Supply PO is blocked (backend 409) and the frontend swaps the normal Cancel button for a 'Contact ABC branch to cancel/change' info button. All 5 new pytest cases pass; frontend UI check passes on both a seeded draft ABC PO and a seeded confirmed ABC PO (MOCK-CONF-10004).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_cancel_guard.py",
+    "/app/test_reports/pytest/abc_cancel_guard.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "set_status guard in backend/routers/purchasing.py correctly checks status=='cancelled' AND integration_provider=='abc_supply' AND external_confirmation_number before raising 409 — precise and non-destructive.",
+    "PurchaseOrderDetail.jsx computes abcLocked = isAbc && !!po.external_confirmation_number and mutually excludes po-cancel vs po-abc-cancel-blocked; also correctly hides the blocked button when po.status is already cancelled or received."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_cancel_guard.py"],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (button swap + guidance + status unchanged)"},
+  "test_credentials": "pjacobsen@asgardsolution.io / RoofSpan#Owner2026",
+  "seed_data_creation": "Two POs created via API for UI verification: draft ABC PO c7d6a0b0-6dc2-4fee-95a3-9e436ce721c0 (no confirmation) and confirmed ABC PO 94148770-d5f9-45dd-b390-f3580dd0e42e (external_confirmation_number=MOCK-CONF-10004, status=ordered). Backend tests create their own throwaway POs.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_abc_cancel_guard.py runs single-worker fine (pytest addopts overridden). Use submission_key=uuid4 hex when calling /abc-submit; /abc-submit-review does NOT return a submission_key so the client must generate one. Confirmed ABC PO transitions to status='ordered' after abc-submit.",
+  "rca of the issue": "Original: POST /purchase-orders/{id}/status accepted status=cancelled for any PO, including ABC POs already confirmed at ABC. Since ABC's Order API exposes no cancellation endpoint, RoofSpan would show 'Cancelled' while ABC continued processing/delivering — a false-authority divergence. Fix (verified): set_status raises HTTPException(409, ...) if status=='cancelled' AND integration_provider=='abc_supply' AND external_confirmation_number is set; PO row is not mutated. Frontend PurchaseOrderDetail hides po-cancel and renders po-abc-cancel-blocked (toast guidance) when abcLocked."
+}

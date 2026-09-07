@@ -885,6 +885,14 @@ async def set_status(po_id: str, payload: POStatusIn, request: Request, user: Us
         raise HTTPException(status_code=404, detail="Purchase order not found")
     if payload.status not in VALID:
         raise HTTPException(status_code=422, detail=f"Status must be one of {VALID}")
+    # SAFETY: a confirmed ABC Supply order cannot be locally "cancelled" — ABC publishes NO order
+    # cancellation API, so a local cancel would falsely imply the ABC order stopped while ABC is still
+    # processing/delivering it. Keep the ABC status authoritative and direct the user to the branch.
+    if payload.status == "cancelled" and po.integration_provider == "abc_supply" and po.external_confirmation_number:
+        raise HTTPException(status_code=409, detail=(
+            f"This ABC Supply order is confirmed (#{po.external_confirmation_number}). ABC provides no "
+            "cancellation API, so RoofSpan cannot cancel it — contact the ABC branch to cancel or change "
+            "the order. The ABC order status remains authoritative."))
     if payload.status == "ordered" and not po.order_date:
         po.order_date = datetime.now(timezone.utc)
     po.status = payload.status

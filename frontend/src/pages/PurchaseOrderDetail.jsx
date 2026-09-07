@@ -70,6 +70,7 @@ export default function PurchaseOrderDetail() {
   useEffect(() => { load(); }, [load]);
 
   const isAbc = po?.integration_provider === "abc_supply";
+  const abcLocked = isAbc && !!po?.external_confirmation_number;
   const openReceive = () => { const init = {}; (po.items || []).forEach((i) => { init[i.id] = Math.max((i.quantity || 0) - (i.received_quantity || 0), 0); }); setRecv(init); setRecvOpen(true); };
   const doReceive = async () => {
     const items = Object.entries(recv).filter(([, q]) => Number(q) > 0).map(([po_item_id, q]) => ({ po_item_id, quantity: Number(q) }));
@@ -95,7 +96,10 @@ export default function PurchaseOrderDetail() {
             {canManage && isAbc && po.external_confirmation_number && <Button size="sm" variant="outline" onClick={() => setAbcOpen(true)} data-testid="po-abc-view"><Truck className="h-4 w-4" /> View ABC order</Button>}
             {canManage && !isAbc && po.status === "draft" && <Button size="sm" onClick={() => setStatus("ordered")} data-testid="po-mark-ordered"><Truck className="h-4 w-4" /> Mark ordered</Button>}
             {canReceive && <Button size="sm" onClick={openReceive} data-testid="po-receive"><PackageCheck className="h-4 w-4" /> Receive</Button>}
-            {canManage && po.status !== "cancelled" && po.status !== "received" && <Button size="sm" variant="outline" onClick={cancel} data-testid="po-cancel"><Ban className="h-4 w-4" /> Cancel</Button>}
+            {canManage && abcLocked && po.status !== "cancelled" && po.status !== "received" && (
+              <Button size="sm" variant="outline" onClick={() => toast.info("ABC has no cancellation API. Contact the ABC branch to cancel or change this order — the ABC order status stays authoritative in RoofSpan.", { duration: 9000 })} data-testid="po-abc-cancel-blocked"><Ban className="h-4 w-4" /> Contact ABC branch to cancel/change</Button>
+            )}
+            {canManage && !abcLocked && po.status !== "cancelled" && po.status !== "received" && <Button size="sm" variant="outline" onClick={cancel} data-testid="po-cancel"><Ban className="h-4 w-4" /> Cancel</Button>}
           </div>
         </div>
 

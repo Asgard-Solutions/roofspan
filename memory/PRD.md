@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P1 — Confirmed ABC PO Cannot Be Falsely Cancelled Locally — FIXED & VERIFIED (2026-06)
+- Bug: the generic status endpoint let a user set an ABC PO to `cancelled` even after it had an ABC confirmation number. ABC's Order API has NO cancellation endpoint, so RoofSpan would read "Cancelled" while ABC kept processing/delivering — a dangerous false-authority divergence.
+- Fix: `set_status` (`routers/purchasing.py`) returns HTTP 409 (PO unchanged) when `status=='cancelled'` AND `integration_provider=='abc_supply'` AND `external_confirmation_number` is set, with guidance to contact the ABC branch (ABC status stays authoritative). Frontend `PurchaseOrderDetail.jsx` hides the normal Cancel button for a confirmed ABC PO (`abcLocked`) and shows a `po-abc-cancel-blocked` "Contact ABC branch to cancel/change" info button instead. Draft ABC POs (no confirmation) and non-ABC POs cancel normally.
+- Verified: testing_agent iteration_100 = backend 100% (5/5, `test_abc_cancel_guard.py`) + frontend 100% (button swap + guidance + status unchanged).
+
 ## P1 — Delivery Instructions Routed to ABC (deliveryAppointment.instructions + overflow) — FIXED & VERIFIED (2026-06)
 - Bug: RoofSpan collected `delivery.instructions` (ABC delivery editor) but the final ABC order never reliably sent them. ABC supports them via `deliveryAppointment.instructions` (255-char limit); longer notes belong in `orderComments`.
 - Fix (`routers/purchasing.py`): `_build_delivery_appointment` now returns `(appointment, overflow)` — instructions go into `deliveryAppointment.instructions` capped at 255; anything beyond 255 is returned as overflow and appended to `order["orderComments"]` as a `{code:"D", description:"Delivery instructions (continued): …"}` entry (alongside any user "H" header comment). Nothing is lost.
