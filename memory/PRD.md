@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## ABC Go-Live #9 — E2E Contract Tests for Every Creation Path Through abc-submit — DONE & VERIFIED (2026-06)
+- New consolidated regression suite `backend/tests/test_abc_creation_paths_e2e.py` drives EVERY ABC PO creation path (Direct/product-catalog create, Reorder-Suggestions style, Job-Material-Plan style, ABC Template convert) all the way to a confirmed `abc-submit` (MOCK-CONF-*), plus negatives: MOCK-REJECT (failed), MOCK-TIMEOUT (unknown + reconcile), same-key idempotency, preflight rejections (credit hold / inactive / unassociated branch / missing) with no-stuck-pending retry, price-change gating, unmapped-material downgrade, and >255 instructions overflow. Because the mock uses the SAME `validate_place_order`, a "confirmed" result is live proof the built payload satisfies the versioned contract.
+- Verified: testing_agent iteration_105 = backend 100% (16/16, single-worker).
+
+## ABC Go-Live #10 — Sandbox Certification Checklist — DELIVERED (2026-06)
+- `/app/memory/ABC_SANDBOX_CERTIFICATION_CHECKLIST.md`: full manual real-Sandbox matrix (C1 ground / C2 rooftop / C3 pickup / C4 dimensional / C5 50+ lines / C6 comments / C7 appointment+instructions / C8 price change / C9 timeout-unknown reconcile / C10 account+branch rejection) + idempotency/lifecycle + sign-off. Strict credential policy: sandbox creds go ONLY in Settings→ABC Supply / env, never in code, git, fixtures, or chat.
+
 ## P2 — Stricter ABC Submit Gating + Explicit Price-Change Acceptance — FIXED & VERIFIED (2026-06)
 - Bug: `AbcOrderPanel` inferred price acceptance from `!!review?.price_changes?.length` and the Submit button wasn't defensively gated — a failed review (`review=null`) still allowed Submit.
 - Fix: explicit `priceChangesAccepted` state (set only by a user checkbox after seeing the latest pricing; reset on every review load/refresh and on any `price_changed` response). `submit()` sends `accept_price_changes = (changes.length>0 && priceChangesAccepted)`. Submit disabled unless a successful current review exists AND no errors AND not unknown AND (no price changes OR the box is ticked). Checkbox lives in the single price-change block (`abc-price-changes` / `abc-accept-price-changes`; duplicate testid removed).
