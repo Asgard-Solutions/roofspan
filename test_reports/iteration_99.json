@@ -1,0 +1,28 @@
+{
+  "summary": "P1 backend fix verified: delivery.instructions is now routed to ABC deliveryAppointment.instructions (capped at 255) with the overflow appended to orderComments as a {code:'D', description:'Delivery instructions (continued): ...'} entry. Added /app/backend/tests/test_abc_delivery_instructions_routing.py with 12 tests spanning E2E abc-submit, white-box _build_delivery_appointment(), and direct mock contract. All 12 passed. Also reran neighboring contract suites (test_abc_delivery_appointment_contract.py + test_abc_order_comments_contract.py = 36/36) to confirm no regression.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_delivery_instructions_routing.py",
+    "/app/test_reports/pytest/iter99_instr.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "purchasing.py::_build_delivery_appointment correctly caps instructions to 255 and returns the overflow; the caller assembles orderComments in the documented order (H then D). Clean two-tuple return keeps the routing lossless.",
+    "The overflow 'D' comment is wrapped in the fixed prefix 'Delivery instructions (continued): ' before the 1000-char slice; because the mock's max description is only bounded by ABC's contract (validated shape only, no explicit length in the mock), this is safe. Consider documenting the 1000-char order-comment slice as a defensive cap in a comment.",
+    "Regression case (no instructions, no appt) still returns (None, None) and no deliveryAppointment/orderComments are attached — verified E2E."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_abc_delivery_instructions_routing.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12 new + 36/36 sibling contract suites)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md via review request).",
+  "seed_data_creation": "Each test creates a fresh ABC PO with a single mapped MOCK-SHINGLE-ARCH-WW line via POST /api/purchase-orders; ABC mock connect + defaults (ship-to 1163698, branch 18) reused from the existing contract-suite fixture pattern.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New suite lives at backend/tests/test_abc_delivery_instructions_routing.py (12/12). It covers the P1 lossless routing: instructions<=255 in deliveryAppointment.instructions, and >255 overflow into orderComments 'D'. Runs single-worker safely because it uses the same disconnect+reconnect ABC fixture as test_abc_delivery_appointment_contract.py — do NOT parallelize the ABC contract suites. To inspect exact payloads sent to ABC in the future, note that the mock's _order_record does NOT persist deliveryAppointment/orderComments; confirmation of shape is via the mock's 400-vs-200 contract validators (_validate_appointment enforces <=255 chars, _validate_comments enforces H/F/D codes).",
+  "rca of the issue": "N/A — this iteration verifies the already-shipped fix in routers/purchasing.py._build_delivery_appointment + abc_submit. The bug (delivery instructions dropped) has been resolved: instructions now always land in deliveryAppointment.instructions (255-cap) and anything past 255 is preserved as an orderComments 'D' detail entry, alongside any user-supplied 'H' order comment."
+}

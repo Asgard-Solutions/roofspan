@@ -490,24 +490,29 @@ def _validate_appointment(d: dict) -> list[str]:
     return errs
 
 
-def _build_delivery_appointment(d: dict) -> dict | None:
+def _build_delivery_appointment(d: dict) -> tuple[dict | None, str | None]:
     """Build the ABC `deliveryAppointment` object from the normalized delivery override.
-    Returns None when there is no appointment intent. Times are passed through as local
-    military time (e.g. 13:00); fromTime is sent for ST/TR, toTime only for TR."""
+    Returns (appointment | None, overflow_instructions | None). ABC caps
+    deliveryAppointment.instructions at 255 chars, so anything beyond 255 is returned as
+    overflow for the caller to route into orderComments (never silently dropped). Times are
+    local military time (e.g. 13:00); fromTime is sent for ST/TR, toTime only for TR."""
     code = (d.get("appointment_type") or "").strip().upper()
     instructions = (d.get("instructions") or "").strip()
     if not code and not instructions:
-        return None
+        return None, None
     if not code:
         code = "AT"  # instructions with no explicit window -> Anytime delivery.
     appt: dict = {"instructionsTypeCode": code}
+    overflow = None
     if instructions:
         appt["instructions"] = instructions[:255]
+        if len(instructions) > 255:
+            overflow = instructions[255:]
     if code in ("ST", "TR") and (d.get("appointment_from") or "").strip():
         appt["fromTime"] = d["appointment_from"].strip()
     if code == "TR" and (d.get("appointment_to") or "").strip():
         appt["toTime"] = d["appointment_to"].strip()
-    return appt
+    return appt, overflow
 
 
 def _validate_delivery(d: dict) -> list[str]:
@@ -695,19 +700,27 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
         order_lines.append(ol)
     order = {"requestId": payload.submission_key, "purchaseOrder": po.number, "branchNumber": po.abc_branch_number,
              "deliveryService": payload.delivery_service, "typeCode": "SO", "currency": "USD", "shipTo": ship_to, "lines": order_lines}
-    if (payload.order_comments or "").strip():
-        # ABC contract: order-level comments are an array of {code, description} objects.
-        # "H" = header comment (the RoofSpan order-level note maps to a header comment).
-        order["orderComments"] = [{"code": "H", "description": payload.order_comments.strip()[:1000]}]
     dates = {}
     if delivery.get("requested_date"):
         dates["deliveryRequestedFor"] = delivery["requested_date"]
     if dates:
         order["dates"] = dates
-    # ABC contract: the time window is a separate `deliveryAppointment` object, NOT dates.deliveryAppointmentTime.
-    appointment = _build_delivery_appointment(delivery)
+    # ABC contract: the time window + delivery instructions live in a separate `deliveryAppointment`
+    # object (NOT dates.deliveryAppointmentTime). Instructions over ABC's 255-char limit overflow into
+    # orderComments so a long delivery note is never lost.
+    appointment, instr_overflow = _build_delivery_appointment(delivery)
     if appointment:
         order["deliveryAppointment"] = appointment
+    # ABC contract: order-level comments are an array of {code, description} objects.
+    order_comments = []
+    if (payload.order_comments or "").strip():
+        # "H" = header comment (the RoofSpan order-level note).
+        order_comments.append({"code": "H", "description": payload.order_comments.strip()[:1000]})
+    if instr_overflow:
+        # "D" = detail comment carrying the remainder of a >255-char delivery instruction.
+        order_comments.append({"code": "D", "description": ("Delivery instructions (continued): " + instr_overflow)[:1000]})
+    if order_comments:
+        order["orderComments"] = order_comments
 
     client, _ = await _abc_client(db, request)
     try:

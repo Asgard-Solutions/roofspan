@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P1 — Delivery Instructions Routed to ABC (deliveryAppointment.instructions + overflow) — FIXED & VERIFIED (2026-06)
+- Bug: RoofSpan collected `delivery.instructions` (ABC delivery editor) but the final ABC order never reliably sent them. ABC supports them via `deliveryAppointment.instructions` (255-char limit); longer notes belong in `orderComments`.
+- Fix (`routers/purchasing.py`): `_build_delivery_appointment` now returns `(appointment, overflow)` — instructions go into `deliveryAppointment.instructions` capped at 255; anything beyond 255 is returned as overflow and appended to `order["orderComments"]` as a `{code:"D", description:"Delivery instructions (continued): …"}` entry (alongside any user "H" header comment). Nothing is lost.
+- Verified: testing_agent iteration_99 = backend 100% (12/12 new `test_abc_delivery_instructions_routing.py` + 36/36 sibling contract suites, no regression).
+
 ## P0 — Job Material Plan ABC PO Auto-Persists Default Ship-To/Branch — FIXED & VERIFIED (2026-06)
 - Bug: `JobMaterialPlan.jsx` supplied line-level `abc_item_number`/`abc_uom` but never the PO's `abc_ship_to_number`/`abc_branch_number`, so ABC submit rejected the PO. There was no UI to repair the missing context.
 - Fix: handled at the SAME backend choke point (`create_po`) so EVERY PO-creation source behaves the same — for an ABC PO, the ABC integration's default Ship-To/branch are resolved and PERSISTED onto the PO and each ABC line at creation (caller-supplied line ABC identity is kept). If defaults are missing (or a line is unmappable), the PO downgrades to a standard draft with `abc_setup_warning` rather than an unsubmittable ABC PO. Explicit body Ship-To/branch are respected (not overwritten). `JobMaterialPlan.jsx` now also surfaces the warning as a toast.
