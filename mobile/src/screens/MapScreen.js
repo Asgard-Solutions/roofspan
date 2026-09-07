@@ -10,7 +10,7 @@ import { C, PIN } from "../theme";
 import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
 import { downloadSectionArea, sectionBounds } from "../offlineTiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
-import { CACHE_SECTIONS, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
+import { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
 
 let MapLibre = null;
 if (Platform.OS !== "web") {
@@ -141,44 +141,48 @@ export default function MapScreen({ navigation }) {
   const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
   const [ticket, setTicket] = useState(null);
 
-  const loadSectionProps = useCallback(async (id) => {
-    if (!id) { setFeatures([]); return; }
+  // FULL authorized property dataset — the PERMANENT map source. Loaded independently of canvass
+  // sections; a section is only an overlay + camera focus and never replaces this dataset.
+  const loadMapProps = useCallback(async () => {
     try {
-      const g = await api.get(`/mobile/canvass-sections/${id}/properties`);
+      const g = await api.get("/mobile/map/properties");
       const feats = g.data.features || [];
       setFeatures(feats);
-      await putCache(propsCacheKey(id), feats);
+      await putCache(CACHE_MAP_PROPS, feats);
+      return true;
     } catch (e) {
-      setFeatures((await getCache(propsCacheKey(id))) || []);
+      const cached = await getCache(CACHE_MAP_PROPS);
+      setFeatures(cached || []);
+      return false;
     }
   }, []);
 
   const load = useCallback(async () => {
-    let secs = [];
-    let online = true;
-    let mapCfg = null;
-    try {
-      const [s, m] = await Promise.all([api.get("/mobile/canvass-sections"), api.get("/map-config")]);
-      secs = s.data.sections || [];
-      mapCfg = m.data;
-      await putCache(CACHE_SECTIONS, secs);
-      await putCache("mapcfg", m.data);
-    } catch (e) {
-      online = false;
-      secs = (await getCache(CACHE_SECTIONS)) || [];
-      mapCfg = (await getCache("mapcfg")) || null;
-    }
-    setCfg(mapCfg);
+    // Independent requests with allSettled so one failed dataset never breaks the whole map.
+    const [secR, cfgR, propsOk] = await Promise.all([
+      api.get("/mobile/canvass-sections").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
+      api.get("/map-config").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
+      loadMapProps(),
+    ]);
+
+    let secs;
+    if (secR.ok) { secs = secR.data.sections || []; await putCache(CACHE_SECTIONS, secs); }
+    else { secs = (await getCache(CACHE_SECTIONS)) || []; }
     setSections(secs);
-    setOfflineNoCache(!online && secs.length === 0);
-    const sel = pickDefaultSection(secs);
-    setSelId(sel);
-    await loadSectionProps(sel);
+
+    let mapCfg;
+    if (cfgR.ok) { mapCfg = cfgR.data; await putCache(CACHE_MAP_CFG, cfgR.data); }
+    else { mapCfg = (await getCache(CACHE_MAP_CFG)) || null; }
+    setCfg(mapCfg);
+
+    // Offline with no usable data at all -> show the offline-no-cache hint (map otherwise renders).
+    const cachedProps = (await getCache(CACHE_MAP_PROPS)) || [];
+    setOfflineNoCache(!cfgR.ok && !secR.ok && !propsOk && cachedProps.length === 0);
+
+    // Default-select a section for camera focus ONLY; this does NOT change the property dataset.
+    setSelId((cur) => cur || pickDefaultSection(secs));
     setLoaded(true);
 
-    // Best-effort tile authorization: mint a short-lived ticket and register it as a global header
-    // so tile URLs stay secret-free and stable. If offline, cached tiles still render from the
-    // ambient cache; only new tiles are unavailable until reconnected.
     if (NATIVE_MAP_OK && mapCfg && mapCfg.maptiler_configured && pairing) {
       ensureAmbientCache();
       try {
@@ -191,11 +195,12 @@ export default function MapScreen({ navigation }) {
         }
       } catch (e) { /* keep any previously registered ticket */ }
     }
-  }, [loadSectionProps, pairing]);
+  }, [loadMapProps, pairing]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const selectSection = async (id) => { setSelId(id); await loadSectionProps(id); };
+  // Selecting a section highlights + focuses the camera. It NEVER mutates the master property dataset.
+  const selectSection = (id) => setSelId(id);
   const openProp = (pid) => navigation.navigate("Property", { id: pid });
 
   const selected = sections.find((s) => s.id === selId) || null;
@@ -309,9 +314,12 @@ export default function MapScreen({ navigation }) {
   const header = (
     <View style={s.hero} testID="my-area-header">
       <Text style={s.heroKicker}>MY AREA</Text>
-      <Text style={s.heroTitle} testID="my-area-title">{selected ? selected.name : "No canvass area assigned"}</Text>
-      {selected ? <Text style={s.heroSub}>{visibleFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text> : null}
-      {sections.length > 1 && (
+      <Text style={s.heroTitle} testID="my-area-title">{selected ? selected.name : "My Area"}</Text>
+      <Text style={s.heroSub}>{visibleFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text>
+      {loaded && sections.length === 0 ? (
+        <Text style={s.heroSub} testID="no-section-note">No canvass area assigned — showing your full property map.</Text>
+      ) : null}
+      {sections.length >= 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
           {sections.map((sec) => (
             <TouchableOpacity key={sec.id} onPress={() => selectSection(sec.id)} testID={`section-chip-${sec.id}`}
@@ -340,21 +348,13 @@ export default function MapScreen({ navigation }) {
     </View>
   );
 
-  // Empty / offline states
-  if (loaded && sections.length === 0) {
+  // Full-screen state ONLY when there is genuinely no data to show (offline with empty caches).
+  // A user with zero canvass sections still gets the full map below — sections are overlays, not a gate.
+  if (loaded && offlineNoCache) {
     return (
       <View style={s.center} testID="no-area-state">
-        {offlineNoCache ? (
-          <>
-            <Text style={s.emptyTitle}>No saved map data offline</Text>
-            <Text style={s.emptyBody}>No saved map data is available offline yet. Connect to RoofSpan Office to sync your assigned area.</Text>
-          </>
-        ) : (
-          <>
-            <Text style={s.emptyTitle}>No canvass area assigned</Text>
-            <Text style={s.emptyBody}>Your office has not assigned you a canvass section yet.</Text>
-          </>
-        )}
+        <Text style={s.emptyTitle}>No saved map data offline</Text>
+        <Text style={s.emptyBody}>No saved map data is available offline yet. Connect to RoofSpan Office to sync your property map.</Text>
       </View>
     );
   }

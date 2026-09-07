@@ -585,6 +585,52 @@ async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(requir
     return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}
 
 
+# ---------- Full authorized property map (Field "My Area" master dataset; NOT gated by canvass sections) ----------
+async def _authorized_territory_ids(db: AsyncSession, user: User):
+    """The set of territory ids a Field user may see on the map, or None for 'all' (management).
+    Sales visibility = territories where the user has an assigned canvass section. This is independent
+    of which section is *selected*, and independent of whether any section is currently assigned."""
+    if not _sales_only(user):
+        return None  # management: full authorized map
+    rows = (await db.execute(
+        select(CanvassSection.territory_id).where(
+            CanvassSection.assigned_user_id == user.id, CanvassSection.active.is_(True))
+    )).scalars().all()
+    return {t for t in rows if t is not None}
+
+
+@router.get("/map/properties")
+async def mobile_map_properties(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Full property GeoJSON the logged-in Field user is authorized to see — the PERMANENT map dataset.
+    Server enforces visibility (never an unrestricted Office endpoint). Independent of canvass sections:
+    a user with zero assigned sections still gets their authorized properties. Properties without usable
+    coordinates are safely excluded."""
+    stmt = select(Property).where(Property.latitude.isnot(None), Property.longitude.isnot(None))
+    territory_ids = await _authorized_territory_ids(db, user)
+    if territory_ids is not None:
+        if not territory_ids:
+            return {"type": "FeatureCollection", "features": []}  # authorized set is empty (still a valid map)
+        stmt = stmt.where(Property.territory_id.in_(territory_ids))
+    rows = (await db.execute(stmt)).scalars().all()
+    features = []
+    for p in rows:
+        last_visit = (await db.execute(
+            select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()).limit(1)
+        )).scalars().first()
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [p.longitude, p.latitude]},
+            "properties": {
+                "id": str(p.id), "address": p.formatted_address, "do_not_knock": p.do_not_knock,
+                "property_type": p.property_type, "owner_occupied": p.owner_occupied,
+                "occupancy": ("owner" if p.owner_occupied is True else "tenant" if p.owner_occupied is False else "unknown"),
+                "last_outcome": last_visit.outcome if last_visit else None,
+                "last_visited_at": last_visit.visited_at.isoformat() if last_visit else None,
+            },
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
 # ---------- Canvass Sections (mobile field assignment; server-authoritative visibility) ----------
 def _sales_only(user: User) -> bool:
     return user.role == "sales"
