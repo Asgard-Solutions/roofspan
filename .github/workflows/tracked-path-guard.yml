@@ -1,0 +1,12 @@
+name: tracked-path-guard
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tracked-path-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-tracked-paths.sh
