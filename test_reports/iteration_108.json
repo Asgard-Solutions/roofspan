@@ -1,0 +1,28 @@
+{
+  "summary": "P0 regression coverage for the RoofSpan Field 'My Area' map data-architecture fix. Added backend suite test_mobile_map_properties.py (6 tests) exercising GET /api/mobile/map/properties authorization, geojson correctness, and zero-section behavior + a canvass-sections isolation regression. Added mobile pure-Node suite map_data_flow.node.test.js (27 assertions) proving the data-flow invariants: full property dataset is INDEPENDENT of canvass sections; SELECT_SECTION never mutates the master collection; zero sections keeps features + config; CACHE_MAP_PROPS / CACHE_SECTIONS / CACHE_MAP_CFG are distinct and CACHE_MAP_PROPS is NOT section-keyed; peer-endpoint failures never clear other datasets; offlineNoCache is only set when everything failed AND no cache exists. All 6 new backend tests + full canvass_sections (10) + mobile_api (10) suites pass = 26/26. All 3 mobile node suites (canvass.node.test.js, mapconfig.node.test.js, map_data_flow.node.test.js) pass. Native renderer intentionally not tested (React Native map).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_mobile_map_properties.py",
+    "/app/mobile/src/tests/map_data_flow.node.test.js",
+    "/app/test_reports/pytest/map_properties.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/routers/mobile.py mobile_map_properties issues a per-property N+1 sub-select for the last Visit (line 617-619). Fine for current fixtures but will scale poorly on large territories; consider a single windowed query (DISTINCT ON property_id ORDER BY visited_at DESC) or lateral join.",
+    "MapScreen.js load() uses Promise.all wrapped in per-promise .catch(() => ({ok:false})) rather than Promise.allSettled. Functionally equivalent to allSettled (no rejection escapes), but the review request literally says allSettled — cosmetic only, invariants hold.",
+    "_authorized_territory_ids treats sales with zero ACTIVE assigned sections as empty scope. This is correct per spec, but note that if a sales user's section is soft-deactivated they will silently lose their entire map — worth surfacing a UX hint (frontend already shows 'No canvass area assigned' note).",
+    "GET /mobile/map/properties returns HTTP 200 with an empty FeatureCollection when unauthorized-territory sales user calls; distinguishing 'authorized but empty' from 'coordinates missing' is not exposed to the client. Not blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_mobile_map_properties.py (new)",
+    "/app/mobile/src/tests/map_data_flow.node.test.js (new)"
+  ],
+  "success_rate": {"backend": "100% (6/6 new + 20/20 regression = 26/26)", "frontend": "N/A (backend-only per request); mobile node tests 100% (3 files pass)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md). New backend suite seeds ephemeral users cvown_*/maprep_*/mapzero_* directly via the async DB — no durable credentials created.",
+  "seed_data_creation": "Ephemeral only: 3 users, 2 territories, 5 properties (incl. one no-coords + one DNK), 1 active canvass section, 2 visits per test-module. Idempotent per run via uuid suffix. No cleanup needed for CI.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend/Postgres was NOT running on container start; I ran `supervisord -c /etc/supervisor/supervisord.conf` to bring up postgresql+backend+frontend before running tests. If future iterations start with services down, run the same command and wait ~10s for postgres to accept connections. New tests are hermetic; each seeds its own uuid-suffixed users/territory. To rerun: `cd /app/backend && python -m pytest tests/test_mobile_map_properties.py -v` and `cd /app/mobile && node src/tests/map_data_flow.node.test.js`. Mobile node tests are run directly (no jest). Frontend/native map rendering intentionally NOT exercised — this fix is about data architecture.",
+  "rca of the issue": "N/A — testing the already-applied fix. Root-cause per the request: MapScreen previously loaded /mobile/canvass-sections first, then loaded that section's properties as the map's master dataset. Field users with zero assigned sections had features=[] and saw no map. Additionally /mobile/canvass-sections and /map-config shared one Promise.all so one failure poisoned both. Fix verified end-to-end at the API + data-flow layer: (1) new GET /api/mobile/map/properties enforces server-side visibility, returns 200 + empty FC for zero-section sales users, excludes properties without coordinates, and returns the exact feature.properties contract (id, address, property_type, owner_occupied, occupancy, do_not_knock, last_outcome, last_visited_at). (2) MapScreen load() uses independent per-promise .catch fallbacks; three distinct caches (CACHE_MAP_PROPS, CACHE_SECTIONS, CACHE_MAP_CFG); SELECT_SECTION is a pure setter that never touches the property collection; offlineNoCache is only true when every dataset failed and no cache exists. All invariants asserted via the pure reducer in the new node suite."
+}

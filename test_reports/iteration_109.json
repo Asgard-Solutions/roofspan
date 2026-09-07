@@ -1,0 +1,36 @@
+{
+  "summary": "P0 verification of RoofSpan Field MAP diagnostic (stop swallowing native/JS map-init errors after Expo 57 / RN 0.86 / React 19.2 upgrade). Ran all four requested mobile pure-Node suites directly: map_diagnostics.node.test.js (33 assertions PASS), map_data_flow.node.test.js (27 checks PASS), canvass.node.test.js (11 checks PASS), mapconfig.node.test.js (44 checks PASS). Statically confirmed the MapScreen + Diagnostics wiring end-to-end: MapErrorBoundary.componentDidCatch now forwards to props.onError (no swallow, guarded try/catch); MapScreen passes onError={recordMapError}; recordMapError builds a redacted diagnostic from live cfg/base/ticket + loadStateRef and persists it under 'map_diag_last' via putCache; loadStateRef is populated from the three independent load() results ({mapConfigLoaded: cfgR.ok, propertiesLoaded: propsOk, canvassLoaded: secR.ok}) so a data failure is distinguishable from a native map crash; the raw tile ticket is NEVER recorded (only !!ticket). Diagnostics.js renders a 'Map renderer' card testID=diag-map-renderer with all required testIDs (diag-map-js/native/style/cfg/props/canvass/base/maptiler/ticket/error) and diag-map-none when the cache is empty. package.json confirmed unchanged: expo 57.0.20, react-native 0.86.3, @maplibre/maplibre-react-native ^10.0.0. Redaction proof (from test 3): Bearer/JWT/token=/key=/access_token= substrings are replaced with [REDACTED]/[REDACTED_JWT] and no raw secret substring survives in the serialized record; the record has no access_token/refresh_token/authorization/api_key/maptiler_key/pairing_secret/raw_ticket fields; tile_ticket_present is a boolean. Environment limit acknowledged and NOT bypassed: mobile/node_modules is not installed, so Expo Doctor / Metro bundling / native Android/iOS builds / on-device rendering were NOT executed and are NOT claimed as passing — those remain for a real build/device.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/mobile/src/tests/map_diagnostics.node.test.js",
+    "/app/mobile/src/tests/map_data_flow.node.test.js",
+    "/app/mobile/src/tests/canvass.node.test.js",
+    "/app/mobile/src/tests/mapconfig.node.test.js",
+    "/app/mobile/src/mapDiagnostics.js",
+    "/app/mobile/src/screens/MapScreen.js",
+    "/app/mobile/src/screens/Diagnostics.js"
+  ],
+  "action_items": [
+    "PENDING (out-of-scope here): real EAS/dev build on Android + iOS device to confirm the native MapLibre v10 module actually initializes on Expo SDK 57 / RN 0.86. This container cannot execute Metro bundling or native builds; MapErrorBoundary + recordMapError will now surface the real cause into Field Diagnostics if it does fail on-device."
+  ],
+  "critical_code_review_comments": [
+    "mapDiagnostics.scrubSecrets is defense-in-depth only — the primary guarantee (never receiving raw secrets) is enforced at the call site: MapScreen.recordMapError passes tileTicketPresent=!!ticket, and never passes maptiler key / pairing secret / access token as fields. This layering is correct.",
+    "MapScreen.recordMapError is wrapped in try/catch (diagnostics must never crash the app) AND the boundary's componentDidCatch invocation of onError is also try/catch — good, matches the review requirement that recordMapError must never throw and the boundary must never re-throw.",
+    "loadStateRef is updated from independent per-promise .catch fallbacks (not Promise.allSettled literally, but semantically identical since no rejection escapes). Preserves the failure-isolation invariant from iteration_108 (canvass failure does not clear properties/config; props failure falls back to CACHE_MAP_PROPS).",
+    "recordMapError reads React state values (cfg, base, ticket) closed over via useCallback deps — correct; on failure the diagnostic reflects the load state as of the last successful setState.",
+    "Minor: recordMapError re-runs buildMapStyle(cfg) synchronously to compute map_style_built. Cheap and idempotent; acceptable.",
+    "Diagnostics screen reads getCache('map_diag_last') on mount inside a try/catch — no crash path when cache is absent; diag-map-none testID is rendered instead. Good."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (backend-only flag was used to skip web-frontend automation; no backend API changes in this task)",
+    "mobile_node_tests": "100% (4/4 suites: map_diagnostics 33/33, map_data_flow 27/27, canvass 11/11, mapconfig 44/44)"
+  },
+  "test_credentials": "N/A — pure mobile logic; no backend/API calls.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To re-run the pure mobile suites (no node_modules required): cd /app/mobile && node src/tests/map_diagnostics.node.test.js && node src/tests/map_data_flow.node.test.js && node src/tests/canvass.node.test.js && node src/tests/mapconfig.node.test.js. Run each file explicitly — shell-glob wildcards are unreliable here. The redaction contract lives in mobile/src/mapDiagnostics.js (scrubSecrets + buildMapDiagnostic); the wiring lives in mobile/src/screens/MapScreen.js (MapErrorBoundary.componentDidCatch -> props.onError; recordMapError; loadStateRef) and mobile/src/screens/Diagnostics.js (Map renderer card). What is STILL PENDING and cannot be done in this container: real Android/iOS device build to confirm MapLibre v10 native module actually initializes on Expo SDK 57 / RN 0.86 — but if it doesn't, the redacted diagnostic will now be captured in getCache('map_diag_last') and shown on the Field Diagnostics screen.",
+  "rca of the issue": "N/A — this iteration verifies the applied fix. Root cause per request: MapScreen.MapErrorBoundary had componentDidCatch(){} which swallowed the real map-init error, so every failure looked like a generic 'map unavailable' — engineers could not tell whether it was (a) native module unavailable, (b) style build failure, (c) map-config load failure, or (d) properties/canvass data failure being misreported as a render crash. Fix verified: componentDidCatch now forwards to props.onError; onError=recordMapError builds a redacted operational snapshot with distinct booleans for maplibre_js_loaded / maplibre_native_available / map_style_built / map_config_loaded / properties_loaded / canvass_loaded / active_base_layer / maptiler_configured / tile_ticket_present, plus error name/message/stack scrubbed of Bearer/JWT/token=/key=/access_token= substrings. Persisted to cache key 'map_diag_last' and surfaced by Diagnostics.js as testID=diag-map-renderer."
+}

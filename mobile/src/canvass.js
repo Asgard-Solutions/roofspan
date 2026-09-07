@@ -4,6 +4,8 @@
  * already-authorized data for rendering + offline caching.
  */
 const CACHE_SECTIONS = "canvass_sections";
+const CACHE_MAP_PROPS = "map_props_full";  // last good FULL authorized property dataset (not section-keyed)
+const CACHE_MAP_CFG = "mapcfg";            // last good map configuration
 
 function propsCacheKey(id) {
   return `canvass_props_${id}`;
@@ -24,4 +26,4 @@ function pinColor(doNotKnock, brandColor, dnkColor) {
   return doNotKnock ? dnkColor : brandColor;
 }
 
-module.exports = { CACHE_SECTIONS, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, pinColor };
+module.exports = { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, pinColor };

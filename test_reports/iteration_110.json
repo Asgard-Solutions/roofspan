@@ -1,0 +1,38 @@
+{
+  "summary": "Release-readiness AUDIT + REGRESSION pass for RoofSpan Field 'My Area'. Audited the applied code (backend GET /api/mobile/map/properties + _authorized_territory_ids; MapScreen loadMapProps/load/selectSection/MapErrorBoundary; mapDiagnostics scrubSecrets; canvass CACHE_* keys) and confirmed the invariants in-source. Extended two existing suites to LOCK RT1-RT5 + authorization as PERMANENT named tests: (a) backend tests/test_mobile_map_properties.py now has explicit test_RT1_no_canvass_assignment_returns_populated_or_valid_empty_state and test_RT_authorization_map_endpoint_does_not_widen_scope (sales set is a strict subset of management set, cross-territory p_b excluded from map AND 403 on detail); (b) mobile/src/tests/map_data_flow.node.test.js adds explicit RT1..RT5 named assertions plus STATIC WIRING checks against MapScreen.js source (loadMapProps catch does NOT putCache; selectSection is a pure setSelId setter; no catch path putCache's empty CACHE_MAP_PROPS/CFG/SECTIONS). Ran the related regression suites end-to-end: backend test_mobile_map_properties (8/8), test_canvass_sections (10/10), test_mobile_api (10/10) = 28/28 PASS. Mobile pure-Node: map_diagnostics 33/33, map_data_flow 48/48 (was 27, added 21 RT-named), canvass 11/11, mapconfig 44/44, sketch_cache 15/15, sync (live) 6/6, sync_diagnostics PASS, sync_status 5/5, transport 8/8, pairing 11/11, refresh PASS, scope 7/7. No defects introduced or found; no code paths clear the master property collection or valid cache. Environment limits honored and reported: mobile/node_modules is NOT installed (only 3 stub folders) — Expo Doctor, Metro bundling, native Android/iOS builds CANNOT run in this container and are NOT claimed passing. Physical-device acceptance for MapLibre v10 on Expo SDK 57 / RN 0.86 is still required for release sign-off.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_mobile_map_properties.py",
+    "/app/mobile/src/tests/map_data_flow.node.test.js",
+    "/app/test_reports/pytest/rt_release_readiness.xml"
+  ],
+  "action_items": [
+    "PENDING (out-of-scope; container-blocked): install mobile/node_modules on a real dev/build host, then run 'npx expo-doctor' and an EAS Android + iOS dev-client build to confirm MapLibre v10 native module initializes on Expo SDK 57 / RN 0.86. If it fails, the redacted diagnostic will now be captured in getCache('map_diag_last') and surfaced by Diagnostics.js (testID=diag-map-renderer).",
+    "OPTIONAL (spec-clarification, not a defect): _authorized_territory_ids grants TERRITORY-wide map visibility to a sales user, while property-detail (assert_property_access) enforces stricter SECTION/lead/job membership. Both scopes are enforced server-side; the map is intentionally a wider 'overview' scope. If product wants map scope == detail scope, tighten mobile.mobile_map_properties to join CanvassSectionProperty and UNION Lead.property_id / Job.property_id. Documented but NOT changed since the current behavior matches the review's explicit RT1 wording (zero-section sales -> 200 empty FC) and 'sales gets territories where they have an assigned active canvass section'."
+  ],
+  "critical_code_review_comments": [
+    "backend/routers/mobile.py mobile_map_properties still issues a per-property N+1 sub-select for the last Visit (lines 617-619). Fine at current scale; recommend a single windowed query (DISTINCT ON property_id ORDER BY visited_at DESC) for larger territories.",
+    "MapScreen.load() uses Promise.all + per-promise .catch(() => ({ok:false})) which is semantically identical to Promise.allSettled since no rejection escapes. Failure isolation invariant holds; cosmetic-only comment.",
+    "loadMapProps catch path correctly reads CACHE_MAP_PROPS and never putCache's on failure (statically asserted by RT3 wiring check). selectSection is literally 'setSelId(id)' (statically asserted by RT4 wiring check). Both are the exact invariants the review requires.",
+    "mapDiagnostics.scrubSecrets is defense-in-depth; the primary secret-avoidance is at the recordMapError call site (only passes !!ticket, never raw keys/tokens). Redaction contract tests pass (33 assertions).",
+    "recordMapError is wrapped in try/catch AND the MapErrorBoundary.componentDidCatch is also try/catch when forwarding to props.onError. Diagnostics can never crash the app."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_mobile_map_properties.py (extended: +2 permanent RT/authorization tests, 8 total)",
+    "/app/mobile/src/tests/map_data_flow.node.test.js (extended: +21 RT1-RT5 named assertions + static MapScreen.js wiring checks, 48 total)"
+  ],
+  "success_rate": {
+    "backend": "100% (28/28: 8 map_properties incl. RT1+authorization-bypass, 10 canvass_sections, 10 mobile_api)",
+    "mobile_node_tests": "100% (12/12 suites; sync ran against live backend and PASSED)",
+    "expo_doctor": "NOT RUNNABLE (mobile/node_modules absent in container)",
+    "metro_bundler": "NOT RUNNABLE (mobile/node_modules absent in container)",
+    "native_android_ios_build": "NOT RUNNABLE (container has no Android SDK / Xcode / EAS credentials)"
+  },
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md, unchanged). Backend suite seeds ephemeral uuid-suffixed users (mapown_*/maprep_*/mapzero_*) directly via async DB session; no durable accounts created; no /app/memory/test_credentials.md changes.",
+  "seed_data_creation": "Ephemeral only: 3 users, 2 territories, 5 properties (incl. one no-coords + one DNK), 1 active canvass section, 2 visits. Idempotent per run via uuid suffix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "RT1-RT5 + authorization-bypass are now PERMANENT named tests. Backend: cd /app/backend && python -m pytest tests/test_mobile_map_properties.py -v (tests: test_RT1_no_canvass_assignment_returns_populated_or_valid_empty_state, test_RT_authorization_map_endpoint_does_not_widen_scope, plus the earlier 6). Mobile pure-Node: cd /app/mobile && node src/tests/map_data_flow.node.test.js (48 assertions incl. RT1..RT5 named). Wildcard globs are still unreliable; invoke each .node.test.js file explicitly. Environment limit persists: mobile/node_modules has only 3 stub dirs — Expo Doctor / Metro / native builds are not runnable here. If Postgres isn't up at container start, run 'supervisord -c /etc/supervisor/supervisord.conf' and wait ~10s.",
+  "rca of the issue": "N/A — this pass is release-readiness audit + regression lock, not bug hunting. All applied fixes from iterations 108/109 remain in effect and are now permanently guarded by explicitly-named RT1-RT5 tests + an authorization-bypass test that asserts the sales set is a strict subset of the management set and cross-territory IDs are refused on both /mobile/map/properties and /api/properties/{id}. Physical-device acceptance for MapLibre v10 native init is still required and cannot be executed in this container."
+}
