@@ -454,6 +454,38 @@ def _order_record(conf: str, order_number: str, order: dict) -> dict:
     }
 
 
+_VALID_ORDER_COMMENT_CODES = {"H", "F", "D"}
+
+
+def _validate_comments(order: dict, lines: list) -> str | None:
+    """Enforce ABC's comment contract. Returns an error message, or None if valid.
+    Order-level: `orderComments` must be a list of {code in H/F/D, description}. A bare
+    `comments` string (the pre-fix shape) is rejected. Line-level: same {code, description} objects."""
+    if "comments" in order:
+        return "Invalid order: use `orderComments` array of {code, description}, not a `comments` string."
+    oc = order.get("orderComments")
+    if oc is not None:
+        if not isinstance(oc, list):
+            return "Invalid orderComments: expected an array of {code, description} objects."
+        for c in oc:
+            if not isinstance(c, dict) or not str(c.get("description") or "").strip():
+                return "Invalid orderComments entry: each comment needs a code and description."
+            if c.get("code") not in _VALID_ORDER_COMMENT_CODES:
+                return f"Invalid orderComments code '{c.get('code')}': must be one of H, F, D."
+    for ln in lines:
+        lc = ln.get("comments")
+        if lc is None:
+            continue
+        if not isinstance(lc, list):
+            return "Invalid line comments: expected an array of {code, description} objects."
+        for c in lc:
+            if not isinstance(c, dict) or not str(c.get("description") or "").strip():
+                return "Invalid line comment entry: each comment needs a code and description."
+            if c.get("code") not in _VALID_ORDER_COMMENT_CODES:
+                return f"Invalid line comment code '{c.get('code')}': must be one of H, F, D."
+    return None
+
+
 @router.post("/api/order/v2/orders")
 async def place_order_mock(request: Request, authorization: str | None = Header(default=None)):
     _require_bearer(authorization)
@@ -461,6 +493,13 @@ async def place_order_mock(request: Request, authorization: str | None = Header(
     order = body[0] if isinstance(body, list) and body else (body if isinstance(body, dict) else {})
     lines = order.get("lines") or []
     req_id = order.get("requestId")
+    # Contract validation: comments must match ABC's shape, not a bare string. This makes the mock
+    # reject the old `comments: "..."` payloads that would fail ABC's production contract.
+    comment_err = _validate_comments(order, lines)
+    if comment_err:
+        return JSONResponse(status_code=400, content={
+            "request": {"ordersReceived": 1, "ordersFailed": 1, "ordersSucceded": 0},
+            "orders": [{"requestId": req_id, "message": comment_err}]})
     # Rejection scenario (documented error shape: 400 with per-order message).
     if any(l.get("itemNumber") == "MOCK-REJECT" for l in lines):
         return JSONResponse(status_code=400, content={

@@ -1,0 +1,23 @@
+{
+  "summary": "Verified P0 ABC Supply order-comments contract fix. Added new pytest file /app/backend/tests/test_abc_order_comments_contract.py with 12 tests covering (a) end-to-end RoofSpan POST /api/purchase-orders/{po_id}/abc-submit with order_comments (H) / per-line line_comments (D) / no comments / both — all confirmed with MOCK-CONF-* (proving the payload builder emits orderComments as an array of {code,description} objects and never a bare `comments` string, otherwise the tightened mock would 400), and (b) direct POST /api/abc-mock/api/order/v2/orders to the mock's _validate_comments helper: legacy bare `comments` string, orderComments missing description, invalid H/F/D code, line comments as bare string, and invalid line comment code — all correctly rejected with HTTP 400; correct H+D shape, H+F shape, and no-comments case accepted. Backend supervisor was not running on entry; started it before running tests.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_order_comments_contract.py",
+    "/app/test_reports/pytest/iter94_abc_comments.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/routers/purchasing.py abc_submit (lines 557-579) correctly builds orderComments = [{code:'H', description:...}] and per-line comments = [{code:'D', description:...}]. Both strings are trimmed and length-capped (1000/500).",
+    "backend/integrations/abc_supply/mock_server.py _validate_comments correctly rejects: top-level bare `comments`, non-list orderComments, missing/empty description, invalid code (only H/F/D allowed), and applies the same rules to line-level comments. Called before the MOCK-REJECT / idempotency short-circuits so bad shapes fail fast.",
+    "Nit (non-blocking): the P0 fix touches only order-level and per-line comment shapes. If ABC's contract also mandates {code,description} arrays for delivery instructions or ship-to level notes, those aren't validated here — flag for follow-up if applicable."
+  ],
+  "updated_files": ["/app/backend/tests/test_abc_order_comments_contract.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "n/a"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Each test creates its own TEST_P0_COMMENTS-tagged ABC PO via POST /api/purchase-orders; no lingering seed data expected beyond confirmed ABC submissions.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New regression file test_abc_order_comments_contract.py is authoritative for the ABC order-comments contract. Backend supervisor may need `sudo supervisord -c /etc/supervisor/supervisord.conf` if services are down (was the case at iteration 94 start). The ABC mock's OAuth token endpoint is /api/abc-mock/oauth2/v1/token (client_credentials works). ABC integration state resets when the mock reloads (in-memory token store); tests should force disconnect+reconnect in setup (already done here).",
+  "rca of the issue": "Legacy code set order['comments']=<string> and ol['comments']=<string>. ABC production requires orderComments (array of {code,description} with code in H/F/D) and line comments as the same object array. Fix in backend/routers/purchasing.py wraps both into the correct arrays with H (header) for order-level and D (detail) for line-level; the mock server's new _validate_comments helper enforces the contract with HTTP 400 so regressions to the bare-string shape are caught automatically. All 12 tests pass, confirming both the fix and the mock guardrail."
+}

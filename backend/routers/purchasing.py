@@ -564,12 +564,15 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
             length_value=length.get("value"), length_uom=length.get("uom"))
         lc = (line_comments.get(str(i.id)) or "").strip()
         if lc:
-            ol["comments"] = lc[:500]
+            # ABC contract: a line-item comment is a {code, description} object ("D" = detail comment).
+            ol["comments"] = [{"code": "D", "description": lc[:500]}]
         order_lines.append(ol)
     order = {"requestId": payload.submission_key, "purchaseOrder": po.number, "branchNumber": po.abc_branch_number,
              "deliveryService": payload.delivery_service, "typeCode": "SO", "currency": "USD", "shipTo": ship_to, "lines": order_lines}
     if (payload.order_comments or "").strip():
-        order["comments"] = payload.order_comments.strip()[:1000]
+        # ABC contract: order-level comments are an array of {code, description} objects.
+        # "H" = header comment (the RoofSpan order-level note maps to a header comment).
+        order["orderComments"] = [{"code": "H", "description": payload.order_comments.strip()[:1000]}]
     dates = {}
     if delivery.get("requested_date"):
         dates["deliveryRequestedFor"] = delivery["requested_date"]

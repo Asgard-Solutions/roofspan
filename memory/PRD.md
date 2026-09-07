@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — ABC Supply Order Comments Contract (orderComments array) — FIXED & VERIFIED (2026-06)
+- Bug: `backend/routers/purchasing.py abc_submit` sent `order["comments"] = <string>` and per-line `ol["comments"] = <string>`. ABC's production API requires `orderComments` as an ARRAY of `{code, description}` objects (code ∈ H=header / F=footer / D=detail); line items likewise need `{code, description}` object arrays. The bare-string shape passed our mock but violated ABC's contract.
+- Fix: order-level note → `order["orderComments"] = [{"code":"H","description":note[:1000]}]`; per-line note → `ol["comments"] = [{"code":"D","description":note[:500]}]`. Tightened the ABC mock (`integrations/abc_supply/mock_server.py` new `_validate_comments()` in `place_order_mock`) to return HTTP 400 for any bare `comments` string or an orderComments/line-comment entry with an invalid code or missing description — so regression to the old shape now fails fast.
+- Verified: testing_agent iteration_94 = backend 100% (12/12). New regression suite `backend/tests/test_abc_order_comments_contract.py` covers e2e submit (H order comment, D line comment, both, none → all confirmed) + direct mock rejection of every legacy/invalid shape.
+
+
 ## Office Update Install Fails 0x80070666 (1638) — Version Not Bumped — FIXED (2026-09)
 - Bug: running the Office update installer gave `0x80070666 - Another version of this product is already installed`. Root cause: the update installer was built while `windows/VERSION` was still `0.4.5` — the SAME version already installed. The entire Windows stack is version-gated off that single file (WiX MSI `ProductVersion` = `$(var.Version)`, the Burn bundle `Version`, and the update-service `decide_update` which only applies when `installed < manifest.version`). Installing 0.4.5 over an installed 0.4.5 → MSI/Burn refuse (1638). An update MUST carry a higher version.
 - Fix: bumped `windows/VERSION` `0.4.5` → `0.4.6` (single source of truth). Verified: `version.py` reads 0.4.6; `parse_version('0.4.6') > parse_version('0.4.5')`; `updater/manifest.compare_versions('0.4.5','0.4.6') == -1` (update now offered, was `0` = the bug). Also fixed a stale `test_version_is_valid_semver` that hardcoded `"0.1.0-dev"` → now asserts `DISPLAY_VERSION == f"{ROOFSPAN_VERSION}-dev"` (format, not a frozen number).
