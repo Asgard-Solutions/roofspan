@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — Job Material Plan ABC PO Auto-Persists Default Ship-To/Branch — FIXED & VERIFIED (2026-06)
+- Bug: `JobMaterialPlan.jsx` supplied line-level `abc_item_number`/`abc_uom` but never the PO's `abc_ship_to_number`/`abc_branch_number`, so ABC submit rejected the PO. There was no UI to repair the missing context.
+- Fix: handled at the SAME backend choke point (`create_po`) so EVERY PO-creation source behaves the same — for an ABC PO, the ABC integration's default Ship-To/branch are resolved and PERSISTED onto the PO and each ABC line at creation (caller-supplied line ABC identity is kept). If defaults are missing (or a line is unmappable), the PO downgrades to a standard draft with `abc_setup_warning` rather than an unsubmittable ABC PO. Explicit body Ship-To/branch are respected (not overwritten). `JobMaterialPlan.jsx` now also surfaces the warning as a toast.
+- Verified: testing_agent iteration_98 = backend 100% (7/7 across `test_abc_po_setup_warning.py` + new `test_abc_po_jobmaterialplan_body.py`): JMP-style body (lines with ABC identity, no PO Ship-To/branch) → defaults auto-populated + submittable; missing defaults → downgrade + warning; explicit override respected.
+
 ## P0 — Reorder Suggestions ABC PO Now Resolvable/Submittable (or flagged) — FIXED & VERIFIED (2026-06)
 - Bug: `ReorderSuggestions.jsx` created POs with `integration_provider='abc_supply'` but only sent generic material info — no ABC item number, UOM, Ship-To, or branch — so `abc-submit` rejected them ("ABC-shaped paperweights").
 - Fix (server-side in `routers/purchasing.py create_po`): when the PO is ABC, resolve each line's ABC identity from `Material.abc_item_number/abc_uom` → fallback to the linked `AbcCatalogItem` (item number, UOM, description, family, image), and apply the ABC integration's default Ship-To/branch. If ANY line is unmappable OR defaults are missing, the PO is downgraded to a standard manual draft (no partial ABC identity) and returns a clear `abc_setup_warning` (new `POOut` field) describing exactly what to fix. `ReorderSuggestions.jsx` surfaces that warning as a toast.
