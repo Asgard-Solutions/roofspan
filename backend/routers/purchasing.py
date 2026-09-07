@@ -33,6 +33,16 @@ VALID = ["draft", "ready_for_review", "ordered", "submitted", "acknowledged", "s
          "partially_received", "received", "backordered", "cancelled"]
 
 
+@router.get("/abc/delivery-services")
+async def abc_delivery_services(user: User = Depends(get_current_user)):
+    """ABC `deliveryService` enum — single source of truth so the UI and backend cannot drift.
+    Availability varies by branch (verify via the Locations API) and is subject to change."""
+    from integrations.abc_supply import orders as abc_orders
+    return {"services": abc_orders.DELIVERY_SERVICES, "default": abc_orders.DEFAULT_DELIVERY_SERVICE}
+
+
+
+
 async def _find_or_create_supplier(db: AsyncSession, name: str | None):
     if not name or not name.strip():
         return None
@@ -552,6 +562,8 @@ async def abc_submit(po_id: str, payload: AbcSubmitIn, request: Request,
     # Physical delivery address: default from the job/property, overlaid with any reviewed override.
     delivery = _normalize_delivery({**(await _default_delivery(db, po)), **(payload.delivery or {})})
     errors = errors + _validate_delivery(delivery)
+    if not abc_orders.is_valid_delivery_service(payload.delivery_service):
+        errors = errors + [f"Delivery service '{payload.delivery_service}' is not a valid ABC code."]
     if errors:
         await db.commit()
         return {"status": "validation_failed", "errors": errors}

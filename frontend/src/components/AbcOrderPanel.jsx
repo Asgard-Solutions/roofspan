@@ -12,11 +12,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Loader2, Send, RefreshCw, AlertTriangle, CheckCircle2, XCircle, HelpCircle, Truck } from "lucide-react";
 
 const norm = { processing: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", shipped: "bg-violet-50 text-violet-700", delivered: "bg-green-50 text-green-700", invoiced: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
-const DELIVERY_SERVICES = [
-  { value: "OTG", label: "Our Truck — Ground Delivery" },
-  { value: "OTB", label: "Our Truck — Boom / Rooftop" },
-  { value: "WCL", label: "Will Call — Customer Pickup" },
-];
 
 export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [loading, setLoading] = useState(false);
@@ -29,6 +24,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   const [delivery, setDelivery] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const [deliveryService, setDeliveryService] = useState("OTG");
+  const [deliveryServices, setDeliveryServices] = useState([]);
   const [orderComments, setOrderComments] = useState("");
   const [lineComments, setLineComments] = useState({});
   // Local authoritative copy of the PO so the panel can transition to the submitted view
@@ -63,6 +59,16 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
   }, [po, submitted]);
 
   useEffect(() => { if (open && po && !submitted) loadReview(); }, [open, po, submitted, loadReview]);
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const { data } = await api.get("/purchase-orders/abc/delivery-services");
+        setDeliveryServices(data.services || []);
+        if (data.default) setDeliveryService((cur) => cur || data.default);
+      } catch (e) { /* enum fetch failed; Select simply shows the current code */ }
+    })();
+  }, [open]);
   useEffect(() => { if (open && submitted) { refreshStatus(); loadActivity(); } /* eslint-disable-next-line */ }, [open, submitted]);
 
   const submit = async () => {
@@ -217,7 +223,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
                   <Label className="text-xs">Delivery Service</Label>
                   <Select value={deliveryService} onValueChange={setDeliveryService}>
                     <SelectTrigger data-testid="abc-delivery-service"><SelectValue /></SelectTrigger>
-                    <SelectContent>{DELIVERY_SERVICES.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
+                    <SelectContent>{deliveryServices.map((d) => <SelectItem key={d.code} value={d.code}>{d.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">

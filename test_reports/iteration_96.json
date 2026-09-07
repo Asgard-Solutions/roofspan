@@ -1,0 +1,22 @@
+{
+  "summary": "P0 ABC deliveryService enum single-source-of-truth verified end-to-end. Backend endpoint returns exactly the 7 documented codes with default OTG and no OTB/WCL. abc-submit rejects OTB/WCL/invalid codes with status='validation_failed' and accepts all 7 valid codes with MOCK-CONF-* confirmations. Default OTG regression passes. Frontend AbcOrderPanel dropdown (data-testid abc-delivery-service) is populated from the backend endpoint and lists exactly the 7 services (Our Truck — Ground/Roof/Window, Customer Pickup, Express Pickup, Common Carrier, Third-Party Carrier); the legacy OTB (Boom / Rooftop) and WCL (Will Call — Customer Pickup) options are absent.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_abc_delivery_services_enum.py",
+    "/app/test_reports/pytest/iter96_delivery_services.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Nice: DELIVERY_SERVICES/DEFAULT_DELIVERY_SERVICE/is_valid_delivery_service centralized in backend/integrations/abc_supply/orders.py and consumed by both the /abc/delivery-services endpoint and abc_submit validation — frontend and backend cannot drift.",
+    "Frontend AbcOrderPanel.jsx swallows the enum-fetch error silently (line ~69). Consider a toast/log so a broken endpoint is observable in dev; behaviour is otherwise correct (Select falls back to just the current code)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (7/7 options verified, OTB/WCL absent)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Each backend test creates its own ABC-linked PO (notes=TEST_P0_DELIVERY_SVC) via POST /api/purchase-orders; not cleaned up (matches existing ABC test pattern).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_abc_delivery_services_enum.py must be run with -o addopts= (or single-worker) because it disconnects/reconnects ABC in a module-scoped autouse fixture — pytest.ini's default xdist parallelism races the same fixture with the sibling test_abc_delivery_appointment_contract.py / test_abc_order_comments_contract.py files. All three ABC contract test files individually pass. Frontend dropdown labels shown in the UI: Our Truck — Ground / Our Truck — Roof / Our Truck — Window / Customer Pickup / Express Pickup / Common Carrier / Third-Party Carrier.",
+  "rca of the issue": "Prior UI-hardcoded list included OTB and WCL which are no longer in ABC's Place Orders deliveryService enum. Fixed by making backend/integrations/abc_supply/orders.py the single source of truth (7 codes; default OTG), exposing GET /api/purchase-orders/abc/delivery-services, adding server-side rejection in abc_submit via is_valid_delivery_service(), and switching AbcOrderPanel.jsx to fetch the enum on panel open."
+}

@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — ABC Supply deliveryService Enum Corrected + Centralized — FIXED & VERIFIED (2026-06)
+- Bug: `AbcOrderPanel.jsx` hardcoded OTB (Boom/Rooftop) and WCL (Will Call) which are NOT in ABC's current published `deliveryService` enum. Correct enum: COM=Common Carrier, CPU=Customer Pickup, EXP=Express Pickup, OTR=Our Truck Roof, OTG=Our Truck Ground, OTW=Our Truck Window, TPC=Third-Party Carrier.
+- Fix: single source of truth in `integrations/abc_supply/orders.py` (`DELIVERY_SERVICES`, `DELIVERY_SERVICE_CODES`, `DEFAULT_DELIVERY_SERVICE='OTG'`, `is_valid_delivery_service()`). New `GET /api/purchase-orders/abc/delivery-services` returns `{services:[{code,label}], default}`. `abc_submit` rejects an invalid `delivery_service` → `validation_failed`. Frontend `AbcOrderPanel.jsx` now fetches the enum on open (removed the hardcoded list), so UI/backend cannot drift.
+- Verified: testing_agent iteration_96 = backend 100% (17/17, `backend/tests/test_abc_delivery_services_enum.py`) + frontend 100% (dropdown lists the 7 documented services; OTB/WCL gone). NOTE: that test file must run single-worker (module-scoped ABC reconnect fixture races xdist).
+
 ## P0 — ABC Supply Delivery Appointment Contract (deliveryAppointment object) — FIXED & VERIFIED (2026-06)
 - Bug: RoofSpan sent a freeform string (e.g. "09:00-12:00") under `dates.deliveryAppointmentTime`, which ABC does not define. ABC expects a separate `deliveryAppointment` object: `instructionsTypeCode` (AT/AM/PM/FS/ST/TR), `instructions` (≤255), `fromTime` (ST & TR), `toTime` (TR only); the date stays under `dates.deliveryRequestedFor`.
 - Backend (`routers/purchasing.py`): `_normalize_delivery` now carries `appointment_type`/`appointment_from`/`appointment_to` (was `appointment_time`); new `_build_delivery_appointment()` emits the ABC object (fromTime for ST/TR, toTime only for TR; defaults to AT when only instructions given); `_validate_appointment()` (run inside `_validate_delivery`) rejects invalid codes, ST-without-from, TR-without-to. `abc_submit` sets `order["deliveryAppointment"]` and never `dates.deliveryAppointmentTime`.
