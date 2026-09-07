@@ -47,13 +47,15 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     try { const { data } = await api.get(`/integrations/abc/notifications/events/${po.id}`); setActivity(data); } catch (e) { /* none */ }
   }, [po?.id]);
 
-  const loadReview = useCallback(async () => {
+  const loadReview = useCallback(async (opts = {}) => {
     if (!po || submitted) return;
     setLoading(true); setReview(null);
     try {
       const { data } = await api.post(`/purchase-orders/${po.id}/abc-submit-review`, {});
       setReview(data);
-      setDelivery(data.delivery || {});
+      // Only seed the delivery editor from the server on the INITIAL load. A pricing refresh must never
+      // clobber delivery/date/appointment fields the rep just typed; preserve local edits.
+      setDelivery((cur) => (opts.preserveLocal && cur ? cur : (data.delivery || {})));
       setSubKey(crypto.randomUUID());
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   }, [po, submitted]);
@@ -216,7 +218,7 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
             <div className="rounded-md border border-border p-3 text-sm space-y-3" data-testid="abc-order-options">
               <div className="flex items-center justify-between">
                 <span className="font-medium text-slate-700">Delivery & Order Options</span>
-                <Button size="sm" variant="ghost" onClick={loadReview} disabled={loading} data-testid="abc-refresh-pricing"><RefreshCw className="h-3.5 w-3.5" /> Refresh ABC Pricing</Button>
+                <Button size="sm" variant="ghost" onClick={() => loadReview({ preserveLocal: true })} disabled={loading} data-testid="abc-refresh-pricing"><RefreshCw className="h-3.5 w-3.5" /> Refresh ABC Pricing</Button>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">

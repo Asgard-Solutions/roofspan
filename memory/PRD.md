@@ -1,5 +1,10 @@
 # RoofSpan — Product Requirements & Status
 
+## P2 — Refresh Pricing No Longer Wipes Unsaved Delivery Edits — FIXED & VERIFIED (2026-06)
+- Bug: `AbcOrderPanel.loadReview()` (used on open AND by "Refresh ABC Pricing") unconditionally did `setDelivery(data.delivery||{})`, so clicking Refresh wiped the requested date / appointment / delivery fields the rep had just typed.
+- Fix: `loadReview(opts={})` now seeds delivery from the server only on initial open; the Refresh button calls `loadReview({preserveLocal:true})` which updates ONLY pricing/review data and keeps the current local delivery edits. order/line comments were already separate state.
+- Verified: testing_agent iteration_103 = frontend 100% (3/3): local edits survive Refresh, initial load still seeds from server, and the preserved requested date flows through to a confirmed ABC submission (MOCK-CONF-*).
+
 ## P1 — Single Versioned ABC Place Order Contract (mock ↔ production cannot drift) — FIXED & VERIFIED (2026-06)
 - Problem: the ABC mock validated payloads ad-hoc, letting wrong shapes (WCL/OTB codes, freeform appointment strings, bare `comments`, list line-comments) pass in tests while ABC's real contract differs — that's how earlier defects survived.
 - Fix: new `integrations/abc_supply/place_order_contract.py` — a versioned contract (`CONTRACT_VERSION`) with `validate_place_order(order)->list[str]` covering the full Place Order schema (identity fields, `deliveryService` enum via single-sourced `DELIVERY_SERVICE_CODES`, line shape, `orderComments` H/F/D array, single-object line comments, `deliveryAppointment` codes + fromTime/toTime rules + 255-char instructions, and rejection of legacy `dates.deliveryAppointmentTime` / bare `comments`). BOTH the mock (`place_order_mock`) and production (`abc_submit`, defense-in-depth before send) call this one validator, so they cannot drift. Added fixture tests from ABC's documented examples.
