@@ -11,6 +11,7 @@ import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
 import { downloadSectionArea, sectionBounds } from "../offlineTiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
 import { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
+import { buildMapDiagnostic, MAP_DIAG_CACHE_KEY } from "../mapDiagnostics";
 
 let MapLibre = null;
 if (Platform.OS !== "web") {
@@ -108,7 +109,10 @@ function pinColorFor(p) {
 class MapErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { failed: false }; }
   static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch() {}
+  componentDidCatch(error, info) {
+    // Do NOT swallow: surface the real native/JS map-init failure to Field Diagnostics (redacted).
+    try { this.props.onError && this.props.onError(error, info); } catch (e) { /* never crash the boundary */ }
+  }
   render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
 
@@ -140,6 +144,31 @@ export default function MapScreen({ navigation }) {
   const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
   const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
   const [ticket, setTicket] = useState(null);
+  // Load-state tracker for map diagnostics (so a data failure is never misreported as a native map crash).
+  const loadStateRef = React.useRef({ mapConfigLoaded: false, propertiesLoaded: false, canvassLoaded: false });
+
+  // Capture (do NOT swallow) a native map-init failure into Field Diagnostics — redacted, no secrets.
+  const recordMapError = useCallback(async (error) => {
+    try {
+      const diag = buildMapDiagnostic({
+        appVersion: Constants.expoConfig?.version || Constants.manifest?.version,
+        executionEnvironment: Constants.executionEnvironment,
+        reactNativeVersion: (Platform.constants && Platform.constants.reactNativeVersion)
+          ? Object.values(Platform.constants.reactNativeVersion).slice(0, 3).join(".") : undefined,
+        maplibreJsLoaded: !!MapLibre,
+        maplibreNativeAvailable: NATIVE_MAP_OK,
+        mapStyleBuilt: !!buildMapStyle(cfg),
+        mapConfigLoaded: loadStateRef.current.mapConfigLoaded,
+        propertiesLoaded: loadStateRef.current.propertiesLoaded,
+        canvassLoaded: loadStateRef.current.canvassLoaded,
+        activeBaseLayer: base,
+        maptilerConfigured: !!(cfg && cfg.maptiler_configured),
+        tileTicketPresent: !!ticket, // BOOLEAN only — the raw ticket is never recorded
+        error,
+      });
+      await putCache(MAP_DIAG_CACHE_KEY, diag);
+    } catch (e) { /* diagnostics must never crash the app */ }
+  }, [cfg, base, ticket]);
 
   // FULL authorized property dataset — the PERMANENT map source. Loaded independently of canvass
   // sections; a section is only an overlay + camera focus and never replaces this dataset.
@@ -169,6 +198,7 @@ export default function MapScreen({ navigation }) {
     if (secR.ok) { secs = secR.data.sections || []; await putCache(CACHE_SECTIONS, secs); }
     else { secs = (await getCache(CACHE_SECTIONS)) || []; }
     setSections(secs);
+    loadStateRef.current = { mapConfigLoaded: cfgR.ok, propertiesLoaded: propsOk, canvassLoaded: secR.ok };
 
     let mapCfg;
     if (cfgR.ok) { mapCfg = cfgR.data; await putCache(CACHE_MAP_CFG, cfgR.data); }
@@ -392,7 +422,7 @@ export default function MapScreen({ navigation }) {
     const center = selected?.geometry?.coordinates?.[0]?.[0] || safeCenter(cfg);
     const fallback = renderFallback("Map unavailable — showing list view.");
     return (
-      <MapErrorBoundary fallback={fallback}>
+      <MapErrorBoundary fallback={fallback} onError={recordMapError}>
         <View style={{ flex: 1 }} testID="map-container">
           {header}
           <View style={{ flex: 1 }}>

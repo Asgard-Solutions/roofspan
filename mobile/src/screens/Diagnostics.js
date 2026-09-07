@@ -2,6 +2,8 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { syncDiagnostics, pendingSummary, runSync } from "../sync";
+import { getCache } from "../storage";
+import { MAP_DIAG_CACHE_KEY } from "../mapDiagnostics";
 import { C } from "../theme";
 
 function fmt(ts) {
@@ -26,10 +28,12 @@ function Row({ label, value, testID }) {
 export default function Diagnostics() {
   const [diag, setDiag] = useState({ mutations: [] });
   const [summary, setSummary] = useState({ counts: {} });
+  const [mapDiag, setMapDiag] = useState(null);
 
   const load = useCallback(async () => {
     setDiag(syncDiagnostics());
     try { setSummary(await pendingSummary()); } catch (e) { /* offline */ }
+    try { setMapDiag(await getCache(MAP_DIAG_CACHE_KEY)); } catch (e) { /* none */ }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -59,6 +63,27 @@ export default function Diagnostics() {
         <Row label="Conflict" value={String(c.conflict || 0)} testID="diag-count-conflict" />
         <Row label="Locked" value={String(c.locked || 0)} testID="diag-count-locked" />
         <Row label="Synced" value={String(c.synced || 0)} testID="diag-count-synced" />
+      </View>
+
+      <Text style={s.section}>Map renderer</Text>
+      <View style={s.card} testID="diag-map-renderer">
+        {mapDiag ? (
+          <>
+            <Row label="Last map failure" value={fmt(mapDiag.at)} testID="diag-map-last-failure" />
+            <Row label="MapLibre JS loaded" value={mapDiag.maplibre_js_loaded ? "yes" : "no"} testID="diag-map-js" />
+            <Row label="Native module available" value={mapDiag.maplibre_native_available ? "yes" : "no"} testID="diag-map-native" />
+            <Row label="Style built" value={mapDiag.map_style_built ? "yes" : "no"} testID="diag-map-style" />
+            <Row label="Map config loaded" value={mapDiag.map_config_loaded ? "yes" : "no"} testID="diag-map-cfg" />
+            <Row label="Properties loaded" value={mapDiag.properties_loaded ? "yes" : "no"} testID="diag-map-props" />
+            <Row label="Canvass loaded" value={mapDiag.canvass_loaded ? "yes" : "no"} testID="diag-map-canvass" />
+            <Row label="Base layer" value={mapDiag.active_base_layer || "—"} testID="diag-map-base" />
+            <Row label="MapTiler configured" value={mapDiag.maptiler_configured ? "yes" : "no"} testID="diag-map-maptiler" />
+            <Row label="Tile ticket present" value={mapDiag.tile_ticket_present ? "yes" : "no"} testID="diag-map-ticket" />
+            <Row label="Error" value={mapDiag.error_name ? `${mapDiag.error_name}: ${mapDiag.error_message || ""}` : (mapDiag.error_message || "—")} testID="diag-map-error" />
+          </>
+        ) : (
+          <Text style={s.empty} testID="diag-map-none">No map renderer failures recorded.</Text>
+        )}
       </View>
 
       <TouchableOpacity style={s.btn} onPress={refresh} testID="diag-refresh-button">
