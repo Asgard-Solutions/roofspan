@@ -2500,3 +2500,29 @@ clone feature deliberately NOT started):
    `yarn test:sketch`. VERIFIED green: full test:sketch chain, test:measurements, sync_diagnostics, and
    backend pytest (sketch service + live API incl. locked-PUT 409 + locked-GET 200 + mobile sync).
    STILL REQUIRES USER: physical-device acceptance of the read-only locked viewer.
+
+## P0 FOLLOW-UP — sketch GET 404 regression + offline read-only indicator FIXED + VERIFIED (2026-06)
+Regression introduced by the first locked-viewer pass: the backend sketch GET returns HTTP 404 for a
+structure that has never had a sketch, and mobile `api.get()` throws on 4xx, so `cache.sketch()` produced
+`{data:null, stale:true, error:http_404}`. `resolveFieldSketchViewerOpen` treated `error && !data` as a
+HARD load failure → a first-time "Sketch Roof" tap on an editable revision hit the retryable error screen
+and the user could NOT create the first sketch. FIX at the SOURCE CONTRACT (not the viewer guessing):
+ - New `mobile/src/sketchReadThrough.js` (dependency-injected, Node-testable): the roof-sketch GET
+   read-through distinguishes an AUTHORITATIVE HTTP 404 ("no sketch yet") from a network/relay failure.
+   404 → `{data:null, stale:false, notFound:true, error:null}` AND retires any obsolete cached sketch
+   (so a later offline read can never resurrect a non-existent sketch). Network/relay failure → falls back
+   to cache `{data:<cached|null>, stale:true, notFound:false, error}`. This 404 handling is specific to the
+   sketch GET (NOT a blanket "every 404 is success"). `cache.js` `sketch()` now delegates to it.
+ - `resolveFieldSketchViewerOpen`: `sketchLoadFailed = !!error && !server && !notFound`. Editable +
+   authoritative 404 → phase ready / source "new" (first-sketch creation works). Locked + 404 →
+   empty_readonly. Network fail + no cache → error. Network fail + cached sketch → ready (cached geometry).
+ - `RoofSketch.js`: read-only status keeps offline provenance visible — "Read only · Offline/cached" when
+   the locked sketch is served from cache (statusMeta.stale), else "Read only".
+ - Tests: new `mobile/src/tests/sketch_read_through.node.test.js` (4 assertions) proving the REAL 404-vs-
+   network semantics end-to-end into the resolver; updated `roof_sketch_locked_viewer.node.test.js` to
+   model the true notFound contract. Both wired into `yarn test:sketch`. Added a live GET-on-locked=200
+   assertion to `test_measurement_sketch_api_live.py`. VERIFIED: test:sketch + test:measurements green,
+   backend sketch/concurrency/live suites 11/11 passed, Babel/Metro compile of all changed files OK.
+ - SECURITY: sanitized the plaintext owner credential out of test_reports/iteration_112.json
+   ("configured securely in test environment"); user is rotating the exposed value separately. Historical
+   reports (<112) still contain the value in git history and were left untouched (user scoped this to 112).

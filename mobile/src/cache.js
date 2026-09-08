@@ -6,6 +6,7 @@ import { putCache, getCache, getCacheMeta, putCacheSerialized, saveSketchDraftIf
 const measurementKeys = require("./measurementCache");
 const sketchKeys = require("./sketchCache");
 const { optimisticCanvassPatch } = require("./fieldReconcile");
+const { readThroughSketch } = require("./sketchReadThrough");
 
 async function readThrough(name, fetcher) {
   try {
@@ -38,11 +39,14 @@ export const cache = {
     measurementKeys.detailKey(id),
     () => api.get(`/mobile/measurements/${id}`),
   ),
-  // Read-through the current server sketch for a structure; falls back to the last cached copy offline.
-  sketch: (revisionId, structureId) => readThrough(
-    sketchKeys.sketchDetailKey(revisionId, structureId),
-    () => api.get(`/mobile/measurements/${revisionId}/sketches/${structureId}`),
-  ),
+  // Read-through the current server sketch for a structure. Distinguishes an AUTHORITATIVE HTTP 404
+  // ("no sketch for this structure yet" → notFound:true, cache retired) from a network/relay failure
+  // (falls back to the last cached copy). See sketchReadThrough for the full contract.
+  sketch: (revisionId, structureId) => readThroughSketch({
+    name: sketchKeys.sketchDetailKey(revisionId, structureId),
+    fetcher: () => api.get(`/mobile/measurements/${revisionId}/sketches/${structureId}`),
+    getCache, getCacheMeta, putCache, clearCache: (n) => putCacheSerialized(n, null),
+  }),
 };
 
 // Persist the latest sketch draft locally BEFORE queueing, so a crash after an edit cannot lose it.

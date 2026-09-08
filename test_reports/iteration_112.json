@@ -16,7 +16,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "100% (9/9, 1 live smoke enabled via RS_TEST_EMAIL/RS_TEST_PW)", "frontend": "N/A (mobile pure-Node suites: 100%)"},
-  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (used for live smoke against https://desktop-mobile-qa.preview.emergentagent.com)",
+  "test_credentials": "configured securely in test environment",
   "seed_data_creation": "Live smoke test self-creates and self-deletes one MeasurementSet via _delete_set teardown; no residual seed data.",
   "retest_needed": false,
   "should_main_agent_self_test": false,

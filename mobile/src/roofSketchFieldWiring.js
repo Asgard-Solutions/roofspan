@@ -42,13 +42,16 @@ function resolveFieldSketchViewerOpen({ draft, sketchResult, mutation, mutationE
   // A queue-lookup failure is OPTIONAL for viewing: default to no active mutation and keep opening.
   const hasActiveMutation = !mutationError && !!(mutation && (mutation.state === "pending" || mutation.state === "failed" || mutation.state === "conflict"));
   const server = sketchResult && sketchResult.data ? sketchResult.data : null;
-  // A HARD sketch-load failure means the read-through errored AND produced no cached/server copy.
-  const sketchLoadFailed = !!(sketchResult && sketchResult.error) && !server;
-  const diagnostics = { mutationLookupFailed: !!mutationError, sketchLoadFailed };
+  // AUTHORITATIVE "no sketch yet" (HTTP 404) is a legitimate empty state, NOT a load failure.
+  const notFound = !!(sketchResult && sketchResult.notFound);
+  // A HARD sketch-load failure = the read-through errored, produced no cached/server copy, AND is not an
+  // authoritative not-found. A 404 must never be misread as a failure (it would block first-sketch creation).
+  const sketchLoadFailed = !!(sketchResult && sketchResult.error) && !server && !notFound;
+  const diagnostics = { mutationLookupFailed: !!mutationError, sketchLoadFailed, notFound };
   const statusMeta = _statusMeta(sketchResult);
 
-  // No local draft to fall back on and the sketch genuinely could not be loaded → we cannot know whether
-  // a real sketch exists. Never fabricate a blank sketch; surface the explicit retryable error instead.
+  // No local draft to fall back on and the sketch genuinely could not be loaded → explicit retryable
+  // error. Never mark the screen ready with incomplete data. (An authoritative 404 is NOT this case.)
   if ((!draft || !draft.document) && sketchLoadFailed) {
     return { phase: "error", reason: "sketch_load_failed", statusMeta, hasActiveMutation, diagnostics };
   }

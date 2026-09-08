@@ -95,7 +95,9 @@ export default function RoofSketch({ route }) {
       // (3) Office advanced past the local draft → surface an open-time conflict review.
       setOpenConflict(initial.conflict && initial.serverDetail ? { serverDetail: initial.serverDetail, officeVersion: Number(initial.serverDetail.document_version) || 0 } : null);
       setEditMode(initial.editMode);
-      setStatus(readOnly ? "Read only" : initialStatus(initial, statusMeta));
+      // Read-only status keeps the offline/cached provenance visible — never hide that the drawing came
+      // from cache rather than a fresh Office read.
+      setStatus(readOnly ? (statusMeta && statusMeta.stale ? "Read only · Offline/cached" : "Read only") : initialStatus(initial, statusMeta));
       setLoadError(false); setNoSketch(false);
       setReady(true);
     })();
