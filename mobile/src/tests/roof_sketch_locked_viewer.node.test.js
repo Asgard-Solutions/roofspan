@@ -60,16 +60,16 @@ function geometryPresent(initial) {
   ok("locked cached sketch while offline → opens read-only from cache (stale flagged)");
 }
 
-// ---- 3) Locked + NO saved sketch (no draft, no server/cached copy) ---------------------------------
+// ---- 3) Locked + NO saved sketch (authoritative HTTP 404 → notFound:true) --------------------------
 {
   const res = WIRE.resolveFieldSketchViewerOpen({
     draft: null,
-    sketchResult: { data: null, stale: false },   // server legitimately has no sketch for this structure
+    sketchResult: { data: null, stale: false, notFound: true, error: null },   // real cache.sketch() 404 shape
     mutation: null, mutationError: null, structureId: "s1", readOnly: true,
   });
-  assert.strictEqual(res.phase, "empty_readonly", "locked + no sketch → explicit empty state");
+  assert.strictEqual(res.phase, "empty_readonly", "locked + authoritative no-sketch → explicit empty state");
   assert.strictEqual(res.initial, undefined, "no fabricated blank/new sketch is created for a locked revision");
-  ok("locked + no saved sketch → honest 'no sketch' state, never a blank editable sketch");
+  ok("locked + authoritative no-sketch (404) → honest 'no sketch' state, never a blank editable sketch");
 }
 
 // ---- 4) Real sketch load failure with NO cache (and no local draft) --------------------------------
@@ -106,15 +106,16 @@ function geometryPresent(initial) {
   assert.ok(geometryPresent(res.initial), "geometry present for editing");
   ok("editable existing sketch → opens normally for editing");
 }
-// Editable brand-new sketch (server has none, no error) is a LEGITIMATE new-document open.
+// Editable brand-new sketch (authoritative 404, no error) is a LEGITIMATE new-document open.
 {
   const res = WIRE.resolveFieldSketchViewerOpen({
-    draft: null, sketchResult: { data: null, stale: false },
+    draft: null, sketchResult: { data: null, stale: false, notFound: true, error: null },
     mutation: null, mutationError: null, structureId: "s1", readOnly: false,
   });
-  assert.strictEqual(res.phase, "ready", "editable + no sketch → start a new sketch");
+  assert.strictEqual(res.phase, "ready", "editable + authoritative no-sketch → start a new sketch");
   assert.strictEqual(res.initial.source, "new", "a fresh new document is created ONLY for an editable revision");
-  ok("editable + no sketch → new sketch document (never for a locked revision)");
+  assert.strictEqual(res.diagnostics.sketchLoadFailed, false, "an authoritative 404 is never a load failure");
+  ok("editable + authoritative no-sketch (404) → new sketch document (Sketch Roof works, no error screen)");
 }
 
 // ---- 6) Local draft is preserved even when the sketch load fails (offline usability) ---------------
