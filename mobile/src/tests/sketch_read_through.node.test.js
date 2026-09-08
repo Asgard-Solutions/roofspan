@@ -10,8 +10,9 @@ const WIRE = require("../roofSketchFieldWiring");
 
 let n = 0; const ok = (m) => { n++; console.log("  \u2713 " + m); };
 
-// Mimic api.get(): HTTP 4xx throws an Error carrying e.response.status (see mobile/src/api.js _throwOn4xx).
-function httpError(status) { const e = new Error("http_" + status); e.response = { status, data: { detail: "x" } }; return e; }
+// Mimic api.get(): HTTP 4xx throws an Error carrying e.response.status AND e.response.data (the parsed
+// body, e.g. { detail: {...} }) — see mobile/src/api.js _throwOn4xx.
+function httpError(status, detail) { const e = new Error("http_" + status); e.response = { status, data: { detail } }; return e; }
 // A genuine network/relay failure throws WITHOUT an HTTP response.
 function networkError() { return new Error("relay_unreachable"); }
 
@@ -47,22 +48,64 @@ function makeStore(initial) {
     ok("existing sketch: HTTP 200 → fresh envelope, cached, viewer opens the server sketch");
   }
 
-  // ---- 2) THE REGRESSION: authoritative HTTP 404 = 'no sketch yet' (NOT a load failure) ------------
+  // ---- 2) THE REGRESSION: authoritative sketch_not_found 404 = 'no sketch yet' (NOT a load failure) ---
   {
     const st = makeStore({ "sk:s1": SKETCH });   // an obsolete cached sketch is present
-    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(404); }, ...st });
-    assert.deepStrictEqual([env.data, env.stale, env.notFound, env.error], [null, false, true, null], "404 → data:null, stale:false, notFound:true, error:null");
-    assert.strictEqual(st.map.get("sk:s1"), null, "404 → obsolete cached sketch is RETIRED (cannot resurrect)");
+    const detail = { code: "sketch_not_found", message: "No sketch for this structure yet" };
+    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(404, detail); }, ...st });
+    assert.deepStrictEqual([env.data, env.stale, env.notFound, env.error], [null, false, true, null], "sketch_not_found 404 → data:null, stale:false, notFound:true, error:null");
+    assert.strictEqual(st.map.get("sk:s1"), null, "sketch_not_found 404 → obsolete cached sketch is RETIRED (cannot resurrect)");
     // Editable revision → first-time creation must be allowed, NOT an error screen.
     const editable = WIRE.resolveFieldSketchViewerOpen({ draft: null, sketchResult: env, mutation: null, mutationError: null, structureId: "s1", readOnly: false });
-    assert.strictEqual(editable.phase, "ready", "editable + 404 → ready (Sketch Roof works)");
-    assert.strictEqual(editable.initial.source, "new", "editable + 404 → a new editable sketch is created");
-    assert.strictEqual(editable.diagnostics.sketchLoadFailed, false, "editable + 404 → NOT flagged as a load failure");
+    assert.strictEqual(editable.phase, "ready", "editable + sketch_not_found → ready (Sketch Roof works)");
+    assert.strictEqual(editable.initial.source, "new", "editable + sketch_not_found → a new editable sketch is created");
+    assert.strictEqual(editable.diagnostics.sketchLoadFailed, false, "editable + sketch_not_found → NOT flagged as a load failure");
     // Locked revision → honest empty state, never a fabricated blank sketch.
     const locked = WIRE.resolveFieldSketchViewerOpen({ draft: null, sketchResult: env, mutation: null, mutationError: null, structureId: "s1", readOnly: true });
-    assert.strictEqual(locked.phase, "empty_readonly", "locked + 404 → empty_readonly (no sketch message)");
-    assert.strictEqual(locked.initial, undefined, "locked + 404 → no fabricated sketch");
-    ok("REGRESSION FIXED: authoritative 404 → first-time Sketch Roof works (editable) / honest empty (locked), cache retired");
+    assert.strictEqual(locked.phase, "empty_readonly", "locked + sketch_not_found → empty_readonly (no sketch message)");
+    assert.strictEqual(locked.initial, undefined, "locked + sketch_not_found → no fabricated sketch");
+    ok("REGRESSION FIXED: sketch_not_found 404 → first-time Sketch Roof works (editable) / honest empty (locked), cache retired");
+  }
+
+  // ---- 2b) LEGACY exact-string 404 (backward compatibility during rollout) --------------------------
+  {
+    const st = makeStore({ "sk:s1": SKETCH });
+    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(404, "No sketch for this structure yet"); }, ...st });
+    assert.strictEqual(env.notFound, true, "legacy exact-string 404 → still recognized as no-sketch");
+    const editable = WIRE.resolveFieldSketchViewerOpen({ draft: null, sketchResult: env, mutation: null, mutationError: null, structureId: "s1", readOnly: false });
+    assert.strictEqual(editable.initial.source, "new", "legacy 404 → editable revision still creates a first sketch");
+    ok("legacy exact-string 404 → same no-sketch behavior (backward compatible)");
+  }
+
+  // ---- 2c) MISSING/STALE revision 404 must NOT be no-sketch → reload/error, never a blank sketch ----
+  {
+    const st = makeStore({ "sk:s1": SKETCH });   // stale cache must NOT be served for a dead revision
+    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(404, "Measurement revision not found"); }, ...st });
+    assert.deepStrictEqual([env.data, env.notFound], [null, false], "missing-revision 404 → data:null, notFound:false (not a no-sketch)");
+    assert.ok(env.error, "missing-revision 404 preserves the error");
+    assert.strictEqual(st.map.get("sk:s1"), SKETCH, "missing-revision 404 → cache is NOT retired here (only sketch_not_found retires)");
+    const editable = WIRE.resolveFieldSketchViewerOpen({ draft: null, sketchResult: env, mutation: null, mutationError: null, structureId: "s1", readOnly: false });
+    assert.strictEqual(editable.phase, "error", "missing-revision 404 → reload/error state, NEVER a new blank sketch");
+    ok("missing/stale revision 404 → reload/error (does not open a blank or cached sketch)");
+  }
+
+  // ---- 2d) Generic/unknown 404 must NOT become notFound ---------------------------------------------
+  {
+    const st = makeStore();
+    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(404, "Some other thing"); }, ...st });
+    assert.strictEqual(env.notFound, false, "generic 404 → NOT classified as no-sketch");
+    const res = WIRE.resolveFieldSketchViewerOpen({ draft: null, sketchResult: env, mutation: null, mutationError: null, structureId: "s1", readOnly: false });
+    assert.strictEqual(res.phase, "error", "generic 404 → reload/error, not a fabricated sketch");
+    ok("generic/unknown 404 → NOT no-sketch, surfaces as error");
+  }
+
+  // ---- 2e) 403 stays an authorization error (no cached sketch served) -------------------------------
+  {
+    const st = makeStore({ "sk:s1": SKETCH });
+    const env = await readThroughSketch({ name: "sk:s1", fetcher: async () => { throw httpError(403, "You are not authorized for this measurement."); }, ...st });
+    assert.deepStrictEqual([env.data, env.notFound], [null, false], "403 → data:null, notFound:false (never serves cached data)");
+    assert.ok(env.error, "403 preserves the authorization error");
+    ok("403 → authorization error, never opens a cached sketch");
   }
 
   // ---- 3) Network/relay failure with NO cache → retryable load error ------------------------------

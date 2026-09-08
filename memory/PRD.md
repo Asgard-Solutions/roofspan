@@ -2526,3 +2526,24 @@ and the user could NOT create the first sketch. FIX at the SOURCE CONTRACT (not 
  - SECURITY: sanitized the plaintext owner credential out of test_reports/iteration_112.json
    ("configured securely in test environment"); user is rotating the exposed value separately. Historical
    reports (<112) still contain the value in git history and were left untouched (user scoped this to 112).
+
+## P0 FOLLOW-UP 2 — narrowed sketch-GET 404 contract (machine-readable) FIXED + VERIFIED (2026-06)
+The 404 regression fix was too broad: sketchReadThrough treated EVERY sketch-GET 404 as notFound=true, so
+a stale/deleted revision ("Measurement revision not found") could wrongly open a new blank sketch.
+NARROW CORRECTION:
+ - Backend: both sketch-GET endpoints (backend/routers/mobile.py mobile_get_sketch — the one the app hits —
+   and backend/routers/measurement_sketches.py) now return the no-sketch 404 with a machine-readable detail
+   {code:"sketch_not_found", message:"No sketch for this structure yet"}. The missing-revision 404 keeps
+   its plain-string detail "Measurement revision not found".
+ - mobile/src/sketchReadThrough.js: `isSketchNotFound(e)` sets notFound=true ONLY for detail.code
+   ==="sketch_not_found" (or the legacy exact string / message, for rollout back-compat). ANY other
+   definitive 4xx (missing-revision 404, generic 404, 401, 403) now returns {data:null, notFound:false,
+   error} → the viewer surfaces a reload/error state and never opens a blank or cached sketch. Only the
+   authoritative sketch_not_found retires the cached copy. Network/5xx still fall back to cache.
+ - Tests: sketch_read_through.node.test.js expanded to 8 assertions (sketch_not_found code, legacy string,
+   missing-revision→error, generic 404→error, 403→error, network±cache). Added live assertions to
+   test_measurement_sketch_api_live.py (no-sketch 404 detail.code=="sketch_not_found" vs missing-revision
+   plain-string 404). Corrected the stale GET-on-locked note in test_reports/iteration_112.json.
+   VERIFIED: yarn test:sketch + test:measurements green; backend sketch/hermetic/live/mobile-sync/
+   concurrency 12/12 (serial); Babel/Metro compile of all changed files OK.
+ - NEXT TASK (not started): New Revision Clone.

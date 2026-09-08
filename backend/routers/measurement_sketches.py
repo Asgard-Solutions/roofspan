@@ -45,7 +45,8 @@ async def get_sketch(revision_id: str, structure_id: str, user: User = Depends(r
     await _scope(db, revision_id, user)
     out = await svc.get_sketch(db, revision_id, structure_id)
     if not out:
-        raise HTTPException(status_code=404, detail="No sketch for this structure yet")
+        # Machine-readable "no sketch yet" contract (distinct from the missing-revision 404 in _scope).
+        raise HTTPException(status_code=404, detail={"code": "sketch_not_found", "message": "No sketch for this structure yet"})
     return out
 
 

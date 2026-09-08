@@ -56,6 +56,14 @@ def test_sketch_api_live_smoke():
     rid, set_id = rev["id"], rev["set_id"]
     s1, s2 = rev["structures"][0]["id"], rev["structures"][1]["id"]
     try:
+        # Machine-readable no-sketch contract: a valid revision + structure with no sketch yet returns 404
+        # detail.code == "sketch_not_found" (mobile client uses this to offer first-sketch creation).
+        r = requests.get(f"{API}/api/mobile/measurements/{rid}/sketches/{s1}", headers=h)
+        assert r.status_code == 404 and r.json()["detail"]["code"] == "sketch_not_found"
+        # A MISSING/stale revision is a DIFFERENT 404 (plain string) — never a no-sketch condition.
+        r = requests.get(f"{API}/api/mobile/measurements/00000000-0000-0000-0000-000000000000/sketches/{s1}", headers=h)
+        assert r.status_code == 404 and isinstance(r.json()["detail"], str) and "revision not found" in r.json()["detail"].lower()
+
         r = requests.put(f"{API}/api/measurements/{rid}/sketches/{s1}", headers=h, json={"schema_version": 1, "edit_mode": "connected_graph", "document": DOC, "expected_version": None})
         assert r.status_code == 200 and r.json()["document_version"] == 1
 

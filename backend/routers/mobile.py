@@ -389,7 +389,9 @@ async def mobile_get_sketch(revision_id: str, structure_id: str, user: User = De
     await _assert_measurement_scope(db, await db.get(MeasurementSet, rev.set_id), user)
     out = await sketch_svc.get_sketch(db, revision_id, structure_id)
     if not out:
-        raise HTTPException(status_code=404, detail="No sketch for this structure yet")
+        # Machine-readable "no sketch yet" contract: distinct from a missing/stale revision 404 above so
+        # the mobile client can safely offer first-sketch creation (see mobile/src/sketchReadThrough.js).
+        raise HTTPException(status_code=404, detail={"code": "sketch_not_found", "message": "No sketch for this structure yet"})
     return out
 
 
