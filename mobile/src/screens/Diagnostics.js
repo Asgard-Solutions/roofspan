@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from "react-nati
 import { useFocusEffect } from "@react-navigation/native";
 import { syncDiagnostics, pendingSummary, runSync } from "../sync";
 import { getCache } from "../storage";
-import { MAP_DIAG_CACHE_KEY } from "../mapDiagnostics";
+import { MAP_DIAG_CACHE_KEY, MAP_LOAD_DIAG_CACHE_KEY } from "../mapDiagnostics";
 import { C } from "../theme";
 
 function fmt(ts) {
@@ -29,11 +29,13 @@ export default function Diagnostics() {
   const [diag, setDiag] = useState({ mutations: [] });
   const [summary, setSummary] = useState({ counts: {} });
   const [mapDiag, setMapDiag] = useState(null);
+  const [mapLoad, setMapLoad] = useState(null);
 
   const load = useCallback(async () => {
     setDiag(syncDiagnostics());
     try { setSummary(await pendingSummary()); } catch (e) { /* offline */ }
     try { setMapDiag(await getCache(MAP_DIAG_CACHE_KEY)); } catch (e) { /* none */ }
+    try { setMapLoad(await getCache(MAP_LOAD_DIAG_CACHE_KEY)); } catch (e) { /* none */ }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -63,6 +65,29 @@ export default function Diagnostics() {
         <Row label="Conflict" value={String(c.conflict || 0)} testID="diag-count-conflict" />
         <Row label="Locked" value={String(c.locked || 0)} testID="diag-count-locked" />
         <Row label="Synced" value={String(c.synced || 0)} testID="diag-count-synced" />
+      </View>
+
+      <Text style={s.section}>My Area load</Text>
+      <View style={s.card} testID="diag-map-load">
+        {mapLoad ? (
+          <>
+            <Row label="User" value={`${mapLoad.user_email || "—"} (${mapLoad.user_role || "—"})`} testID="diag-load-user" />
+            <Row label="Properties status" value={mapLoad.map_properties_status} testID="diag-load-props-status" />
+            <Row label="Property count" value={String(mapLoad.property_feature_count)} testID="diag-load-prop-count" />
+            <Row label="Cached property count" value={String(mapLoad.cached_property_feature_count)} testID="diag-load-cached-props" />
+            <Row label="Canvass status" value={mapLoad.canvass_status} testID="diag-load-canvass-status" />
+            <Row label="Section count" value={String(mapLoad.section_count)} testID="diag-load-section-count" />
+            <Row label="Selected section" value={mapLoad.selected_section_id || "—"} testID="diag-load-selected" />
+            <Row label="Map config" value={mapLoad.map_config_status} testID="diag-load-cfg" />
+            <Row label="Map style loaded" value={mapLoad.map_style_loaded ? "yes" : "no"} testID="diag-load-style" />
+            <Row label="MapLibre version" value={mapLoad.maplibre_version || "—"} testID="diag-load-mlv" />
+            <Row label="Source API" value={mapLoad.source_api || "—"} testID="diag-load-source" />
+            <Row label="Prop features -> map" value={String(mapLoad.property_source_feature_count)} testID="diag-load-prop-src" />
+            <Row label="Canvass features -> map" value={String(mapLoad.canvass_source_feature_count)} testID="diag-load-canvass-src" />
+          </>
+        ) : (
+          <Text style={s.empty} testID="diag-load-none">Open My Area once to record a load snapshot.</Text>
+        )}
       </View>
 
       <Text style={s.section}>Map renderer</Text>

@@ -2,7 +2,7 @@
 // Pure Node tests for RoofSpan Field MAP diagnostics: capture the right operational fields and NEVER leak
 // secrets. Run directly: `node src/tests/map_diagnostics.node.test.js`.
 const assert = require("assert");
-const { buildMapDiagnostic, scrubSecrets, MAP_DIAG_CACHE_KEY } = require("../mapDiagnostics");
+const { buildMapDiagnostic, buildMapLoadDiagnostic, scrubSecrets, MAP_DIAG_CACHE_KEY, MAP_LOAD_DIAG_CACHE_KEY } = require("../mapDiagnostics");
 
 let n = 0;
 function ok(label, cond) { n++; assert.ok(cond, label); }
@@ -57,5 +57,125 @@ ok("no literal SUPERSECRET anywhere", !/SUPERSECRET123|REALTOKENVALUE|MTKEYXYZ/.
 // 5. scrubSecrets handles null.
 ok("scrub null", scrubSecrets(null) === null);
 ok("cache key stable", MAP_DIAG_CACHE_KEY === "map_diag_last");
+
+// ==============================================================================
+// Phase 1 — buildMapLoadDiagnostic: written on EVERY My Area load. Distinguishes
+// a 200-with-zero-records ("ok"/count=0) from an API failure ("failed"). NO secrets.
+// ==============================================================================
+ok("MAP_LOAD_DIAG_CACHE_KEY stable", MAP_LOAD_DIAG_CACHE_KEY === "map_diag_load");
+
+// 1. Happy path: sales user, 2 property features, 2 sections (one with geometry).
+const feats = [
+  { type: "Feature", geometry: { type: "Point", coordinates: [1.1, 2.2] }, properties: { id: "p1" } },
+  { type: "Feature", geometry: { type: "Point", coordinates: [3.3, 4.4] }, properties: { id: "p2" } },
+];
+const sections = [
+  { id: "sA", name: "Alpha", geometry: { type: "Polygon", coordinates: [] }, property_count: 12 },
+  { id: "sB", name: "Beta",  geometry: null, property_count: 0 },
+];
+const load = buildMapLoadDiagnostic({
+  userId: "u-123", userEmail: "rep@t.io", userRole: "sales",
+  propertiesOk: true, propertyFeatures: feats,
+  cachedPropertyFeatures: [feats[0]],
+  canvassOk: true, sections, cachedSectionCount: 1, selectedSectionId: "sA",
+  mapConfigOk: true, mapStyleBuilt: true, maplibreVersion: "10.0.1",
+  reactNativeVersion: "0.86.3", sourceApi: "/api/mobile/map/properties",
+}, () => "2026-06-01T00:00:00Z");
+
+ok("load: user id captured", load.user_id === "u-123");
+ok("load: user email captured", load.user_email === "rep@t.io");
+ok("load: user role captured", load.user_role === "sales");
+ok("load: property_feature_count = 2", load.property_feature_count === 2);
+ok("load: cached_property_feature_count = 1 (distinct from live)", load.cached_property_feature_count === 1);
+ok("load: section_count = 2", load.section_count === 2);
+ok("load: cached_section_count = 1", load.cached_section_count === 1);
+ok("load: selected_section_id", load.selected_section_id === "sA");
+ok("load: map_properties_status ok", load.map_properties_status === "ok");
+ok("load: canvass_status ok", load.canvass_status === "ok");
+ok("load: map_config_status ok", load.map_config_status === "ok");
+ok("load: map_style_loaded true", load.map_style_loaded === true);
+ok("load: maplibre_version", load.maplibre_version === "10.0.1");
+ok("load: react_native_version", load.react_native_version === "0.86.3");
+ok("load: source_api", load.source_api === "/api/mobile/map/properties");
+ok("load: timestamp", load.at === "2026-06-01T00:00:00Z");
+
+// Sample per-property valid_point booleans + first-3 IDs only.
+ok("load: sample_property_ids array of first-3", Array.isArray(load.sample_property_ids) && load.sample_property_ids.length === 2);
+ok("load: sample property has id", load.sample_property_ids[0].id === "p1");
+ok("load: sample valid_point true for well-formed Point", load.sample_property_ids[0].valid_point === true);
+
+// Per-section geometry_present/geometry_type/property_count.
+ok("load: sample_sections length", load.sample_sections.length === 2);
+ok("load: section geometry_present true for sA", load.sample_sections[0].geometry_present === true);
+ok("load: section geometry_type Polygon", load.sample_sections[0].geometry_type === "Polygon");
+ok("load: section property_count preserved", load.sample_sections[0].property_count === 12);
+ok("load: section geometry_present false for sB", load.sample_sections[1].geometry_present === false);
+ok("load: section geometry_type null when missing", load.sample_sections[1].geometry_type === null);
+ok("load: canvass_source_feature_count = 1 (only geom-present)", load.canvass_source_feature_count === 1);
+
+// 2. Distinguish 200+zero-records from failure: propertiesOk=true, empty array => ok + count 0.
+const zero = buildMapLoadDiagnostic({
+  userId: "u-zero", userEmail: "z@t.io", userRole: "sales",
+  propertiesOk: true, propertyFeatures: [], canvassOk: true, sections: [],
+  mapConfigOk: true, mapStyleBuilt: true,
+});
+ok("zero: status ok (not failed)", zero.map_properties_status === "ok");
+ok("zero: property_feature_count = 0", zero.property_feature_count === 0);
+ok("zero: feature_collection_valid true", zero.feature_collection_valid === true);
+ok("zero: section_count = 0", zero.section_count === 0);
+
+// 3. Failure path: propertiesOk=false => status 'failed'; feature_collection_valid=false.
+const fail = buildMapLoadDiagnostic({
+  userId: "u-f", userEmail: "f@t.io", userRole: "sales",
+  propertiesOk: false, propertyFeatures: [], canvassOk: false, sections: [],
+  mapConfigOk: false,
+});
+ok("fail: map_properties_status failed", fail.map_properties_status === "failed");
+ok("fail: feature_collection_valid false", fail.feature_collection_valid === false);
+ok("fail: canvass_status failed", fail.canvass_status === "failed");
+ok("fail: map_config_status failed", fail.map_config_status === "failed");
+
+// 4. Invalid point coordinates => valid_point false (distinguishes shape errors).
+const bad = buildMapLoadDiagnostic({
+  propertiesOk: true,
+  propertyFeatures: [
+    { type: "Feature", geometry: { type: "Point", coordinates: [1] }, properties: { id: "bad1" } },
+    { type: "Feature", geometry: { type: "LineString", coordinates: [[1, 2], [3, 4]] }, properties: { id: "bad2" } },
+    { type: "Feature", geometry: null, properties: { id: "bad3" } },
+  ],
+  canvassOk: true, sections: [],
+});
+ok("bad points: all valid_point=false", bad.sample_property_ids.every((s) => s.valid_point === false));
+ok("bad points: ids still captured", bad.sample_property_ids.map((s) => s.id).join(",") === "bad1,bad2,bad3");
+
+// 5. NO tokens/keys/tickets/headers ever appear in the load diagnostic.
+const serializedLoad = JSON.stringify(load);
+["access_token", "refresh_token", "authorization", "Authorization", "api_key",
+ "maptiler_key", "pairing_secret", "raw_ticket", "ticket", "bearer", "Bearer"].forEach((k) => {
+  ok(`load: no '${k}' in serialized output`, !serializedLoad.includes(k));
+});
+["access_token", "refresh_token", "authorization", "api_key", "maptiler_key",
+ "pairing_secret", "raw_ticket", "ticket"].forEach((k) => {
+  ok(`load: no top-level '${k}' key`, !Object.prototype.hasOwnProperty.call(load, k));
+});
+
+// 6. Cached-vs-live counts must remain distinct fields (bug: mixing them hides "loaded from cache").
+ok("cached-vs-live distinct fields",
+   Object.prototype.hasOwnProperty.call(load, "property_feature_count") &&
+   Object.prototype.hasOwnProperty.call(load, "cached_property_feature_count") &&
+   Object.prototype.hasOwnProperty.call(load, "section_count") &&
+   Object.prototype.hasOwnProperty.call(load, "cached_section_count"));
+
+// 7. Only first-3 property IDs sampled (never leaks the whole dataset).
+const many = buildMapLoadDiagnostic({
+  propertiesOk: true,
+  propertyFeatures: Array.from({ length: 25 }, (_, i) => ({
+    type: "Feature", geometry: { type: "Point", coordinates: [i, i] }, properties: { id: `id-${i}` },
+  })),
+  canvassOk: true, sections: [],
+});
+ok("first-3 property ids only", many.sample_property_ids.length === 3);
+ok("full count still reported", many.property_feature_count === 25);
+
 
 console.log(`map_diagnostics.node.test.js: ${n} assertions passed`);

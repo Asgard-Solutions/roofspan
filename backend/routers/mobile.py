@@ -601,17 +601,15 @@ async def _authorized_territory_ids(db: AsyncSession, user: User):
 
 @router.get("/map/properties")
 async def mobile_map_properties(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    """Full property GeoJSON the logged-in Field user is authorized to see — the PERMANENT map dataset.
-    Server enforces visibility (never an unrestricted Office endpoint). Independent of canvass sections:
-    a user with zero assigned sections still gets their authorized properties. Properties without usable
-    coordinates are safely excluded."""
-    stmt = select(Property).where(Property.latitude.isnot(None), Property.longitude.isnot(None))
-    territory_ids = await _authorized_territory_ids(db, user)
-    if territory_ids is not None:
-        if not territory_ids:
-            return {"type": "FeatureCollection", "features": []}  # authorized set is empty (still a valid map)
-        stmt = stmt.where(Property.territory_id.in_(territory_ids))
-    rows = (await db.execute(stmt)).scalars().all()
+    """Full MAP-SAFE property GeoJSON for the Field 'My Area' master layer. This is the base business-data
+    layer and is INDEPENDENT of canvass assignments: it MUST NOT disappear because the user has no assigned
+    section, a section is inactive, or the canvass API fails. Every Field user (sales + management) sees the
+    full set of map-safe properties that have usable coordinates. Only map-safe fields are exposed here;
+    full property-detail authorization is enforced separately when a user opens a Property. Properties
+    without usable coordinates are excluded."""
+    rows = (await db.execute(
+        select(Property).where(Property.latitude.isnot(None), Property.longitude.isnot(None))
+    )).scalars().all()
     features = []
     for p in rows:
         last_visit = (await db.execute(
