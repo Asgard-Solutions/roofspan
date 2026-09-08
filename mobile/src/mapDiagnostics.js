@@ -11,6 +11,7 @@
  */
 
 const MAP_DIAG_CACHE_KEY = "map_diag_last";
+const MAP_LOAD_DIAG_CACHE_KEY = "map_diag_load";  // updated on EVERY My Area load (success or partial)
 const _MAX_MSG = 500;
 const _MAX_STACK = 1500;
 
@@ -63,4 +64,47 @@ function buildMapDiagnostic(fields = {}, now = () => new Date().toISOString()) {
   };
 }
 
-module.exports = { MAP_DIAG_CACHE_KEY, scrubSecrets, buildMapDiagnostic };
+module.exports = { MAP_DIAG_CACHE_KEY, MAP_LOAD_DIAG_CACHE_KEY, scrubSecrets, buildMapDiagnostic, buildMapLoadDiagnostic };
+
+// Success/partial-load snapshot recorded on EVERY My Area load so a "200 with zero records" is clearly
+// distinguishable from an API failure, and cached counts from live counts. No secrets — counts + IDs only.
+function buildMapLoadDiagnostic(f = {}, now = () => new Date().toISOString()) {
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  const propFeats = arr(f.propertyFeatures);
+  const cachedProps = arr(f.cachedPropertyFeatures);
+  const sections = arr(f.sections);
+  const sampleProps = propFeats.slice(0, 3).map((ft) => ({
+    id: ft && ft.properties ? String(ft.properties.id) : null,
+    valid_point: !!(ft && ft.geometry && ft.geometry.type === "Point"
+      && Array.isArray(ft.geometry.coordinates) && ft.geometry.coordinates.length === 2
+      && typeof ft.geometry.coordinates[0] === "number" && typeof ft.geometry.coordinates[1] === "number"),
+  }));
+  const sampleSecs = sections.slice(0, 3).map((s) => ({
+    id: s ? String(s.id) : null, name: s ? String(s.name || "") : null,
+    geometry_present: !!(s && s.geometry), geometry_type: s && s.geometry ? s.geometry.type : null,
+    property_count: s && typeof s.property_count === "number" ? s.property_count : null,
+  }));
+  return {
+    user_id: f.userId != null ? String(f.userId) : null,
+    user_email: f.userEmail != null ? String(f.userEmail) : null,
+    user_role: f.userRole != null ? String(f.userRole) : null,
+    map_properties_status: f.propertiesOk ? "ok" : "failed",
+    feature_collection_valid: !!f.propertiesOk,
+    property_feature_count: propFeats.length,
+    cached_property_feature_count: cachedProps.length,
+    sample_property_ids: sampleProps,
+    canvass_status: f.canvassOk ? "ok" : "failed",
+    section_count: sections.length,
+    cached_section_count: f.cachedSectionCount != null ? Number(f.cachedSectionCount) : null,
+    selected_section_id: f.selectedSectionId != null ? String(f.selectedSectionId) : null,
+    sample_sections: sampleSecs,
+    map_config_status: f.mapConfigOk ? "ok" : "failed",
+    map_style_loaded: f.mapStyleBuilt === true,
+    maplibre_version: f.maplibreVersion != null ? String(f.maplibreVersion) : null,
+    react_native_version: f.reactNativeVersion != null ? String(f.reactNativeVersion) : null,
+    source_api: f.sourceApi != null ? String(f.sourceApi) : null,
+    property_source_feature_count: propFeats.length,
+    canvass_source_feature_count: sections.filter((s) => s && s.geometry).length,
+    at: now(),
+  };
+}

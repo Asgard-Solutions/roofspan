@@ -3,15 +3,15 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform, ScrollVie
 import { useFocusEffect } from "@react-navigation/native";
 import Constants from "expo-constants";
 import { api } from "../api";
-import { getToken } from "../auth";
+import { getToken, useAuth } from "../auth";
 import { usePairing } from "../pairingContext";
 import { putCache, getCache } from "../storage";
 import { C, PIN } from "../theme";
 import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
 import { downloadSectionArea, sectionBounds } from "../offlineTiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
-import { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC } from "../canvass";
-import { buildMapDiagnostic, MAP_DIAG_CACHE_KEY } from "../mapDiagnostics";
+import { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, buildAllSectionsFC } from "../canvass";
+import { buildMapDiagnostic, buildMapLoadDiagnostic, MAP_DIAG_CACHE_KEY, MAP_LOAD_DIAG_CACHE_KEY } from "../mapDiagnostics";
 
 let MapLibre = null;
 if (Platform.OS !== "web") {
@@ -119,6 +119,8 @@ class MapErrorBoundary extends React.Component {
 export default function MapScreen({ navigation }) {
   const pairingCtx = usePairing();
   const pairing = pairingCtx ? pairingCtx.pairing : null;
+  const authCtx = useAuth();
+  const user = authCtx ? authCtx.user : null;
 
   const [sections, setSections] = useState([]);
   const [selId, setSelId] = useState(null);
@@ -178,21 +180,22 @@ export default function MapScreen({ navigation }) {
       const feats = g.data.features || [];
       setFeatures(feats);
       await putCache(CACHE_MAP_PROPS, feats);
-      return true;
+      return { ok: true, feats };
     } catch (e) {
-      const cached = await getCache(CACHE_MAP_PROPS);
-      setFeatures(cached || []);
-      return false;
+      const cached = (await getCache(CACHE_MAP_PROPS)) || [];
+      setFeatures(cached);
+      return { ok: false, feats: cached, fromCache: true };
     }
   }, []);
 
   const load = useCallback(async () => {
     // Independent requests with allSettled so one failed dataset never breaks the whole map.
-    const [secR, cfgR, propsOk] = await Promise.all([
+    const [secR, cfgR, propsRes] = await Promise.all([
       api.get("/mobile/canvass-sections").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
       api.get("/map-config").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
       loadMapProps(),
     ]);
+    const propsOk = propsRes.ok;
 
     let secs;
     if (secR.ok) { secs = secR.data.sections || []; await putCache(CACHE_SECTIONS, secs); }
@@ -213,6 +216,23 @@ export default function MapScreen({ navigation }) {
     setSelId((cur) => cur || pickDefaultSection(secs));
     setLoaded(true);
 
+    // Record a runtime load snapshot (counts + statuses) on EVERY load so a "200 with zero records"
+    // is distinguishable from an API failure. No secrets — counts/IDs only.
+    try {
+      const selNow = selId || pickDefaultSection(secs);
+      const rnv = (Platform.constants && Platform.constants.reactNativeVersion)
+        ? Object.values(Platform.constants.reactNativeVersion).slice(0, 3).join(".") : null;
+      const loadDiag = buildMapLoadDiagnostic({
+        userId: user?.id, userEmail: user?.email, userRole: user?.role,
+        propertiesOk: propsOk, propertyFeatures: propsRes.feats, cachedPropertyFeatures: cachedProps,
+        canvassOk: secR.ok, sections: secs, cachedSectionCount: (await getCache(CACHE_SECTIONS) || []).length,
+        selectedSectionId: selNow, mapConfigOk: cfgR.ok, mapStyleBuilt: !!buildMapStyle(mapCfg),
+        maplibreVersion: (MapLibre && MapLibre.version) || null, reactNativeVersion: rnv,
+        sourceApi: MapLibre && MapLibre.GeoJSONSource ? "GeoJSONSource" : (MapLibre && MapLibre.ShapeSource ? "ShapeSource" : null),
+      });
+      await putCache(MAP_LOAD_DIAG_CACHE_KEY, loadDiag);
+    } catch (e) { /* diagnostics must never break the map */ }
+
     if (NATIVE_MAP_OK && mapCfg && mapCfg.maptiler_configured && pairing) {
       ensureAmbientCache();
       try {
@@ -225,7 +245,7 @@ export default function MapScreen({ navigation }) {
         }
       } catch (e) { /* keep any previously registered ticket */ }
     }
-  }, [loadMapProps, pairing]);
+  }, [loadMapProps, pairing, selId, user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -418,7 +438,7 @@ export default function MapScreen({ navigation }) {
     const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
     const fc = { type: "FeatureCollection", features: visibleFeatures };
     const secColor = selected?.color || C.brand;
-    const polyFc = buildSectionPolygonFC(selected);
+    const polyFc = buildAllSectionsFC(sections, selId);
     const center = selected?.geometry?.coordinates?.[0]?.[0] || safeCenter(cfg);
     const fallback = renderFallback("Map unavailable — showing list view.");
     return (
@@ -445,8 +465,8 @@ export default function MapScreen({ navigation }) {
               )}
 
               <ShapeSource id="myarea" shape={polyFc}>
-                <FillLayer id="myarea-fill" style={{ fillColor: secColor, fillOpacity: 0.15 }} />
-                <LineLayer id="myarea-line" style={{ lineColor: secColor, lineWidth: 2.5 }} />
+                <FillLayer id="myarea-fill" style={{ fillColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], fillOpacity: ["case", ["get", "selected"], 0.28, 0.1] }} />
+                <LineLayer id="myarea-line" style={{ lineColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], lineWidth: ["case", ["get", "selected"], 3.5, 1.5] }} />
               </ShapeSource>
               <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
                 <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: colorMode === "progress" ? PROGRESS_COLOR : PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />

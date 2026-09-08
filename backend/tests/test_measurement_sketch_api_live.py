@@ -77,5 +77,9 @@ def test_sketch_api_live_smoke():
             assert requests.post(f"{API}/api/measurements/{rid}/status", headers=h, json={"to": to}).status_code == 200
         r = requests.put(f"{API}/api/measurements/{rid}/sketches/{s1}", headers=h, json={"schema_version": 1, "edit_mode": "connected_graph", "document": DOC, "expected_version": 2})
         assert r.status_code == 409 and "locked" in r.json()["detail"].lower()
+        # Read-only viewing of a LOCKED revision's sketch must still succeed (the P0 locked-viewer contract):
+        # GET has no editability gate, so the Field app can render the immutable sketch in read-only mode.
+        r = requests.get(f"{API}/api/measurements/{rid}/sketches/{s1}", headers=h)
+        assert r.status_code == 200 and r.json()["document_version"] == 2
     finally:
         _delete_set(h, set_id)

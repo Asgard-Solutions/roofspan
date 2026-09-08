@@ -21,9 +21,22 @@ function buildSectionPolygonFC(section) {
   return { type: "FeatureCollection", features: [{ type: "Feature", geometry: section.geometry, properties: {} }] };
 }
 
+// GeoJSON FeatureCollection for ALL assigned sections (each carries safe render props). The selected
+// section is flagged so the layer can emphasize it; changing selection never drops the other polygons.
+function buildAllSectionsFC(sections, selectedId) {
+  const feats = (sections || [])
+    .filter((s) => s && s.geometry)
+    .map((s) => ({
+      type: "Feature",
+      geometry: JSON.parse(JSON.stringify(s.geometry)),
+      properties: { section_id: s.id, name: s.name || "", color: s.color || null, selected: s.id === selectedId },
+    }));
+  return { type: "FeatureCollection", features: feats };
+}
+
 // Pin color contract: Do Not Knock is always the DNK color; otherwise the normal property color.
 function pinColor(doNotKnock, brandColor, dnkColor) {
   return doNotKnock ? dnkColor : brandColor;
 }
 
-module.exports = { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, pinColor };
+module.exports = { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, buildAllSectionsFC, pinColor };

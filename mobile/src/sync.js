@@ -491,6 +491,21 @@ export async function syncNow() { _resetBackoff(); refreshActiveLeads("manual").
 // B3B2: whether the sync engine is actively processing right now (drives the "Synchronizing…" status).
 export function isSyncing() { return _running; }
 
+// P0 locked-viewer: record (never swallow) a Roof Sketch viewer-open dependency failure. Called when
+// the OPTIONAL queue lookup throws while opening a (possibly locked) sketch — the viewer still opens, but
+// the failure is captured in the durable diagnostics ring so a stuck device can be explained.
+export function recordSketchViewerDiagnostic({ revisionId, structureId, error } = {}) {
+  try {
+    _diag.recordMutation({
+      clientId: sketchUpdateMutationId(revisionId, structureId),
+      kind: "sketch_viewer_open", state: "failed", httpResult: "queue_lookup_failed",
+      pathCategory: "/api/measurements/sketches", revisionId,
+      recoveryAction: "none", error: error ? String(error.message || error) : "mutation_lookup_failed",
+    });
+    _persistDiag();
+  } catch (e) { /* best effort — diagnostics must never block the viewer */ }
+}
+
 // B3B2: the durable mutation for exactly ONE structure's Roof Sketch (deterministic client_id). Returns
 // null when there is no pending/failed/conflict/synced row for this structure. Never the global queue.
 export async function currentSketchMutation(revisionId, structureId) {

@@ -21,6 +21,49 @@ function resolveFieldSketchLoad({ draft, sketchResult, structureId, hasActiveMut
   return { initial, statusMeta };
 }
 
+// P0 locked-viewer open resolution (pure). Decides whether the Field Roof Sketch screen can present a
+// usable read/edit model, must show the retryable error state, or (locked + no saved sketch) the honest
+// "no sketch" state. OPTIONAL dependencies are fault-isolated by the caller and passed in explicitly:
+//   mutationError : truthy when currentSketchMutation() threw (queue lookup) — MUST NOT strand the viewer
+//   sketchResult  : read-through envelope { data, stale, cachedAt, error } from cache.sketch() (or null)
+//   draft         : loadSketchDraft() result (already null-on-error) or null
+// Returns { phase, initial?, statusMeta, hasActiveMutation, diagnostics, reason? }.
+//   phase "ready"          → a usable viewer/editor model was created (initial present)
+//   phase "empty_readonly" → locked revision with NO real saved sketch (never fabricate a blank sketch)
+//   phase "error"          → the sketch could not be loaded and there is no cached/local copy (retryable)
+function _statusMeta(sketchResult) {
+  return {
+    stale: !!(sketchResult && sketchResult.stale),
+    cachedAt: (sketchResult && sketchResult.cachedAt) || null,
+    error: (sketchResult && sketchResult.error) || null,
+  };
+}
+function resolveFieldSketchViewerOpen({ draft, sketchResult, mutation, mutationError, structureId, readOnly } = {}) {
+  // A queue-lookup failure is OPTIONAL for viewing: default to no active mutation and keep opening.
+  const hasActiveMutation = !mutationError && !!(mutation && (mutation.state === "pending" || mutation.state === "failed" || mutation.state === "conflict"));
+  const server = sketchResult && sketchResult.data ? sketchResult.data : null;
+  // A HARD sketch-load failure means the read-through errored AND produced no cached/server copy.
+  const sketchLoadFailed = !!(sketchResult && sketchResult.error) && !server;
+  const diagnostics = { mutationLookupFailed: !!mutationError, sketchLoadFailed };
+  const statusMeta = _statusMeta(sketchResult);
+
+  // No local draft to fall back on and the sketch genuinely could not be loaded → we cannot know whether
+  // a real sketch exists. Never fabricate a blank sketch; surface the explicit retryable error instead.
+  if ((!draft || !draft.document) && sketchLoadFailed) {
+    return { phase: "error", reason: "sketch_load_failed", statusMeta, hasActiveMutation, diagnostics };
+  }
+
+  const initial = resolveInitialSketch({ draft, server, structureId, hasActiveMutation });
+
+  // Locked/read-only revision with no draft and no server/cached copy: the resolver would return a fresh
+  // "new" document — that must NOT be presented as a real roof sketch on a locked revision.
+  if (readOnly && initial.source === "new") {
+    return { phase: "empty_readonly", statusMeta, hasActiveMutation, diagnostics };
+  }
+
+  return { phase: "ready", initial, statusMeta, hasActiveMutation, diagnostics };
+}
+
 // Map the screen's snake_case route ids onto the controller's camelCase argument names (the controller
 // naming is already contract-tested and must NOT change).
 function makeFieldEditorArgs({ revision_id, structure_id, initial, persist } = {}) {
@@ -147,6 +190,7 @@ function deriveSketchLocked(mutation) {
 module.exports = {
   DRAG_THRESHOLD_PX,
   resolveFieldSketchLoad,
+  resolveFieldSketchViewerOpen,
   makeFieldEditorArgs,
   movedBeyondThreshold,
   pickReleaseCandidate,

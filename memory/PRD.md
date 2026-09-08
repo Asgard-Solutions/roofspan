@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — Field Map Empty Pins/Polygons: Master Map Decoupled from Canvass (root cause) — FIXED & VERIFIED (data layer) (2026-06)
+- Device symptom: basemap renders but NO property pins and NO assigned canvass polygons for a sales user who HAS sections in Office.
+- Root cause: `GET /api/mobile/map/properties` derived the master map from canvass-section territories, so if a sales user's active-section assignment didn't resolve on the request path, BOTH the property map AND canvass came back empty (shared failure mode).
+- Fix (Phase 3): the map endpoint now returns the FULL map-safe property set (all properties with coordinates) for EVERY Field role, INDEPENDENT of canvass; sales map == management map; zero-section sales still gets the full populated map. Map-safe fields only (detail auth stays separate). Removed the incorrect "zero-section → empty" contract. (Phase 4): MapScreen renders ALL active assigned sections via `buildAllSectionsFC` (data-driven selected emphasis; geometry deep-copied for mutation isolation), not just the selected one. (Phase 1): `buildMapLoadDiagnostic` writes a runtime load snapshot to `map_diag_load` on EVERY load with real COUNTS + statuses (property/section counts, cached-vs-live, per-section geometry, user id/email/role, maplibre_version, source_api) — a 200-with-zero-records is now distinguishable from a failure; surfaced in the Diagnostics "My Area load" card. No secrets.
+- Verified: testing_agent iteration_111 = backend 100% (28/28: Phase-3 contract + Phase-2 assignment lifecycle via real /api/auth/login) + mobile pure-Node 100% (map_diagnostics 92, canvass 30, map_data_flow 66, mapconfig 44). API returns NON-ZERO for every role incl. zero-section sales; assigned_user_id matches authenticated User.id through the real login flow.
+- DEVICE STATUS (honest): whether MapLibre v10 draws non-empty GeoJSON on Expo 57 / RN 0.86 is NOT determined here — mobile node_modules/Expo Doctor/Metro/native builds are NOT runnable in this container. If pins/polygons are still absent on device AFTER this data fix, read the Diagnostics "My Area load" card: if property_feature_count>0 & section_count>0 but nothing draws → it's the native renderer (Phase 6 v11 migration, gated on that on-device evidence). Phase 7 native fixture screen also requires a device.
+
 ## Field "My Area" — Release-Readiness Audit + Permanent Regression Lock — VERIFIED (2026-06)
 - Audited the applied map fixes (no defects found; no code path clears the master property collection or valid cache). Locked RT1–RT5 + authorization-bypass as PERMANENT named tests: backend `test_mobile_map_properties.py` (+`test_RT1_no_canvass_assignment_...`, +`test_RT_authorization_map_endpoint_does_not_widen_scope` — sales set ⊂ management set, cross-territory refused on both map + detail endpoints); mobile `map_data_flow.node.test.js` (+21 RT1–RT5 named assertions incl. static MapScreen wiring checks: loadMapProps catch never re-caches empty; selectSection is a pure setter).
 - Runnable results (testing_agent iteration_110): backend 28/28 (map_properties 8, canvass_sections 10, mobile_api 10); mobile pure-Node 12/12 suites (map_data_flow 48, map_diagnostics 33, canvass 11, mapconfig 44, + sync/transport/pairing/scope/etc). 
@@ -2463,3 +2470,33 @@ VERIFIED IN CONTAINER: expo-doctor 18/18, npx expo config shows no jsEngine, all
 (resolve/map/pairing/transport/reconcile/measurements/sketch). STILL REQUIRES USER: physical-device
 acceptance via `npx eas-cli build --platform android --profile preview --clear-cache` (Emergent
 container cannot run native Android / EAS, and cannot run hermesc — that is an env limit, NOT shipped).
+
+## P0 LOCKED ROOF SKETCH VIEWER — FIXED + VERIFIED (2026-06, iteration_112)
+Confirmed on a physical build: opening the Roof Sketch of a LOCKED measurement revision was stuck on
+"Locked" and never rendered. ROOT CAUSE (mobile/src/screens/RoofSketch.js): (1) `status` state was
+initialized to "Locked" and that same value was reused as the loading label (`{status}…`), and (2) the
+OPTIONAL queue lookup `currentSketchMutation()` (plus cache/draft reads) could throw during the open
+effect, aborting before `setReady(true)` and stranding the screen forever. FIX (implementation-only pass;
+clone feature deliberately NOT started):
+ - New pure, Node-testable resolver `WIRE.resolveFieldSketchViewerOpen({draft, sketchResult, mutation,
+   mutationError, structureId, readOnly})` → {phase:"ready"|"empty_readonly"|"error", initial?, statusMeta,
+   hasActiveMutation, diagnostics}. Optional deps fault-isolated: a queue-lookup throw forces
+   hasActiveMutation=false and STILL opens the server/cached sketch; a real load failure with NO cache and
+   no draft returns phase "error" (retryable) instead of a fabricated blank sketch; a locked revision with
+   no draft/server/cache returns phase "empty_readonly" (never a blank editable "new" doc).
+ - RoofSketch.js: status now starts "Loading roof sketch…" (never "Locked"); init effect wraps cache.sketch
+   + currentSketchMutation in try/catch (records recordSketchViewerDiagnostic on queue-lookup failure);
+   adds loadError + noSketch + reloadToken states with an explicit retryable error screen and an honest
+   "No roof sketch has been saved for this structure." empty screen; readonly banner text updated to
+   "Read only — this measurement revision is locked."; ready=true only when a usable model was created.
+   Canvas already supported readOnly pan/zoom/select-without-mutation (verified).
+ - Measurements.js sketch button: locked+has_sketch→"View Roof Sketch", editable+has_sketch→"Edit Roof
+   Sketch", editable+no_sketch→"Sketch Roof", locked+no_sketch→no button + no-sketch hint.
+ - sync.js: new export recordSketchViewerDiagnostic() (durable diagnostics ring, no secrets/PII).
+ - Backend already correct: get_sketch has NO editability gate (read-only viewing allowed); save_sketch
+   returns 409 "This measurement revision is locked" on a locked revision. Added an explicit
+   GET-on-locked=200 assertion to test_measurement_sketch_api_live.py.
+ - Tests: new mobile/src/tests/roof_sketch_locked_viewer.node.test.js (9 assertions) wired into
+   `yarn test:sketch`. VERIFIED green: full test:sketch chain, test:measurements, sync_diagnostics, and
+   backend pytest (sketch service + live API incl. locked-PUT 409 + locked-GET 200 + mobile sync).
+   STILL REQUIRES USER: physical-device acceptance of the read-only locked viewer.
