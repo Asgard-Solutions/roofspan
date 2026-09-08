@@ -613,9 +613,17 @@ export default function Measurements({ route, navigation }) {
             {existing?.id && st.id ? (
               <>
                 <RoofThumbnail structure={st} facets={facets} edges={edges} testID={`meas-structure-thumbnail-${i}`} />
-                <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
-                  <Text style={s.sketchBtnText}>{st.has_sketch ? "Edit Roof Sketch" : "Sketch Roof"}</Text>
-                </TouchableOpacity>
+                {st.has_sketch ? (
+                  <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
+                    <Text style={s.sketchBtnText}>{readonly ? "View Roof Sketch" : "Edit Roof Sketch"}</Text>
+                  </TouchableOpacity>
+                ) : (readonly ? (
+                  <Text style={s.sketchHint} testID={`sketch-roof-none-${i}`}>No roof sketch has been saved for this structure.</Text>
+                ) : (
+                  <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: true })}>
+                    <Text style={s.sketchBtnText}>Sketch Roof</Text>
+                  </TouchableOpacity>
+                ))}
               </>
             ) : (
               <Text style={s.sketchHint} testID={`sketch-roof-disabled-${i}`}>Save the measurement first to create this structure before sketching the roof.</Text>

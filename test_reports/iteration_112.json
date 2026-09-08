@@ -1,0 +1,25 @@
+{
+  "summary": "Backend-only validation of the P0 locked Roof Sketch viewer fix. Ran pytest suites for the sketch service + live sketch API + mobile measurement sync, and the mobile pure-Node test chains (yarn test:sketch, yarn test:measurements). All targeted contracts pass: GET on a locked revision succeeds (get_sketch has no editability gate), PUT on a locked revision returns HTTP 409 with 'locked' message, stale document_version returns 409 with server state, mobile locked-viewer regression suite passes (9 assertions in 'P0 LOCKED ROOF SKETCH VIEWER' + 9 in 'SKETCH OPEN DECISION' covering: existing locked sketch + currentSketchMutation() throw -> viewer still initializes with full geometry / no mutation queued / never stuck on 'Locked'; locked cached sketch offline; locked+no sketch -> empty_readonly; real load failure with no cache -> retryable error; editable sketch opens normally). No regression in the measurement suites from the new sync.js recordSketchViewerDiagnostic export.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_measurement_sketch_service.py",
+    "/app/backend/tests/test_measurement_sketch_api_live.py",
+    "/app/backend/tests/test_mobile_measurement_sync.py",
+    "/app/mobile/src/tests/roof_sketch_locked_viewer.node.test.js"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "get_sketch (backend/services/measurement_sketches.py L88-92) correctly has no is_editable() gate — read-only viewing of a locked revision is allowed as required.",
+    "save_sketch (L101-105) raises HTTPException 409 with 'This measurement revision is locked...' — matches the contract 'locked' substring the live pytest and mobile viewer both key off of.",
+    "Fault isolation in RoofSketch.js init effect (resolveFieldSketchViewerOpen) is well-covered by pure-Node regression: currentSketchMutation() throwing no longer strands the screen on 'Locked'."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (9/9, 1 live smoke enabled via RS_TEST_EMAIL/RS_TEST_PW)", "frontend": "N/A (mobile pure-Node suites: 100%)"},
+  "test_credentials": "Owner: pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (used for live smoke against https://desktop-mobile-qa.preview.emergentagent.com)",
+  "seed_data_creation": "Live smoke test self-creates and self-deletes one MeasurementSet via _delete_set teardown; no residual seed data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "P0 locked-viewer fix is fully covered by: backend/tests/test_measurement_sketch_service.py (service-level 409 on locked PUT to any of field_complete/office_verified/locked), backend/tests/test_measurement_sketch_api_live.py (HTTP-level 409 on locked PUT after transitioning revision through the status ladder), and mobile/src/tests/roof_sketch_locked_viewer.node.test.js (client-side fault isolation of currentSketchMutation, loadSketchDraft, cache.sketch). GET on locked is not asserted with an explicit status check in the live suite but is guaranteed structurally by get_sketch having no editability gate and by the mobile viewer test which exercises the full read-only render path. If a future iteration wants to pin GET-on-locked=200 at the HTTP level, add one more requests.get(...) assertion after the status ladder in test_measurement_sketch_api_live.py.",
+  "rca of the issue": "N/A — validation pass only; fix from previous iteration already merged and confirmed working."
+}

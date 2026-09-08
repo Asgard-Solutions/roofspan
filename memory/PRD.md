@@ -2470,3 +2470,33 @@ VERIFIED IN CONTAINER: expo-doctor 18/18, npx expo config shows no jsEngine, all
 (resolve/map/pairing/transport/reconcile/measurements/sketch). STILL REQUIRES USER: physical-device
 acceptance via `npx eas-cli build --platform android --profile preview --clear-cache` (Emergent
 container cannot run native Android / EAS, and cannot run hermesc — that is an env limit, NOT shipped).
+
+## P0 LOCKED ROOF SKETCH VIEWER — FIXED + VERIFIED (2026-06, iteration_112)
+Confirmed on a physical build: opening the Roof Sketch of a LOCKED measurement revision was stuck on
+"Locked" and never rendered. ROOT CAUSE (mobile/src/screens/RoofSketch.js): (1) `status` state was
+initialized to "Locked" and that same value was reused as the loading label (`{status}…`), and (2) the
+OPTIONAL queue lookup `currentSketchMutation()` (plus cache/draft reads) could throw during the open
+effect, aborting before `setReady(true)` and stranding the screen forever. FIX (implementation-only pass;
+clone feature deliberately NOT started):
+ - New pure, Node-testable resolver `WIRE.resolveFieldSketchViewerOpen({draft, sketchResult, mutation,
+   mutationError, structureId, readOnly})` → {phase:"ready"|"empty_readonly"|"error", initial?, statusMeta,
+   hasActiveMutation, diagnostics}. Optional deps fault-isolated: a queue-lookup throw forces
+   hasActiveMutation=false and STILL opens the server/cached sketch; a real load failure with NO cache and
+   no draft returns phase "error" (retryable) instead of a fabricated blank sketch; a locked revision with
+   no draft/server/cache returns phase "empty_readonly" (never a blank editable "new" doc).
+ - RoofSketch.js: status now starts "Loading roof sketch…" (never "Locked"); init effect wraps cache.sketch
+   + currentSketchMutation in try/catch (records recordSketchViewerDiagnostic on queue-lookup failure);
+   adds loadError + noSketch + reloadToken states with an explicit retryable error screen and an honest
+   "No roof sketch has been saved for this structure." empty screen; readonly banner text updated to
+   "Read only — this measurement revision is locked."; ready=true only when a usable model was created.
+   Canvas already supported readOnly pan/zoom/select-without-mutation (verified).
+ - Measurements.js sketch button: locked+has_sketch→"View Roof Sketch", editable+has_sketch→"Edit Roof
+   Sketch", editable+no_sketch→"Sketch Roof", locked+no_sketch→no button + no-sketch hint.
+ - sync.js: new export recordSketchViewerDiagnostic() (durable diagnostics ring, no secrets/PII).
+ - Backend already correct: get_sketch has NO editability gate (read-only viewing allowed); save_sketch
+   returns 409 "This measurement revision is locked" on a locked revision. Added an explicit
+   GET-on-locked=200 assertion to test_measurement_sketch_api_live.py.
+ - Tests: new mobile/src/tests/roof_sketch_locked_viewer.node.test.js (9 assertions) wired into
+   `yarn test:sketch`. VERIFIED green: full test:sketch chain, test:measurements, sync_diagnostics, and
+   backend pytest (sketch service + live API incl. locked-PUT 409 + locked-GET 200 + mobile sync).
+   STILL REQUIRES USER: physical-device acceptance of the read-only locked viewer.

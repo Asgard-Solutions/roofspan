@@ -8,7 +8,7 @@ import { createFieldEditor } from "../roofSketchFieldController";
 import { createSketchSyncCoordinator } from "../roofSketchSyncCoordinator";
 import * as WIRE from "../roofSketchFieldWiring";
 import { loadSketchDraft, saveSketchDraftStrict, clearSketchDraft, cacheSketchDetail, cache, cacheMeasurementDetail } from "../cache";
-import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, currentMeasurementMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal } from "../sync";
+import { queueMutation, onSyncChange, isSyncing, currentSketchMutation, currentMeasurementMutation, syncNow, resolveSketchConflictUseOffice, resolveSketchConflictKeepLocal, recordSketchViewerDiagnostic } from "../sync";
 import { conflictReview } from "../roofSketchConflict";
 import * as RECON from "../roofProposalReconcile";
 import { chooseDurableMeasurementBase } from "../measurementReconcile";
@@ -26,10 +26,13 @@ export default function RoofSketch({ route }) {
   const { revision_id, structure_id, structure_name = "Roof", editable = true } = route.params || {};
   const readOnly = !editable;
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);   // P0: sketch could not be loaded, no cache → retryable
+  const [noSketch, setNoSketch] = useState(false);      // P0: locked revision with no saved sketch
+  const [reloadToken, setReloadToken] = useState(0);    // bumped by Retry to re-run the open sequence
   const [tool, setTool] = useState("select");
   const [editMode, setEditMode] = useState("connected_graph");
   const [selection, setSelection] = useState(null);
-  const [status, setStatus] = useState(readOnly ? "Locked" : "Loading");
+  const [status, setStatus] = useState("Loading roof sketch…");
   const [resetToken, setResetToken] = useState(0);
   const [conflict, setConflict] = useState(null);       // B3C: Base/Local/Office review, or null
   const [openConflict, setOpenConflict] = useState(null); // Office-advanced-at-open review (local ops), or null
@@ -55,15 +58,29 @@ export default function RoofSketch({ route }) {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // loadSketchDraft() is already fault-isolated (returns null on storage failure) so a draft-storage
+      // error can never block an existing authoritative/cached sketch from opening.
       const draft = await loadSketchDraft(revision_id, structure_id);
       // Office-sketch discovery: always validate against the current Office copy on open — even when a
       // local draft exists — so an obsolete draft is retired and an Office-advanced change is surfaced.
       let sketchResult = null;
-      try { sketchResult = await cache.sketch(revision_id, structure_id); } catch (e) { sketchResult = null; }
-      const m0 = await currentSketchMutation(revision_id, structure_id);
-      const hasActiveMutation = !!(m0 && (m0.state === "pending" || m0.state === "failed" || m0.state === "conflict"));
+      try { sketchResult = await cache.sketch(revision_id, structure_id); } catch (e) { sketchResult = { data: null, stale: true, error: e }; }
+      // currentSketchMutation() (the durable queue lookup) is OPTIONAL for VIEWING. If it throws we record
+      // the failure and continue opening the server/cached sketch — a locked viewer must never strand here.
+      let m0 = null, mutationError = null;
+      try { m0 = await currentSketchMutation(revision_id, structure_id); }
+      catch (e) { mutationError = e; recordSketchViewerDiagnostic({ revisionId: revision_id, structureId: structure_id, error: e }); }
       if (!alive) return;
-      const { initial, statusMeta } = WIRE.resolveFieldSketchLoad({ draft, sketchResult, structureId: structure_id, hasActiveMutation });
+
+      const open = WIRE.resolveFieldSketchViewerOpen({ draft, sketchResult, mutation: m0, mutationError, structureId: structure_id, readOnly });
+
+      // The sketch genuinely could not be loaded and there is no cached/local copy → explicit retryable
+      // error. Never mark the screen ready with incomplete data.
+      if (open.phase === "error") { setStatus("Couldn't load roof sketch"); setNoSketch(false); setLoadError(true); return; }
+      // Locked revision with no saved sketch → honest empty state; never fabricate a blank editable sketch.
+      if (open.phase === "empty_readonly") { setStatus("Read only"); setLoadError(false); setNoSketch(true); return; }
+
+      const { initial, statusMeta } = open;
       // (1) obsolete draft identical to Office → retire it and adopt the authoritative Office sketch.
       if (initial.retireObsoleteDraft) {
         await clearSketchDraft(revision_id, structure_id);
@@ -78,11 +95,18 @@ export default function RoofSketch({ route }) {
       // (3) Office advanced past the local draft → surface an open-time conflict review.
       setOpenConflict(initial.conflict && initial.serverDetail ? { serverDetail: initial.serverDetail, officeVersion: Number(initial.serverDetail.document_version) || 0 } : null);
       setEditMode(initial.editMode);
-      setStatus(readOnly ? "Locked" : initialStatus(initial, statusMeta));
+      setStatus(readOnly ? "Read only" : initialStatus(initial, statusMeta));
+      setLoadError(false); setNoSketch(false);
       setReady(true);
     })();
     return () => { alive = false; if (editorRef.current) editorRef.current.flush(); };
-  }, [revision_id, structure_id]);
+  }, [revision_id, structure_id, reloadToken]);
+
+  // Retry after a hard load failure: reset the error and re-run the open sequence.
+  const retryLoad = useCallback(() => {
+    setLoadError(false); setNoSketch(false); setReady(false);
+    setStatus("Loading roof sketch…"); setReloadToken((x) => x + 1);
+  }, []);
 
   // B3B2: structure-specific live sync status + CAS-metadata adoption for the OPEN editor. Reads ONLY
   // this structure's deterministic mutation (never the global queue), adopts newly acknowledged CAS
@@ -362,7 +386,21 @@ export default function RoofSketch({ route }) {
     });
   };
 
-  if (!ready || !editor) return <View style={sx.centered}><Text style={sx.dim}>{status}…</Text></View>;
+  if (loadError) return (
+    <View style={sx.centered} testID="roof-sketch-error">
+      <Text style={sx.errTitle} testID="roof-sketch-error-title">Couldn't load this roof sketch</Text>
+      <Text style={sx.errSub}>Check your connection and try again. Nothing was changed and your data is safe.</Text>
+      <TouchableOpacity testID="roof-sketch-retry" style={sx.errRetry} onPress={retryLoad}><Text style={sx.primaryText}>Retry</Text></TouchableOpacity>
+    </View>
+  );
+  if (noSketch) return (
+    <View style={sx.centered} testID="roof-sketch-empty">
+      <Text style={sx.structure} testID="roof-sketch-empty-title">{structure_name}</Text>
+      <Text style={sx.locked} testID="readonly-banner">Read only — this measurement revision is locked.</Text>
+      <Text style={sx.errSub} testID="roof-sketch-no-sketch-message">No roof sketch has been saved for this structure.</Text>
+    </View>
+  );
+  if (!ready || !editor) return <View style={sx.centered}><Text style={sx.dim} testID="roof-sketch-loading">{status}</Text></View>;
 
   const scaleResolved = editor.document.scale && editor.document.scale.resolved;
   const proposals = RECON.buildFieldProposals({
@@ -507,7 +545,7 @@ export default function RoofSketch({ route }) {
         </ScrollView>
       ) : null}
 
-      {readOnly ? <Text style={sx.locked} testID="readonly-banner">This measurement revision is locked.</Text> : null}
+      {readOnly ? <Text style={sx.locked} testID="readonly-banner">Read only — this measurement revision is locked.</Text> : null}
       {locked && !readOnly ? <Text style={sx.locked} testID="revision-locked-banner">Measurement revision locked — changes require a new measurement revision.</Text> : null}
       {conflictActive ? <Text style={sx.conflictBanner} testID="conflict-banner">Sync conflict — review required before editing.</Text> : null}
       {openConflictActive ? (
@@ -644,8 +682,11 @@ function humanValidation(code) {
 
 const sx = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg, paddingHorizontal: 24 },
   dim: { color: "#94A3B8" },
+  errTitle: { color: "#fff", fontSize: 18, fontWeight: "800", textAlign: "center", marginBottom: 8 },
+  errSub: { color: "#94A3B8", fontSize: 13, textAlign: "center", marginTop: 4 },
+  errRetry: { backgroundColor: C.brand, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10, marginTop: 18 },
   statusBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 14, paddingVertical: 8 },
   statusRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   structure: { color: "#fff", fontSize: 16, fontWeight: "800" },
