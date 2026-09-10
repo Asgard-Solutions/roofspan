@@ -77,7 +77,12 @@ export default function Diagnostics() {
             <Row label="Cached property count" value={String(mapLoad.cached_property_feature_count)} testID="diag-load-cached-props" />
             <Row label="Canvass status" value={mapLoad.canvass_status} testID="diag-load-canvass-status" />
             <Row label="Section count" value={String(mapLoad.section_count)} testID="diag-load-section-count" />
-            <Row label="Selected section" value={mapLoad.selected_section_id || "—"} testID="diag-load-selected" />
+            <Row label="Area count" value={String(mapLoad.area_count != null ? mapLoad.area_count : "—")} testID="diag-load-area-count" />
+            <Row label="Selected area" value={mapLoad.selected_area_id || mapLoad.selected_section_id || "—"} testID="diag-load-selected" />
+            <Row label="Native available" value={mapLoad.native_available ? "yes" : "no"} testID="diag-load-native" />
+            <Row label="Execution env" value={mapLoad.execution_environment || "—"} testID="diag-load-exec" />
+            <Row label="Map mount attempted" value={mapLoad.map_mount_attempted ? "yes" : "no"} testID="diag-load-mount-attempted" />
+            <Row label="Map mount succeeded" value={mapLoad.map_mount_succeeded ? "yes" : "no"} testID="diag-load-mount-succeeded" />
             <Row label="Map config" value={mapLoad.map_config_status} testID="diag-load-cfg" />
             <Row label="Map style loaded" value={mapLoad.map_style_loaded ? "yes" : "no"} testID="diag-load-style" />
             <Row label="MapLibre version" value={mapLoad.maplibre_version || "—"} testID="diag-load-mlv" />
@@ -104,6 +109,8 @@ export default function Diagnostics() {
             <Row label="Base layer" value={mapDiag.active_base_layer || "—"} testID="diag-map-base" />
             <Row label="MapTiler configured" value={mapDiag.maptiler_configured ? "yes" : "no"} testID="diag-map-maptiler" />
             <Row label="Tile ticket present" value={mapDiag.tile_ticket_present ? "yes" : "no"} testID="diag-map-ticket" />
+            <Row label="Mount attempted" value={mapDiag.map_mount_attempted ? "yes" : "no"} testID="diag-map-mount-attempted" />
+            <Row label="Mount succeeded" value={mapDiag.map_mount_succeeded ? "yes" : "no"} testID="diag-map-mount-succeeded" />
             <Row label="Error" value={mapDiag.error_name ? `${mapDiag.error_name}: ${mapDiag.error_message || ""}` : (mapDiag.error_message || "—")} testID="diag-map-error" />
           </>
         ) : (

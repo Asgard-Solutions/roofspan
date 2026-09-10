@@ -1,0 +1,124 @@
+"use strict";
+/* RoofSpan Field — "My Area" MAP regression coverage (pure Node).
+ * Locks in the P0 fix: My Area is a MAP, never a property directory; load states are independent so one
+ * slow/failed request can't strand the map; the unified area selector (ZIP + assigned canvass) drives
+ * fitBounds + pin scope; diagnostics expose mount/area/native state. */
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const A = require("../mapAreas");
+const { buildMapLoadDiagnostic, buildMapDiagnostic } = require("../mapDiagnostics");
+
+let n = 0; const ok = (m) => { n++; console.log("  \u2713 " + m); };
+
+const feat = (id, lng, lat, zip, occ) => ({ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { id, zip_code: zip, owner_occupied: occ } });
+const FEATURES = [
+  feat("p1", 2, 2, "73010", true),
+  feat("p2", 3, 3, "73010", false),
+  feat("p3", 25, 25, "73065", null),
+  feat("p4", 26, 24, "73065", true),
+];
+const AREAS_RAW = { areas: [
+  { type: "canvass_section", id: "sec-1", name: "North Blanchard", color: "#2563EB", territory_id: "t1",
+    geometry: { type: "Polygon", coordinates: [[[1, 1], [1, 4], [4, 4], [4, 1], [1, 1]]] }, property_count: 2, bounds: [[1, 1], [4, 4]] },
+  { type: "zip", id: "zip:73065", name: "73065 - Newcastle", zip_code: "73065", geometry: { type: "Polygon", coordinates: [] }, property_count: 2, bounds: [[24, 23], [27, 26]] },
+  { type: "zip", id: "zip:bad", name: "bad", zip_code: "00000", bounds: [[1]] }, // invalid bounds → dropped to null
+  { id: "no-type" }, // dropped (no type)
+] };
+
+// ---- normalizeAreas: ZIP never carries a polygon; invalid bounds nulled; malformed dropped ----------
+{
+  const areas = A.normalizeAreas(AREAS_RAW);
+  assert.strictEqual(areas.length, 3, "malformed area (no type) is dropped");
+  const zip = areas.find((a) => a.id === "zip:73065");
+  assert.strictEqual(zip.geometry, null, "a ZIP area NEVER carries a polygon (bounds-only)");
+  assert.deepStrictEqual(zip.bounds, [[24, 23], [27, 26]], "valid ZIP bounds retained");
+  const bad = areas.find((a) => a.id === "zip:bad");
+  assert.strictEqual(bad.bounds, null, "invalid bounds are nulled (never fabricated)");
+  const sec = areas.find((a) => a.id === "sec-1");
+  assert.ok(sec.geometry && sec.geometry.type === "Polygon", "canvass_section keeps its real polygon");
+  ok("normalizeAreas: ZIP has no polygon, invalid bounds nulled, malformed dropped, polygons kept");
+}
+
+// ---- pickDefaultArea prefers an assigned canvass area (real polygon) over a ZIP -------------------
+{
+  const areas = A.normalizeAreas(AREAS_RAW);
+  assert.strictEqual(A.pickDefaultArea(areas), "sec-1", "default selects the assigned canvass area");
+  assert.strictEqual(A.pickDefaultArea([{ id: "zip:1", type: "zip", zip_code: "1" }]), "zip:1", "ZIP-only → first ZIP is default");
+  assert.strictEqual(A.pickDefaultArea([]), null, "no areas → no default");
+  ok("pickDefaultArea: assigned canvass area preferred; ZIP fallback; none → null");
+}
+
+// ---- boundsToCamera: proper fitBounds (ne/sw + padding), not a single vertex ----------------------
+{
+  const cam = A.boundsToCamera([[1, 1], [4, 5]], 40);
+  assert.deepStrictEqual([cam.sw, cam.ne], [[1, 1], [4, 5]], "camera fits the full bounding box (sw/ne)");
+  assert.strictEqual(cam.paddingTop, 40, "padding applied so irregular areas are fully visible");
+  assert.strictEqual(A.boundsToCamera(null), null, "no bounds → no camera fit");
+  assert.strictEqual(A.boundsToCamera([[1]]), null, "invalid bounds → no camera fit");
+  // A single-point ZIP still fits.
+  const one = A.boundsToCamera([[5, 5], [5, 5]]);
+  assert.deepStrictEqual([one.sw, one.ne], [[5, 5], [5, 5]], "single-point area still fits");
+  ok("boundsToCamera: fitBounds with padding (never coordinates[0][0]); single-point safe");
+}
+
+// ---- filterFeaturesForArea: ZIP by zip_code, polygon by bounds, none → full map -------------------
+{
+  const areas = A.normalizeAreas(AREAS_RAW);
+  const zip = areas.find((a) => a.id === "zip:73065");
+  const sec = areas.find((a) => a.id === "sec-1");
+  const byZip = A.filterFeaturesForArea(FEATURES, zip).map((f) => f.properties.id);
+  assert.deepStrictEqual(byZip.sort(), ["p3", "p4"], "ZIP scope filters pins by property zip_code");
+  const bySec = A.filterFeaturesForArea(FEATURES, sec).map((f) => f.properties.id);
+  assert.deepStrictEqual(bySec.sort(), ["p1", "p2"], "polygon area scopes pins to its bounds");
+  assert.strictEqual(A.filterFeaturesForArea(FEATURES, null).length, 4, "no area → full authorized map");
+  ok("filterFeaturesForArea: ZIP→zip_code, canvass→bounds, none→full map");
+}
+
+// ---- boundsFromFeatures: fallback bbox from point features ----------------------------------------
+{
+  assert.deepStrictEqual(A.boundsFromFeatures(FEATURES), [[2, 2], [26, 25]], "bbox spans all point features");
+  assert.strictEqual(A.boundsFromFeatures([]), null, "no features → null");
+  ok("boundsFromFeatures: correct bbox fallback");
+}
+
+// ---- Diagnostics expose the required decoupled-state fields ---------------------------------------
+{
+  const load = buildMapLoadDiagnostic({
+    propertiesOk: true, propertyFeatures: FEATURES, canvassOk: false, sections: [],
+    mapConfigOk: false, areaCount: 3, selectedAreaId: "sec-1",
+    nativeAvailable: true, executionEnvironment: "standalone",
+    mapMountAttempted: true, mapMountSucceeded: false,
+  });
+  assert.strictEqual(load.property_status, "ok", "property_status present");
+  assert.strictEqual(load.canvass_status, "failed", "an independent canvass failure is reported, not fatal");
+  assert.strictEqual(load.map_config_status, "failed", "an independent config failure is reported, not fatal");
+  assert.strictEqual(load.property_feature_count, 4, "property_feature_count present");
+  assert.strictEqual(load.area_count, 3, "area_count present");
+  assert.strictEqual(load.selected_area_id, "sec-1", "selected_area_id present");
+  assert.strictEqual(load.native_available, true, "native_available present");
+  assert.strictEqual(load.execution_environment, "standalone", "execution_environment present");
+  assert.strictEqual(load.map_mount_attempted, true, "map_mount_attempted present");
+  assert.strictEqual(load.map_mount_succeeded, false, "map_mount_succeeded present");
+
+  const err = buildMapDiagnostic({ mapMountAttempted: true, mapMountSucceeded: false, areaCount: 3, selectedAreaId: "sec-1",
+    error: { name: "MapError", message: "native init failed" } });
+  assert.strictEqual(err.map_mount_attempted, true, "renderer diag records mount attempted");
+  assert.strictEqual(err.map_mount_succeeded, false, "renderer diag records mount succeeded");
+  assert.strictEqual(err.error_name, "MapError", "renderer diag captures the native error name");
+  ok("diagnostics: property/canvass/config statuses independent; mount + area + native fields recorded");
+}
+
+// ---- PRODUCT GUARD: My Area is a MAP, not a property directory (FlatList fallback removed) ---------
+{
+  const src = fs.readFileSync(path.join(__dirname, "..", "screens", "MapScreen.js"), "utf8");
+  assert.ok(!/FlatList/.test(src), "MapScreen must NOT use a FlatList (no property directory fallback)");
+  assert.ok(!/renderFallback/.test(src), "the old renderFallback property-list must be gone");
+  assert.ok(/onDidFinishRenderingMapFully/.test(src), "map mount success is tracked");
+  assert.ok(/map-native-unavailable/.test(src) && /map-init-error/.test(src) && /map-retry-button/.test(src), "compact map states + retry exist");
+  assert.ok(/boundsToCamera/.test(src), "camera uses fitBounds via boundsToCamera");
+  assert.ok(!/coordinates\?\.\[0\]\?\.\[0\]/.test(src), "camera no longer derives center from coordinates[0][0]");
+  ok("PRODUCT GUARD: FlatList/renderFallback removed; compact map states + fitBounds + mount tracking present");
+}
+
+console.log("\nMY AREA MAP: all " + n + " assertions passed");
