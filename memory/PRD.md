@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Cleanup — Office Map: "Property Locations Checked" moved into a per-Territory-card flyout — DONE & VERIFIED (2026-06)
+- Moved the large standalone location-status panel (previously portaled to the bottom of the territory panel via `AppShell.jsx`) into a compact shadcn **Popover** flyout opened from a trigger icon (lucide `Navigation`, title "Property location status") on each Territory card header.
+- Territory-specific data: added optional `territory_id` query param to `GET /api/location-resolution/progress` (`backend/routers/location_resolution.py`) filtering `Property.territory_id`; existing computation reused (no invented stats). Proven: global total=329 vs a specific territory scoped correctly (e.g. 1-property territory → "1 of 1 checked, 100%").
+- `LocationResolutionProgress.jsx`: refactored from a global self-portal into a `{ territoryId }`-scoped inline component with loading (`location-resolution-loading`), error (`location-resolution-error`), and empty (`location-resolution-empty`) states; removed `createPortal`/`territory-panel` target logic; polls the scoped endpoint every 2s while the popover is open (content mounts only when `statusOpenId === t.id`).
+- Single-open behavior via one `statusOpenId` state; Radix Popover closes on outside-click + Escape; trigger + content `stopPropagation` so opening does NOT select the territory / move camera / reset filters.
+- Removed the standalone mount + now-unused imports in `AppShell.jsx` (`LocationResolutionProgress`, `useLocation`, `location`).
+- Preserved: territory selection, property counts, Import, Delete, Draw territory, filters, pins, canvass, ZIP search, Street/Satellite.
+- Verified: MapView/LocationResolutionProgress/AppShell transpile clean; frontend webpack compiled; backend syntax OK + scoped endpoint curl; screenshot confirms standalone panel gone, per-card trigger present, flyout opens with correct territory data. User does final visual acceptance.
+
+
 ## Cleanup — Office Map: Removed Contactable-Leads Toggle, Duplicate "Showing X of Y", Walking-Route Feature — DONE & VERIFIED (2026-06)
 - Office `frontend/src/pages/MapView.jsx` ONLY (Field/mobile untouched). Removed three sidebar items + all code used solely by them:
   - "Contactable leads only" toggle: removed the button, `contactableOnly`/`setContactableOnly` state, and its `filteredFeatures` filter branch/dependency (real auth + Do Not Knock behavior unchanged).

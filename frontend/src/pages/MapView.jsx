@@ -11,7 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import ImportDialog from "@/components/ImportDialog";
 import PropertySheet from "@/components/PropertySheet";
-import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2 } from "lucide-react";
+import LocationResolutionProgress from "@/components/LocationResolutionProgress";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2, Navigation } from "lucide-react";
 
 const OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const MANAGE = ["owner", "administrator", "office"];
@@ -55,6 +57,7 @@ export default function MapView() {
   const [occFilter, setOccFilter] = useState("all");
   const [features, setFeatures] = useState([]);
   const [reps, setReps] = useState([]);
+  const [statusOpenId, setStatusOpenId] = useState(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -650,7 +653,17 @@ export default function MapView() {
                 <div key={t.id} onClick={() => selectTerritory(t)}
                   className={`mb-1 cursor-pointer rounded-md border p-3 transition-colors ${selectedId === t.id ? "border-slate-900 bg-slate-50" : "border-transparent hover:bg-slate-50"}`}
                   data-testid={`territory-item-${t.id}`}>
-                  <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm" style={{ backgroundColor: t.color }} /><span className="font-medium text-slate-900">{t.name}</span></div>{canManage && <button onClick={(e) => { e.stopPropagation(); deleteTerritory(t); }} className="text-slate-300 hover:text-red-500" data-testid={`delete-territory-${t.id}`}><Trash2 className="h-4 w-4" /></button>}</div>
+                  <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm" style={{ backgroundColor: t.color }} /><span className="font-medium text-slate-900">{t.name}</span></div><div className="flex items-center gap-1">
+                    <Popover open={statusOpenId === t.id} onOpenChange={(o) => setStatusOpenId(o ? t.id : null)}>
+                      <PopoverTrigger asChild>
+                        <button onClick={(e) => e.stopPropagation()} title="Property location status" className="text-slate-300 hover:text-slate-700" data-testid={`location-status-trigger-${t.id}`}><Navigation className="h-4 w-4" /></button>
+                      </PopoverTrigger>
+                      <PopoverContent side="right" align="start" className="w-72" onClick={(e) => e.stopPropagation()} data-testid={`location-status-flyout-${t.id}`}>
+                        {statusOpenId === t.id && <LocationResolutionProgress territoryId={t.id} />}
+                      </PopoverContent>
+                    </Popover>
+                    {canManage && <button onClick={(e) => { e.stopPropagation(); deleteTerritory(t); }} className="text-slate-300 hover:text-red-500" data-testid={`delete-territory-${t.id}`}><Trash2 className="h-4 w-4" /></button>}
+                  </div></div>
                   <div className="mt-1 flex items-center gap-3 text-xs text-slate-500"><span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {t.property_count} properties</span></div>
                   {selectedId === t.id && canManage && <Button size="sm" variant="outline" className="mt-2 w-full" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }} data-testid="import-button"><Download className="h-4 w-4" /> Import properties</Button>}
                 </div>

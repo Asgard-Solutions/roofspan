@@ -1,6 +1,6 @@
 from collections import Counter
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,10 +20,14 @@ def _loc(prop: Property) -> dict:
 
 @router.get("/progress")
 async def location_resolution_progress(
+    territory_id: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    props = (await db.execute(select(Property).where(Property.source == "rentcast"))).scalars().all()
+    stmt = select(Property).where(Property.source == "rentcast")
+    if territory_id:
+        stmt = stmt.where(Property.territory_id == territory_id)
+    props = (await db.execute(stmt)).scalars().all()
     integration = (
         await db.execute(select(IntegrationSetting).where(IntegrationSetting.provider == "mapbox"))
     ).scalar_one_or_none()

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import { CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
@@ -30,41 +29,51 @@ const ACCURACY_LABELS = {
   unknown: "Other",
 };
 
-export default function LocationResolutionProgress() {
+export default function LocationResolutionProgress({ territoryId }) {
   const [status, setStatus] = useState(null);
-  const [target, setTarget] = useState(null);
-
-  useEffect(() => {
-    let alive = true;
-    let timer;
-    const findTarget = () => {
-      if (!alive) return;
-      const node = document.querySelector('[data-testid="territory-panel"]');
-      if (node) setTarget(node);
-      else timer = window.setTimeout(findTarget, 100);
-    };
-    findTarget();
-    return () => { alive = false; if (timer) window.clearTimeout(timer); };
-  }, []);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let alive = true;
     let timer;
     const load = async () => {
       try {
-        const { data } = await api.get("/location-resolution/progress");
-        if (alive) setStatus(data);
+        const url = territoryId
+          ? `/location-resolution/progress?territory_id=${encodeURIComponent(territoryId)}`
+          : "/location-resolution/progress";
+        const { data } = await api.get(url);
+        if (alive) { setStatus(data); setError(false); }
       } catch {
-        // Progress reporting must never interfere with the map itself.
+        if (alive && !status) setError(true);
       } finally {
         if (alive) timer = window.setTimeout(load, 2000);
       }
     };
     load();
     return () => { alive = false; if (timer) window.clearTimeout(timer); };
-  }, []);
+  }, [territoryId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!target || !status || !status.total) return null;
+  if (error) {
+    return (
+      <div className="px-1 py-2 text-[11px] text-red-600" data-testid="location-resolution-error">
+        Couldn't load location status. It will retry automatically.
+      </div>
+    );
+  }
+  if (!status) {
+    return (
+      <div className="flex items-center gap-2 px-1 py-2 text-[11px] text-slate-500" data-testid="location-resolution-loading">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" /> Loading location status…
+      </div>
+    );
+  }
+  if (!status.total) {
+    return (
+      <div className="px-1 py-2 text-[11px] text-slate-500" data-testid="location-resolution-empty">
+        No imported properties to check in this territory yet.
+      </div>
+    );
+  }
 
   const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
   const resolved = Number(status.resolved || 0);
@@ -77,8 +86,8 @@ export default function LocationResolutionProgress() {
   const reasons = (status.rejection_breakdown || []).filter((r) => Number(r.count || 0) > 0).slice(0, 6);
   const accuracies = (status.accuracy_breakdown || []).filter((r) => Number(r.count || 0) > 0);
 
-  return createPortal(
-    <div className="border-t border-border bg-slate-50 px-4 py-3" data-testid="location-resolution-progress">
+  return (
+    <div data-testid="location-resolution-progress">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {processing ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600" /> : providerRequired || completeWithRetries ? <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />}
@@ -109,7 +118,6 @@ export default function LocationResolutionProgress() {
       {accuracies.length > 0 && <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 border-t border-slate-200 pt-2 text-[10px] text-slate-500" data-testid="location-accuracy-breakdown">{accuracies.map((item) => <span key={item.accuracy_type}><strong className="text-slate-700">{Number(item.count || 0).toLocaleString()}</strong> {ACCURACY_LABELS[item.accuracy_type] || item.accuracy_type}</span>)}</div>}
 
       {reasons.length > 0 && <div className="mt-2 border-t border-slate-200 pt-2" data-testid="location-rejection-breakdown"><div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Why unresolved</div><div className="space-y-0.5 text-[10px] text-slate-500">{reasons.map((item) => <div key={item.reason} className="flex items-center justify-between gap-2"><span className="truncate" title={item.reason}>{REASON_LABELS[item.reason] || item.reason}</span><strong className="shrink-0 text-slate-700">{Number(item.count || 0).toLocaleString()}</strong></div>)}</div></div>}
-    </div>,
-    target
+    </div>
   );
 }
