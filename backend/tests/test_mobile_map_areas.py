@@ -41,7 +41,8 @@ async def _seed():
 
         terr_a = Territory(name=f"AR-A-{sfx}", geometry=TERR_A, created_by=owner.email)
         terr_b = Territory(name=f"AR-B-{sfx}", geometry=TERR_B, created_by=owner.email)
-        db.add_all([terr_a, terr_b]); await db.flush()
+        terr_empty = Territory(name=f"AR-EMPTY-{sfx}", geometry=TERR_A, created_by=owner.email)
+        db.add_all([terr_a, terr_b, terr_empty]); await db.flush()
 
         zip_in = f"73{sfx[:3]}"   # ZIP present INSIDE rep's assigned territory A
         zip_out = f"74{sfx[:3]}"  # ZIP only in territory B (out of rep scope)
@@ -66,7 +67,7 @@ async def _seed():
             "rep": (str(rep.id), rep.email, "sales"),
             "rep_other": (str(rep_other.id), rep_other.email, "sales"),
             "sec": str(sec.id), "zip_in": zip_in, "zip_out": zip_out,
-            "terr_a": str(terr_a.id), "terr_b": str(terr_b.id),
+            "terr_a": str(terr_a.id), "terr_b": str(terr_b.id), "terr_empty": str(terr_empty.id),
         }
 
 
@@ -158,6 +159,15 @@ def test_management_sees_both_territories():
     areas = _areas(_tok(S["owner"]))
     terr_ids = {a["territory_id"] for a in areas if a["type"] == "territory"}
     assert S["terr_a"] in terr_ids and S["terr_b"] in terr_ids, "management sees all active territories"
+
+
+def test_empty_territory_hidden_from_field_selector():
+    """A territory with zero coord'd properties is hidden from the Field area selector to reduce
+    clutter on data-heavy accounts (Field users cannot import, so an empty territory is not useful)."""
+    areas = _areas(_tok(S["owner"]))
+    terr_ids = {a["territory_id"] for a in areas if a["type"] == "territory"}
+    assert S["terr_empty"] not in terr_ids, "empty territory must not appear as a Field area"
+    assert S["terr_a"] in terr_ids, "non-empty territories still appear"
 
 
 def test_default_priority_order_canvass_before_territory_before_zip():

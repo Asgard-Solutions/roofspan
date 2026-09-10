@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Enhancement — Hide Zero-Property Territories from Office + Field selectors — DONE & VERIFIED (2026-06)
+- Field (`backend/routers/mobile.py` `/map/areas`): territory areas with 0 coord'd properties are skipped (Field users can't import, so empties are pure clutter). Non-empty territories + canvass + zip unchanged.
+- Office (`frontend/src/pages/MapView.jsx`): added `showEmptyTerritories` state (default false) + `visibleTerritories`/`emptyTerritoryCount` memos. The list shows only territories with `property_count > 0`, PLUS the currently selected territory always (so a freshly drawn/empty territory stays reachable for Import/Delete). A compact `toggle-empty-territories` button ("Show N empty territories" / "Hide empty territories") reveals/hides the rest. Header badge reflects the visible count.
+- Verified: backend `test_mobile_map_areas.py` 12/12 (incl. new `test_empty_territory_hidden_from_field_selector`) + `test_mobile_map_properties.py` 9/9; MapView transpiles; frontend webpack compiled; Office screenshot: 170 non-empty shown by default, "Show 5 empty territories" → 175, toggles back. User does final visual acceptance.
+
+
 ## Cleanup — Office Map: Collapsible Territories + Canvass Sections (collapsed by default) — DONE & VERIFIED (2026-06)
 - `frontend/src/pages/MapView.jsx` only. Added two independent presentation-only states `territoriesExpanded`/`canvassExpanded` (both default `false`), plus clickable section headers using lucide `ChevronRight` (collapsed) / `ChevronDown` (expanded) and a compact count badge reusing in-memory `territories.length` / `sections.length` (no new API calls).
 - Territories: wrapped the card list in a `territories-toggle` header + gated `territories-list`. Canvass Sections: made the header a `canvass-toggle` (keeps the "Show all"/clearSection button beside it) + gated the body (list + Draw Canvass Section).
