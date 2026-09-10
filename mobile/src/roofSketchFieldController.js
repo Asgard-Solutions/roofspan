@@ -38,8 +38,14 @@ function _sketchDocsEqual(a, b) {
   try { return JSON.stringify(RS.normalizeSketchDocument(a)) === JSON.stringify(RS.normalizeSketchDocument(b)); }
   catch (e) { return false; }
 }
-function resolveInitialSketch({ draft, server, structureId, hasActiveMutation = false } = {}) {
+function resolveInitialSketch({ draft, server, structureId, hasActiveMutation = false, readOnly = false } = {}) {
   const serverVersion = server ? (Number(server.document_version) || 0) : 0;
+  // A locked/read-only revision can NEVER be edited, so a leftover local draft (e.g. a stray single line
+  // from an earlier session) must never shadow the authoritative Office sketch. Whenever a server (or
+  // cached-server) document exists, present it — exactly what Office shows for this structure.
+  if (readOnly && server && server.document) {
+    return { ..._serverInitial(server), decision: "office_readonly" };
+  }
   if (draft && draft.document) {
     const draftVersion = Number(draft.document_version) || 0;
     // (2) Active unsynced local edit is always authoritative — never replaced by an Office GET.

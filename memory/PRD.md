@@ -1,5 +1,19 @@
 # RoofSpan — Product Requirements & Status
 
+## Bug Fix — Field "View Roof Sketch" on a LOCKED revision showed a single line / 0 planes — FIXED & VERIFIED (2026-06)
+- Symptom: opening View Roof Sketch on a locked (read-only) measurement rendered a stray single-line sketch ("0 SF · 0 planes") while the measurement-card thumbnail (rendered from measurement facets/edges) and RoofSpan Office both showed the full roof.
+- ROOT CAUSE: `resolveInitialSketch` (mobile/src/roofSketchFieldController.js) preferred a leftover local DRAFT over the authoritative Office/server sketch even in read-only mode, so a stale single-line draft shadowed the full saved sketch. Backend was fine — mobile & office sketch GETs share `services.measurement_sketches.get_sketch` and return identical documents.
+- FIX: added a `readOnly` short-circuit — when `readOnly` and a server (or cached-server) document exists, always present the server document (decision `office_readonly`), never the draft. Wiring `resolveFieldSketchViewerOpen` now passes `readOnly` through.
+- Files: `mobile/src/roofSketchFieldController.js`, `mobile/src/roofSketchFieldWiring.js`, new regression in `mobile/src/tests/roof_sketch_locked_viewer.node.test.js` (#6), plus testing-agent's `backend/tests/test_field_locked_sketch_parity.py`.
+- VERIFIED (testing_agent iteration_114): backend 100% (mobile↔office sketch document parity, sketch_not_found 404 contract, scope 403) + node resolver 100% (roof_sketch_locked_viewer 10 incl. new case, open_decision, editor 44, read_through 8). No issues; retest not needed. Physical-device acceptance pending (user).
+
+
+## Enhancement — Hide Zero-Property Territories from Office + Field selectors — DONE & VERIFIED (2026-06)
+- Field (`backend/routers/mobile.py` `/map/areas`): territory areas with 0 coord'd properties are skipped (Field users can't import, so empties are pure clutter). Non-empty territories + canvass + zip unchanged.
+- Office (`frontend/src/pages/MapView.jsx`): added `showEmptyTerritories` state (default false) + `visibleTerritories`/`emptyTerritoryCount` memos. The list shows only territories with `property_count > 0`, PLUS the currently selected territory always (so a freshly drawn/empty territory stays reachable for Import/Delete). A compact `toggle-empty-territories` button ("Show N empty territories" / "Hide empty territories") reveals/hides the rest. Header badge reflects the visible count.
+- Verified: backend `test_mobile_map_areas.py` 12/12 (incl. new `test_empty_territory_hidden_from_field_selector`) + `test_mobile_map_properties.py` 9/9; MapView transpiles; frontend webpack compiled; Office screenshot: 170 non-empty shown by default, "Show 5 empty territories" → 175, toggles back. User does final visual acceptance.
+
+
 ## Cleanup — Office Map: Collapsible Territories + Canvass Sections (collapsed by default) — DONE & VERIFIED (2026-06)
 - `frontend/src/pages/MapView.jsx` only. Added two independent presentation-only states `territoriesExpanded`/`canvassExpanded` (both default `false`), plus clickable section headers using lucide `ChevronRight` (collapsed) / `ChevronDown` (expanded) and a compact count badge reusing in-memory `territories.length` / `sections.length` (no new API calls).
 - Territories: wrapped the card list in a `territories-toggle` header + gated `territories-list`. Canvass Sections: made the header a `canvass-toggle` (keeps the "Show all"/clearSection button beside it) + gated the body (list + Draw Canvass Section).

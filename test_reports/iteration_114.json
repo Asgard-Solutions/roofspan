@@ -1,0 +1,25 @@
+{
+  "summary": "Verified the RoofSpan Field locked-viewer P0 fix. (a) Ran the pure Node resolver suite — roof_sketch_locked_viewer.node.test.js passes all 10 assertions including the new #6 'REPORTED BUG: locked revision shows the full Office sketch, a stray local draft never shadows it'; the readOnly short-circuit in resolveInitialSketch (mobile/src/roofSketchFieldController.js) correctly prefers server.document over any local draft. Companion suites roof_sketch_open_decision, roof_sketch_editor (44), sketch_read_through (8) also pass. (b) Authored a new hermetic backend contract test test_field_locked_sketch_parity.py that seeds property/user/lead/measurement revisions and directly calls both routers.measurement_sketches.get_sketch and routers.mobile.mobile_get_sketch; the mobile and office endpoints return the byte-identical `document` (schema_version, document_version, edit_mode, vertices/edges/facets) — Field/Office parity holds. (c) The sketch_not_found 404 contract (detail.code == 'sketch_not_found') is enforced on BOTH endpoints for a structure with no saved sketch. (d) Cross-rep scope 403 is enforced on the mobile GET; owner reads across reps. (e) Public HTTP smoke against REACT_APP_BACKEND_URL confirms owner login and 404 on unknown revision on both endpoints. No regressions; the fix behaves exactly as documented.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_field_locked_sketch_parity.py",
+    "/app/test_reports/pytest/field_locked_parity.xml",
+    "/app/mobile/src/tests/roof_sketch_locked_viewer.node.test.js"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "resolveInitialSketch readOnly short-circuit is placed correctly BEFORE the draft branch — this is the right ordering and prevents a stale draft from shadowing Office on locked revisions.",
+    "resolveFieldSketchViewerOpen forwards readOnly into resolveInitialSketch (line 59) and still handles the readOnly + source='new' → 'empty_readonly' case afterwards, so the honest empty state is still surfaced for locked structures with no server sketch and no draft.",
+    "Both office and mobile sketch endpoints delegate to services.measurement_sketches.get_sketch/_out (single source of truth) — no divergence risk between Field and Office documents.",
+    "Both endpoints emit the same {code:'sketch_not_found'} structured 404; keep this contract stable for the mobile read-through cache."
+  ],
+  "updated_files": ["/app/backend/tests/test_field_locked_sketch_parity.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (mobile RN not runnable here; verified via pure Node resolver suite = 100%)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 (valid; login returns access_token).",
+  "seed_data_creation": "Hermetic per test: two properties, two sales users, two leads, two measurement revisions each with 2 structures; one saved full-geometry sketch per revision. All seeded rows deleted in teardown (assertion confirms deletion).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The Field locked-viewer fix is verified end-to-end (pure resolver + backend parity/404/403). The new hermetic test /app/backend/tests/test_field_locked_sketch_parity.py is stable and safe to re-run for regression coverage. Mobile RN app cannot be exercised here — always verify via node src/tests/*.node.test.js from /app/mobile.",
+  "rca of the issue": "Root cause (already fixed by main agent): resolveInitialSketch in mobile/src/roofSketchFieldController.js applied the local-draft branch before considering whether the revision was read-only, so a stray leftover single-line local draft shadowed the authoritative Office server document on LOCKED revisions — producing the '0 planes / single line' viewer while the RoofThumbnail (which reads facets separately) still looked correct. Fix (verified): a readOnly && server.document short-circuit at the top of resolveInitialSketch now always returns _serverInitial(server) with decision 'office_readonly' on locked revisions. resolveFieldSketchViewerOpen was updated to pass readOnly through. Reproduction & mitigation are pinned by assertion #6 of roof_sketch_locked_viewer.node.test.js and by Field/Office document parity in test_field_locked_sketch_parity.py."
+}

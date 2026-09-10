@@ -777,12 +777,15 @@ async def mobile_map_areas(user: User = Depends(require_roles(*FIELD_ROLES)), db
         })
 
     # 2) Territories — same records/relationship Office uses; the Priority-2 default fallback.
+    #    Empty territories (no coord'd properties) are hidden from the Field selector to reduce clutter.
     territories = await _authorized_territories(db, user)
     for t in territories:
         count = (await db.execute(
             select(func.count(Property.id)).where(
                 Property.territory_id == t.id, Property.latitude.isnot(None), Property.longitude.isnot(None))
         )).scalar_one()
+        if int(count) == 0:
+            continue
         areas.append({
             "type": "territory", "id": f"territory:{t.id}", "name": t.name, "color": t.color,
             "territory_id": str(t.id), "geometry": t.geometry, "property_count": int(count),

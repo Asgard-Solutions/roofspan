@@ -56,7 +56,7 @@ function resolveFieldSketchViewerOpen({ draft, sketchResult, mutation, mutationE
     return { phase: "error", reason: "sketch_load_failed", statusMeta, hasActiveMutation, diagnostics };
   }
 
-  const initial = resolveInitialSketch({ draft, server, structureId, hasActiveMutation });
+  const initial = resolveInitialSketch({ draft, server, structureId, hasActiveMutation, readOnly });
 
   // Locked/read-only revision with no draft and no server/cached copy: the resolver would return a fresh
   // "new" document — that must NOT be presented as a real roof sketch on a locked revision.

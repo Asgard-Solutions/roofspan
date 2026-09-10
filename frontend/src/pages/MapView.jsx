@@ -60,6 +60,7 @@ export default function MapView() {
   const [statusOpenId, setStatusOpenId] = useState(null);
   const [territoriesExpanded, setTerritoriesExpanded] = useState(false);
   const [canvassExpanded, setCanvassExpanded] = useState(false);
+  const [showEmptyTerritories, setShowEmptyTerritories] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -457,6 +458,18 @@ export default function MapView() {
     return true;
   }), [features, occFilter, sectionPropIds]);
 
+  // Hide zero-property territories from the list to keep data-heavy accounts clean. The currently
+  // selected territory is ALWAYS shown (so a freshly drawn/empty territory stays reachable for Import),
+  // and a "Show N empty" toggle reveals the rest.
+  const emptyTerritoryCount = useMemo(
+    () => territories.filter((t) => Number(t.property_count || 0) === 0 && t.id !== selectedId).length,
+    [territories, selectedId]
+  );
+  const visibleTerritories = useMemo(
+    () => (showEmptyTerritories ? territories : territories.filter((t) => Number(t.property_count || 0) > 0 || t.id === selectedId)),
+    [territories, showEmptyTerritories, selectedId]
+  );
+
   // Rebuild the main-thread cluster index whenever the loaded property set or user filter changes.
   // This is the missing link that previously left superRef empty while the UI reported thousands of
   // loaded properties.
@@ -655,13 +668,13 @@ export default function MapView() {
               <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {territoriesExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Territories
               </span>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid="territories-count">{territories.length}</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid="territories-count">{visibleTerritories.length}</span>
             </button>
 
             {territoriesExpanded && (
             <div className="p-2" data-testid="territories-list">
               {territories.length === 0 && <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>}
-              {territories.map((t) => (
+              {visibleTerritories.map((t) => (
                 <div key={t.id} onClick={() => selectTerritory(t)}
                   className={`mb-1 cursor-pointer rounded-md border p-3 transition-colors ${selectedId === t.id ? "border-slate-900 bg-slate-50" : "border-transparent hover:bg-slate-50"}`}
                   data-testid={`territory-item-${t.id}`}>
@@ -680,6 +693,13 @@ export default function MapView() {
                   {selectedId === t.id && canManage && <Button size="sm" variant="outline" className="mt-2 w-full" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }} data-testid="import-button"><Download className="h-4 w-4" /> Import properties</Button>}
                 </div>
               ))}
+              {emptyTerritoryCount > 0 && (
+                <button type="button" onClick={() => setShowEmptyTerritories((v) => !v)}
+                  className="mt-1 w-full rounded-md px-3 py-1.5 text-left text-xs font-medium text-slate-500 hover:bg-slate-50"
+                  data-testid="toggle-empty-territories">
+                  {showEmptyTerritories ? "Hide empty territories" : `Show ${emptyTerritoryCount} empty ${emptyTerritoryCount === 1 ? "territory" : "territories"}`}
+                </button>
+              )}
             </div>
             )}
           </div>
