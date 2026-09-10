@@ -63,12 +63,16 @@
                   InstallArguments="/silent /install"
                   Compressed="yes" />
 
-      <!-- 2a) PostgreSQL password PREP (RoofSpan-owned helper, runs BEFORE the EDB installer). Generates a
-               strong superuser password at runtime (or honors an admin-supplied PgSuperPassword),
-               DPAPI-protects it (LocalMachine) to identity\pg_super.bin for RoofSpan first-run, and writes
-               a transient EDB option file the real installer reads (so the secret is never on a command
-               line and never committed). Uses the OS PowerShell as a small helper payload - it does NOT
-               replace the PostgreSQL package. -->
+      <!-- 2a) PostgreSQL password PREP (RoofSpan-owned helper, runs BEFORE the EDB installer). The prep
+               logic lives in the CHECKED-IN, BUNDLE-EMBEDDED script Prepare-PostgreSQL.ps1 (a Burn
+               <Payload>), NOT inline: WiX Burn formats '[...]' tokens in InstallArguments and would strip
+               PowerShell type accelerators ([string], [Convert], [Security.Cryptography...], [IO.File],
+               [Text.Encoding]) and corrupt the command (the confirmed clean-computer 0x1 failure). Only
+               the legitimate [PgSuperPassword] Burn variable remains a bracket token here; it is Hidden
+               (masked in logs) and, when empty, the script generates a strong random password itself.
+               Uses the OS PowerShell as a small helper payload - it does NOT replace the PostgreSQL package.
+               Burn extracts the ExePackage payloads together and runs powershell.exe with that package
+               working directory, so the script is referenced by its payload name. -->
       <ExePackage Id="PostgreSQLPasswordPrep"
                   CacheId="RoofSpanPostgreSQLPasswordPrep"
                   DisplayName="RoofSpan PostgreSQL preparation"
@@ -76,8 +80,10 @@
                   Permanent="yes"
                   Vital="yes"
                   InstallCondition="NOT PgPresent"
-                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='Stop'; $p='[PgSuperPassword]'; if([string]::IsNullOrWhiteSpace($p)){$b=New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $p='Rs1!'+([Convert]::ToBase64String($b) -replace '[+/=]','X')}; $d='C:\ProgramData\RoofSpan\identity'; New-Item -ItemType Directory -Force -Path $d | Out-Null; Add-Type -AssemblyName System.Security; $e=[Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($p),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine); [IO.File]::WriteAllBytes((Join-Path $d 'pg_super.bin'),$e); Set-Content -Encoding ASCII -Path (Join-Path $d 'pg_install.optionfile') -Value ('superpassword=' + $p)&quot;"
-                  Compressed="yes" />
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Prepare-PostgreSQL.ps1 -PgSuperPassword &quot;[PgSuperPassword]&quot;"
+                  Compressed="yes">
+        <Payload SourceFile="scripts\Prepare-PostgreSQL.ps1" />
+      </ExePackage>
 
       <!-- 2b) PostgreSQL prerequisite = the REAL EDB installer, EMBEDDED in RoofSpanSetup.exe. Reads the
                generated superuser password from the option file; unattended flags + service name preserved.
@@ -93,7 +99,9 @@
                   InstallArguments="--optionfile &quot;C:\ProgramData\RoofSpan\identity\pg_install.optionfile&quot; --mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL"
                   Compressed="yes" />
 
-      <!-- 2c) Remove the transient option file (the DPAPI-protected pg_super.bin remains for first-run). -->
+      <!-- 2c) Remove the transient option file (the DPAPI-protected pg_super.bin remains for first-run).
+               Also a BUNDLE-EMBEDDED script <Payload> (Cleanup-PostgreSQL.ps1) rather than inline, for the
+               same Burn-formatting safety and to keep both PostgreSQL helpers uniform and regression-tested. -->
       <ExePackage Id="PostgreSQLPasswordCleanup"
                   CacheId="RoofSpanPostgreSQLPasswordCleanup"
                   DisplayName="RoofSpan PostgreSQL cleanup"
@@ -101,8 +109,10 @@
                   Permanent="yes"
                   Vital="no"
                   InstallCondition="NOT PgPresent"
-                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$f='C:\ProgramData\RoofSpan\identity\pg_install.optionfile'; if(Test-Path $f){Remove-Item -Force $f}&quot;"
-                  Compressed="yes" />
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Cleanup-PostgreSQL.ps1"
+                  Compressed="yes">
+        <Payload SourceFile="scripts\Cleanup-PostgreSQL.ps1" />
+      </ExePackage>
 
       <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. -->
       <MsiPackage Id="RoofSpanOfficeMsi"
