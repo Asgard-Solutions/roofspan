@@ -115,6 +115,31 @@ const AREAS_RAW = { areas: [
   ok("boundsFromFeatures: correct bbox fallback");
 }
 
+// ---- Camera precedence: a selected area's bounds ALWAYS win over map-config default_center --------
+// (Regression for the Austin/wrong-center defect. FIXTURES ONLY — no production coords in prod logic.)
+{
+  const territory = {
+    type: "territory", id: "territory:t-far", territory_id: "t-far",
+    geometry: { type: "Polygon", coordinates: [[[-97.6, 35.1], [-97.6, 35.4], [-97.2, 35.4], [-97.2, 35.1], [-97.6, 35.1]]] },
+    bounds: [[-97.6, 35.1], [-97.2, 35.4]],
+  };
+  const cam = A.boundsToCamera(territory.bounds);
+  assert.ok(cam, "a territory with bounds yields a camera fit");
+  assert.deepStrictEqual([cam.sw, cam.ne], [[-97.6, 35.1], [-97.2, 35.4]], "camera fits the territory bounds exactly");
+  // An UNRELATED default-center fixture must be OUTSIDE the fitted bounds → no default-center fallback.
+  const defaultCenterFixture = [-97.74, 30.27];
+  const inside = defaultCenterFixture[0] >= cam.sw[0] && defaultCenterFixture[0] <= cam.ne[0] &&
+                 defaultCenterFixture[1] >= cam.sw[1] && defaultCenterFixture[1] <= cam.ne[1];
+  assert.ok(!inside, "the unrelated default center is NOT inside the fitted territory bounds");
+  // Static wiring: MapScreen prefers area bounds over safeCenter(cfg); safeCenter is ONLY the no-area fallback.
+  const src = fs.readFileSync(path.join(__dirname, "..", "screens", "MapScreen.js"), "utf8").replace(/\s+/g, " ");
+  assert.ok(/camBounds \? \{ bounds: camBounds \} : \{ zoomLevel: safeZoom\(cfg\), centerCoordinate: safeCenter\(cfg\) \}/.test(src),
+    "Camera uses area bounds when present; safeCenter(cfg) is ONLY the no-area fallback");
+  assert.ok(/const camBounds = selectedArea \? boundsToCamera\(selectedArea\.bounds/.test(src),
+    "camBounds derives from the selected area's stored bounds first");
+  ok("camera precedence: selected-area bounds override map-config default_center (fixtures only)");
+}
+
 // ---- Diagnostics expose the required decoupled-state fields ---------------------------------------
 {
   const load = buildMapLoadDiagnostic({

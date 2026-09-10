@@ -182,3 +182,35 @@ def test_management_sees_all_sections_and_both_zips():
     zin = next(a for a in areas if a["type"] == "zip" and a["zip_code"] == S["zip_in"])
     # Management ZIP count includes ALL 3 props sharing zip_in (2 in A + 1 in B).
     assert zin["property_count"] == 3, "management ZIP count spans all properties in the ZIP"
+
+
+
+def test_territory_bounds_come_from_stored_geometry_not_default_center():
+    """Camera regression: a Territory area's bounds are derived from its STORED polygon geometry
+    (TERR_A = [[0,0]..[10,10]]), independent of any map-config default_center. Proven with fixtures —
+    no production coordinates are hardcoded in app logic."""
+    areas = _areas(_tok(S["owner"]))
+    ta = next(a for a in areas if a["type"] == "territory" and a["territory_id"] == S["terr_a"])
+    # Bounds match the stored polygon exactly (sw/ne).
+    assert ta["bounds"] == [[0, 0], [10, 10]], "territory bounds come from stored geometry"
+    # An UNRELATED default-center fixture is OUTSIDE the territory bounds → fitBounds cannot resolve to it.
+    default_center_fixture = [-97.74, 30.27]
+    sw, ne = ta["bounds"]
+    inside = sw[0] <= default_center_fixture[0] <= ne[0] and sw[1] <= default_center_fixture[1] <= ne[1]
+    assert not inside, "a far default center is not inside the territory bounds (no default-center fallback)"
+
+
+def test_field_office_territory_geometry_and_count_parity():
+    """Office (/api/territories) and Field (/api/mobile/map/areas) report the SAME Territory id,
+    geometry, and coord'd property count for the same territory."""
+    import requests as _rq
+    areas = _areas(_tok(S["owner"]))
+    ta = next(a for a in areas if a["type"] == "territory" and a["territory_id"] == S["terr_a"])
+    r = _rq.get(f"{API}/territories/{S['terr_a']}", headers=_tok(S["owner"]), timeout=20)
+    assert r.status_code == 200, r.text
+    office = r.json()
+    assert office["id"] == ta["territory_id"], "same Territory id"
+    assert office["geometry"] == ta["geometry"], "same stored GeoJSON geometry"
+    # Office count is all props in the territory; Field territory-area count is coord'd props. terr_a's
+    # two props both have coords, so the counts match here.
+    assert office["property_count"] == ta["property_count"] == 2, "Field/Office territory property counts agree"

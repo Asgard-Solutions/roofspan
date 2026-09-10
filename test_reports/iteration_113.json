@@ -1,0 +1,22 @@
+{
+  "summary": "Verified RoofSpan Office↔Field Map Parity audit. Ran backend regression suites tests/test_mobile_map_areas.py and tests/test_mobile_map_properties.py — 20/20 pass, covering: (a) /api/mobile/map/areas default-priority ordering canvass_section > territory > zip, (b) territory areas carry territory_id/name/geometry (Polygon)/bounds/scoped property_count, (c) /api/mobile/map/properties?territory_id=X returns only that territory's map-safe features with [lon,lat] coords + map-safe keys and NO contact/phone/email/notes/credentials/token fields, (d) sales user requesting an out-of-scope territory gets HTTP 403 (server-authoritative isolation), (e) canvass-section isolation between sales users returns 403 for cross-user detail, (f) Field↔Office parity — /api/mobile/map/properties?territory_id=X property IDs == /api/properties/geojson?territory_id=X (Field additionally strips invalid-coord rows), and territory geometry + property_count from /api/territories/{id} equals the territory area returned by /api/mobile/map/areas. Additionally inspected the payload for secrets — MAP_SAFE_KEYS whitelist + FORBIDDEN_KEYS deny list verified; no MapTiler key or tokens surface. Office UI (/map, owner login) verified via Playwright: 'Map view' selector shows ONLY Street and Satellite (basemap-map-button, basemap-satellite-button); basemap-buildings-button is ABSENT; Satellite toggles and renders via the secure proxy without errors; Street toggles back cleanly; territory list renders (MAP-A/MAP-B/AR-A/AR-B/MT-… seed rows visible); no console errors referencing 'buildings'. Only WebGL performance warnings from headless GPU driver observed (unrelated). Mobile MapScreen.js contains no 'buildings' references (as required — Field is Expo RN and not runnable in this env, verified via backend endpoints per instructions).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_mobile_map_areas.py",
+    "/app/backend/tests/test_mobile_map_properties.py",
+    "/app/test_reports/pytest/iter113.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MapView.jsx is 852 lines — still under 900 but trending large; consider splitting basemap panel and territory list into subcomponents in a future refactor (non-blocking).",
+    "Buildings source/layer branches have been cleanly removed from MapView.jsx (only Street/Satellite basemap-* testids remain) — no dead references detected."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% (Office UI checks passed)"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 works against production preview URL.",
+  "seed_data_creation": "Both regression suites self-seed unique-suffix territories/properties/users/sections in the shared DB (creates MAP-A/B and AR-A/B territories per run).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend suites MUST be executed from /app/backend (cd /app/backend && python -m pytest tests/...) — the tests import 'from db import SessionLocal' which is a top-level module inside /app/backend. Running pytest from /app root causes ModuleNotFoundError. The Office /map SPA requires login first via data-testid=login-{email,password}-input + login-submit-button. Field (Expo RN) cannot be exercised here; verify Field solely via /api/mobile/* endpoints. Both territory_id and zip scopes are already covered; Buildings basemap is fully removed from Office SPA and mobile MapScreen.js."
+}

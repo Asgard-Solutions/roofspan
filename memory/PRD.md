@@ -1,5 +1,11 @@
 # RoofSpan — Product Requirements & Status
 
+## Audit — Office↔Field Map Parity + Scope + Buildings-Removal — VERIFIED, no defects (2026-06)
+- Added a camera-precedence regression (fixtures only, no prod coords): mobile `map_areas.node.test.js` proves a selected area's bounds drive the camera and `safeCenter(cfg)` is ONLY the no-area fallback (Austin/default-center defect can't recur); backend `test_mobile_map_areas.py` proves territory bounds come from stored geometry (far from a default center) + Field/Office geometry+count parity via `GET /api/territories/{id}`.
+- testing_agent iteration_113: backend 100% (20/20 across map_areas + map_properties: default-priority order, territory area shape, territory-scoped map-safe features [lon,lat] + no secrets, sales 403 out-of-scope, cross-sales canvass 403, Field↔Office property-ID + geometry + count parity) + Office UI 100% (Map view = Street|Satellite only, `basemap-buildings-button` ABSENT, Satellite via secure proxy renders, Street toggles, territory list + pins render, no buildings console errors). No critical/minor issues; no action items.
+- Local regressions also green: node map_areas 10 / mapconfig / canvass; backend canvass_sections 9, mobile_api 11, salesperson_p1 23, property_patch 1. No app code changed in this audit (test-only additions).
+
+
 ## Cleanup — Buildings Map Mode Removed from Office + Field — DONE & VERIFIED (2026-06)
 - Removed the user-facing "Buildings" map mode from both products; map selector is now Street | Satellite only. Satellite (secure tile-ticket/Relay) and Street unchanged; MapLibre/Expo/RN untouched.
 - Field (`mobile/src/screens/MapScreen.js`): removed `overlayBuildings` state, `toggleBuildings`, the Buildings selector button, `buildingsUrl`, the buildings VectorSource/FillLayer/LineLayer block, `VectorSource` from the MapLibre destructure, and the buildings branch of the imagery-loading hint; `imageryReady` no longer depends on buildingsUrl.
