@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Cleanup — Office Map: Collapsible Territories + Canvass Sections (collapsed by default) — DONE & VERIFIED (2026-06)
+- `frontend/src/pages/MapView.jsx` only. Added two independent presentation-only states `territoriesExpanded`/`canvassExpanded` (both default `false`), plus clickable section headers using lucide `ChevronRight` (collapsed) / `ChevronDown` (expanded) and a compact count badge reusing in-memory `territories.length` / `sections.length` (no new API calls).
+- Territories: wrapped the card list in a `territories-toggle` header + gated `territories-list`. Canvass Sections: made the header a `canvass-toggle` (keeps the "Show all"/clearSection button beside it) + gated the body (list + Draw Canvass Section).
+- Collapse/expand is UI-only: does NOT deselect territory/section, remove polygons/pins, move camera, reset filters, or reload data (selectedId/selectedSectionId untouched). Sections operate independently (both can be open). No accordion behavior. No persistence (fresh session = both collapsed).
+- Preserved & verified: select territory (highlight + camera + Import button), select/draw/reassign/delete canvass section, Draw new territory, Property Locations Checked flyout, filters, pins, Street/Satellite. Previously-removed controls (Contactable toggle, "Showing X of Y", Build walking route, Buildings mode) remain removed (grep count 0).
+- Verified: MapView transpiles; frontend webpack compiled; screenshots confirm both sections collapsed on load, independent expand, territory selection + map unaffected. User does final visual acceptance.
+
+
 ## Cleanup — Office Map: "Property Locations Checked" moved into a per-Territory-card flyout — DONE & VERIFIED (2026-06)
 - Moved the large standalone location-status panel (previously portaled to the bottom of the territory panel via `AppShell.jsx`) into a compact shadcn **Popover** flyout opened from a trigger icon (lucide `Navigation`, title "Property location status") on each Territory card header.
 - Territory-specific data: added optional `territory_id` query param to `GET /api/location-resolution/progress` (`backend/routers/location_resolution.py`) filtering `Property.territory_id`; existing computation reused (no invented stats). Proven: global total=329 vs a specific territory scoped correctly (e.g. 1-property territory → "1 of 1 checked, 100%").

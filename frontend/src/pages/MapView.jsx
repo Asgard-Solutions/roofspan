@@ -13,7 +13,7 @@ import ImportDialog from "@/components/ImportDialog";
 import PropertySheet from "@/components/PropertySheet";
 import LocationResolutionProgress from "@/components/LocationResolutionProgress";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2, Navigation } from "lucide-react";
+import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2, Navigation, ChevronRight, ChevronDown } from "lucide-react";
 
 const OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const MANAGE = ["owner", "administrator", "office"];
@@ -58,6 +58,8 @@ export default function MapView() {
   const [features, setFeatures] = useState([]);
   const [reps, setReps] = useState([]);
   const [statusOpenId, setStatusOpenId] = useState(null);
+  const [territoriesExpanded, setTerritoriesExpanded] = useState(false);
+  const [canvassExpanded, setCanvassExpanded] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -647,7 +649,17 @@ export default function MapView() {
 
             {canManage && !isCanvassDrawing && <div className="border-b border-border p-4">{!isDrawing ? <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button"><PencilRuler className="h-4 w-4" /> Draw new territory</Button> : <div className="space-y-2"><div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div><div className="flex gap-2"><Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button><Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button></div></div>}</div>}
 
-            <div className="p-2">
+            <button type="button" onClick={() => setTerritoriesExpanded((v) => !v)}
+              className="flex w-full items-center justify-between border-b border-border px-5 py-3 hover:bg-slate-50"
+              data-testid="territories-toggle" aria-expanded={territoriesExpanded}>
+              <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {territoriesExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Territories
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid="territories-count">{territories.length}</span>
+            </button>
+
+            {territoriesExpanded && (
+            <div className="p-2" data-testid="territories-list">
               {territories.length === 0 && <div className="px-3 py-6 text-center text-sm text-slate-400">No territories yet.{canManage ? " Draw one to begin." : ""}</div>}
               {territories.map((t) => (
                 <div key={t.id} onClick={() => selectTerritory(t)}
@@ -669,14 +681,21 @@ export default function MapView() {
                 </div>
               ))}
             </div>
+            )}
           </div>
 
           {selected && (
             <div className="border-t border-border px-5 py-4" data-testid="canvass-sections-panel">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Canvass Sections</span>
+              <div className="flex items-center justify-between">
+                <button type="button" onClick={() => setCanvassExpanded((v) => !v)}
+                  className="flex flex-1 items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700"
+                  data-testid="canvass-toggle" aria-expanded={canvassExpanded}>
+                  {canvassExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Canvass Sections
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid="canvass-count">{sections.length}</span>
+                </button>
                 {selectedSectionId && <button className="text-xs font-medium text-blue-600" onClick={clearSection} data-testid="clear-section-button">Show all</button>}
               </div>
+              {canvassExpanded && (<div className="mt-2">
               {sections.length === 0 ? (
                 <div className="text-xs text-slate-400" data-testid="canvass-empty">No canvass sections yet. Draw a section to assign part of this territory to a salesperson.</div>
               ) : (
@@ -714,6 +733,7 @@ export default function MapView() {
               ) : (
                 <Button variant="outline" className="mt-3 w-full" onClick={startCanvassDraw} data-testid="draw-canvass-button"><PencilRuler className="h-4 w-4" /> Draw Canvass Section</Button>
               ))}
+              </div>)}
             </div>
           )}
           {selected && <div className="border-t border-border px-5 py-3 text-xs text-slate-500" data-testid="selected-summary"><span className="font-semibold text-slate-700">{selected.name}</span> · {propCount} properties on map<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1"><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-600" /> Owned</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Rented</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" /> Unknown</span><span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Do Not Knock</span></div></div>}
