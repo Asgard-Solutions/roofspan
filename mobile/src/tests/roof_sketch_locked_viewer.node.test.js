@@ -142,4 +142,25 @@ function geometryPresent(initial) {
   ok("queue-lookup error → hasActiveMutation defaults false (safe), viewer still opens");
 }
 
+// ---- 6) THE REPORTED BUG: locked revision + stale local draft (a stray single line) must NOT shadow
+//         the authoritative Office sketch. Read-only always shows the full server geometry (like Office).
+{
+  const strayLine = {
+    edit_mode: "connected_graph",
+    vertices: [{ id: "va", x: 0, y: 0 }, { id: "vb", x: 23, y: 0 }],
+    edges: [{ id: "e_mtkc8dbo880v2", v1: "va", v2: "vb" }],
+    facets: [], penetrations: [],
+  };
+  const res = WIRE.resolveFieldSketchViewerOpen({
+    draft: draftOf(strayLine, 2),                          // leftover single-line local draft
+    sketchResult: { data: serverSketch(geomDoc, 3), stale: false },  // full Office sketch
+    mutation: null, mutationError: null, structureId: "s1", readOnly: true,
+  });
+  assert.strictEqual(res.phase, "ready", "locked viewer opens");
+  assert.strictEqual(res.initial.source, "server", "read-only ignores the stale draft and uses the Office sketch");
+  assert.ok(geometryPresent(res.initial), "the FULL saved geometry renders (planes+edges), not a single line");
+  assert.strictEqual((res.initial.document.facets || []).length, 1, "facets/planes from Office are present (not 0)");
+  ok("REPORTED BUG: locked revision shows the full Office sketch, a stray local draft never shadows it");
+}
+
 console.log("\nP0 LOCKED ROOF SKETCH VIEWER: all " + n + " assertions passed");
