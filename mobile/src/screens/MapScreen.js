@@ -125,7 +125,6 @@ export default function MapScreen({ navigation }) {
   const [retryToken, setRetryToken] = useState(0);
 
   const [base, setBase] = useState("street");
-  const [overlayBuildings, setOverlayBuildings] = useState(false);
   const [imageryLoading, setImageryLoading] = useState(false);
   const [imageryError, setImageryError] = useState(false);
   const [imageryMsg, setImageryMsg] = useState(null);
@@ -143,7 +142,6 @@ export default function MapScreen({ navigation }) {
     loadingTimer.current = setTimeout(() => setImageryLoading(false), 2800);
   };
   const chooseBase = (v) => { setBase(v); if (v === "satellite") { flashLoading(); ensureTicket(); } };
-  const toggleBuildings = () => { setOverlayBuildings((v) => { const nv = !v; if (nv) { flashLoading(); ensureTicket(); } return nv; }); };
 
   // Capture (never swallow) a native map-init failure into Field Diagnostics — redacted, no secrets.
   const recordMapError = useCallback(async (error) => {
@@ -322,9 +320,8 @@ export default function MapScreen({ navigation }) {
   const areaFeatures = useMemo(() => filterFeaturesForArea(visibleFeatures, selectedArea), [visibleFeatures, selectedArea]);
 
   const satelliteUrl = tileTemplate(pairing, "satellite", ticket);
-  const buildingsUrl = tileTemplate(pairing, "buildings", ticket);
   const imageryAvailable = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured);
-  const imageryReady = imageryAvailable && !!satelliteUrl && !!buildingsUrl;
+  const imageryReady = imageryAvailable && !!satelliteUrl;
   const activeBase = imageryAvailable ? base : "street";
 
   const startDownload = useCallback(async () => {
@@ -367,9 +364,6 @@ export default function MapScreen({ navigation }) {
           <Text style={[s.segText, activeBase === v && s.segTextActive]}>{label}</Text>
         </TouchableOpacity>
       ))}
-      <TouchableOpacity onPress={toggleBuildings} style={[s.segBtn, overlayBuildings && s.segBtnActive]} testID="basemap-buildings-toggle">
-        <Text style={[s.segText, overlayBuildings && s.segTextActive]}>Buildings</Text>
-      </TouchableOpacity>
     </View>
   ) : null;
 
@@ -470,7 +464,7 @@ export default function MapScreen({ navigation }) {
     );
   }
 
-  const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
+  const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer } = MapLibre;
   const fc = { type: "FeatureCollection", features: areaFeatures };
   const polyFc = buildAllSectionsFC(polyAreas.map((a) => ({ id: a.id, name: a.name, color: a.color, geometry: a.geometry })), selectedAreaId);
   const secColor = (selectedArea && selectedArea.color) || C.brand;
@@ -512,15 +506,6 @@ export default function MapScreen({ navigation }) {
               </RasterSource>
             )}
 
-            {overlayBuildings && buildingsUrl && VectorSource && (
-              <VectorSource id="rs-buildings" tileUrlTemplates={[buildingsUrl]} minZoomLevel={14} maxZoomLevel={20}>
-                <FillLayer id="rs-buildings-fill" sourceLayerID="building" minZoomLevel={14}
-                  style={{ fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"], fillOpacity: 0.35 }} />
-                <LineLayer id="rs-buildings-line" sourceLayerID="building" minZoomLevel={14}
-                  style={{ lineColor: ["case", ["==", ["get", "class"], "residential"], "#C2410C", "#475569"], lineWidth: 1.25, lineOpacity: 0.9 }} />
-              </VectorSource>
-            )}
-
             <ShapeSource id="myarea" shape={polyFc}>
               <FillLayer id="myarea-fill" style={{ fillColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], fillOpacity: ["case", ["get", "selected"], 0.28, 0.1] }} />
               <LineLayer id="myarea-line" style={{ lineColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], lineWidth: ["case", ["get", "selected"], 3.5, 1.5] }} />
@@ -540,7 +525,7 @@ export default function MapScreen({ navigation }) {
             </View>
           ) : null}
 
-          {(activeBase === "satellite" || overlayBuildings) && (!satelliteUrl || imageryLoading) ? (
+          {activeBase === "satellite" && (!satelliteUrl || imageryLoading) ? (
             <View style={s.imgHintWrap} pointerEvents="box-none">
               <TouchableOpacity style={s.imgHint} onPress={ensureTicket} disabled={!!satelliteUrl && imageryLoading} testID="imagery-hint">
                 <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? (imageryMsg ? `Imagery unavailable: ${imageryMsg}` : "Imagery unavailable — tap to retry") : "Loading imagery…"}</Text>

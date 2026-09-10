@@ -1,5 +1,13 @@
 # RoofSpan — Product Requirements & Status
 
+## Cleanup — Buildings Map Mode Removed from Office + Field — DONE & VERIFIED (2026-06)
+- Removed the user-facing "Buildings" map mode from both products; map selector is now Street | Satellite only. Satellite (secure tile-ticket/Relay) and Street unchanged; MapLibre/Expo/RN untouched.
+- Field (`mobile/src/screens/MapScreen.js`): removed `overlayBuildings` state, `toggleBuildings`, the Buildings selector button, `buildingsUrl`, the buildings VectorSource/FillLayer/LineLayer block, `VectorSource` from the MapLibre destructure, and the buildings branch of the imagery-loading hint; `imageryReady` no longer depends on buildingsUrl.
+- Office (`frontend/src/pages/MapView.jsx`): removed the Buildings button + zoom hint, the buildings vector source + `buildings-fill`/`buildings-outline` layers, the buildings visibility toggling + zoom toast in `switchBase`, and the `/map/tiles/buildings/` branch of `transformRequest` (satellite auth retained).
+- Backend: `GET /api/map/tiles/buildings/{z}/{x}/{y}` (`routers/building_tiles.py`) LEFT IN PLACE (smallest safe change) — now UI-dead. NOTE: `backend/maptiler.py`'s building-tile fetch is a SEPARATE property-location-resolution feature (direct MapTiler call, not this endpoint) and is unaffected.
+- Verified: MapScreen.js + MapView.jsx transpile clean; frontend compiled successfully; `map_areas`/`mapconfig` node tests green; grep shows zero remaining Buildings references in either file; Office screenshot shows Street|Satellite only with Satellite rendering + territories/property controls intact. Field on-device verification pending (user).
+
+
 ## P0 — Field "My Area" Territory Scope + Default-Area Hierarchy (Austin/wrong-area + 8,554-property bug) — FIXED & VERIFIED (data/logic layer) (2026-06)
 - Device symptom (MapLibre confirmed working on Android): Field showed 8,554 properties, "No area assigned yet — showing your full property map", camera on Austin TX; Office correctly showed the Oklahoma territory.
 - ROOT CAUSE: `GET /api/mobile/map/properties` returned the ENTIRE map-safe DB with NO territory filter, and the client `filterFeaturesForArea(features, null)` returned ALL features when no area was selected; a sales/owner with no selectable area therefore saw every property and the camera fell back to `map-config.default_center` (Austin).
