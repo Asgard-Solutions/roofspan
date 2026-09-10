@@ -1,5 +1,60 @@
 # RoofSpan — Product Requirements & Status
 
+## Cleanup — Office Map: Collapsible Territories + Canvass Sections (collapsed by default) — DONE & VERIFIED (2026-06)
+- `frontend/src/pages/MapView.jsx` only. Added two independent presentation-only states `territoriesExpanded`/`canvassExpanded` (both default `false`), plus clickable section headers using lucide `ChevronRight` (collapsed) / `ChevronDown` (expanded) and a compact count badge reusing in-memory `territories.length` / `sections.length` (no new API calls).
+- Territories: wrapped the card list in a `territories-toggle` header + gated `territories-list`. Canvass Sections: made the header a `canvass-toggle` (keeps the "Show all"/clearSection button beside it) + gated the body (list + Draw Canvass Section).
+- Collapse/expand is UI-only: does NOT deselect territory/section, remove polygons/pins, move camera, reset filters, or reload data (selectedId/selectedSectionId untouched). Sections operate independently (both can be open). No accordion behavior. No persistence (fresh session = both collapsed).
+- Preserved & verified: select territory (highlight + camera + Import button), select/draw/reassign/delete canvass section, Draw new territory, Property Locations Checked flyout, filters, pins, Street/Satellite. Previously-removed controls (Contactable toggle, "Showing X of Y", Build walking route, Buildings mode) remain removed (grep count 0).
+- Verified: MapView transpiles; frontend webpack compiled; screenshots confirm both sections collapsed on load, independent expand, territory selection + map unaffected. User does final visual acceptance.
+
+
+## Cleanup — Office Map: "Property Locations Checked" moved into a per-Territory-card flyout — DONE & VERIFIED (2026-06)
+- Moved the large standalone location-status panel (previously portaled to the bottom of the territory panel via `AppShell.jsx`) into a compact shadcn **Popover** flyout opened from a trigger icon (lucide `Navigation`, title "Property location status") on each Territory card header.
+- Territory-specific data: added optional `territory_id` query param to `GET /api/location-resolution/progress` (`backend/routers/location_resolution.py`) filtering `Property.territory_id`; existing computation reused (no invented stats). Proven: global total=329 vs a specific territory scoped correctly (e.g. 1-property territory → "1 of 1 checked, 100%").
+- `LocationResolutionProgress.jsx`: refactored from a global self-portal into a `{ territoryId }`-scoped inline component with loading (`location-resolution-loading`), error (`location-resolution-error`), and empty (`location-resolution-empty`) states; removed `createPortal`/`territory-panel` target logic; polls the scoped endpoint every 2s while the popover is open (content mounts only when `statusOpenId === t.id`).
+- Single-open behavior via one `statusOpenId` state; Radix Popover closes on outside-click + Escape; trigger + content `stopPropagation` so opening does NOT select the territory / move camera / reset filters.
+- Removed the standalone mount + now-unused imports in `AppShell.jsx` (`LocationResolutionProgress`, `useLocation`, `location`).
+- Preserved: territory selection, property counts, Import, Delete, Draw territory, filters, pins, canvass, ZIP search, Street/Satellite.
+- Verified: MapView/LocationResolutionProgress/AppShell transpile clean; frontend webpack compiled; backend syntax OK + scoped endpoint curl; screenshot confirms standalone panel gone, per-card trigger present, flyout opens with correct territory data. User does final visual acceptance.
+
+
+## Cleanup — Office Map: Removed Contactable-Leads Toggle, Duplicate "Showing X of Y", Walking-Route Feature — DONE & VERIFIED (2026-06)
+- Office `frontend/src/pages/MapView.jsx` ONLY (Field/mobile untouched). Removed three sidebar items + all code used solely by them:
+  - "Contactable leads only" toggle: removed the button, `contactableOnly`/`setContactableOnly` state, and its `filteredFeatures` filter branch/dependency (real auth + Do Not Knock behavior unchanged).
+  - Duplicate "Showing X of Y" line (`data-testid=filtered-count`): removed (the useful per-territory count elsewhere is retained).
+  - "Build walking route" feature: removed the build/clear/assign buttons, route-info line, the assign-route Dialog, and all route-only code — `routeMarkers` ref, `routeInfo`/`builtRoute`/`assignOpen`/`routeName`/`routeRepId`/`savingRoute` state, `clearRoute`/`_haversineMi`/`buildRoute`/`openAssign`/`saveRoute` handlers, the `clearRoute` on-features effect, and the map `route` source + `route-line` layer. Removed now-unused `useNavigate`/`navigate` and the `UserPlus` icon import.
+- Kept (shared, verified still used): `reps` (canvass rep selects), `canManage`, `Loader2`, `zipHit`, `selected`, `filteredFeatures` (cluster rendering), property filters, territory/canvass controls, ZIP search/import, Street/Satellite, property sheet.
+- Backend: NO `/api/routes` router exists (the removed `api.post("/routes")`/`navigate("/routes/:id")` pointed at unimplemented endpoints), so nothing was left in place or removed server-side.
+- Verified: MapView.jsx transpiles clean; frontend webpack compiled (warnings benign); grep shows zero dangling references to any removed symbol; Office /map screenshot + testid probes confirm contactable-toggle/filtered-count/build-route-button/assign-route-button ABSENT while occ-filter-all/owned/rented/unknown + basemap-map/satellite PRESENT, territories + Draw-new-territory + geocoding status intact.
+
+
+## Audit — Office↔Field Map Parity + Scope + Buildings-Removal — VERIFIED, no defects (2026-06)
+- Added a camera-precedence regression (fixtures only, no prod coords): mobile `map_areas.node.test.js` proves a selected area's bounds drive the camera and `safeCenter(cfg)` is ONLY the no-area fallback (Austin/default-center defect can't recur); backend `test_mobile_map_areas.py` proves territory bounds come from stored geometry (far from a default center) + Field/Office geometry+count parity via `GET /api/territories/{id}`.
+- testing_agent iteration_113: backend 100% (20/20 across map_areas + map_properties: default-priority order, territory area shape, territory-scoped map-safe features [lon,lat] + no secrets, sales 403 out-of-scope, cross-sales canvass 403, Field↔Office property-ID + geometry + count parity) + Office UI 100% (Map view = Street|Satellite only, `basemap-buildings-button` ABSENT, Satellite via secure proxy renders, Street toggles, territory list + pins render, no buildings console errors). No critical/minor issues; no action items.
+- Local regressions also green: node map_areas 10 / mapconfig / canvass; backend canvass_sections 9, mobile_api 11, salesperson_p1 23, property_patch 1. No app code changed in this audit (test-only additions).
+
+
+## Cleanup — Buildings Map Mode Removed from Office + Field — DONE & VERIFIED (2026-06)
+- Removed the user-facing "Buildings" map mode from both products; map selector is now Street | Satellite only. Satellite (secure tile-ticket/Relay) and Street unchanged; MapLibre/Expo/RN untouched.
+- Field (`mobile/src/screens/MapScreen.js`): removed `overlayBuildings` state, `toggleBuildings`, the Buildings selector button, `buildingsUrl`, the buildings VectorSource/FillLayer/LineLayer block, `VectorSource` from the MapLibre destructure, and the buildings branch of the imagery-loading hint; `imageryReady` no longer depends on buildingsUrl.
+- Office (`frontend/src/pages/MapView.jsx`): removed the Buildings button + zoom hint, the buildings vector source + `buildings-fill`/`buildings-outline` layers, the buildings visibility toggling + zoom toast in `switchBase`, and the `/map/tiles/buildings/` branch of `transformRequest` (satellite auth retained).
+- Backend: `GET /api/map/tiles/buildings/{z}/{x}/{y}` (`routers/building_tiles.py`) LEFT IN PLACE (smallest safe change) — now UI-dead. NOTE: `backend/maptiler.py`'s building-tile fetch is a SEPARATE property-location-resolution feature (direct MapTiler call, not this endpoint) and is unaffected.
+- Verified: MapScreen.js + MapView.jsx transpile clean; frontend compiled successfully; `map_areas`/`mapconfig` node tests green; grep shows zero remaining Buildings references in either file; Office screenshot shows Street|Satellite only with Satellite rendering + territories/property controls intact. Field on-device verification pending (user).
+
+
+## P0 — Field "My Area" Territory Scope + Default-Area Hierarchy (Austin/wrong-area + 8,554-property bug) — FIXED & VERIFIED (data/logic layer) (2026-06)
+- Device symptom (MapLibre confirmed working on Android): Field showed 8,554 properties, "No area assigned yet — showing your full property map", camera on Austin TX; Office correctly showed the Oklahoma territory.
+- ROOT CAUSE: `GET /api/mobile/map/properties` returned the ENTIRE map-safe DB with NO territory filter, and the client `filterFeaturesForArea(features, null)` returned ALL features when no area was selected; a sales/owner with no selectable area therefore saw every property and the camera fell back to `map-config.default_center` (Austin).
+- FIX (backend `routers/mobile.py`):
+  - New scope helper `_map_territory_scope(db,user)` → None (all active territories) for management AND for sales with no assigned canvass section; the section's territories for sales WITH assignments. (No `Territory.assigned_user_id` fabricated; full Property DETAIL auth stays separate.)
+  - `GET /api/mobile/map/properties?territory_id=|zip=` is now SCOPED + server-authoritative (403 if a sales rep requests an out-of-scope territory). Added coordinate-range validation (`_valid_lonlat`, rejects NaN/out-of-range) and `territory_id` on each feature. Never returns the whole DB.
+  - `GET /api/mobile/map/areas` now returns THREE kinds in default-priority order: `canvass_section` → `territory` (Office `Territory` + `Property.territory_id`, real polygon geometry, bounds, scoped count, id `territory:<uuid>`, ordered created_at DESC like Office) → `zip` (scoped to authorized territories).
+- FIX (mobile): `mapAreas.pickDefaultArea` priority = canvass_section > territory > zip > none (ZIP never overrides a Territory); `filterFeaturesForArea(_, null)` → [] (NEVER all). `MapScreen.js` loads properties PER SELECTED AREA from the scoped endpoint (canvass → `/canvass-sections/{id}/properties`, territory → `?territory_id=`, zip → `?zip=`), each with its own cache; draws the selected Territory boundary; header shows "Territory: X / Canvass: X / ZIP: X" with the scoped count; compact `map-no-area` state replaces the "showing full property map" fallback.
+- AUTHORIZATION RULE IMPLEMENTED (reported): sales WITH canvass section(s) → scoped to those territories; sales WITHOUT any section → active Office territories' map-safe layer (Priority-2 fallback); management → all. Canvass-section isolation unchanged (a rep never sees another rep's section).
+- MapLibre / Expo / RN NOT changed.
+- VERIFIED: backend pytest `test_mobile_map_properties.py` 9/9 + `test_mobile_map_areas.py` 9/9 (territory scoping, 403 isolation, Office/Field parity, invalid-coord exclusion, default-priority order); mobile node `map_areas.node.test.js` (priority, no-area→empty, scoped-loader wiring) + canvass/mapconfig green; live curl parity: territory `d076a49a` → mobile 20 features == Office 20, all `[lon,lat]` valid. Physical-device acceptance PENDING (user).
+
+
 ## P0 — Field Map Empty Pins/Polygons: Master Map Decoupled from Canvass (root cause) — FIXED & VERIFIED (data layer) (2026-06)
 - Device symptom: basemap renders but NO property pins and NO assigned canvass polygons for a sales user who HAS sections in Office.
 - Root cause: `GET /api/mobile/map/properties` derived the master map from canvass-section territories, so if a sales user's active-section assignment didn't resolve on the request path, BOTH the property map AND canvass came back empty (shared failure mode).

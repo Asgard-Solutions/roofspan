@@ -76,7 +76,9 @@ async def _seed():
                               latitude=None, longitude=None, do_not_knock=False)
         p_b = Property(territory_id=terr_b.id, formatted_address=f"B-only-{sfx}",
                        latitude=25.0, longitude=25.0, do_not_knock=False)
-        db.add_all([p_owner, p_tenant, p_dnk, p_nocoords, p_b]); await db.flush()
+        p_badcoords = Property(territory_id=terr_a.id, formatted_address=f"A-badcoords-{sfx}",
+                               latitude=999.0, longitude=2.0, do_not_knock=False)
+        db.add_all([p_owner, p_tenant, p_dnk, p_nocoords, p_b, p_badcoords]); await db.flush()
 
         sec = CanvassSection(territory_id=terr_a.id, name=f"S-{sfx}", geometry=SEC_A,
                              assigned_user_id=rep.id, active=True, created_by=owner.email)
@@ -97,6 +99,7 @@ async def _seed():
             "terr_a": str(terr_a.id), "terr_b": str(terr_b.id),
             "p_owner": str(p_owner.id), "p_tenant": str(p_tenant.id),
             "p_dnk": str(p_dnk.id), "p_nocoords": str(p_nocoords.id), "p_b": str(p_b.id),
+            "p_badcoords": str(p_badcoords.id),
             "sec": str(sec.id),
         }
 
@@ -154,55 +157,70 @@ async def _reassign_section(section_id, new_user_id=None, active=None):
 
 
 # ================================================================================
-# PHASE 3 — /api/mobile/map/properties CONTRACT (canvass-INDEPENDENT master map)
+# /api/mobile/map/properties CONTRACT — SCOPED to the selected area (territory/zip)
+# Field never downloads the whole DB; scope is server-authoritative.
 # ================================================================================
 
-def test_phase3_management_gets_full_map_safe_dataset():
-    """Management sees every property with valid coords; excludes those without lat/long."""
-    r = _get(f"{API}/mobile/map/properties", _tok(S["owner"]))
+def test_management_territory_scoped_returns_only_that_territory():
+    """Management passes ?territory_id → gets ONLY that territory's map-safe props (Office parity)."""
+    r = _get(f"{API}/mobile/map/properties?territory_id={S['terr_a']}", _tok(S["owner"]))
     assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["type"] == "FeatureCollection"
-    ids = {f["properties"]["id"] for f in d["features"]}
-    for k in ["p_owner", "p_tenant", "p_dnk", "p_b"]:
-        assert S[k] in ids, f"management must see {k}"
-    assert S["p_nocoords"] not in ids, "properties without coords must be excluded"
+    ids = {f["properties"]["id"] for f in r.json()["features"]}
+    assert ids == {S["p_owner"], S["p_tenant"], S["p_dnk"]}, "territory A scope = exactly A's coord'd props"
+    assert S["p_b"] not in ids, "territory B property must NOT appear in a territory A request"
+    assert S["p_nocoords"] not in ids and S["p_badcoords"] not in ids, "no-coord/invalid-coord excluded"
+
+    r_b = _get(f"{API}/mobile/map/properties?territory_id={S['terr_b']}", _tok(S["owner"]))
+    ids_b = {f["properties"]["id"] for f in r_b.json()["features"]}
+    assert ids_b == {S["p_b"]}, "territory B scope = exactly B's props"
 
 
-def test_phase3_sales_map_equals_management_map():
-    """CONTRACT CHANGE: master map is NOT territory/canvass-gated. A sales user sees the SAME
-    set of features as a management user (map-safe only; detail authorization is separate)."""
-    r_rep = _get(f"{API}/mobile/map/properties", _tok(S["rep"]))
-    r_own = _get(f"{API}/mobile/map/properties", _tok(S["owner"]))
-    assert r_rep.status_code == 200 and r_own.status_code == 200
-    rep_ids = {f["properties"]["id"] for f in r_rep.json()["features"]}
-    own_ids = {f["properties"]["id"] for f in r_own.json()["features"]}
-    assert rep_ids == own_ids, "sales map MUST equal management map (map is canvass-independent)"
-    # Both terr_a and terr_b properties are on the sales map.
-    assert S["p_owner"] in rep_ids and S["p_b"] in rep_ids
-    assert S["p_nocoords"] not in rep_ids
+def test_sales_scoped_to_assigned_territory_and_denied_others():
+    """A sales rep with an active section in terr_a is scoped to terr_a and 403'd on terr_b."""
+    r_a = _get(f"{API}/mobile/map/properties?territory_id={S['terr_a']}", _tok(S["rep"]))
+    assert r_a.status_code == 200, r_a.text
+    ids_a = {f["properties"]["id"] for f in r_a.json()["features"]}
+    assert ids_a == {S["p_owner"], S["p_tenant"], S["p_dnk"]}, "rep sees exactly terr_a's props"
+    assert S["p_b"] not in ids_a, "rep must not see terr_b property via terr_a request"
+
+    # No-param request is ALSO scoped to the rep's authorized territory (never the whole DB).
+    r_np = _get(f"{API}/mobile/map/properties", _tok(S["rep"]))
+    ids_np = {f["properties"]["id"] for f in r_np.json()["features"]}
+    assert S["p_b"] not in ids_np, "assigned rep's default map is scoped to their territory (no terr_b)"
+
+    # A territory the rep is NOT authorized for → 403 (server-authoritative isolation).
+    r_forbid = _get(f"{API}/mobile/map/properties?territory_id={S['terr_b']}", _tok(S["rep"]))
+    assert r_forbid.status_code == 403, "rep must be denied a territory outside their scope"
 
 
-def test_phase3_sales_with_zero_sections_gets_full_populated_map():
-    """CONTRACT CHANGE (previously asserted empty): a sales user with ZERO assigned canvass
-    sections STILL receives the full populated master property FeatureCollection."""
-    r_zero = _get(f"{API}/mobile/map/properties", _tok(S["rep_zero"]))
-    r_own = _get(f"{API}/mobile/map/properties", _tok(S["owner"]))
-    assert r_zero.status_code == 200, r_zero.text
-    d = r_zero.json()
-    assert d["type"] == "FeatureCollection"
-    zero_ids = {f["properties"]["id"] for f in d["features"]}
-    own_ids = {f["properties"]["id"] for f in r_own.json()["features"]}
-    # Full map, NOT empty.
-    assert len(zero_ids) > 0, "zero-section sales must receive the full populated map, not empty"
-    assert zero_ids == own_ids, "zero-section sales map MUST equal management map"
-    for k in ["p_owner", "p_tenant", "p_dnk", "p_b"]:
-        assert S[k] in zero_ids
+def test_field_office_territory_property_parity():
+    """For the SAME territory, Field's scoped property IDs match Office's canonical /properties/geojson
+    IDs — Field and Office agree on territory membership + coordinates."""
+    r_field = _get(f"{API}/mobile/map/properties?territory_id={S['terr_a']}", _tok(S["owner"]))
+    r_office = _get(f"{API}/properties/geojson?territory_id={S['terr_a']}", _tok(S["owner"]))
+    assert r_field.status_code == 200 and r_office.status_code == 200
+    field_ids = {f["properties"]["id"] for f in r_field.json()["features"]}
+    office_ids = {f["properties"]["id"] for f in r_office.json()["features"]}
+    # Field applies an extra coordinate-range safety filter (Office's geojson does not), so the ONLY
+    # allowed difference is the intentionally-invalid-coordinate property. Every valid property matches.
+    assert S["p_badcoords"] in office_ids, "Office geojson does not range-validate (includes bad coords)"
+    assert field_ids == office_ids - {S["p_badcoords"]}, \
+        "Field territory property IDs match Office's for the same territory (minus invalid-coord safety)"
+    # Coordinates identical + [lon, lat] order.
+    fo = next(f for f in r_field.json()["features"] if f["properties"]["id"] == S["p_owner"])
+    assert fo["geometry"]["coordinates"] == [2.0, 2.0], "coordinates are [lon, lat], same stored values as Office"
 
 
-def test_phase3_map_safe_fields_only_no_secrets_or_contacts():
+def test_invalid_coordinates_excluded():
+    """A property with out-of-range coordinates (lat 999) is NEVER placed on the map."""
+    r = _get(f"{API}/mobile/map/properties?territory_id={S['terr_a']}", _tok(S["owner"]))
+    ids = {f["properties"]["id"] for f in r.json()["features"]}
+    assert S["p_badcoords"] not in ids, "invalid-coordinate property must be excluded (no fake pin)"
+
+
+def test_map_safe_fields_only_no_secrets_or_contacts():
     """Feature.properties exposes ONLY map-safe fields. No contacts/phones/notes/credentials."""
-    r = _get(f"{API}/mobile/map/properties", _tok(S["owner"]))
+    r = _get(f"{API}/mobile/map/properties?territory_id={S['terr_a']}", _tok(S["owner"]))
     d = r.json()
     by_id = {f["properties"]["id"]: f for f in d["features"]}
     fo = by_id[S["p_owner"]]
@@ -210,13 +228,10 @@ def test_phase3_map_safe_fields_only_no_secrets_or_contacts():
     lon, lat = fo["geometry"]["coordinates"]
     assert lon == 2.0 and lat == 2.0, "coordinates must be [lon, lat]"
     props_keys = set(fo["properties"].keys())
-    # Every required map-safe key is present.
     missing = MAP_SAFE_KEYS - props_keys
     assert not missing, f"missing map-safe keys: {missing}"
-    # No forbidden keys leaked.
     leaked = FORBIDDEN_KEYS & props_keys
     assert not leaked, f"forbidden fields leaked on map feature: {leaked}"
-    # Business shape.
     assert fo["properties"]["occupancy"] == "owner"
     assert fo["properties"]["owner_occupied"] is True
     assert fo["properties"]["do_not_knock"] is False

@@ -36,11 +36,18 @@ function isValidBounds(b) {
   );
 }
 
-// Default selection: prefer an assigned canvass area (has a real polygon), else the first ZIP, else none.
+// Default selection PRIORITY (matches the server area order):
+//   1) assigned canvass_section  2) territory  3) zip  4) none.
+// A ZIP must NEVER override a valid Territory as the normal fallback.
 function pickDefaultArea(areas) {
   if (!Array.isArray(areas) || areas.length === 0) return null;
   const sec = areas.find((a) => a.type === "canvass_section");
-  return (sec || areas[0]).id;
+  if (sec) return sec.id;
+  const terr = areas.find((a) => a.type === "territory");
+  if (terr) return terr.id;
+  const zip = areas.find((a) => a.type === "zip");
+  if (zip) return zip.id;
+  return null;
 }
 
 function findArea(areas, id) {
@@ -66,19 +73,19 @@ function _within(coord, bounds) {
   return lng >= sw[0] && lng <= ne[0] && lat >= sw[1] && lat <= ne[1];
 }
 
-// Which master pins belong to the selected area:
-//   - no area selected → all features (full authorized map)
-//   - ZIP → features whose property zip_code matches (authoritative property→ZIP relationship)
-//   - canvass_section/territory → features inside the area's bounds (cheap bbox scope for camera focus)
+// Which pins belong to the selected area. Properties are now SERVER-SCOPED to the selected area
+// (Territory / canvass section / ZIP loaded from a scoped endpoint), so this is a light guard:
+//   - no area selected → NEVER all properties (returns []); the UI shows a "no area" state instead
+//   - ZIP → defensively keep only features whose property zip_code matches
+//   - canvass_section / territory → already server-scoped, returned as-is
 function filterFeaturesForArea(features, area) {
   const list = Array.isArray(features) ? features : [];
-  if (!area) return list;
+  if (!area) return [];
   if (area.type === "zip") {
     if (!area.zip_code) return list;
     return list.filter((f) => f && f.properties && String(f.properties.zip_code || "") === area.zip_code);
   }
-  if (!area.bounds) return list;
-  return list.filter((f) => f && f.geometry && _within(f.geometry.coordinates, area.bounds));
+  return list;
 }
 
 // Fallback bounds when a selected area has none (should be rare): compute from the given point features.
