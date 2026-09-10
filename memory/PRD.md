@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Cleanup — Office Map: Removed Contactable-Leads Toggle, Duplicate "Showing X of Y", Walking-Route Feature — DONE & VERIFIED (2026-06)
+- Office `frontend/src/pages/MapView.jsx` ONLY (Field/mobile untouched). Removed three sidebar items + all code used solely by them:
+  - "Contactable leads only" toggle: removed the button, `contactableOnly`/`setContactableOnly` state, and its `filteredFeatures` filter branch/dependency (real auth + Do Not Knock behavior unchanged).
+  - Duplicate "Showing X of Y" line (`data-testid=filtered-count`): removed (the useful per-territory count elsewhere is retained).
+  - "Build walking route" feature: removed the build/clear/assign buttons, route-info line, the assign-route Dialog, and all route-only code — `routeMarkers` ref, `routeInfo`/`builtRoute`/`assignOpen`/`routeName`/`routeRepId`/`savingRoute` state, `clearRoute`/`_haversineMi`/`buildRoute`/`openAssign`/`saveRoute` handlers, the `clearRoute` on-features effect, and the map `route` source + `route-line` layer. Removed now-unused `useNavigate`/`navigate` and the `UserPlus` icon import.
+- Kept (shared, verified still used): `reps` (canvass rep selects), `canManage`, `Loader2`, `zipHit`, `selected`, `filteredFeatures` (cluster rendering), property filters, territory/canvass controls, ZIP search/import, Street/Satellite, property sheet.
+- Backend: NO `/api/routes` router exists (the removed `api.post("/routes")`/`navigate("/routes/:id")` pointed at unimplemented endpoints), so nothing was left in place or removed server-side.
+- Verified: MapView.jsx transpiles clean; frontend webpack compiled (warnings benign); grep shows zero dangling references to any removed symbol; Office /map screenshot + testid probes confirm contactable-toggle/filtered-count/build-route-button/assign-route-button ABSENT while occ-filter-all/owned/rented/unknown + basemap-map/satellite PRESENT, territories + Draw-new-territory + geocoding status intact.
+
+
 ## Audit — Office↔Field Map Parity + Scope + Buildings-Removal — VERIFIED, no defects (2026-06)
 - Added a camera-precedence regression (fixtures only, no prod coords): mobile `map_areas.node.test.js` proves a selected area's bounds drive the camera and `safeCenter(cfg)` is ONLY the no-area fallback (Austin/default-center defect can't recur); backend `test_mobile_map_areas.py` proves territory bounds come from stored geometry (far from a default center) + Field/Office geometry+count parity via `GET /api/territories/{id}`.
 - testing_agent iteration_113: backend 100% (20/20 across map_areas + map_properties: default-priority order, territory area shape, territory-scoped map-safe features [lon,lat] + no secrets, sales 403 out-of-scope, cross-sales canvass 403, Field↔Office property-ID + geometry + count parity) + Office UI 100% (Map view = Street|Satellite only, `basemap-buildings-button` ABSENT, Satellite via secure proxy renders, Street toggles, territory list + pins render, no buildings console errors). No critical/minor issues; no action items.

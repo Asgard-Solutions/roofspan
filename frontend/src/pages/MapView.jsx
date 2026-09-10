@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import * as maplibregl from "maplibre-gl";
 import Supercluster from "supercluster";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -12,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import ImportDialog from "@/components/ImportDialog";
 import PropertySheet from "@/components/PropertySheet";
-import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2, UserPlus } from "lucide-react";
+import { PencilRuler, Download, Trash2, MapPin, Ban, Check, X, Plus, Loader2 } from "lucide-react";
 
 const OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const MANAGE = ["owner", "administrator", "office"];
@@ -29,7 +28,6 @@ function baseStyle() {
 export default function MapView() {
   const { user } = useAuth();
   const canManage = MANAGE.includes(user?.role);
-  const navigate = useNavigate();
 
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -38,7 +36,6 @@ export default function MapView() {
   const drawPts = useRef([]);
   const canvassGeom = useRef(null);
   const vertexMarkers = useRef([]);
-  const routeMarkers = useRef([]);
   const zipForTerritory = useRef(null);
   const openSheetRef = useRef(null);
   const superRef = useRef(null);
@@ -56,15 +53,8 @@ export default function MapView() {
   const [mapConfig, setMapConfig] = useState(null);
   const [baseLayer, setBaseLayer] = useState("map");
   const [occFilter, setOccFilter] = useState("all");
-  const [contactableOnly, setContactableOnly] = useState(false);
   const [features, setFeatures] = useState([]);
-  const [routeInfo, setRouteInfo] = useState(null);
-  const [builtRoute, setBuiltRoute] = useState([]);
-  const [assignOpen, setAssignOpen] = useState(false);
   const [reps, setReps] = useState([]);
-  const [routeName, setRouteName] = useState("");
-  const [routeRepId, setRouteRepId] = useState("");
-  const [savingRoute, setSavingRoute] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -300,11 +290,6 @@ export default function MapView() {
         map.addSource("draw-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "draw-vertices", type: "circle", source: "draw-pts", paint: { "circle-radius": 7, "circle-color": "#EA580C", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
 
-        map.addSource("route", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "route-line", type: "line", source: "route",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": "#4F46E5", "line-width": 4, "line-opacity": 0.85 } });
-
         loadedRef.current = true;
 
         map.on("click", (e) => {
@@ -464,9 +449,8 @@ export default function MapView() {
     const p = f.properties || {};
     if (sectionPropIds && !sectionPropIds.has(p.id)) return false;
     if (occFilter !== "all" && p.occupancy !== occFilter) return false;
-    if (contactableOnly && !p.contactable) return false;
     return true;
-  }), [features, occFilter, contactableOnly, sectionPropIds]);
+  }), [features, occFilter, sectionPropIds]);
 
   // Rebuild the main-thread cluster index whenever the loaded property set or user filter changes.
   // This is the missing link that previously left superRef empty while the UI reported thousands of
@@ -482,89 +466,6 @@ export default function MapView() {
     superRef.current = index;
     renderClusters();
   }, [filteredFeatures, renderClusters, clearMarkers]);
-
-  const clearRoute = useCallback(() => {
-    const map = mapRef.current;
-    routeMarkers.current.forEach((m) => m.remove());
-    routeMarkers.current = [];
-    if (map && map.getSource("route")) map.getSource("route").setData({ type: "FeatureCollection", features: [] });
-    setRouteInfo(null);
-    setBuiltRoute([]);
-  }, []);
-
-  const _haversineMi = (a, b) => {
-    const R = 3958.8, toRad = (d) => (d * Math.PI) / 180;
-    const dLat = toRad(b[1] - a[1]), dLng = toRad(b[0] - a[0]);
-    const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(s));
-  };
-
-  const buildRoute = useCallback(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const pts = filteredFeatures.slice(0, 200).map((f) => ({ id: f.properties.id, c: f.geometry.coordinates, address: f.properties.address }));
-    if (pts.length < 2) { toast.error("Need at least 2 matching stops to build a route"); return; }
-    const remaining = [...pts].sort((a, b) => a.c[0] - b.c[0]);
-    const order = [remaining.shift()];
-    let miles = 0;
-    while (remaining.length) {
-      const last = order[order.length - 1].c;
-      let bi = 0, bd = Infinity;
-      remaining.forEach((r, i) => { const d = _haversineMi(last, r.c); if (d < bd) { bd = d; bi = i; } });
-      miles += bd;
-      order.push(remaining.splice(bi, 1)[0]);
-    }
-    map.getSource("route").setData({
-      type: "FeatureCollection",
-      features: [{ type: "Feature", geometry: { type: "LineString", coordinates: order.map((o) => o.c) }, properties: {} }],
-    });
-    routeMarkers.current.forEach((m) => m.remove());
-    routeMarkers.current = order.map((o, i) => {
-      const el = document.createElement("div");
-      el.className = "rs-route-marker";
-      el.textContent = String(i + 1);
-      return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(o.c).addTo(map);
-    });
-    map.fitBounds(order.reduce((b, o) => b.extend(o.c), new maplibregl.LngLatBounds(order[0].c, order[0].c)), { padding: 70, duration: 700 });
-    setRouteInfo({ stops: order.length, miles: miles.toFixed(1) });
-    setBuiltRoute(order.map((o, i) => ({
-      property_id: o.id, latitude: o.c[1], longitude: o.c[0], sort: i, address: o.address || "",
-    })));
-    toast.success(`Route ready: ${order.length} stops, ~${miles.toFixed(1)} mi`);
-  }, [filteredFeatures]);
-
-  useEffect(() => { clearRoute(); }, [features, clearRoute]);
-
-  const openAssign = useCallback(async () => {
-    setRouteName(selected?.name ? `${selected.name} route` : (zipHit?.zip ? `ZIP ${zipHit.zip} route` : "Canvassing route"));
-    setRouteRepId("");
-    setAssignOpen(true);
-    try {
-      const { data } = await api.get("/users/assignable");
-      setReps(data);
-    } catch (e) {
-      toast.error(apiError(e));
-    }
-  }, [selected, zipHit]);
-
-  const saveRoute = useCallback(async () => {
-    if (!routeName.trim()) { toast.error("Give the route a name"); return; }
-    if (builtRoute.length < 2) { toast.error("Build a walking route first"); return; }
-    setSavingRoute(true);
-    try {
-      const { data } = await api.post("/routes", {
-        name: routeName.trim(), territory_id: selectedId || null, assigned_user_id: routeRepId || null,
-        est_miles: routeInfo ? Number(routeInfo.miles) : 0, stops: builtRoute,
-      });
-      toast.success(routeRepId ? "Route assigned" : "Route saved");
-      setAssignOpen(false);
-      navigate(`/routes/${data.id}`);
-    } catch (e) {
-      toast.error(apiError(e));
-    } finally {
-      setSavingRoute(false);
-    }
-  }, [routeName, builtRoute, selectedId, routeRepId, routeInfo, navigate]);
 
   const switchBase = (layer) => {
     const map = mapRef.current;
@@ -739,13 +640,6 @@ export default function MapView() {
                     data-testid={`occ-filter-${v}`}>{label}</button>
                 ))}
               </div>
-              <button type="button" onClick={() => setContactableOnly((v) => !v)}
-                className={`flex w-full items-center justify-between rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${contactableOnly ? "border-green-600 bg-green-50 text-green-800" : "border-border bg-white text-slate-600 hover:bg-slate-50"}`}
-                data-testid="contactable-toggle"><span>Contactable leads only</span><span>{contactableOnly ? "On" : "Off"}</span></button>
-              <div className="pt-1 text-xs text-slate-500" data-testid="filtered-count">Showing <span className="font-semibold text-slate-800">{filteredFeatures.length}</span> of {features.length}{(occFilter !== "all" || contactableOnly) && <span> matching</span>}</div>
-              <div className="flex gap-2 pt-1"><Button size="sm" variant="secondary" className="flex-1" onClick={buildRoute} disabled={filteredFeatures.length < 2} data-testid="build-route-button">Build walking route</Button>{routeInfo && <Button size="sm" variant="ghost" onClick={clearRoute} data-testid="clear-route-button">Clear</Button>}</div>
-              {routeInfo && <div className="rounded-md bg-indigo-50 px-3 py-1.5 text-xs text-indigo-800" data-testid="route-info">Route: <strong>{routeInfo.stops}</strong> stops · ~<strong>{routeInfo.miles}</strong> mi walking</div>}
-              {routeInfo && canManage && <Button size="sm" className="w-full" onClick={openAssign} data-testid="assign-route-button"><UserPlus className="h-4 w-4" /> Assign route to rep</Button>}
             </div>
 
             {canManage && !isCanvassDrawing && <div className="border-b border-border p-4">{!isDrawing ? <Button onClick={startDraw} className="w-full" data-testid="draw-territory-button"><PencilRuler className="h-4 w-4" /> Draw new territory</Button> : <div className="space-y-2"><div className="rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-800">Drawing… {drawCount} point{drawCount === 1 ? "" : "s"}. Click the map to add corners.</div><div className="flex gap-2"><Button onClick={finishDraw} className="flex-1" data-testid="finish-draw-button"><Check className="h-4 w-4" /> Finish</Button><Button variant="outline" onClick={cancelDraw} data-testid="cancel-draw-button"><X className="h-4 w-4" /></Button></div></div>}</div>}
@@ -816,8 +710,6 @@ export default function MapView() {
       </div>
 
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}><DialogContent data-testid="save-territory-dialog"><DialogHeader><DialogTitle>Name this territory</DialogTitle><DialogDescription>Give the drawn territory a name and color.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Territory name</Label><Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. North Austin" data-testid="territory-name-input" /></div><div className="space-y-1.5"><Label>Color</Label><div className="flex gap-2">{COLORS.map((c) => <button key={c} onClick={() => setNewColor(c)} className={`h-7 w-7 rounded-md border-2 ${newColor === c ? "border-slate-900" : "border-transparent"}`} style={{ backgroundColor: c }} data-testid={`color-${c}`} />)}</div></div></div><DialogFooter><Button variant="outline" onClick={() => { setSaveOpen(false); cancelDraw(); }}>Cancel</Button><Button onClick={saveTerritory} disabled={saving} data-testid="save-territory-button">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Create territory</>}</Button></DialogFooter></DialogContent></Dialog>
-
-      <Dialog open={assignOpen} onOpenChange={setAssignOpen}><DialogContent data-testid="assign-route-dialog"><DialogHeader><DialogTitle>Assign this route</DialogTitle><DialogDescription>Save the {builtRoute.length}-stop walking route and assign it to a sales rep for canvassing.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Route name</Label><Input value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="e.g. North Austin route" data-testid="route-name-input" /></div><div className="space-y-1.5"><Label>Assign to rep</Label><select value={routeRepId} onChange={(e) => setRouteRepId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm" data-testid="route-rep-select"><option value="">Unassigned (assign later)</option>{reps.map((u) => <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.role}</option>)}</select></div><div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">{builtRoute.length} stops{routeInfo ? ` · ~${routeInfo.miles} mi walking` : ""}</div></div><DialogFooter><Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button><Button onClick={saveRoute} disabled={savingRoute} data-testid="save-route-button">{savingRoute ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UserPlus className="h-4 w-4" /> {routeRepId ? "Assign route" : "Save route"}</>}</Button></DialogFooter></DialogContent></Dialog>
 
       {selected && <ImportDialog open={importOpen} onOpenChange={setImportOpen} territory={selected} onComplete={handleImportComplete} />}
 
