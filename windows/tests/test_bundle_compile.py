@@ -210,16 +210,83 @@ def test_burn_package_cache_ids_are_explicit_unique_and_version_scoped():
     assert 'CacheId="RoofSpanOfficeMsi-$(var.Version)"' in bundle
 
 
-def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
+def _prep_script_text():
+    return (INSTALLER / "scripts" / "Prepare-PostgreSQL.ps1").read_text(encoding="utf-8")
+
+
+def _prep_install_arguments():
+    """The InstallArguments string of the PostgreSQLPasswordPrep ExePackage (Burn-formatted at runtime)."""
     bundle = _bundle_text()
-    assert "RandomNumberGenerator" in bundle
-    assert "IsNullOrWhiteSpace($p)" in bundle
-    assert "[PgSuperPassword]" in bundle
-    assert "ProtectedData" in bundle and "LocalMachine" in bundle
-    assert "pg_install.optionfile" in bundle and "superpassword=" in bundle
+    tag = re.search(r'<ExePackage\b[^>]*\bId="PostgreSQLPasswordPrep".*?</ExePackage>', bundle, re.DOTALL)
+    assert tag, "PostgreSQLPasswordPrep ExePackage not found"
+    args = re.search(r'InstallArguments="([^"]*)"', tag.group(0))
+    assert args, "PostgreSQLPasswordPrep has no InstallArguments"
+    return args.group(1)
+
+
+def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
+    # The password logic now lives in the checked-in, bundle-embedded PowerShell PAYLOAD, not inline.
+    script = _prep_script_text()
+    assert "RandomNumberGenerator" in script
+    assert "IsNullOrWhiteSpace($pw)" in script
+    assert "ProtectedData" in script and "LocalMachine" in script
+    assert "pg_install.optionfile" in script and "superpassword=" in script
+    # The bundle carries the script as an embedded payload and still runs the REAL EDB installer.
+    bundle = _bundle_text()
+    assert 'SourceFile="scripts\\Prepare-PostgreSQL.ps1"' in bundle
+    assert '-File Prepare-PostgreSQL.ps1' in bundle
     assert 'SourceFile="$(var.PostgresInstaller)"' in bundle
     assert "--optionfile" in bundle
     assert "--mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL" in bundle
+
+
+# The confirmed clean-computer 0x1 failure: Burn formats '[...]' tokens in InstallArguments, stripping
+# PowerShell type accelerators. These MUST NOT reappear inside any ExePackage InstallArguments.
+_BURN_FORMATTING_TRAPS = [
+    "[string]", "[Convert]", "[IO.File]", "[Text.Encoding]", "[Security.Cryptography",
+    "RandomNumberGenerator", "ProtectedData", "IsNullOrWhiteSpace", "ToBase64String",
+    "-replace", "WriteAllBytes",
+]
+
+
+def test_prep_install_arguments_have_no_burn_formatting_type_expressions():
+    args = _prep_install_arguments()
+    for trap in _BURN_FORMATTING_TRAPS:
+        assert trap not in args, f"PostgreSQLPasswordPrep InstallArguments reintroduced a Burn-formatted expression: {trap}"
+    # The ONLY legitimate bracket token is the Hidden [PgSuperPassword] Burn variable.
+    brackets = re.findall(r"\[[^\]]*\]", args)
+    assert brackets == ["[PgSuperPassword]"], f"unexpected bracket tokens in InstallArguments: {brackets}"
+    assert "-File Prepare-PostgreSQL.ps1" in args
+
+
+def test_no_exepackage_install_arguments_use_inline_command_script():
+    """Neither PowerShell helper may embed a program via -Command; both must invoke a -File payload."""
+    bundle = _bundle_text()
+    for tag in re.findall(r"<ExePackage\b[^>]*?(?:/>|>.*?</ExePackage>)", bundle, re.DOTALL):
+        if "powershell.exe" not in tag:
+            continue
+        args = re.search(r'InstallArguments="([^"]*)"', tag)
+        assert args, f"powershell ExePackage without InstallArguments:\n{tag}"
+        assert "-Command" not in args.group(1), "powershell helper must use -File payload, not inline -Command"
+        assert "-File " in args.group(1)
+        assert re.search(r'<Payload\s+SourceFile="scripts\\[A-Za-z0-9\-]+\.ps1"\s*/>', tag), \
+            f"powershell ExePackage does not carry its .ps1 as an embedded Payload:\n{tag}"
+
+
+def test_prep_and_cleanup_scripts_are_committed_and_ascii():
+    for name in ("Prepare-PostgreSQL.ps1", "Cleanup-PostgreSQL.ps1"):
+        path = INSTALLER / "scripts" / name
+        assert path.exists(), f"missing installer script payload: {name}"
+        raw = path.read_bytes()
+        assert all(b < 128 for b in raw), f"{name} must be ASCII"
+        assert b"password" not in raw.lower() or b"superpassword" in raw.lower()
+
+
+def test_cleanup_script_preserves_identity_secret():
+    cleanup = (INSTALLER / "scripts" / "Cleanup-PostgreSQL.ps1").read_text(encoding="utf-8")
+    code = cleanup.split("#>")[-1]  # executable portion, excluding the explanatory comment block
+    assert "pg_install.optionfile" in code and "Remove-Item" in code
+    assert "pg_super.bin" not in code, "cleanup must NOT remove pg_super.bin (needed by RoofSpan first-run)"
 
 
 def test_all_bundle_prerequisites_are_embedded():

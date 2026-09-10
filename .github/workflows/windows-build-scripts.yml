@@ -153,6 +153,104 @@ jobs:
           if ($m -match 'Packaging="external"') { throw "a prerequisite is an external payload" }
           Write-Host "OK: PostgreSQL + WebView2 + MSI are embedded; setup is self-contained"
 
+  # REAL Burn runtime regression for the clean-computer PostgreSQLPasswordPrep 0x1 failure. A compile-only
+  # test is NOT enough (the broken installer compiled fine). This builds a minimal Burn bundle that reuses
+  # the EXACT prep/cleanup InstallArguments + the checked-in script payloads, then EXECUTES them through
+  # real WiX/Burn '[...]' formatting on a clean runner and proves the files + DPAPI secret are correct.
+  burn-prep-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WiX Toolset 5.0.2 + BootstrapperApplications extension
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+
+      - name: Build + run the REAL Burn prep path, then the cleanup path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content windows/VERSION -Raw).Trim()
+          $scripts = (Resolve-Path "windows/installer/scripts").Path
+          $work = Join-Path $env:RUNNER_TEMP "burnprep"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $ps = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+          $known = "Rs!Clean_" + [Guid]::NewGuid().ToString("N").Substring(0,12)
+
+          function New-Bundle($id, $upgrade, $args, $payload) {
+            $lines = @(
+              '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">',
+              ('  <Bundle Name="RoofSpan Prep Runtime Test" Manufacturer="RoofSpan" Version="' + $version + '" UpgradeCode="' + $upgrade + '">'),
+              '    <BootstrapperApplication>',
+              '      <bal:WixStandardBootstrapperApplication Theme="none" SuppressOptionsUI="yes" />',
+              '    </BootstrapperApplication>',
+              '    <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />',
+              '    <Chain>',
+              ('      <ExePackage Id="' + $id + '" CacheId="RoofSpan' + $id + '-Test"'),
+              ('                  SourceFile="' + $ps + '" Permanent="yes" Vital="yes"'),
+              ('                  InstallArguments="' + $args + '" Compressed="yes">'),
+              ('        <Payload SourceFile="' + $scripts + '\' + $payload + '" />'),
+              '      </ExePackage>',
+              '    </Chain>',
+              '  </Bundle>',
+              '</Wix>'
+            )
+            return ($lines -join "`n")
+          }
+
+          # --- PREP: reuse the exact prep InstallArguments from bundle.wxs (with the [PgSuperPassword] token). ---
+          $prepArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Prepare-PostgreSQL.ps1 -PgSuperPassword &quot;[PgSuperPassword]&quot;'
+          $prepWxs = Join-Path $work "prep.wxs"
+          New-Bundle "PostgreSQLPasswordPrep" "5f5f5f5f-1111-4a11-9a11-aaaaaaaaaaaa" $prepArgs "Prepare-PostgreSQL.ps1" | Set-Content -Encoding UTF8 $prepWxs
+          $prepSetup = Join-Path $work "PrepSetup.exe"
+          wix build $prepWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $prepSetup
+          if (-not (Test-Path $prepSetup)) { throw "prep test bundle did not build" }
+
+          $prepLog = Join-Path $work "prep.burn.log"
+          $p = Start-Process $prepSetup -ArgumentList @("/quiet","/norestart","/log","`"$prepLog`"","PgSuperPassword=$known") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { if (Test-Path $prepLog) { Get-Content $prepLog -Tail 120 }; throw "Burn prep bundle exited $($p.ExitCode) (the 0x1 regression?)" }
+
+          # The Burn log must show the prep package succeeding and NOT the corrupted formatted command.
+          $log = if (Test-Path $prepLog) { Get-Content $prepLog -Raw } else { "" }
+          foreach ($bad in @("::IsNullOrWhiteSpace","::Create()","::ToBase64String","::Protect","::WriteAllBytes","-replace '',")) {
+            if ($log -match [regex]::Escape($bad)) { throw "Burn formatting corrupted the prep command: found '$bad'" }
+          }
+
+          $bin = "C:\ProgramData\RoofSpan\identity\pg_super.bin"
+          $opt = "C:\ProgramData\RoofSpan\identity\pg_install.optionfile"
+          if (-not (Test-Path $bin)) { throw "prep did not create pg_super.bin" }
+          if (-not (Test-Path $opt)) { throw "prep did not create pg_install.optionfile" }
+          $optLine = (Get-Content $opt | Where-Object { $_ -match '^superpassword=' } | Select-Object -First 1)
+          if (-not $optLine) { throw "option file has no superpassword line" }
+          $optPw = $optLine.Substring("superpassword=".Length)
+          if ([string]::IsNullOrWhiteSpace($optPw)) { throw "superpassword is empty" }
+          if ($optPw -ne $known) { throw "supplied PgSuperPassword was not honored by the prep step" }
+
+          # The DPAPI (LocalMachine) protected secret must decode to the same password on this machine.
+          Add-Type -AssemblyName System.Security
+          $enc = [IO.File]::ReadAllBytes($bin)
+          $dec = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine))
+          if ($dec -ne $known) { throw "DPAPI-unprotected pg_super.bin does not match the generated password" }
+          Write-Host "OK: prep ran through real Burn; pg_super.bin + option file correct; DPAPI round-trip verified"
+
+          # --- CLEANUP: reuse the exact cleanup InstallArguments; option file must go, pg_super.bin must stay. ---
+          $cleanupArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Cleanup-PostgreSQL.ps1'
+          $cleanWxs = Join-Path $work "cleanup.wxs"
+          New-Bundle "PostgreSQLPasswordCleanup" "6f6f6f6f-2222-4b22-9b22-bbbbbbbbbbbb" $cleanupArgs "Cleanup-PostgreSQL.ps1" | Set-Content -Encoding UTF8 $cleanWxs
+          $cleanSetup = Join-Path $work "CleanupSetup.exe"
+          wix build $cleanWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $cleanSetup
+          $c = Start-Process $cleanSetup -ArgumentList @("/quiet","/norestart") -Wait -PassThru
+          if ($c.ExitCode -ne 0) { throw "Burn cleanup bundle exited $($c.ExitCode)" }
+          if (Test-Path $opt) { throw "cleanup did not remove pg_install.optionfile" }
+          if (-not (Test-Path $bin)) { throw "cleanup wrongly removed pg_super.bin (needed by first-run)" }
+          Write-Host "OK: cleanup removed the transient option file and preserved pg_super.bin"
+
+      - name: Remove test identity artifacts
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Recurse -Force "C:\ProgramData\RoofSpan\identity" -ErrorAction SilentlyContinue
+
   # Build actual PyInstaller services, install the MSI, and prove SCM + upgrade behavior.
   services-install-smoke:
     runs-on: windows-latest
