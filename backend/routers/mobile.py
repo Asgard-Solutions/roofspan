@@ -624,6 +624,7 @@ async def mobile_map_properties(user: User = Depends(require_roles(*FIELD_ROLES)
                 "id": str(p.id), "address": p.formatted_address, "do_not_knock": p.do_not_knock,
                 "property_type": p.property_type, "owner_occupied": p.owner_occupied,
                 "occupancy": ("owner" if p.owner_occupied is True else "tenant" if p.owner_occupied is False else "unknown"),
+                "zip_code": p.zip_code or None,
                 "last_outcome": last_visit.outcome if last_visit else None,
                 "last_visited_at": last_visit.visited_at.isoformat() if last_visit else None,
             },
@@ -657,6 +658,99 @@ async def mobile_canvass_sections(user: User = Depends(require_roles(*FIELD_ROLE
             "color": s.color, "geometry": s.geometry, "property_count": count,
         })
     return {"sections": out}
+
+
+# ---------- Unified Field area selector (ZIP datasets + assigned canvass areas) ----------
+def _coords_bounds(coords):
+    """[[minLng,minLat],[maxLng,maxLat]] (sw, ne) from a list of [lng,lat] pairs, or None if empty."""
+    pts = [c for c in coords if isinstance(c, (list, tuple)) and len(c) >= 2
+           and isinstance(c[0], (int, float)) and isinstance(c[1], (int, float))]
+    if not pts:
+        return None
+    lngs = [p[0] for p in pts]
+    lats = [p[1] for p in pts]
+    return [[min(lngs), min(lats)], [max(lngs), max(lats)]]
+
+
+def _geometry_coords(geom):
+    """Flatten all [lng,lat] positions out of a GeoJSON Polygon/MultiPolygon/Point geometry."""
+    if not isinstance(geom, dict):
+        return []
+    t = geom.get("type")
+    c = geom.get("coordinates")
+    out = []
+    if t == "Point" and isinstance(c, (list, tuple)):
+        out.append(c)
+    elif t == "Polygon" and isinstance(c, (list, tuple)):
+        for ring in c:
+            out.extend(ring or [])
+    elif t == "MultiPolygon" and isinstance(c, (list, tuple)):
+        for poly in c:
+            for ring in (poly or []):
+                out.extend(ring or [])
+    return out
+
+
+@router.get("/map/areas")
+async def mobile_map_areas(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Field-authorized area selector, server-authoritative. Two area kinds, unified in one list:
+      - type "canvass_section": the caller's ASSIGNED active sections (sales) or all active sections
+        (management). Carries the real stored GeoJSON geometry + polygon bounds.
+      - type "zip": Office-loaded ZIP property datasets the caller is authorized to work. A sales user
+        is scoped STRICTLY to properties inside their assigned territories; the ZIP's property_count and
+        bounds are computed from those in-scope properties ONLY (a ZIP that straddles the assignment
+        boundary is never widened). Management sees all ZIPs. ZIP has no stored polygon — bounds are
+        derived from member property coordinates (never a fabricated polygon)."""
+    areas = []
+
+    # Assigned/visible canvass sections → real polygon areas.
+    sections = await _visible_sections(db, user)
+    for s in sections:
+        count = (await db.execute(
+            select(func.count(CanvassSectionProperty.id)).where(CanvassSectionProperty.section_id == s.id)
+        )).scalar_one()
+        areas.append({
+            "type": "canvass_section", "id": str(s.id), "name": s.name, "color": s.color,
+            "territory_id": str(s.territory_id) if s.territory_id else None,
+            "geometry": s.geometry, "property_count": int(count),
+            "bounds": _coords_bounds(_geometry_coords(s.geometry)),
+        })
+
+    # ZIP areas — strictly scoped to the caller's authorized properties.
+    terr_ids = await _authorized_territory_ids(db, user)  # None => management (all), set => sales scope
+    zip_rows = []
+    if terr_ids is None:
+        zip_rows = (await db.execute(
+            select(Property.zip_code, Property.city, Property.longitude, Property.latitude)
+            .where(Property.latitude.isnot(None), Property.longitude.isnot(None))
+        )).all()
+    elif terr_ids:
+        zip_rows = (await db.execute(
+            select(Property.zip_code, Property.city, Property.longitude, Property.latitude)
+            .where(Property.latitude.isnot(None), Property.longitude.isnot(None),
+                   Property.territory_id.in_(terr_ids))
+        )).all()
+    # else: sales user with no assigned territory → no authorized ZIP datasets (strict).
+
+    groups = {}
+    for zip_code, city, lng, lat in zip_rows:
+        z = (zip_code or "").strip()
+        if not z:
+            continue
+        g = groups.setdefault(z, {"coords": [], "cities": {}})
+        g["coords"].append([lng, lat])
+        if city:
+            g["cities"][city] = g["cities"].get(city, 0) + 1
+    for z, g in sorted(groups.items()):
+        top_city = max(g["cities"].items(), key=lambda kv: kv[1])[0] if g["cities"] else None
+        areas.append({
+            "type": "zip", "id": f"zip:{z}", "zip_code": z,
+            "name": f"{z} - {top_city}" if top_city else z,
+            "color": None, "geometry": None, "territory_id": None,
+            "property_count": len(g["coords"]), "bounds": _coords_bounds(g["coords"]),
+        })
+
+    return {"areas": areas}
 
 
 async def _authorize_section(db: AsyncSession, section_id: str, user: User) -> CanvassSection:

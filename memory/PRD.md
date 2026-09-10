@@ -2547,3 +2547,34 @@ NARROW CORRECTION:
    VERIFIED: yarn test:sketch + test:measurements green; backend sketch/hermetic/live/mobile-sync/
    concurrency 12/12 (serial); Babel/Metro compile of all changed files OK.
  - NEXT TASK (not started): New Revision Clone.
+
+## P0 — My Area map restored (map-only, decoupled load, unified area selector) IMPLEMENTED (2026-06)
+Regression: My Area showed ~8,554 properties in a scrolling FlatList and was stuck on "Loading map…".
+ROOT CAUSE (code trace): (1) the native <MapView> only mounted under `NATIVE_MAP_OK && mapStyle`, and
+`mapStyle = buildMapStyle(cfg)` returns null unless `/map-config` returned a valid `osm_tile_url` — so a
+slow/failed/incomplete map-config prevented the map from ever mounting; (2) the fallback rendered a
+FlatList of every property; (3) "Loading map…" was the terminal branch of a single global `loaded`
+boolean that was set only after unguarded `getCache/putCache` calls AFTER `setFeatures`, so any storage
+hiccup left `loaded=false` permanently while the list already showed 8,554 rows; (4) camera used
+`geometry.coordinates[0][0]` instead of fitBounds.
+FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
+ - Removed the FlatList/renderFallback entirely. My Area is now MAP-ONLY with compact states:
+   map-native-unavailable, map-init-error + retry, base-map retry chip, loading. Never a property list.
+ - Decoupled independent states (propStatus/cfgStatus/areaStatus) each with a finite 15s timeout; the
+   native <MapView> mounts as soon as native is available using a background base style
+   (BASE_FALLBACK_STYLE) with the OSM raster attached as a child when config arrives — the map no longer
+   depends on /map-config, /map/properties, or /map/areas completing.
+ - New unified area selector from GET /api/mobile/map/areas: `canvass_section` (assigned, real polygon +
+   bounds) and `zip` (Office-loaded ZIP dataset, no polygon, bounds from member property coords). Camera
+   uses fitBounds (boundsToCamera → Camera bounds prop); pins scoped by zip_code (ZIP) or bbox (polygon).
+ - Backend: added GET /api/mobile/map/areas (strict sales authorization: assigned sections only; ZIP areas
+   scoped to properties inside assigned territories, counts/bounds from in-scope props only; management
+   sees all). Added map-safe `zip_code` to /api/mobile/map/properties.
+ - Diagnostics: added map_mount_attempted, map_mount_succeeded, native_available, execution_environment,
+   area_count, selected_area_id, property_status; surfaced on the Diagnostics screen. No secrets logged.
+ - New files: mobile/src/mapAreas.js, mobile/src/tests/map_areas.node.test.js, backend/tests/
+   test_mobile_map_areas.py. Changed: MapScreen.js, mapDiagnostics.js, Diagnostics.js, mobile.py.
+ - VERIFIED (automated only): yarn test:map (7) + test:canvass green; backend test_mobile_map_areas 5/5,
+   test_mobile_map_properties 8/8; Babel/Metro compile of all changed screens OK.
+ - REQUIRES USER: physical Android build + on-device acceptance (native MapLibre v10 render on Expo 57 /
+   RN 0.86 New Arch cannot be verified in-container; diagnostics now record mount attempted/succeeded).

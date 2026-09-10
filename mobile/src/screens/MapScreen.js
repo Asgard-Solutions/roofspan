@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform, ScrollView } from "react-native";
+import React, { useCallback, useMemo, useState, useEffect } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Platform, ScrollView } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Constants from "expo-constants";
 import { api } from "../api";
@@ -10,8 +10,12 @@ import { C, PIN } from "../theme";
 import { mintTileTicket, tileTemplate, TILE_TICKET_HEADER } from "../tiles";
 import { downloadSectionArea, sectionBounds } from "../offlineTiles";
 import { buildMapStyle, safeCenter, safeZoom, isNativeMapAvailable } from "../mapConfig";
-import { CACHE_SECTIONS, CACHE_MAP_PROPS, CACHE_MAP_CFG, propsCacheKey, pickDefaultSection, buildSectionPolygonFC, buildAllSectionsFC } from "../canvass";
+import { CACHE_MAP_PROPS, CACHE_MAP_CFG, buildAllSectionsFC } from "../canvass";
+import { normalizeAreas, pickDefaultArea, findArea, boundsToCamera, filterFeaturesForArea, boundsFromFeatures } from "../mapAreas";
 import { buildMapDiagnostic, buildMapLoadDiagnostic, MAP_DIAG_CACHE_KEY, MAP_LOAD_DIAG_CACHE_KEY } from "../mapDiagnostics";
+
+const CACHE_AREAS = "map_areas_full"; // last good authorized area list (selector + polygons)
+const REQ_TIMEOUT_MS = 15000; // finite timeout so a hung request can NEVER strand the map
 
 let MapLibre = null;
 if (Platform.OS !== "web") {
@@ -19,18 +23,24 @@ if (Platform.OS !== "web") {
 }
 const NATIVE_MAP_OK = MapLibre && isNativeMapAvailable(Constants.executionEnvironment);
 
-// When satellite is selected we must NOT keep the opaque OSM base underneath (that's why satellite
-// looked like it "wasn't rendering"). Office hides its OSM layer for satellite; on native we swap to a
-// background-only style so the satellite raster child IS the visible base — matching Office.
-const SATELLITE_BG_STYLE = { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b1b2b" } }] };
+// Background-only style so the native MapView ALWAYS mounts even when /map-config is slow/failed —
+// the base OSM raster (from config) and satellite raster (from ticket) attach as children when ready.
+const BASE_FALLBACK_STYLE = { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b1b2b" } }] };
+const SATELLITE_BG_STYLE = BASE_FALLBACK_STYLE;
 
-// Grow MapLibre's ambient tile cache once so recently viewed satellite/building tiles remain
-// available when a rep loses signal in the field. Best-effort; never blocks the map.
 let _ambientCacheReady = false;
 function ensureAmbientCache() {
   if (_ambientCacheReady || !MapLibre || !MapLibre.offlineManager) return;
   _ambientCacheReady = true;
   try { MapLibre.offlineManager.setMaximumAmbientCacheSize(120 * 1024 * 1024); } catch (e) { /* noop */ }
+}
+
+// Finite-timeout wrapper: a request that never settles must not block the screen forever.
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("request_timeout")), ms);
+    promise.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
 }
 
 // Data-driven pin color — MUST mirror the RoofSpan Office legend.
@@ -41,22 +51,14 @@ const PIN_COLOR = [
   ["==", ["get", "owner_occupied"], false], PIN.rented,
   PIN.unknown,
 ];
-
 const LEGEND = [
   { key: "owned", color: PIN.owned, label: "Owned" },
   { key: "rented", color: PIN.rented, label: "Rented" },
   { key: "unknown", color: PIN.unknown, label: "Unknown" },
   { key: "dnk", color: PIN.dnk, label: "Do Not Knock" },
 ];
-
-// Door-knocking progress colors + legend (second pin coloring mode).
 const PROG = {
-  knocked_today: "#16A34A", // green — visited today
-  callback: "#2563EB",      // blue — needs a return visit
-  not_home: "#F59E0B",      // amber — no answer
-  contacted: "#0D9488",     // teal — spoken to previously
-  none: "#94A3B8",          // slate — not visited yet
-  dnk: PIN.dnk,             // red — do not knock
+  knocked_today: "#16A34A", callback: "#2563EB", not_home: "#F59E0B", contacted: "#0D9488", none: "#94A3B8", dnk: PIN.dnk,
 };
 const PROGRESS_LEGEND = [
   { key: "knocked_today", color: PROG.knocked_today, label: "Knocked today" },
@@ -68,12 +70,8 @@ const PROGRESS_LEGEND = [
 ];
 const PROGRESS_COLOR = [
   "match", ["get", "progress"],
-  "dnk", PROG.dnk,
-  "knocked_today", PROG.knocked_today,
-  "callback", PROG.callback,
-  "not_home", PROG.not_home,
-  "contacted", PROG.contacted,
-  PROG.none,
+  "dnk", PROG.dnk, "knocked_today", PROG.knocked_today, "callback", PROG.callback,
+  "not_home", PROG.not_home, "contacted", PROG.contacted, PROG.none,
 ];
 
 function deriveProgress(p) {
@@ -88,12 +86,8 @@ function deriveProgress(p) {
 }
 
 const FILTERS = [
-  { key: "all", label: "All" },
-  { key: "owned", label: "Owned" },
-  { key: "rented", label: "Rented" },
-  { key: "unknown", label: "Unknown" },
+  { key: "all", label: "All" }, { key: "owned", label: "Owned" }, { key: "rented", label: "Rented" }, { key: "unknown", label: "Unknown" },
 ];
-
 function matchesFilter(p, filter) {
   if (filter === "all") return true;
   if (filter === "owned") return p.owner_occupied === true;
@@ -102,15 +96,10 @@ function matchesFilter(p, filter) {
   return true;
 }
 
-function pinColorFor(p) {
-  return p.do_not_knock ? PIN.dnk : p.owner_occupied === true ? PIN.owned : p.owner_occupied === false ? PIN.rented : PIN.unknown;
-}
-
 class MapErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { failed: false }; }
   static getDerivedStateFromError() { return { failed: true }; }
   componentDidCatch(error, info) {
-    // Do NOT swallow: surface the real native/JS map-init failure to Field Diagnostics (redacted).
     try { this.props.onError && this.props.onError(error, info); } catch (e) { /* never crash the boundary */ }
   }
   render() { return this.state.failed ? this.props.fallback : this.props.children; }
@@ -122,19 +111,32 @@ export default function MapScreen({ navigation }) {
   const authCtx = useAuth();
   const user = authCtx ? authCtx.user : null;
 
-  const [sections, setSections] = useState([]);
-  const [selId, setSelId] = useState(null);
+  // INDEPENDENT dataset states — NO single global `loaded` boolean gates the native map anymore.
+  const [propStatus, setPropStatus] = useState("loading"); // loading | ok | cache | failed
+  const [cfgStatus, setCfgStatus] = useState("loading");
+  const [areaStatus, setAreaStatus] = useState("loading");
   const [features, setFeatures] = useState([]);
   const [cfg, setCfg] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-  const [offlineNoCache, setOfflineNoCache] = useState(false);
-  const [base, setBase] = useState("street"); // street | satellite
+  const [areas, setAreas] = useState([]);
+  const [selectedAreaId, setSelectedAreaId] = useState(null);
+
+  const [mapMounted, setMapMounted] = useState(false);
+  const [mapInitError, setMapInitError] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
+
+  const [base, setBase] = useState("street");
   const [overlayBuildings, setOverlayBuildings] = useState(false);
   const [imageryLoading, setImageryLoading] = useState(false);
   const [imageryError, setImageryError] = useState(false);
   const [imageryMsg, setImageryMsg] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [colorMode, setColorMode] = useState("occupancy");
+  const [dl, setDl] = useState({ status: "idle", pct: 0 });
+  const [ticket, setTicket] = useState(null);
   const mintingRef = React.useRef(false);
   const loadingTimer = React.useRef(null);
+  const mountAttemptedRef = React.useRef(false);
+
   const flashLoading = () => {
     setImageryLoading(true);
     if (loadingTimer.current) clearTimeout(loadingTimer.current);
@@ -142,15 +144,10 @@ export default function MapScreen({ navigation }) {
   };
   const chooseBase = (v) => { setBase(v); if (v === "satellite") { flashLoading(); ensureTicket(); } };
   const toggleBuildings = () => { setOverlayBuildings((v) => { const nv = !v; if (nv) { flashLoading(); ensureTicket(); } return nv; }); };
-  const [filter, setFilter] = useState("all");
-  const [colorMode, setColorMode] = useState("occupancy"); // occupancy | progress
-  const [dl, setDl] = useState({ status: "idle", pct: 0 }); // offline download
-  const [ticket, setTicket] = useState(null);
-  // Load-state tracker for map diagnostics (so a data failure is never misreported as a native map crash).
-  const loadStateRef = React.useRef({ mapConfigLoaded: false, propertiesLoaded: false, canvassLoaded: false });
 
-  // Capture (do NOT swallow) a native map-init failure into Field Diagnostics — redacted, no secrets.
+  // Capture (never swallow) a native map-init failure into Field Diagnostics — redacted, no secrets.
   const recordMapError = useCallback(async (error) => {
+    setMapInitError(true);
     try {
       const diag = buildMapDiagnostic({
         appVersion: Constants.expoConfig?.version || Constants.manifest?.version,
@@ -160,101 +157,132 @@ export default function MapScreen({ navigation }) {
         maplibreJsLoaded: !!MapLibre,
         maplibreNativeAvailable: NATIVE_MAP_OK,
         mapStyleBuilt: !!buildMapStyle(cfg),
-        mapConfigLoaded: loadStateRef.current.mapConfigLoaded,
-        propertiesLoaded: loadStateRef.current.propertiesLoaded,
-        canvassLoaded: loadStateRef.current.canvassLoaded,
+        mapConfigLoaded: cfgStatus === "ok" || cfgStatus === "cache",
+        propertiesLoaded: propStatus === "ok" || propStatus === "cache",
+        canvassLoaded: areaStatus === "ok" || areaStatus === "cache",
         activeBaseLayer: base,
         maptilerConfigured: !!(cfg && cfg.maptiler_configured),
-        tileTicketPresent: !!ticket, // BOOLEAN only — the raw ticket is never recorded
+        tileTicketPresent: !!ticket,
+        mapMountAttempted: mountAttemptedRef.current,
+        mapMountSucceeded: mapMounted,
+        areaCount: areas.length,
+        selectedAreaId,
         error,
       });
       await putCache(MAP_DIAG_CACHE_KEY, diag);
     } catch (e) { /* diagnostics must never crash the app */ }
-  }, [cfg, base, ticket]);
+  }, [cfg, base, ticket, cfgStatus, propStatus, areaStatus, mapMounted, areas, selectedAreaId]);
 
-  // FULL authorized property dataset — the PERMANENT map source. Loaded independently of canvass
-  // sections; a section is only an overlay + camera focus and never replaces this dataset.
-  const loadMapProps = useCallback(async () => {
+  // ---- Independent loaders (each owns its own state; one failing NEVER blocks the others/the map) ----
+  const loadProps = useCallback(async () => {
     try {
-      const g = await api.get("/mobile/map/properties");
-      const feats = g.data.features || [];
-      setFeatures(feats);
-      await putCache(CACHE_MAP_PROPS, feats);
-      return { ok: true, feats };
+      const g = await withTimeout(api.get("/mobile/map/properties"), REQ_TIMEOUT_MS);
+      const feats = (g.data && g.data.features) || [];
+      setFeatures(feats); await putCache(CACHE_MAP_PROPS, feats); setPropStatus("ok");
+      return feats;
     } catch (e) {
       const cached = (await getCache(CACHE_MAP_PROPS)) || [];
-      setFeatures(cached);
-      return { ok: false, feats: cached, fromCache: true };
+      setFeatures(cached); setPropStatus(cached.length ? "cache" : "failed");
+      return cached;
     }
   }, []);
 
-  const load = useCallback(async () => {
-    // Independent requests with allSettled so one failed dataset never breaks the whole map.
-    const [secR, cfgR, propsRes] = await Promise.all([
-      api.get("/mobile/canvass-sections").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
-      api.get("/map-config").then((r) => ({ ok: true, data: r.data })).catch(() => ({ ok: false })),
-      loadMapProps(),
-    ]);
-    const propsOk = propsRes.ok;
-
-    let secs;
-    if (secR.ok) { secs = secR.data.sections || []; await putCache(CACHE_SECTIONS, secs); }
-    else { secs = (await getCache(CACHE_SECTIONS)) || []; }
-    setSections(secs);
-    loadStateRef.current = { mapConfigLoaded: cfgR.ok, propertiesLoaded: propsOk, canvassLoaded: secR.ok };
-
-    let mapCfg;
-    if (cfgR.ok) { mapCfg = cfgR.data; await putCache(CACHE_MAP_CFG, cfgR.data); }
-    else { mapCfg = (await getCache(CACHE_MAP_CFG)) || null; }
-    setCfg(mapCfg);
-
-    // Offline with no usable data at all -> show the offline-no-cache hint (map otherwise renders).
-    const cachedProps = (await getCache(CACHE_MAP_PROPS)) || [];
-    setOfflineNoCache(!cfgR.ok && !secR.ok && !propsOk && cachedProps.length === 0);
-
-    // Default-select a section for camera focus ONLY; this does NOT change the property dataset.
-    setSelId((cur) => cur || pickDefaultSection(secs));
-    setLoaded(true);
-
-    // Record a runtime load snapshot (counts + statuses) on EVERY load so a "200 with zero records"
-    // is distinguishable from an API failure. No secrets — counts/IDs only.
+  const loadCfg = useCallback(async () => {
     try {
-      const selNow = selId || pickDefaultSection(secs);
-      const rnv = (Platform.constants && Platform.constants.reactNativeVersion)
-        ? Object.values(Platform.constants.reactNativeVersion).slice(0, 3).join(".") : null;
-      const loadDiag = buildMapLoadDiagnostic({
-        userId: user?.id, userEmail: user?.email, userRole: user?.role,
-        propertiesOk: propsOk, propertyFeatures: propsRes.feats, cachedPropertyFeatures: cachedProps,
-        canvassOk: secR.ok, sections: secs, cachedSectionCount: (await getCache(CACHE_SECTIONS) || []).length,
-        selectedSectionId: selNow, mapConfigOk: cfgR.ok, mapStyleBuilt: !!buildMapStyle(mapCfg),
-        maplibreVersion: (MapLibre && MapLibre.version) || null, reactNativeVersion: rnv,
-        sourceApi: MapLibre && MapLibre.GeoJSONSource ? "GeoJSONSource" : (MapLibre && MapLibre.ShapeSource ? "ShapeSource" : null),
-      });
-      await putCache(MAP_LOAD_DIAG_CACHE_KEY, loadDiag);
-    } catch (e) { /* diagnostics must never break the map */ }
-
-    if (NATIVE_MAP_OK && mapCfg && mapCfg.maptiler_configured && pairing) {
-      ensureAmbientCache();
-      try {
-        const token = await getToken();
-        const res = await mintTileTicket(pairing, token);
-        if (res.ticket) {
-          setTicket(res.ticket);
-          setImageryMsg(null);
-          if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
-        }
-      } catch (e) { /* keep any previously registered ticket */ }
+      const r = await withTimeout(api.get("/map-config"), REQ_TIMEOUT_MS);
+      setCfg(r.data); await putCache(CACHE_MAP_CFG, r.data); setCfgStatus("ok");
+      // Eagerly mint a tile ticket so satellite is available without an extra tap.
+      if (NATIVE_MAP_OK && r.data && r.data.maptiler_configured && pairing) {
+        ensureAmbientCache();
+        try {
+          const token = await getToken();
+          const res = await mintTileTicket(pairing, token);
+          if (res.ticket) {
+            setTicket(res.ticket); setImageryMsg(null);
+            if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
+          }
+        } catch (e) { /* keep any previously registered ticket */ }
+      }
+      return r.data;
+    } catch (e) {
+      const cached = (await getCache(CACHE_MAP_CFG)) || null;
+      setCfg(cached); setCfgStatus(cached ? "cache" : "failed");
+      return cached;
     }
-  }, [loadMapProps, pairing, selId, user]);
+  }, [pairing]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const loadAreas = useCallback(async () => {
+    try {
+      const r = await withTimeout(api.get("/mobile/map/areas"), REQ_TIMEOUT_MS);
+      const norm = normalizeAreas(r.data);
+      setAreas(norm); await putCache(CACHE_AREAS, norm);
+      setSelectedAreaId((cur) => cur || pickDefaultArea(norm));
+      setAreaStatus("ok");
+      return norm;
+    } catch (e) {
+      const cached = normalizeAreas((await getCache(CACHE_AREAS)) || []);
+      setAreas(cached); setSelectedAreaId((cur) => cur || pickDefaultArea(cached));
+      setAreaStatus(cached.length ? "cache" : "failed");
+      return cached;
+    }
+  }, []);
 
-  // Selecting a section highlights + focuses the camera. It NEVER mutates the master property dataset.
-  const selectSection = (id) => setSelId(id);
+  // Fire all three INDEPENDENTLY on focus. No Promise.all gate; the map mounts as soon as native is ready.
+  const load = useCallback(() => {
+    setMapInitError(false);
+    loadProps(); loadCfg(); loadAreas();
+  }, [loadProps, loadCfg, loadAreas]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load, retryToken]));
+
+  // Record a redacted load snapshot whenever the datasets settle (counts/statuses only — never secrets).
+  useEffect(() => {
+    const settled = propStatus !== "loading" && cfgStatus !== "loading" && areaStatus !== "loading";
+    if (!settled) return;
+    (async () => {
+      try {
+        const rnv = (Platform.constants && Platform.constants.reactNativeVersion)
+          ? Object.values(Platform.constants.reactNativeVersion).slice(0, 3).join(".") : null;
+        const sectionAreas = areas.filter((a) => a.type === "canvass_section" && a.geometry);
+        const loadDiag = buildMapLoadDiagnostic({
+          userId: user?.id, userEmail: user?.email, userRole: user?.role,
+          propertiesOk: propStatus === "ok" || propStatus === "cache", propertyFeatures: features,
+          cachedPropertyFeatures: (await getCache(CACHE_MAP_PROPS)) || [],
+          canvassOk: areaStatus === "ok" || areaStatus === "cache",
+          sections: sectionAreas.map((a) => ({ id: a.id, name: a.name, geometry: a.geometry, property_count: a.property_count })),
+          cachedSectionCount: normalizeAreas((await getCache(CACHE_AREAS)) || []).filter((a) => a.type === "canvass_section").length,
+          selectedSectionId: selectedAreaId, selectedAreaId, areaCount: areas.length,
+          mapConfigOk: cfgStatus === "ok" || cfgStatus === "cache", mapStyleBuilt: !!buildMapStyle(cfg),
+          maplibreVersion: (MapLibre && MapLibre.version) || null, reactNativeVersion: rnv,
+          nativeAvailable: NATIVE_MAP_OK, executionEnvironment: Constants.executionEnvironment,
+          mapMountAttempted: mountAttemptedRef.current, mapMountSucceeded: mapMounted,
+          sourceApi: MapLibre && MapLibre.ShapeSource ? "ShapeSource" : (MapLibre && MapLibre.GeoJSONSource ? "GeoJSONSource" : null),
+        });
+        await putCache(MAP_LOAD_DIAG_CACHE_KEY, loadDiag);
+      } catch (e) { /* diagnostics must never break the map */ }
+    })();
+  }, [propStatus, cfgStatus, areaStatus, features, areas, cfg, selectedAreaId, mapMounted, user]);
+
+  const ensureTicket = useCallback(async () => {
+    if (ticket || mintingRef.current || !imageryAvailable || !pairing) return;
+    mintingRef.current = true; setImageryError(false);
+    try {
+      const token = await getToken();
+      const res = await mintTileTicket(pairing, token);
+      if (res.ticket) {
+        setTicket(res.ticket); setImageryMsg(null);
+        if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
+      } else { setImageryError(true); setImageryMsg(res.detail || null); }
+    } catch (e) { setImageryError(true); } finally { mintingRef.current = false; }
+  }, [ticket, pairing]); // eslint-disable-line
+
+  const retryMap = useCallback(() => { setMapInitError(false); setMapMounted(false); mountAttemptedRef.current = false; setRetryToken((x) => x + 1); }, []);
+
   const openProp = (pid) => navigation.navigate("Property", { id: pid });
+  const selectArea = (id) => setSelectedAreaId(id);
 
-  const selected = sections.find((s) => s.id === selId) || null;
-  const mapStyle = NATIVE_MAP_OK ? buildMapStyle(cfg) : null;
+  const selectedArea = findArea(areas, selectedAreaId);
+  const sectionAreas = useMemo(() => areas.filter((a) => a.type === "canvass_section" && a.geometry), [areas]);
 
   const visibleFeatures = useMemo(
     () => features
@@ -262,54 +290,37 @@ export default function MapScreen({ navigation }) {
       .filter((f) => matchesFilter(f.properties || {}, filter)),
     [features, filter]
   );
+  // Pins scoped to the selected area (ZIP → by zip_code; polygon area → by bounds; none → full map).
+  const areaFeatures = useMemo(() => filterFeaturesForArea(visibleFeatures, selectedArea), [visibleFeatures, selectedArea]);
 
-  // Imagery is offered when the Office has MapTiler configured. Tiles use a stable URL + ticket header;
-  // when offline, previously viewed tiles are served from the ambient cache.
   const satelliteUrl = tileTemplate(pairing, "satellite", ticket);
   const buildingsUrl = tileTemplate(pairing, "buildings", ticket);
-  // imageryAvailable => the Office supports satellite imagery, so ALWAYS offer the option (the switcher
-  // must never silently vanish). imageryReady => we also hold a tile ticket, so tiles can actually draw.
   const imageryAvailable = !!(NATIVE_MAP_OK && cfg && cfg.maptiler_configured);
   const imageryReady = imageryAvailable && !!satelliteUrl && !!buildingsUrl;
   const activeBase = imageryAvailable ? base : "street";
 
-  // Mint a tile ticket on demand (also attempted eagerly in load()). Keeps the Satellite/Buildings
-  // options usable and lets them recover gracefully if the ticket was not ready or a mint failed.
-  const ensureTicket = useCallback(async () => {
-    if (ticket || mintingRef.current || !imageryAvailable || !pairing) return;
-    mintingRef.current = true;
-    setImageryError(false);
-    try {
-      const token = await getToken();
-      const res = await mintTileTicket(pairing, token);
-      if (res.ticket) {
-        setTicket(res.ticket);
-        setImageryMsg(null);
-        if (MapLibre && MapLibre.addCustomHeader) { try { MapLibre.addCustomHeader(TILE_TICKET_HEADER, res.ticket); } catch (e) {} }
-      } else {
-        setImageryError(true);
-        setImageryMsg(res.detail || null);
-      }
-    } catch (e) {
-      setImageryError(true);
-    } finally {
-      mintingRef.current = false;
-    }
-  }, [ticket, imageryAvailable, pairing]);
-
   const startDownload = useCallback(async () => {
-    if (!selected || !satelliteUrl || !cfg || !cfg.osm_tile_url || !MapLibre) return;
+    const sec = sectionAreas.find((a) => a.id === selectedAreaId);
+    if (!sec || !satelliteUrl || !cfg || !cfg.osm_tile_url || !MapLibre) return;
     setDl({ status: "downloading", pct: 0 });
     try {
-      await downloadSectionArea({
-        MapLibre, section: selected, osmTileUrl: cfg.osm_tile_url, satelliteUrl,
-        onProgress: (pct) => setDl({ status: "downloading", pct }),
-      });
+      await downloadSectionArea({ MapLibre, section: sec, osmTileUrl: cfg.osm_tile_url, satelliteUrl, onProgress: (pct) => setDl({ status: "downloading", pct }) });
       setDl({ status: "done", pct: 100 });
-    } catch (e) {
-      setDl({ status: "error", pct: 0 });
-    }
-  }, [selected, satelliteUrl, cfg]);
+    } catch (e) { setDl({ status: "error", pct: 0 }); }
+  }, [sectionAreas, selectedAreaId, satelliteUrl, cfg]);
+
+  // ---------- Header (selector + filters) — shown on every state so controls stay reachable ----------
+  const areaSelector = areas.length >= 1 ? (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }} testID="area-selector">
+      {areas.map((a) => (
+        <TouchableOpacity key={a.id} onPress={() => selectArea(a.id)} testID={`area-chip-${a.id}`}
+          style={[s.chip, a.id === selectedAreaId && { backgroundColor: a.color || C.brand, borderColor: a.color || C.brand }]}>
+          <Text style={[s.chipKind, a.id === selectedAreaId && { color: "#fff" }]}>{a.type === "zip" ? "ZIP" : "AREA"}</Text>
+          <Text style={[s.chipText, a.id === selectedAreaId && { color: "#fff" }]}>{a.name}</Text>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  ) : null;
 
   const colorModeSwitcher = (
     <View style={s.switcher} testID="pin-color-mode">
@@ -320,18 +331,6 @@ export default function MapScreen({ navigation }) {
       ))}
     </View>
   );
-
-  const canPrefetch = imageryReady && selected && !!sectionBounds(selected);
-  const prefetchButton = canPrefetch ? (
-    <TouchableOpacity onPress={startDownload} disabled={dl.status === "downloading"} style={s.dlBtn} testID="download-area-button">
-      <Text style={s.dlBtnText}>
-        {dl.status === "downloading" ? `Downloading… ${dl.pct}%`
-          : dl.status === "done" ? "Area saved for offline ✓"
-          : dl.status === "error" ? "Download failed — tap to retry"
-          : "Download area for offline"}
-      </Text>
-    </TouchableOpacity>
-  ) : null;
 
   const baseSwitcher = imageryAvailable ? (
     <View style={s.switcher} testID="basemap-switcher">
@@ -351,8 +350,7 @@ export default function MapScreen({ navigation }) {
       {FILTERS.map((f) => {
         const dot = f.key === "all" ? null : f.key === "owned" ? PIN.owned : f.key === "rented" ? PIN.rented : PIN.unknown;
         return (
-          <TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} testID={`filter-${f.key}`}
-            style={[s.filterChip, filter === f.key && s.filterChipActive]}>
+          <TouchableOpacity key={f.key} onPress={() => setFilter(f.key)} testID={`filter-${f.key}`} style={[s.filterChip, filter === f.key && s.filterChipActive]}>
             {dot ? <View style={[s.filterDot, { backgroundColor: dot }]} /> : null}
             <Text style={[s.filterText, filter === f.key && s.filterTextActive]}>{f.label}</Text>
           </TouchableOpacity>
@@ -361,24 +359,24 @@ export default function MapScreen({ navigation }) {
     </ScrollView>
   );
 
+  const canPrefetch = imageryReady && selectedArea && selectedArea.type === "canvass_section" && !!sectionBounds(selectedArea);
+  const prefetchButton = canPrefetch ? (
+    <TouchableOpacity onPress={startDownload} disabled={dl.status === "downloading"} style={s.dlBtn} testID="download-area-button">
+      <Text style={s.dlBtnText}>
+        {dl.status === "downloading" ? `Downloading… ${dl.pct}%` : dl.status === "done" ? "Area saved for offline ✓" : dl.status === "error" ? "Download failed — tap to retry" : "Download area for offline"}
+      </Text>
+    </TouchableOpacity>
+  ) : null;
+
   const header = (
     <View style={s.hero} testID="my-area-header">
       <Text style={s.heroKicker}>MY AREA</Text>
-      <Text style={s.heroTitle} testID="my-area-title">{selected ? selected.name : "My Area"}</Text>
-      <Text style={s.heroSub}>{visibleFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text>
-      {loaded && sections.length === 0 ? (
-        <Text style={s.heroSub} testID="no-section-note">No canvass area assigned — showing your full property map.</Text>
+      <Text style={s.heroTitle} testID="my-area-title">{selectedArea ? selectedArea.name : "My Area"}</Text>
+      <Text style={s.heroSub}>{areaFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text>
+      {areaStatus !== "loading" && areas.length === 0 ? (
+        <Text style={s.heroSub} testID="no-area-note">No area assigned yet — showing your full property map.</Text>
       ) : null}
-      {sections.length >= 1 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-          {sections.map((sec) => (
-            <TouchableOpacity key={sec.id} onPress={() => selectSection(sec.id)} testID={`section-chip-${sec.id}`}
-              style={[s.chip, sec.id === selId && { backgroundColor: sec.color || C.brand, borderColor: sec.color || C.brand }]}>
-              <Text style={[s.chipText, sec.id === selId && { color: "#fff" }]}>{sec.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+      {areaSelector}
       {baseSwitcher}
       {imageryAvailable ? colorModeSwitcher : null}
       {filterChips}
@@ -398,103 +396,123 @@ export default function MapScreen({ navigation }) {
     </View>
   );
 
-  // Full-screen state ONLY when there is genuinely no data to show (offline with empty caches).
-  // A user with zero canvass sections still gets the full map below — sections are overlays, not a gate.
-  if (loaded && offlineNoCache) {
+  // ---------- MAP STATES (never a property directory) ----------
+  // 1) Native module unavailable (Expo Go / not bundled): compact state, NOT a list.
+  if (!NATIVE_MAP_OK) {
+    const inExpoGo = Constants.executionEnvironment === "storeClient";
     return (
-      <View style={s.center} testID="no-area-state">
-        <Text style={s.emptyTitle}>No saved map data offline</Text>
-        <Text style={s.emptyBody}>No saved map data is available offline yet. Connect to RoofSpan Office to sync your property map.</Text>
+      <View style={{ flex: 1, backgroundColor: "#F8FAFC" }}>
+        {header}
+        <View style={s.mapState} testID="map-native-unavailable">
+          <Text style={s.stateTitle}>Map needs the RoofSpan Field app</Text>
+          <Text style={s.stateBody}>{inExpoGo ? "The satellite map only renders in a RoofSpan Field build (not Expo Go). Open the installed app to view your area." : "The native map is unavailable on this build."}</Text>
+        </View>
       </View>
     );
   }
 
-  const renderFallback = (reason) => (
-    <View style={{ flex: 1, backgroundColor: "#F8FAFC" }}>
-      {header}
-      <FlatList
-        style={{ flex: 1, paddingHorizontal: 14 }}
-        data={visibleFeatures}
-        keyExtractor={(f) => f.properties.id}
-        ListHeaderComponent={<Text style={s.note}>{reason}</Text>}
-        ListEmptyComponent={<Text style={s.empty}>No properties match this filter.</Text>}
-        renderItem={({ item }) => {
-          const p = item.properties;
-          return (
-            <TouchableOpacity style={[s.card, p.do_not_knock && s.dnkCard]} onPress={() => openProp(p.id)} testID={`map-prop-${p.id}`}>
-              <View style={s.cardRow}>
-                <View style={[s.cardDot, { backgroundColor: pinColorFor(p) }]} />
-                <Text style={[s.addr, p.do_not_knock && { color: "#fff" }]}>{p.address}</Text>
-              </View>
-              {p.do_not_knock ? <Text style={s.dnk}>DO NOT KNOCK</Text> : <Text style={s.type}>{p.property_type || "property"}</Text>}
-            </TouchableOpacity>
-          );
-        }}
-      />
-    </View>
-  );
+  const realStyle = buildMapStyle(cfg);            // null when config is not yet usable
+  const mapStyle = realStyle || BASE_FALLBACK_STYLE; // map STILL mounts on a valid background style
+  const camBounds = selectedArea
+    ? boundsToCamera(selectedArea.bounds || boundsFromFeatures(filterFeaturesForArea(features, selectedArea)))
+    : null;
 
-  if (NATIVE_MAP_OK && mapStyle) {
-    const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
-    const fc = { type: "FeatureCollection", features: visibleFeatures };
-    const secColor = selected?.color || C.brand;
-    const polyFc = buildAllSectionsFC(sections, selId);
-    const center = selected?.geometry?.coordinates?.[0]?.[0] || safeCenter(cfg);
-    const fallback = renderFallback("Map unavailable — showing list view.");
+  // 2) Native map initialization threw: compact retry inside the map region (diagnostic already recorded).
+  if (mapInitError) {
     return (
-      <MapErrorBoundary fallback={fallback} onError={recordMapError}>
-        <View style={{ flex: 1 }} testID="map-container">
-          {header}
-          <View style={{ flex: 1 }}>
-            <MapView style={{ flex: 1 }} mapStyle={activeBase === "satellite" && satelliteUrl ? SATELLITE_BG_STYLE : mapStyle} testID="map-view">
-              <Camera zoomLevel={safeZoom(cfg)} centerCoordinate={center} />
-
-              {activeBase === "satellite" && satelliteUrl && RasterSource && (
-                <RasterSource id="rs-satellite" tileUrlTemplates={[satelliteUrl]} tileSize={512}>
-                  <RasterLayer id="rs-satellite-layer" style={{}} />
-                </RasterSource>
-              )}
-
-              {overlayBuildings && buildingsUrl && VectorSource && (
-                <VectorSource id="rs-buildings" tileUrlTemplates={[buildingsUrl]} minZoomLevel={14} maxZoomLevel={20}>
-                  <FillLayer id="rs-buildings-fill" sourceLayerID="building" minZoomLevel={14}
-                    style={{ fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"], fillOpacity: 0.35 }} />
-                  <LineLayer id="rs-buildings-line" sourceLayerID="building" minZoomLevel={14}
-                    style={{ lineColor: ["case", ["==", ["get", "class"], "residential"], "#C2410C", "#475569"], lineWidth: 1.25, lineOpacity: 0.9 }} />
-                </VectorSource>
-              )}
-
-              <ShapeSource id="myarea" shape={polyFc}>
-                <FillLayer id="myarea-fill" style={{ fillColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], fillOpacity: ["case", ["get", "selected"], 0.28, 0.1] }} />
-                <LineLayer id="myarea-line" style={{ lineColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], lineWidth: ["case", ["get", "selected"], 3.5, 1.5] }} />
-              </ShapeSource>
-              <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
-                <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: colorMode === "progress" ? PROGRESS_COLOR : PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
-              </ShapeSource>
-            </MapView>
-            {(activeBase === "satellite" || overlayBuildings) && (!satelliteUrl || imageryLoading) ? (
-              <View style={s.imgHintWrap} pointerEvents="box-none">
-                <TouchableOpacity style={s.imgHint} onPress={ensureTicket} disabled={!!satelliteUrl && imageryLoading} testID="imagery-hint">
-                  <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? (imageryMsg ? `Imagery unavailable: ${imageryMsg}` : "Imagery unavailable — tap to retry") : "Loading imagery…"}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-            {legend}
-          </View>
+      <View style={{ flex: 1, backgroundColor: "#F8FAFC" }}>
+        {header}
+        <View style={s.mapState} testID="map-init-error">
+          <Text style={s.stateTitle}>Map unavailable</Text>
+          <Text style={s.stateBody}>The map couldn't start. Your data is safe.</Text>
+          <TouchableOpacity style={s.retryBtn} onPress={retryMap} testID="map-retry-button"><Text style={s.retryText}>Tap to retry</Text></TouchableOpacity>
         </View>
-      </MapErrorBoundary>
+      </View>
     );
   }
 
-  const inExpoGo = Constants.executionEnvironment === "storeClient";
-  const reason = !MapLibre
-    ? "Map list view (native MapLibre renders on device)."
-    : inExpoGo
-      ? "Map requires a development build (Expo Go can't load native maps) — showing list view."
-      : loaded && !mapStyle
-        ? "Map unavailable — showing list view."
-        : "Loading map…";
-  return renderFallback(reason);
+  const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
+  const fc = { type: "FeatureCollection", features: areaFeatures };
+  const polyFc = buildAllSectionsFC(sectionAreas.map((a) => ({ id: a.id, name: a.name, color: a.color, geometry: a.geometry })), selectedAreaId);
+  const secColor = (selectedArea && selectedArea.color) || C.brand;
+  mountAttemptedRef.current = true;
+
+  const fallback = (
+    <View style={{ flex: 1, backgroundColor: "#F8FAFC" }}>
+      {header}
+      <View style={s.mapState} testID="map-init-error">
+        <Text style={s.stateTitle}>Map unavailable</Text>
+        <Text style={s.stateBody}>The map couldn't start. Your data is safe.</Text>
+        <TouchableOpacity style={s.retryBtn} onPress={retryMap} testID="map-retry-button"><Text style={s.retryText}>Tap to retry</Text></TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  return (
+    <MapErrorBoundary fallback={fallback} onError={recordMapError}>
+      <View style={{ flex: 1 }} testID="map-container">
+        {header}
+        <View style={{ flex: 1 }}>
+          <MapView style={{ flex: 1 }} mapStyle={activeBase === "satellite" && satelliteUrl ? SATELLITE_BG_STYLE : mapStyle}
+            testID="map-view" onDidFinishRenderingMapFully={() => setMapMounted(true)}>
+            <Camera
+              {...(camBounds ? { bounds: camBounds } : { zoomLevel: safeZoom(cfg), centerCoordinate: safeCenter(cfg) })}
+              animationDuration={600}
+            />
+
+            {activeBase === "satellite" && satelliteUrl && RasterSource && (
+              <RasterSource id="rs-satellite" tileUrlTemplates={[satelliteUrl]} tileSize={512}>
+                <RasterLayer id="rs-satellite-layer" style={{}} />
+              </RasterSource>
+            )}
+            {/* When NOT satellite, draw the base OSM raster from config as a child so the map mounts even
+                if config arrives after the MapView (background style is used until then). */}
+            {activeBase !== "satellite" && realStyle && RasterSource && (
+              <RasterSource id="rs-osm" tileUrlTemplates={[cfg.osm_tile_url]} tileSize={256}>
+                <RasterLayer id="rs-osm-layer" style={{}} />
+              </RasterSource>
+            )}
+
+            {overlayBuildings && buildingsUrl && VectorSource && (
+              <VectorSource id="rs-buildings" tileUrlTemplates={[buildingsUrl]} minZoomLevel={14} maxZoomLevel={20}>
+                <FillLayer id="rs-buildings-fill" sourceLayerID="building" minZoomLevel={14}
+                  style={{ fillColor: ["case", ["==", ["get", "class"], "residential"], "#F97316", "#64748B"], fillOpacity: 0.35 }} />
+                <LineLayer id="rs-buildings-line" sourceLayerID="building" minZoomLevel={14}
+                  style={{ lineColor: ["case", ["==", ["get", "class"], "residential"], "#C2410C", "#475569"], lineWidth: 1.25, lineOpacity: 0.9 }} />
+              </VectorSource>
+            )}
+
+            <ShapeSource id="myarea" shape={polyFc}>
+              <FillLayer id="myarea-fill" style={{ fillColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], fillOpacity: ["case", ["get", "selected"], 0.28, 0.1] }} />
+              <LineLayer id="myarea-line" style={{ lineColor: ["case", ["get", "selected"], secColor, ["coalesce", ["get", "color"], C.brand]], lineWidth: ["case", ["get", "selected"], 3.5, 1.5] }} />
+            </ShapeSource>
+            <ShapeSource id="props" shape={fc} onPress={(e) => { const f = e.features && e.features[0]; if (f) openProp(f.properties.id); }}>
+              <CircleLayer id="pins" style={{ circleRadius: 7, circleColor: colorMode === "progress" ? PROGRESS_COLOR : PIN_COLOR, circleStrokeWidth: 2, circleStrokeColor: "#fff" }} />
+            </ShapeSource>
+          </MapView>
+
+          {/* Base tiles genuinely unavailable (no config + no satellite ticket): non-blocking retry chip —
+              the MapView itself stays mounted. */}
+          {!realStyle && !(activeBase === "satellite" && satelliteUrl) ? (
+            <View style={s.imgHintWrap} pointerEvents="box-none">
+              <TouchableOpacity style={s.imgHint} onPress={retryMap} testID="basemap-retry">
+                <Text style={s.imgHintText}>{cfgStatus === "failed" ? "Base map unavailable — tap to retry" : "Loading base map…"}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {(activeBase === "satellite" || overlayBuildings) && (!satelliteUrl || imageryLoading) ? (
+            <View style={s.imgHintWrap} pointerEvents="box-none">
+              <TouchableOpacity style={s.imgHint} onPress={ensureTicket} disabled={!!satelliteUrl && imageryLoading} testID="imagery-hint">
+                <Text style={s.imgHintText}>{imageryError && !satelliteUrl ? (imageryMsg ? `Imagery unavailable: ${imageryMsg}` : "Imagery unavailable — tap to retry") : "Loading imagery…"}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {legend}
+        </View>
+      </View>
+    </MapErrorBoundary>
+  );
 }
 
 const s = StyleSheet.create({
@@ -502,7 +520,8 @@ const s = StyleSheet.create({
   heroKicker: { fontSize: 11, fontWeight: "800", letterSpacing: 1, color: C.sub },
   heroTitle: { fontSize: 20, fontWeight: "900", color: C.ink, marginTop: 2 },
   heroSub: { fontSize: 13, color: C.sub, marginTop: 2 },
-  chip: { borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8, backgroundColor: "#fff" },
+  chip: { borderWidth: 1, borderColor: C.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8, backgroundColor: "#fff", flexDirection: "row", alignItems: "center" },
+  chipKind: { fontSize: 9, fontWeight: "900", letterSpacing: 0.6, color: C.sub, marginRight: 6 },
   chipText: { fontSize: 12, fontWeight: "700", color: C.ink },
   switcher: { flexDirection: "row", backgroundColor: "#F1F5F9", borderRadius: 10, padding: 3, marginTop: 10 },
   segBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
@@ -524,16 +543,9 @@ const s = StyleSheet.create({
   legendRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
   legendDot: { width: 12, height: 12, borderRadius: 6, marginRight: 8, borderWidth: 1.5, borderColor: "#fff" },
   legendLabel: { fontSize: 12, fontWeight: "600", color: C.ink },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, backgroundColor: "#F8FAFC" },
-  emptyTitle: { fontSize: 17, fontWeight: "800", color: C.ink, marginBottom: 6, textAlign: "center" },
-  emptyBody: { fontSize: 14, color: C.sub, textAlign: "center", lineHeight: 20 },
-  note: { color: C.sub, fontStyle: "italic", marginVertical: 10 },
-  empty: { color: C.sub, fontStyle: "italic", paddingVertical: 20 },
-  card: { backgroundColor: "#fff", borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: C.line },
-  cardRow: { flexDirection: "row", alignItems: "center" },
-  cardDot: { width: 12, height: 12, borderRadius: 6, marginRight: 10, borderWidth: 1.5, borderColor: "#fff" },
-  dnkCard: { backgroundColor: C.dnk, borderColor: C.dnk },
-  addr: { fontSize: 15, fontWeight: "700", color: C.ink, flex: 1 },
-  type: { fontSize: 12, color: C.sub, marginTop: 4, marginLeft: 22 },
-  dnk: { color: "#fff", fontWeight: "900", marginTop: 4, marginLeft: 22 },
+  mapState: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, backgroundColor: "#0b1b2b" },
+  stateTitle: { fontSize: 17, fontWeight: "800", color: "#fff", marginBottom: 6, textAlign: "center" },
+  stateBody: { fontSize: 14, color: "#CBD5E1", textAlign: "center", lineHeight: 20 },
+  retryBtn: { marginTop: 18, backgroundColor: C.brand, borderRadius: 10, paddingHorizontal: 22, paddingVertical: 11 },
+  retryText: { color: "#fff", fontSize: 14, fontWeight: "800" },
 });
