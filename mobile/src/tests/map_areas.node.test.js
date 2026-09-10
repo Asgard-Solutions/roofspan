@@ -40,16 +40,48 @@ const AREAS_RAW = { areas: [
   ok("normalizeAreas: ZIP has no polygon, invalid bounds nulled, malformed dropped, polygons kept");
 }
 
-// ---- pickDefaultArea prefers an assigned canvass area (real polygon) over a ZIP -------------------
+// ---- pickDefaultArea PRIORITY: canvass_section > territory > zip > none --------------------------
 {
   const areas = A.normalizeAreas(AREAS_RAW);
   assert.strictEqual(A.pickDefaultArea(areas), "sec-1", "default selects the assigned canvass area");
-  assert.strictEqual(A.pickDefaultArea([{ id: "zip:1", type: "zip", zip_code: "1" }]), "zip:1", "ZIP-only → first ZIP is default");
+  const terrAndZip = [
+    { id: "zip:1", type: "zip", zip_code: "1" },
+    { id: "territory:t1", type: "territory", territory_id: "t1", geometry: { type: "Polygon", coordinates: [] } },
+  ];
+  assert.strictEqual(A.pickDefaultArea(terrAndZip), "territory:t1", "Territory outranks ZIP as the fallback default");
+  assert.strictEqual(A.pickDefaultArea([{ id: "zip:1", type: "zip", zip_code: "1" }]), "zip:1", "ZIP-only → ZIP is default");
   assert.strictEqual(A.pickDefaultArea([]), null, "no areas → no default");
-  ok("pickDefaultArea: assigned canvass area preferred; ZIP fallback; none → null");
+  ok("pickDefaultArea: canvass > territory > zip > none (ZIP never overrides a Territory)");
 }
 
-// ---- boundsToCamera: proper fitBounds (ne/sw + padding), not a single vertex ----------------------
+// ---- Territory area: keeps its real polygon + bounds; carries territory_id --------------------------
+{
+  const raw = { areas: [
+    { type: "territory", id: "territory:t1", name: "73010", color: "#16A34A", territory_id: "t1",
+      geometry: { type: "Polygon", coordinates: [[[1, 1], [1, 4], [4, 4], [4, 1], [1, 1]]] },
+      property_count: 8029, bounds: [[1, 1], [4, 4]] },
+  ] };
+  const areas = A.normalizeAreas(raw);
+  const t = areas.find((a) => a.id === "territory:t1");
+  assert.ok(t && t.type === "territory", "territory area normalized");
+  assert.ok(t.geometry && t.geometry.type === "Polygon", "territory keeps its real GeoJSON polygon");
+  assert.strictEqual(t.territory_id, "t1", "territory carries territory_id for scoped property loading");
+  assert.deepStrictEqual(t.bounds, [[1, 1], [4, 4]], "territory bounds retained for fitBounds");
+  assert.strictEqual(t.property_count, 8029, "territory property_count surfaced (scoped, not whole DB)");
+  ok("normalizeAreas: territory keeps polygon + bounds + territory_id + scoped count");
+}
+
+// ---- MapScreen wiring: properties are loaded SCOPED per selected area (never the whole DB) ---------
+{
+  const src = fs.readFileSync(path.join(__dirname, "..", "screens", "MapScreen.js"), "utf8");
+  assert.ok(/canvass-sections\/\$\{area\.id\}\/properties/.test(src), "canvass section → its own scoped properties endpoint");
+  assert.ok(/map\/properties\?territory_id=/.test(src), "territory → /mobile/map/properties?territory_id= (scoped)");
+  assert.ok(/map\/properties\?zip=/.test(src), "zip → /mobile/map/properties?zip= (scoped)");
+  assert.ok(/loadPropsForArea/.test(src), "properties load via per-area loader (loadPropsForArea)");
+  assert.ok(/map-no-area/.test(src), "compact 'no area' state exists (never dumps every property)");
+  assert.ok(!/No area assigned yet — showing your full property map/.test(src), "the old 'showing your full property map' fallback is gone");
+  ok("MapScreen: per-area scoped property loading + no-area compact state; full-map fallback removed");
+}
 {
   const cam = A.boundsToCamera([[1, 1], [4, 5]], 40);
   assert.deepStrictEqual([cam.sw, cam.ne], [[1, 1], [4, 5]], "camera fits the full bounding box (sw/ne)");
@@ -62,17 +94,18 @@ const AREAS_RAW = { areas: [
   ok("boundsToCamera: fitBounds with padding (never coordinates[0][0]); single-point safe");
 }
 
-// ---- filterFeaturesForArea: ZIP by zip_code, polygon by bounds, none → full map -------------------
+// ---- filterFeaturesForArea: server-scoped datasets; ZIP by zip_code; NO area → NEVER all ----------
 {
   const areas = A.normalizeAreas(AREAS_RAW);
   const zip = areas.find((a) => a.id === "zip:73065");
   const sec = areas.find((a) => a.id === "sec-1");
   const byZip = A.filterFeaturesForArea(FEATURES, zip).map((f) => f.properties.id);
   assert.deepStrictEqual(byZip.sort(), ["p3", "p4"], "ZIP scope filters pins by property zip_code");
+  // Canvass/territory datasets are already scoped by the server → returned as-is (no client bbox drop).
   const bySec = A.filterFeaturesForArea(FEATURES, sec).map((f) => f.properties.id);
-  assert.deepStrictEqual(bySec.sort(), ["p1", "p2"], "polygon area scopes pins to its bounds");
-  assert.strictEqual(A.filterFeaturesForArea(FEATURES, null).length, 4, "no area → full authorized map");
-  ok("filterFeaturesForArea: ZIP→zip_code, canvass→bounds, none→full map");
+  assert.deepStrictEqual(bySec.sort(), ["p1", "p2", "p3", "p4"], "canvass/territory: server-scoped, returned as-is");
+  assert.strictEqual(A.filterFeaturesForArea(FEATURES, null).length, 0, "no area → NEVER the full property map (empty)");
+  ok("filterFeaturesForArea: ZIP→zip_code; canvass/territory server-scoped; none→empty (never all)");
 }
 
 // ---- boundsFromFeatures: fallback bbox from point features ----------------------------------------

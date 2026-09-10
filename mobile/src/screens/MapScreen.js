@@ -174,14 +174,26 @@ export default function MapScreen({ navigation }) {
   }, [cfg, base, ticket, cfgStatus, propStatus, areaStatus, mapMounted, areas, selectedAreaId]);
 
   // ---- Independent loaders (each owns its own state; one failing NEVER blocks the others/the map) ----
-  const loadProps = useCallback(async () => {
+  // Build the SCOPED property endpoint for the selected area — Field NEVER downloads the whole DB.
+  const areaPropsUrl = (area) => {
+    if (!area) return null;
+    if (area.type === "canvass_section") return `/mobile/canvass-sections/${area.id}/properties`;
+    if (area.type === "territory") return `/mobile/map/properties?territory_id=${encodeURIComponent(area.territory_id || area.id)}`;
+    if (area.type === "zip") return `/mobile/map/properties?zip=${encodeURIComponent(area.zip_code || "")}`;
+    return "/mobile/map/properties";
+  };
+
+  const loadPropsForArea = useCallback(async (area) => {
+    if (!area) { setFeatures([]); setPropStatus("ok"); return []; }
+    const cacheKey = `${CACHE_MAP_PROPS}:${area.id}`;
+    setPropStatus("loading");
     try {
-      const g = await withTimeout(api.get("/mobile/map/properties"), REQ_TIMEOUT_MS);
+      const g = await withTimeout(api.get(areaPropsUrl(area)), REQ_TIMEOUT_MS);
       const feats = (g.data && g.data.features) || [];
-      setFeatures(feats); await putCache(CACHE_MAP_PROPS, feats); setPropStatus("ok");
+      setFeatures(feats); await putCache(cacheKey, feats); setPropStatus("ok");
       return feats;
     } catch (e) {
-      const cached = (await getCache(CACHE_MAP_PROPS)) || [];
+      const cached = (await getCache(cacheKey)) || [];
       setFeatures(cached); setPropStatus(cached.length ? "cache" : "failed");
       return cached;
     }
@@ -227,13 +239,20 @@ export default function MapScreen({ navigation }) {
     }
   }, []);
 
-  // Fire all three INDEPENDENTLY on focus. No Promise.all gate; the map mounts as soon as native is ready.
+  // Fire config + areas INDEPENDENTLY on focus. Properties load per-area (effect below).
   const load = useCallback(() => {
     setMapInitError(false);
-    loadProps(); loadCfg(); loadAreas();
-  }, [loadProps, loadCfg, loadAreas]);
+    loadCfg(); loadAreas();
+  }, [loadCfg, loadAreas]);
 
   useFocusEffect(useCallback(() => { load(); }, [load, retryToken]));
+
+  // Load properties SCOPED to the selected area (server-authoritative). Re-runs when the user switches
+  // area; each area has its own cache so switching never corrupts another area's dataset.
+  useEffect(() => {
+    const area = findArea(areas, selectedAreaId);
+    loadPropsForArea(area);
+  }, [selectedAreaId, areas, loadPropsForArea]);
 
   // Record a redacted load snapshot whenever the datasets settle (counts/statuses only — never secrets).
   useEffect(() => {
@@ -247,7 +266,7 @@ export default function MapScreen({ navigation }) {
         const loadDiag = buildMapLoadDiagnostic({
           userId: user?.id, userEmail: user?.email, userRole: user?.role,
           propertiesOk: propStatus === "ok" || propStatus === "cache", propertyFeatures: features,
-          cachedPropertyFeatures: (await getCache(CACHE_MAP_PROPS)) || [],
+          cachedPropertyFeatures: (await getCache(`${CACHE_MAP_PROPS}:${selectedAreaId}`)) || [],
           canvassOk: areaStatus === "ok" || areaStatus === "cache",
           sections: sectionAreas.map((a) => ({ id: a.id, name: a.name, geometry: a.geometry, property_count: a.property_count })),
           cachedSectionCount: normalizeAreas((await getCache(CACHE_AREAS)) || []).filter((a) => a.type === "canvass_section").length,
@@ -282,7 +301,16 @@ export default function MapScreen({ navigation }) {
   const selectArea = (id) => setSelectedAreaId(id);
 
   const selectedArea = findArea(areas, selectedAreaId);
+  const scopeKind = selectedArea ? (selectedArea.type === "zip" ? "ZIP" : selectedArea.type === "territory" ? "Territory" : "Canvass") : null;
   const sectionAreas = useMemo(() => areas.filter((a) => a.type === "canvass_section" && a.geometry), [areas]);
+  // Polygons to draw: all assigned canvass sections + the selected Territory boundary (if a territory).
+  const polyAreas = useMemo(() => {
+    const secs = areas.filter((a) => a.type === "canvass_section" && a.geometry);
+    if (selectedArea && selectedArea.type === "territory" && selectedArea.geometry) {
+      return [...secs, { id: selectedArea.id, name: selectedArea.name, color: selectedArea.color, geometry: selectedArea.geometry }];
+    }
+    return secs;
+  }, [areas, selectedArea]);
 
   const visibleFeatures = useMemo(
     () => features
@@ -315,7 +343,7 @@ export default function MapScreen({ navigation }) {
       {areas.map((a) => (
         <TouchableOpacity key={a.id} onPress={() => selectArea(a.id)} testID={`area-chip-${a.id}`}
           style={[s.chip, a.id === selectedAreaId && { backgroundColor: a.color || C.brand, borderColor: a.color || C.brand }]}>
-          <Text style={[s.chipKind, a.id === selectedAreaId && { color: "#fff" }]}>{a.type === "zip" ? "ZIP" : "AREA"}</Text>
+          <Text style={[s.chipKind, a.id === selectedAreaId && { color: "#fff" }]}>{a.type === "zip" ? "ZIP" : a.type === "territory" ? "TERR" : "AREA"}</Text>
           <Text style={[s.chipText, a.id === selectedAreaId && { color: "#fff" }]}>{a.name}</Text>
         </TouchableOpacity>
       ))}
@@ -371,11 +399,8 @@ export default function MapScreen({ navigation }) {
   const header = (
     <View style={s.hero} testID="my-area-header">
       <Text style={s.heroKicker}>MY AREA</Text>
-      <Text style={s.heroTitle} testID="my-area-title">{selectedArea ? selectedArea.name : "My Area"}</Text>
+      <Text style={s.heroTitle} testID="my-area-title">{selectedArea ? `${scopeKind}: ${selectedArea.name}` : "My Area"}</Text>
       <Text style={s.heroSub}>{areaFeatures.length}{filter !== "all" ? ` of ${features.length}` : ""} properties</Text>
-      {areaStatus !== "loading" && areas.length === 0 ? (
-        <Text style={s.heroSub} testID="no-area-note">No area assigned yet — showing your full property map.</Text>
-      ) : null}
       {areaSelector}
       {baseSwitcher}
       {imageryAvailable ? colorModeSwitcher : null}
@@ -411,6 +436,20 @@ export default function MapScreen({ navigation }) {
     );
   }
 
+  // 1b) No area available at all (no canvass section, no territory, no ZIP): compact state — NEVER a
+  //     fallback that dumps every property in the database onto the map.
+  if (areaStatus !== "loading" && areas.length === 0) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#F8FAFC" }}>
+        {header}
+        <View style={s.mapState} testID="map-no-area">
+          <Text style={s.stateTitle}>No property area available</Text>
+          <Text style={s.stateBody}>You don't have a canvass section or territory assigned yet. Ask your manager to assign you an area.</Text>
+        </View>
+      </View>
+    );
+  }
+
   const realStyle = buildMapStyle(cfg);            // null when config is not yet usable
   const mapStyle = realStyle || BASE_FALLBACK_STYLE; // map STILL mounts on a valid background style
   const camBounds = selectedArea
@@ -433,7 +472,7 @@ export default function MapScreen({ navigation }) {
 
   const { MapView, Camera, ShapeSource, CircleLayer, FillLayer, LineLayer, RasterSource, RasterLayer, VectorSource } = MapLibre;
   const fc = { type: "FeatureCollection", features: areaFeatures };
-  const polyFc = buildAllSectionsFC(sectionAreas.map((a) => ({ id: a.id, name: a.name, color: a.color, geometry: a.geometry })), selectedAreaId);
+  const polyFc = buildAllSectionsFC(polyAreas.map((a) => ({ id: a.id, name: a.name, color: a.color, geometry: a.geometry })), selectedAreaId);
   const secColor = (selectedArea && selectedArea.color) || C.brand;
   mountAttemptedRef.current = true;
 

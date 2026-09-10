@@ -1,5 +1,18 @@
 # RoofSpan — Product Requirements & Status
 
+## P0 — Field "My Area" Territory Scope + Default-Area Hierarchy (Austin/wrong-area + 8,554-property bug) — FIXED & VERIFIED (data/logic layer) (2026-06)
+- Device symptom (MapLibre confirmed working on Android): Field showed 8,554 properties, "No area assigned yet — showing your full property map", camera on Austin TX; Office correctly showed the Oklahoma territory.
+- ROOT CAUSE: `GET /api/mobile/map/properties` returned the ENTIRE map-safe DB with NO territory filter, and the client `filterFeaturesForArea(features, null)` returned ALL features when no area was selected; a sales/owner with no selectable area therefore saw every property and the camera fell back to `map-config.default_center` (Austin).
+- FIX (backend `routers/mobile.py`):
+  - New scope helper `_map_territory_scope(db,user)` → None (all active territories) for management AND for sales with no assigned canvass section; the section's territories for sales WITH assignments. (No `Territory.assigned_user_id` fabricated; full Property DETAIL auth stays separate.)
+  - `GET /api/mobile/map/properties?territory_id=|zip=` is now SCOPED + server-authoritative (403 if a sales rep requests an out-of-scope territory). Added coordinate-range validation (`_valid_lonlat`, rejects NaN/out-of-range) and `territory_id` on each feature. Never returns the whole DB.
+  - `GET /api/mobile/map/areas` now returns THREE kinds in default-priority order: `canvass_section` → `territory` (Office `Territory` + `Property.territory_id`, real polygon geometry, bounds, scoped count, id `territory:<uuid>`, ordered created_at DESC like Office) → `zip` (scoped to authorized territories).
+- FIX (mobile): `mapAreas.pickDefaultArea` priority = canvass_section > territory > zip > none (ZIP never overrides a Territory); `filterFeaturesForArea(_, null)` → [] (NEVER all). `MapScreen.js` loads properties PER SELECTED AREA from the scoped endpoint (canvass → `/canvass-sections/{id}/properties`, territory → `?territory_id=`, zip → `?zip=`), each with its own cache; draws the selected Territory boundary; header shows "Territory: X / Canvass: X / ZIP: X" with the scoped count; compact `map-no-area` state replaces the "showing full property map" fallback.
+- AUTHORIZATION RULE IMPLEMENTED (reported): sales WITH canvass section(s) → scoped to those territories; sales WITHOUT any section → active Office territories' map-safe layer (Priority-2 fallback); management → all. Canvass-section isolation unchanged (a rep never sees another rep's section).
+- MapLibre / Expo / RN NOT changed.
+- VERIFIED: backend pytest `test_mobile_map_properties.py` 9/9 + `test_mobile_map_areas.py` 9/9 (territory scoping, 403 isolation, Office/Field parity, invalid-coord exclusion, default-priority order); mobile node `map_areas.node.test.js` (priority, no-area→empty, scoped-loader wiring) + canvass/mapconfig green; live curl parity: territory `d076a49a` → mobile 20 features == Office 20, all `[lon,lat]` valid. Physical-device acceptance PENDING (user).
+
+
 ## P0 — Field Map Empty Pins/Polygons: Master Map Decoupled from Canvass (root cause) — FIXED & VERIFIED (data layer) (2026-06)
 - Device symptom: basemap renders but NO property pins and NO assigned canvass polygons for a sales user who HAS sections in Office.
 - Root cause: `GET /api/mobile/map/properties` derived the master map from canvass-section territories, so if a sales user's active-section assignment didn't resolve on the request path, BOTH the property map AND canvass came back empty (shared failure mode).

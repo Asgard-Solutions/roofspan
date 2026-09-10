@@ -13,7 +13,7 @@ from pydantic import BaseModel, field_validator
 from fastapi.responses import Response
 
 from db import get_db
-from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty
+from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey, User, CanvassSection, CanvassSectionProperty, Territory
 from models import MeasurementSet, MeasurementRevision
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from services.object_storage import put_object, get_object
@@ -601,19 +601,78 @@ async def _authorized_territory_ids(db: AsyncSession, user: User):
     return {t for t in rows if t is not None}
 
 
-@router.get("/map/properties")
-async def mobile_map_properties(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    """Full MAP-SAFE property GeoJSON for the Field 'My Area' master layer. This is the base business-data
-    layer and is INDEPENDENT of canvass assignments: it MUST NOT disappear because the user has no assigned
-    section, a section is inactive, or the canvass API fails. Every Field user (sales + management) sees the
-    full set of map-safe properties that have usable coordinates. Only map-safe fields are exposed here;
-    full property-detail authorization is enforced separately when a user opens a Property. Properties
-    without usable coordinates are excluded."""
+def _valid_lonlat(lng, lat) -> bool:
+    """Reject null / NaN / out-of-range coordinates so a bad row can never place a pin in the wrong
+    place or drag the camera to a fabricated location. GeoJSON order is [longitude, latitude]."""
+    try:
+        lng = float(lng); lat = float(lat)
+    except (TypeError, ValueError):
+        return False
+    if lng != lng or lat != lat:  # NaN
+        return False
+    return -180.0 <= lng <= 180.0 and -90.0 <= lat <= 90.0
+
+
+async def _map_territory_scope(db: AsyncSession, user: User):
+    """Territory ids a Field user may view on the map, or None = ALL active territories.
+
+    AUTHORIZATION RULE (reported in the completion notes):
+      - management (owner/admin/office/manager): None -> all active territories.
+      - sales WITH assigned active canvass section(s): ONLY those sections' territories.
+      - sales WITHOUT any assigned canvass section: None -> all active territories' MAP-SAFE layer.
+        (The product model has no Territory.assigned_user_id; we do NOT fabricate one. Full Property
+        DETAIL authorization remains separately enforced when a Property is actually opened.)"""
+    if not _sales_only(user):
+        return None
     rows = (await db.execute(
-        select(Property).where(Property.latitude.isnot(None), Property.longitude.isnot(None))
+        select(CanvassSection.territory_id).where(
+            CanvassSection.assigned_user_id == user.id, CanvassSection.active.is_(True))
     )).scalars().all()
+    ids = {t for t in rows if t is not None}
+    return ids or None
+
+
+async def _authorized_territories(db: AsyncSession, user: User):
+    """Active Territory records the Field user may see, ordered the SAME way Office orders them
+    (created_at DESC) so Field/Office agree on territory ordering/selection."""
+    scope = await _map_territory_scope(db, user)
+    stmt = select(Territory).where(Territory.active.is_(True))
+    if scope is not None:
+        stmt = stmt.where(Territory.id.in_(scope))
+    return (await db.execute(stmt.order_by(Territory.created_at.desc()))).scalars().all()
+
+
+@router.get("/map/properties")
+async def mobile_map_properties(
+    territory_id: str | None = Query(None),
+    zip: str | None = Query(None),
+    user: User = Depends(require_roles(*FIELD_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    """MAP-SAFE property GeoJSON for the Field 'My Area' layer, SCOPED to the selected area. Field never
+    downloads the whole database: the caller passes `territory_id` (Territory area) or `zip` (ZIP area);
+    a canvass section uses its own /canvass-sections/{id}/properties endpoint. Scope is server-authoritative
+    — a sales user can never widen past their authorized territories. Only map-safe fields are exposed here;
+    full property-detail authorization is enforced separately when a user opens a Property. Properties
+    without usable/valid coordinates are excluded. Coordinates use the SAME stored Property lat/lng Office
+    uses (no re-geocoding, no ZIP centroids, no lat/lng swap)."""
+    scope = await _map_territory_scope(db, user)  # None => all active territories, set => sales scope
+    stmt = select(Property).where(Property.latitude.isnot(None), Property.longitude.isnot(None))
+    if territory_id:
+        if scope is not None and territory_id not in {str(t) for t in scope}:
+            raise HTTPException(status_code=403, detail="You are not authorized for this territory")
+        stmt = stmt.where(Property.territory_id == territory_id)
+    else:
+        # No explicit territory: restrict to the caller's authorized territories (NEVER the full DB).
+        if scope is not None:
+            stmt = stmt.where(Property.territory_id.in_(scope))
+        if zip:
+            stmt = stmt.where(Property.zip_code == zip)
+    rows = (await db.execute(stmt)).scalars().all()
     features = []
     for p in rows:
+        if not _valid_lonlat(p.longitude, p.latitude):
+            continue
         last_visit = (await db.execute(
             select(Visit).where(Visit.property_id == p.id).order_by(Visit.visited_at.desc()).limit(1)
         )).scalars().first()
@@ -625,6 +684,7 @@ async def mobile_map_properties(user: User = Depends(require_roles(*FIELD_ROLES)
                 "property_type": p.property_type, "owner_occupied": p.owner_occupied,
                 "occupancy": ("owner" if p.owner_occupied is True else "tenant" if p.owner_occupied is False else "unknown"),
                 "zip_code": p.zip_code or None,
+                "territory_id": str(p.territory_id) if p.territory_id else None,
                 "last_outcome": last_visit.outcome if last_visit else None,
                 "last_visited_at": last_visit.visited_at.isoformat() if last_visit else None,
             },
@@ -693,17 +753,17 @@ def _geometry_coords(geom):
 
 @router.get("/map/areas")
 async def mobile_map_areas(user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    """Field-authorized area selector, server-authoritative. Two area kinds, unified in one list:
+    """Field-authorized area selector, server-authoritative. Three area kinds, unified in one list and
+    returned in DEFAULT-PRIORITY order (canvass_section, then territory, then zip):
       - type "canvass_section": the caller's ASSIGNED active sections (sales) or all active sections
-        (management). Carries the real stored GeoJSON geometry + polygon bounds.
-      - type "zip": Office-loaded ZIP property datasets the caller is authorized to work. A sales user
-        is scoped STRICTLY to properties inside their assigned territories; the ZIP's property_count and
-        bounds are computed from those in-scope properties ONLY (a ZIP that straddles the assignment
-        boundary is never widened). Management sees all ZIPs. ZIP has no stored polygon — bounds are
-        derived from member property coordinates (never a fabricated polygon)."""
+        (management). Real stored GeoJSON geometry + polygon bounds.
+      - type "territory": the same Office-managed Territory records (Territory + Property.territory_id).
+        Carries territory id/name/color, stored GeoJSON geometry, property_count and polygon bounds.
+      - type "zip": ZIP property datasets scoped to the caller's authorized territories. No stored polygon
+        — bounds derived from member property coordinates (never a fabricated polygon)."""
     areas = []
 
-    # Assigned/visible canvass sections → real polygon areas.
+    # 1) Assigned/visible canvass sections → real polygon areas (highest default priority).
     sections = await _visible_sections(db, user)
     for s in sections:
         count = (await db.execute(
@@ -716,26 +776,31 @@ async def mobile_map_areas(user: User = Depends(require_roles(*FIELD_ROLES)), db
             "bounds": _coords_bounds(_geometry_coords(s.geometry)),
         })
 
-    # ZIP areas — strictly scoped to the caller's authorized properties.
-    terr_ids = await _authorized_territory_ids(db, user)  # None => management (all), set => sales scope
-    zip_rows = []
-    if terr_ids is None:
-        zip_rows = (await db.execute(
-            select(Property.zip_code, Property.city, Property.longitude, Property.latitude)
-            .where(Property.latitude.isnot(None), Property.longitude.isnot(None))
-        )).all()
-    elif terr_ids:
-        zip_rows = (await db.execute(
-            select(Property.zip_code, Property.city, Property.longitude, Property.latitude)
-            .where(Property.latitude.isnot(None), Property.longitude.isnot(None),
-                   Property.territory_id.in_(terr_ids))
-        )).all()
-    # else: sales user with no assigned territory → no authorized ZIP datasets (strict).
+    # 2) Territories — same records/relationship Office uses; the Priority-2 default fallback.
+    territories = await _authorized_territories(db, user)
+    for t in territories:
+        count = (await db.execute(
+            select(func.count(Property.id)).where(
+                Property.territory_id == t.id, Property.latitude.isnot(None), Property.longitude.isnot(None))
+        )).scalar_one()
+        areas.append({
+            "type": "territory", "id": f"territory:{t.id}", "name": t.name, "color": t.color,
+            "territory_id": str(t.id), "geometry": t.geometry, "property_count": int(count),
+            "bounds": _coords_bounds(_geometry_coords(t.geometry)),
+        })
+
+    # 3) ZIP areas — strictly scoped to the caller's authorized territories.
+    scope = await _map_territory_scope(db, user)  # None => management (all), set => sales scope
+    zip_stmt = select(Property.zip_code, Property.city, Property.longitude, Property.latitude).where(
+        Property.latitude.isnot(None), Property.longitude.isnot(None))
+    if scope is not None:
+        zip_stmt = zip_stmt.where(Property.territory_id.in_(scope))
+    zip_rows = (await db.execute(zip_stmt)).all()
 
     groups = {}
     for zip_code, city, lng, lat in zip_rows:
         z = (zip_code or "").strip()
-        if not z:
+        if not z or not _valid_lonlat(lng, lat):
             continue
         g = groups.setdefault(z, {"coords": [], "cities": {}})
         g["coords"].append([lng, lat])

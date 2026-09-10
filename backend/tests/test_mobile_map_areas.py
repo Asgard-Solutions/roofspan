@@ -66,6 +66,7 @@ async def _seed():
             "rep": (str(rep.id), rep.email, "sales"),
             "rep_other": (str(rep_other.id), rep_other.email, "sales"),
             "sec": str(sec.id), "zip_in": zip_in, "zip_out": zip_out,
+            "terr_a": str(terr_a.id), "terr_b": str(terr_b.id),
         }
 
 
@@ -122,9 +123,55 @@ def test_sales_zip_is_strictly_scoped_and_bounds_from_in_scope_props_only():
 def test_sales_cannot_see_other_reps_section():
     areas = _areas(_tok(S["rep_other"]))
     assert not any(a["id"] == S["sec"] for a in areas), "a different rep must not see this section"
-    # rep_other has no assignment → no canvass areas and no authorized ZIPs (strict).
+    # rep_other has no assignment → no canvass areas at all (section isolation preserved).
     assert not any(a["type"] == "canvass_section" for a in areas)
-    assert not any(a["type"] == "zip" for a in areas), "unassigned rep gets no ZIP areas (strict auth)"
+    # AUTHORIZATION RULE: a sales rep with NO assigned canvass section falls back to Territories
+    # (the Priority-2 default). No Territory.assigned_user_id exists, so they see the active Office
+    # territories' map-safe layer (both terr_a + terr_b) instead of an empty screen.
+    terr_ids = {a["territory_id"] for a in areas if a["type"] == "territory"}
+    assert S["terr_a"] in terr_ids and S["terr_b"] in terr_ids, \
+        "unassigned rep falls back to the active Office territories (Priority-2 default)"
+
+
+def test_sales_with_section_sees_only_its_territory():
+    """A sales rep WITH an active section is scoped to that section's territory — they get the terr_a
+    territory area but NOT terr_b (server-authoritative scope)."""
+    areas = _areas(_tok(S["rep"]))
+    terr_ids = {a["territory_id"] for a in areas if a["type"] == "territory"}
+    assert S["terr_a"] in terr_ids, "assigned rep sees their section's territory as a selectable area"
+    assert S["terr_b"] not in terr_ids, "assigned rep must NOT see an out-of-scope territory"
+
+
+def test_territory_area_carries_geometry_bounds_and_scoped_count():
+    """Territory areas expose id/name/color, stored GeoJSON polygon, bounds, and a SCOPED property
+    count (only that territory's coord'd props) — the Priority-2 fallback the Field map fits to."""
+    areas = _areas(_tok(S["owner"]))
+    ta = next((a for a in areas if a["type"] == "territory" and a["territory_id"] == S["terr_a"]), None)
+    assert ta is not None, "management sees the terr_a territory area"
+    assert ta["id"] == f"territory:{S['terr_a']}", "territory area id is prefixed to avoid id collisions"
+    assert ta["geometry"] and ta["geometry"]["type"] == "Polygon", "territory carries its real polygon"
+    assert ta["bounds"] == [[0, 0], [10, 10]], "territory bounds computed from its polygon for fitBounds"
+    assert ta["property_count"] == 2, "terr_a has 2 coord'd props (p1, p2); scoped, not whole DB"
+
+
+def test_management_sees_both_territories():
+    areas = _areas(_tok(S["owner"]))
+    terr_ids = {a["territory_id"] for a in areas if a["type"] == "territory"}
+    assert S["terr_a"] in terr_ids and S["terr_b"] in terr_ids, "management sees all active territories"
+
+
+def test_default_priority_order_canvass_before_territory_before_zip():
+    """Server returns areas in default-priority order so the client's pickDefaultArea (canvass >
+    territory > zip) selects correctly."""
+    areas = _areas(_tok(S["rep"]))
+    kinds = [a["type"] for a in areas]
+    first_canvass = next((i for i, k in enumerate(kinds) if k == "canvass_section"), None)
+    first_terr = next((i for i, k in enumerate(kinds) if k == "territory"), None)
+    first_zip = next((i for i, k in enumerate(kinds) if k == "zip"), None)
+    assert first_canvass is not None and first_terr is not None
+    assert first_canvass < first_terr, "canvass_section areas come before territory areas"
+    if first_zip is not None:
+        assert first_terr < first_zip, "territory areas come before zip areas"
 
 
 def test_management_sees_all_sections_and_both_zips():
