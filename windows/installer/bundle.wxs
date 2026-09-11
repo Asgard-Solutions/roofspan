@@ -84,18 +84,17 @@
                   InstallArguments="/silent /install"
                   Compressed="yes" />
 
-      <!-- 2a) PostgreSQL PREP + VALIDATION (RoofSpan-owned helper, runs BEFORE the EDB installer). The
-               logic lives in the CHECKED-IN, BUNDLE-EMBEDDED script Prepare-PostgreSQL.ps1 (a Burn
-               <Payload> with an explicit Name), NOT inline: WiX Burn formats '[...]' tokens in
-               InstallArguments and would strip PowerShell type accelerators ([string], [Convert],
-               [Security.Cryptography...], [IO.File], [Text.Encoding]) and corrupt the command (the
-               confirmed clean-computer 0x1 failure). Only the legitimate [PgSuperPassword] Burn variable
-               remains a bracket token here; it is Hidden (masked in logs) and, when empty, the script
-               generates a strong random password itself. The script also validates port 5432, detects
-               stale/incomplete or unrelated installs, and HALTS (non-zero, Vital) with an actionable
-               message rather than damaging existing data. Burn extracts the ExePackage payloads into the
-               package working directory and runs powershell.exe there, so the script is referenced by its
-               payload name; the payload SourceFile is anchored to this bundle's directory. -->
+      <!-- 2a) PostgreSQL PREP + VALIDATION (RoofSpan-owned helper). ALWAYS runs (no InstallCondition) so it
+               can validate/decide in every state, and it HALTS (non-zero, Vital) before the EDB installer
+               when it is not safe to proceed. The logic lives in the CHECKED-IN, BUNDLE-EMBEDDED script
+               Prepare-PostgreSQL.ps1 (a Burn <Payload> with an explicit Name), NOT inline: WiX Burn formats
+               '[...]' tokens in InstallArguments and would strip PowerShell type accelerators ([string],
+               [Convert], [Security.Cryptography...], [IO.File], [Text.Encoding]) and corrupt the command
+               (the confirmed clean-computer 0x1 failure). The script is invoked by its ABSOLUTE cached path
+               via the legitimate Burn engine variable [WixBundleExecutePackageCacheFolder] (NOT a relative
+               path - Burn's per-package working directory is not guaranteed, which caused the
+               0x80070490 ERROR_NOT_FOUND launch failure). [PgSuperPassword] stays Hidden (masked in logs)
+               and, when empty, the script generates a strong random password itself. -->
       <ExePackage Id="PostgreSQLPasswordPrep"
                   CacheId="RoofSpanPostgreSQLPasswordPrep"
                   DisplayName="RoofSpan PostgreSQL preparation"
@@ -103,31 +102,34 @@
                   PerMachine="yes"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
-                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Prepare-PostgreSQL.ps1 -PgSuperPassword &quot;[PgSuperPassword]&quot;"
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[WixBundleExecutePackageCacheFolder]\Prepare-PostgreSQL.ps1&quot; -PgSuperPassword &quot;[PgSuperPassword]&quot;"
                   Compressed="yes">
         <Payload Name="Prepare-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Prepare-PostgreSQL.ps1" />
       </ExePackage>
 
       <!-- 2b) PostgreSQL prerequisite = the REAL EDB installer, EMBEDDED in RoofSpanSetup.exe. Reads the
                generated superuser password from the option file; unattended flags + service name preserved.
-               PerMachine + unattended => a machine-wide service under elevation. Explicit version-scoped
-               CacheId prevents collisions with any other embedded executable. -->
+               PerMachine + unattended => a machine-wide service under elevation. Vital="no" ON PURPOSE: a
+               failure here must NOT halt the chain before the cleanup step, so the transient plaintext
+               option file is always removed. The subsequent Vital PostgreSQLVerify step re-imposes the
+               "PostgreSQL must be healthy before Office" requirement and stops with an actionable error if
+               EDB actually failed. Skipped when a working RoofSpan-managed instance already exists. -->
       <ExePackage Id="PostgreSQLPrereq"
                   CacheId="RoofSpanPostgreSQLPrereq-$(var.Version)"
                   DisplayName="PostgreSQL (RoofSpan prerequisite)"
                   SourceFile="$(var.PostgresInstaller)"
                   PerMachine="yes"
                   Permanent="yes"
-                  Vital="yes"
+                  Vital="no"
                   InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
                   DetectCondition="PgServicePresent AND PgSecretPresent"
                   InstallArguments="--optionfile &quot;C:\ProgramData\RoofSpan\identity\pg_install.optionfile&quot; --mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL"
                   Compressed="yes" />
 
-      <!-- 2c) Remove the transient option file (the DPAPI-protected pg_super.bin remains for first-run).
-               Also a BUNDLE-EMBEDDED script <Payload> (Cleanup-PostgreSQL.ps1) rather than inline, for the
-               same Burn-formatting safety and to keep both PostgreSQL helpers uniform and regression-tested. -->
+      <!-- 2c) ALWAYS-run cleanup: remove the transient plaintext option file (the DPAPI-protected
+               pg_super.bin remains for first-run). It runs even after an EDB FAILURE (because EDB is
+               non-vital), so a failed PostgreSQL install never leaves the plaintext superuser password on
+               disk. Bundle-embedded script <Payload>, invoked by absolute cached path. -->
       <ExePackage Id="PostgreSQLPasswordCleanup"
                   CacheId="RoofSpanPostgreSQLPasswordCleanup"
                   DisplayName="RoofSpan PostgreSQL cleanup"
@@ -135,10 +137,27 @@
                   PerMachine="yes"
                   Permanent="yes"
                   Vital="no"
-                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
-                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Cleanup-PostgreSQL.ps1"
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[WixBundleExecutePackageCacheFolder]\Cleanup-PostgreSQL.ps1&quot;"
                   Compressed="yes">
         <Payload Name="Cleanup-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Cleanup-PostgreSQL.ps1" />
+      </ExePackage>
+
+      <!-- 2d) HEALTH GATE (Vital): before Office is installed, prove the RoofSpan-managed PostgreSQL is
+               actually usable - the RoofSpanPostgreSQL service exists, the DPAPI credential authenticates
+               over TCP on 127.0.0.1:5432, and the server version is compatible. This validates BOTH the
+               fresh-install path (EDB succeeded) AND the skip path (a pre-existing managed install is
+               genuinely healthy, not just present). It halts with an actionable error otherwise, so Office
+               is never installed against a missing or broken database. -->
+      <ExePackage Id="PostgreSQLVerify"
+                  CacheId="RoofSpanPostgreSQLVerify"
+                  DisplayName="RoofSpan PostgreSQL health check"
+                  SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
+                  PerMachine="yes"
+                  Permanent="yes"
+                  Vital="yes"
+                  InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[WixBundleExecutePackageCacheFolder]\Verify-PostgreSQL.ps1&quot;"
+                  Compressed="yes">
+        <Payload Name="Verify-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Verify-PostgreSQL.ps1" />
       </ExePackage>
 
       <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. perMachine (see RoofSpan.wxs Scope). -->

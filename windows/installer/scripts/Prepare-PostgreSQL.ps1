@@ -6,13 +6,15 @@
   such as [string], [Convert], [Security.Cryptography...], [Text.Encoding], [IO.File] and corrupts the
   command. Payload file contents are NOT formatted by Burn.
 
-  This script decides whether a fresh PostgreSQL install is safe and prepares its credentials. Burn only
-  runs it (and the EDB installer) when a working RoofSpan-managed PostgreSQL is NOT already present
-  (NOT (PgServicePresent AND PgSecretPresent)). It handles these states explicitly:
+  This script decides whether a fresh PostgreSQL install is safe and prepares its credentials. It ALWAYS
+  runs (no InstallCondition) so it can reason about every state, and it HALTS (non-zero, Vital) before the
+  EDB installer when it is not safe to proceed. It handles these states explicitly:
 
     - Absent (clean machine)              -> generate/honor the superuser password + write the option
                                              file so the EDB installer runs.
-    - Working RoofSpan-managed present    -> Burn already skipped this step; if reached, no-op exit 0.
+    - Working RoofSpan-managed present    -> no-op exit 0 (the separate Vital Verify-PostgreSQL.ps1 step
+                                             then proves the server is actually healthy - version,
+                                             credentials, connectivity - before Office is installed).
     - Unrelated PostgreSQL on port 5432   -> STOP (exit 1) with an actionable message. RoofSpan never
                                              stops, reconfigures, or modifies another application's
                                              service or database.

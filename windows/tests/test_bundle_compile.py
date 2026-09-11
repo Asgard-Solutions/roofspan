@@ -252,7 +252,8 @@ def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
     bundle = _bundle_text()
     assert 'SourceFile="$(sys.SOURCEFILEDIR)scripts\\Prepare-PostgreSQL.ps1"' in bundle
     assert 'Name="Prepare-PostgreSQL.ps1"' in bundle
-    assert '-File Prepare-PostgreSQL.ps1' in bundle
+    # Launched by ABSOLUTE cached path (Burn's per-package working directory is not reliable).
+    assert '-File &quot;[WixBundleExecutePackageCacheFolder]\\Prepare-PostgreSQL.ps1&quot;' in bundle
     assert 'SourceFile="$(var.PostgresInstaller)"' in bundle
     assert "--optionfile" in bundle
     assert "--mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL" in bundle
@@ -287,10 +288,61 @@ def test_bundle_detects_managed_install_by_service_and_secret_and_is_permachine(
     assert 'InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"' in bundle
     assert 'DetectCondition="PgServicePresent AND PgSecretPresent"' in bundle
     # Every package is PerMachine so a double-click elevates (UAC) without "Run as administrator".
-    for pkg_id in ("WebView2Runtime", "PostgreSQLPasswordPrep", "PostgreSQLPrereq", "PostgreSQLPasswordCleanup"):
+    for pkg_id in ("WebView2Runtime", "PostgreSQLPasswordPrep", "PostgreSQLPrereq",
+                   "PostgreSQLPasswordCleanup", "PostgreSQLVerify"):
         tag = re.search(rf'<ExePackage\b[^>]*\bId="{pkg_id}".*?(?:/>|</ExePackage>)', bundle, re.DOTALL)
         assert tag, f"missing ExePackage {pkg_id}"
         assert 'PerMachine="yes"' in tag.group(0), f"{pkg_id} must be PerMachine"
+
+
+def _exepackage_tag(pkg_id):
+    bundle = _bundle_text()
+    tag = re.search(rf'<ExePackage\b[^>]*\bId="{pkg_id}".*?(?:/>|</ExePackage>)', bundle, re.DOTALL)
+    assert tag, f"missing ExePackage {pkg_id}"
+    return tag.group(0)
+
+
+def test_edb_is_non_vital_so_cleanup_runs_then_a_vital_verify_gates_office():
+    """A failed EDB install must NOT halt before cleanup (so the plaintext option file is always removed),
+    and a Vital health check must re-impose 'PostgreSQL healthy before Office'."""
+    bundle = _bundle_text()
+    # EDB installer is non-vital.
+    assert 'Vital="no"' in _exepackage_tag("PostgreSQLPrereq")
+    # Cleanup runs ALWAYS (no InstallCondition) and is non-vital, so it executes even after an EDB failure.
+    cleanup = _exepackage_tag("PostgreSQLPasswordCleanup")
+    assert 'InstallCondition' not in cleanup, "cleanup must run unconditionally so it fires after an EDB failure"
+    assert 'Vital="no"' in cleanup
+    # Verify is Vital and runs after cleanup and before the Office MSI.
+    verify = _exepackage_tag("PostgreSQLVerify")
+    assert 'Vital="yes"' in verify
+    assert bundle.index('Id="PostgreSQLPrereq"') < bundle.index('Id="PostgreSQLPasswordCleanup"') \
+        < bundle.index('Id="PostgreSQLVerify"') < bundle.index('Id="RoofSpanOfficeMsi"')
+
+
+def test_all_powershell_helpers_launch_by_absolute_cache_folder_path():
+    """prep, cleanup, and verify must invoke their script by the absolute [WixBundleExecutePackageCacheFolder]
+    path - never a brittle relative -File that depends on Burn's per-package working directory."""
+    for pkg_id, script in (
+        ("PostgreSQLPasswordPrep", "Prepare-PostgreSQL.ps1"),
+        ("PostgreSQLPasswordCleanup", "Cleanup-PostgreSQL.ps1"),
+        ("PostgreSQLVerify", "Verify-PostgreSQL.ps1"),
+    ):
+        tag = _exepackage_tag(pkg_id)
+        assert f'-File &quot;[WixBundleExecutePackageCacheFolder]\\{script}&quot;' in tag, \
+            f"{pkg_id} must launch {script} by absolute cached path"
+        assert f'Name="{script}"' in tag
+
+
+def test_verify_script_checks_service_credentials_and_version():
+    verify = (INSTALLER / "scripts" / "Verify-PostgreSQL.ps1").read_text(encoding="utf-8")
+    assert "RoofSpanPostgreSQL" in verify
+    assert "pg_super.bin" in verify and "ProtectedData" in verify and "LocalMachine" in verify
+    assert "psql" in verify
+    assert "server_version_num" in verify
+    assert "127.0.0.1" in verify and "5432" in verify
+    assert "ROOFSPAN-PREREQ-ERROR" in verify and "exit 1" in verify
+    # The decrypted password must not be echoed; PGPASSWORD is cleared after use.
+    assert "$env:PGPASSWORD = ''" in verify
 
 
 # The confirmed clean-computer 0x1 failure: Burn formats '[...]' tokens in InstallArguments, stripping
@@ -306,14 +358,17 @@ def test_prep_install_arguments_have_no_burn_formatting_type_expressions():
     args = _prep_install_arguments()
     for trap in _BURN_FORMATTING_TRAPS:
         assert trap not in args, f"PostgreSQLPasswordPrep InstallArguments reintroduced a Burn-formatted expression: {trap}"
-    # The ONLY legitimate bracket token is the Hidden [PgSuperPassword] Burn variable.
-    brackets = re.findall(r"\[[^\]]*\]", args)
-    assert brackets == ["[PgSuperPassword]"], f"unexpected bracket tokens in InstallArguments: {brackets}"
-    assert "-File Prepare-PostgreSQL.ps1" in args
+    # The legitimate bracket tokens are the Hidden [PgSuperPassword] variable and the Burn engine's
+    # absolute per-package cache folder used to locate the script (an absolute launch path, NOT a
+    # PowerShell type accelerator).
+    brackets = sorted(set(re.findall(r"\[[^\]]*\]", args)))
+    assert brackets == ["[PgSuperPassword]", "[WixBundleExecutePackageCacheFolder]"], \
+        f"unexpected bracket tokens in InstallArguments: {brackets}"
+    assert "-File &quot;[WixBundleExecutePackageCacheFolder]\\Prepare-PostgreSQL.ps1&quot;" in args
 
 
 def test_no_exepackage_install_arguments_use_inline_command_script():
-    """Neither PowerShell helper may embed a program via -Command; both must invoke a -File payload."""
+    """Every PowerShell helper must invoke a -File payload (never inline -Command) by absolute cache path."""
     bundle = _bundle_text()
     for tag in re.findall(r"<ExePackage\b[^>]*?(?:/>|>.*?</ExePackage>)", bundle, re.DOTALL):
         if "powershell.exe" not in tag:
@@ -322,17 +377,24 @@ def test_no_exepackage_install_arguments_use_inline_command_script():
         assert args, f"powershell ExePackage without InstallArguments:\n{tag}"
         assert "-Command" not in args.group(1), "powershell helper must use -File payload, not inline -Command"
         assert "-File " in args.group(1)
+        assert "[WixBundleExecutePackageCacheFolder]" in args.group(1), \
+            f"powershell ExePackage must launch its script by absolute cached path:\n{tag}"
         assert re.search(r'<Payload\s+Name="[A-Za-z0-9\-]+\.ps1"\s+SourceFile="\$\(sys\.SOURCEFILEDIR\)scripts\\[A-Za-z0-9\-]+\.ps1"\s*/>', tag), \
             f"powershell ExePackage does not carry its .ps1 as a directory-anchored embedded Payload:\n{tag}"
 
 
 def test_prep_and_cleanup_scripts_are_committed_and_ascii():
-    for name in ("Prepare-PostgreSQL.ps1", "Cleanup-PostgreSQL.ps1"):
+    import re as _re
+    for name in ("Prepare-PostgreSQL.ps1", "Cleanup-PostgreSQL.ps1", "Verify-PostgreSQL.ps1"):
         path = INSTALLER / "scripts" / name
         assert path.exists(), f"missing installer script payload: {name}"
         raw = path.read_bytes()
         assert all(b < 128 for b in raw), f"{name} must be ASCII"
-        assert b"password" not in raw.lower() or b"superpassword" in raw.lower()
+        # No hardcoded credential: reject any quoted password LITERAL (comments/messages may say "password";
+        # the EDB option key is built by concatenation, and PGPASSWORD is only ever set to a variable or '').
+        text = raw.decode("ascii")
+        assert not _re.search(r'(?i)password\s*=\s*["\'][^"\'\n]+["\']', text), \
+            f"{name} appears to contain a hardcoded password literal"
 
 
 def test_cleanup_script_preserves_identity_secret():
