@@ -345,6 +345,38 @@ def test_verify_script_checks_service_credentials_and_version():
     assert "$env:PGPASSWORD = ''" in verify
 
 
+def test_verify_requires_transient_option_file_removed_before_office():
+    """The Vital verify gate must refuse to let Office proceed while the plaintext option file remains."""
+    verify = (INSTALLER / "scripts" / "Verify-PostgreSQL.ps1").read_text(encoding="utf-8")
+    assert "pg_install.optionfile" in verify
+    # The option-file check must come before the service/version checks (fail fast on a lingering secret).
+    assert verify.index("pg_install.optionfile") < verify.index("server_version_num")
+
+
+def test_cleanup_reports_deletion_failure_and_confirms_removal():
+    cleanup = (INSTALLER / "scripts" / "Cleanup-PostgreSQL.ps1").read_text(encoding="utf-8")
+    code = cleanup.split("#>")[-1]
+    assert "ROOFSPAN-PREREQ-ERROR" in code and "exit 1" in code, "cleanup must REPORT a deletion failure"
+    # It must re-check Test-Path AFTER Remove-Item to confirm the file is actually gone.
+    assert code.index("Remove-Item") < code.rindex("Test-Path"), "cleanup must confirm removal after deleting"
+    # The removal must NOT be silently swallowed: strict error handling + try/catch that reports.
+    assert "$ErrorActionPreference = 'Stop'" in code
+    assert "catch" in code, "cleanup must catch and report a deletion failure"
+
+
+def test_all_prereq_scripts_write_a_start_breadcrumb():
+    """Each helper writes a durable breadcrumb so a post-mortem can establish it actually STARTED (Burn
+    does not capture an ExePackage's stdout)."""
+    for name, marker in (
+        ("Prepare-PostgreSQL.ps1", "PREP-START"),
+        ("Cleanup-PostgreSQL.ps1", "CLEANUP-START"),
+        ("Verify-PostgreSQL.ps1", "VERIFY-START"),
+    ):
+        text = (INSTALLER / "scripts" / name).read_text(encoding="utf-8")
+        assert "prereq-diag.log" in text, f"{name} must write the diagnostic breadcrumb"
+        assert marker in text, f"{name} must record its {marker} breadcrumb"
+
+
 # The confirmed clean-computer 0x1 failure: Burn formats '[...]' tokens in InstallArguments, stripping
 # PowerShell type accelerators. These MUST NOT reappear inside any ExePackage InstallArguments.
 _BURN_FORMATTING_TRAPS = [

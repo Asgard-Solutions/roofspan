@@ -38,6 +38,18 @@ $pgSuperBin  = Join-Path $identityDir 'pg_super.bin'
 $optionFile  = Join-Path $identityDir 'pg_install.optionfile'
 $serviceName = 'RoofSpanPostgreSQL'
 $pgPort      = 5432
+$diagLog     = 'C:\ProgramData\RoofSpan\prereq-diag.log'
+
+function Write-Diag([string]$m) {
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $diagLog) | Out-Null
+        Add-Content -Path $diagLog -Value ((Get-Date).ToUniversalTime().ToString('o') + ' ' + $m)
+    } catch {}
+}
+
+# Durable breadcrumb so a post-mortem can establish that PowerShell + this script actually STARTED
+# (Burn does not capture an ExePackage's stdout, so this file is the reliable "did it run" signal).
+Write-Diag 'PREP-START'
 
 function Remove-OptionFileQuietly {
     if (Test-Path $optionFile) { Remove-Item -Force $optionFile -ErrorAction SilentlyContinue }
@@ -46,6 +58,7 @@ function Remove-OptionFileQuietly {
 function Stop-WithError([string]$message) {
     # Never leave a transient plaintext credential behind on a handled failure path.
     Remove-OptionFileQuietly
+    Write-Diag 'PREP-STOP'
     Write-Host "ROOFSPAN-PREREQ-ERROR: $message"
     exit 1
 }
@@ -57,6 +70,7 @@ if ($svc) {
     if ($secretPresent) {
         # Healthy RoofSpan-managed install; nothing to prepare (Burn normally skips this step entirely).
         Write-Host "RoofSpan-managed PostgreSQL service is present and owned by RoofSpan; skipping preparation."
+        Write-Diag 'PREP-END-SKIP-MANAGED'
         exit 0
     }
     Stop-WithError ("A '$serviceName' service already exists but the RoofSpan credential " +
@@ -114,4 +128,5 @@ try {
     Stop-WithError ("PostgreSQL preparation failed: " + $_.Exception.Message)
 }
 
+Write-Diag 'PREP-END-OK'
 exit 0

@@ -19,14 +19,34 @@ $ErrorActionPreference = 'Stop'
 
 $identityDir = 'C:\ProgramData\RoofSpan\identity'
 $pgSuperBin  = Join-Path $identityDir 'pg_super.bin'
+$optionFile  = Join-Path $identityDir 'pg_install.optionfile'
 $serviceName = 'RoofSpanPostgreSQL'
 $pgHost      = '127.0.0.1'
 $pgPort      = 5432
 $minVersion  = 130000   # server_version_num floor (PostgreSQL 13); RoofSpan ships and supports newer.
+$diagLog     = 'C:\ProgramData\RoofSpan\prereq-diag.log'
+
+function Write-Diag([string]$m) {
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $diagLog) | Out-Null
+        Add-Content -Path $diagLog -Value ((Get-Date).ToUniversalTime().ToString('o') + ' ' + $m)
+    } catch {}
+}
 
 function Stop-WithError([string]$message) {
+    Write-Diag 'VERIFY-STOP'
     Write-Host "ROOFSPAN-PREREQ-ERROR: $message"
     exit 1
+}
+
+Write-Diag 'VERIFY-START'
+
+# 0) The transient plaintext option file MUST be gone before Office proceeds. This enforces cleanup even
+#    if the (non-vital) cleanup step failed or was skipped, so the plaintext superuser password is never
+#    left on disk when Office installs.
+if (Test-Path $optionFile) {
+    Stop-WithError ("the transient PostgreSQL option file ($optionFile) still exists - it holds the " +
+        "plaintext superuser password and cleanup did not remove it. Delete it and re-run RoofSpanSetup.exe.")
 }
 
 # 1) The RoofSpan-managed service must exist. If not, the EDB installer did not produce it.
@@ -88,4 +108,5 @@ if ($verNum -lt $minVersion) {
 }
 
 Write-Host "RoofSpan PostgreSQL health check passed (server_version_num=$verNum)."
+Write-Diag 'VERIFY-END-OK'
 exit 0
