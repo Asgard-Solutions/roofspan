@@ -1,6 +1,16 @@
 # RoofSpan — Product Requirements & Status
 
 
+## P0 — Windows Installer: burn-prep-runtime harness fix (WiX stdout leak) + classifier correctness (2026-06)
+- WINDOWS EVIDENCE (latest run): PostgreSQL preparation now STARTS and COMPLETES on Windows - breadcrumb PREP-END-OK, package exit 0x0, Burn exit 0x0. The prerequisite step itself is proven working. The remaining failure was in the TEST HARNESS, after prep.
+- ROOT CAUSE (harness, not installer): `Invoke-Prep` ran `wix build ... -o $prepSetup` WITHOUT redirecting stdout, so WiX's build messages leaked into the function's PowerShell output stream and were concatenated with the returned `$optPw`. `$got` became `[wix text..., password]`, so the (correct) supplied-password equality check failed.
+- FIX (test harness only): capture all `wix build` streams to `prep-wixbuild.log`/`cleanup-wixbuild.log` (preserved in the diagnostics artifact) with `*>`, check `$LASTEXITCODE` immediately; `Invoke-Prep` now emits EXACTLY one string (`Write-Output $optPw`); new `Assert-SinglePassword` asserts output count == 1 AND type `[string]` BEFORE comparing; the password-equality assertion is kept intact; neither password is printed (only lengths, on mismatch). Supplied + generated + cleanup paths all still run.
+- CLASSIFIER CORRECTED: (a) a helper `*-END-OK` + package exit 0 => the prerequisite COMPLETED; look at subsequent harness assertions, not the script/launch; (b) PREP-START alone does NOT establish where the failure occurred; (c) a MISSING breadcrumb is INCONCLUSIVE (the breadcrumb writer suppresses its own errors via try/catch), so it is not proof the script never ran - decide from the wix build log, Burn log + package exit code.
+- LAUNCH-CHANGE FRAMING: kept the production absolute-path launch (`[WixBundleExecutePackageCacheFolder]`) as a robustness contract; bundle.wxs comment no longer attributes the earlier 0x80070490 SOLELY to relative paths (that cause was never isolated).
+- Files: .github/workflows/windows-build-scripts.yml, windows/installer/bundle.wxs (comment).
+- VALIDATION here (Linux): windows/tests = 128 passed, 5 skipped; installer tests all pass; same 3 pre-existing unrelated failures. YAML parses. Windows re-run of burn-prep-runtime (supplied/generated/cleanup) still PENDING on GitHub Actions. Outstanding acceptance checks retained: clean-machine full install + WebView2-absent offline (manual clean-VM).
+
+
 ## P0 — Windows Installer: diagnostics + cleanup-enforcement refinements (2026-06)
 - DIAGNOSTICS / LOG PRESERVATION: `burn-prep-runtime` now preserves the generated `.wxs`, built test `.exe`, Burn `/log` files, %TEMP% Burn engine logs, and the prereq breadcrumb as an uploaded artifact (`actions/upload-artifact`, `if: always()`) - including failures BEFORE package execution. `clean-machine-full-install` uploads `setup.burn.log`, ProgramData logs, and the breadcrumb.
 - BOOTSTRAPPER PARITY: the `burn-prep-runtime` test bundle now MIRRORS the production BA - it reads `Theme=`/`LicenseUrl=` from `bundle.wxs` (`hyperlinkLicense`) and uses the SAME values (was `Theme="none"`), so a BA-startup/elevation difference can't mask a real defect.
