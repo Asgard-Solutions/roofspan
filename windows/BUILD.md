@@ -19,9 +19,14 @@ do NOT need to activate `.venv`, manually run `pip`/`yarn`, or change PowerShell
   The build scripts automatically use `.\.venv\Scripts\pyinstaller.exe` - do NOT activate `.venv`.
   build_exes.ps1 also auto-installs pywin32 into that env if missing (the three services are real
   pywin32-hosted Windows SCM services, built ONEDIR: services\<name>\<name>.exe + \_internal\).
-- Prerequisite installers (not committed):
-  - PostgreSQL: `D:\AsgardSolutions\Prerequisites\PostgreSQL\postgresql-16.14-2-windows-x64.exe`
-  - WebView2:   `D:\AsgardSolutions\Prerequisites\WebView2\MicrosoftEdgeWebview2Setup.exe`
+- Prerequisite installers (not committed). Both are embedded into RoofSpanSetup.exe so the customer never
+  downloads anything at install time:
+  - PostgreSQL (EDB silent installer): `D:\AsgardSolutions\Prerequisites\PostgreSQL\postgresql-16.14-2-windows-x64.exe`
+  - WebView2 (FULL Evergreen Standalone x64 installer, NOT the download bootstrapper):
+    `D:\AsgardSolutions\Prerequisites\WebView2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe`
+    Download it from https://developer.microsoft.com/microsoft-edge/webview2/ → "Evergreen Standalone
+    Installer" → x64 (stable permalink: https://go.microsoft.com/fwlink/?linkid=2124701). The small
+    `MicrosoftEdgeWebview2Setup.exe` download bootstrapper is NOT accepted (it needs internet at install).
 
 ## Canonical clean build
 ```powershell
@@ -45,7 +50,7 @@ $Version = (Get-Content ..\VERSION -Raw).Trim()
   -Version $Version `
   -StageDir ..\..\_stage `
   -PostgresInstaller "D:\AsgardSolutions\Prerequisites\PostgreSQL\postgresql-16.14-2-windows-x64.exe" `
-  -WebView2Bootstrapper "D:\AsgardSolutions\Prerequisites\WebView2\MicrosoftEdgeWebview2Setup.exe"
+  -WebView2StandaloneInstaller "D:\AsgardSolutions\Prerequisites\WebView2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 ```
 
 `build.ps1` rejects a `-Version` that does not equal `windows\VERSION`. Change the checked-in version
@@ -74,14 +79,21 @@ Select-Object FullName,LastWriteTime,Length
     the binary does not contain the hosted installation-id v2 contract, canonical identity endpoint, and
     canonical `/api/relay/installation` route.
 - `build.ps1`
-  - Requires `-StageDir`, `-PostgresInstaller`, `-WebView2Bootstrapper`; validates WiX, the full staged
-    payload, and both prerequisite installers before building.
+  - Requires `-StageDir`, `-PostgresInstaller`, `-WebView2StandaloneInstaller`; validates WiX, the full
+    staged payload, and both prerequisite installers before building.
   - Re-runs the Relay connector build-info probe and refuses an old `_stage`, a mismatched source SHA, or
     a version that differs from `windows\VERSION`.
+  - Builds into a clean isolated folder and checks native exit codes after MSI + bundle compile and after
+    signing, so a failed rebuild can never publish or copy an older installer as the new output. The
+    stable `RoofSpanSetup.exe` is refreshed only on full success, and the build prints the release
+    version, artifact size, and SHA-256 so the exact file under test is identifiable.
   - Produces the MSI, the versioned `RoofSpanSetup-<ver>.exe` Burn bundle, and `RoofSpanSetup.exe`.
-- Installer chain (`bundle.wxs`): WebView2 Runtime (skipped if already installed) -> PostgreSQL (skipped
-  if already installed) -> RoofSpan Office MSI. Both prerequisites are `Permanent` (never removed on
-  RoofSpan uninstall), so existing customer machines are not needlessly reinstalled.
+- Installer chain (`bundle.wxs`): every package is PerMachine (double-click elevates via UAC). WebView2
+  Evergreen Standalone (skipped if already installed) -> PostgreSQL prep + validation -> EDB PostgreSQL
+  (skipped only when a working RoofSpan-managed instance is present, detected via BOTH the
+  RoofSpanPostgreSQL service AND the RoofSpan pg_super.bin credential) -> option-file cleanup -> RoofSpan
+  Office MSI. Both prerequisites are `Permanent` (never removed on RoofSpan uninstall), so existing
+  customer machines are not needlessly reinstalled.
 
 ## Relay connector verification
 After installation, this command must report the build SHA used for the installer, the current version,

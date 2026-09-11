@@ -70,7 +70,7 @@ def _make_payloads(outdir: Path):
     return msi, pg, wv
 
 
-def _run_wix_build(outdir: Path):
+def _run_wix_build(outdir: Path, cwd: Path | None = None):
     import os
 
     msi, pg, wv = _make_payloads(outdir)
@@ -94,7 +94,7 @@ def _run_wix_build(outdir: Path):
         "-d",
         f"PostgresInstaller={pg}",
         "-d",
-        f"WebView2Bootstrapper={wv}",
+        f"WebView2StandaloneInstaller={wv}",
         "-ext",
         "WixToolset.BootstrapperApplications.wixext",
         "-ext",
@@ -102,7 +102,7 @@ def _run_wix_build(outdir: Path):
         "-o",
         str(outdir / "RoofSpanSetup.exe"),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(cwd) if cwd else None)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
@@ -113,7 +113,7 @@ def test_burn_bundle_compiles():
         rc, out = _run_wix_build(outdir)
 
         assert "WIX0010" not in out, f"typed Variable without Value regressed:\n{out}"
-        assert "'[WebView2Bootstrapper]'" not in out
+        assert "'[WebView2StandaloneInstaller]'" not in out
         assert "'[PostgresInstaller]'" not in out
         assert "WIX8000" not in out, f"Burn package cache identity collision:\n{out}"
 
@@ -124,6 +124,22 @@ def test_burn_bundle_compiles():
             # WiX payload binding is unsupported off Windows. We still require preprocessing/compile to
             # reach that boundary without an authoring regression.
             assert "WIX0150" not in out, f"preprocessor aborted the compile:\n{out}"
+
+
+@pytest.mark.skipif(WIX is None, reason="wix CLI not installed; authoritative compile runs in Windows CI")
+def test_bundle_compiles_from_repo_root_and_installer_dir():
+    """The script payloads are anchored to the bundle's own directory ($(sys.SOURCEFILEDIR)), so the
+    bundle must resolve them and compile identically whether invoked from the repo root or installer\\.
+    The previous relative 'scripts\\...' payload path caused WIX0103 (file not found) from the repo root."""
+    repo_root = WINDOWS.parent
+    for cwd in (repo_root, INSTALLER):
+        with tempfile.TemporaryDirectory() as td:
+            outdir = Path(td)
+            _rc, out = _run_wix_build(outdir, cwd=cwd)
+            assert "WIX0103" not in out, f"payload file not found when building from {cwd}:\n{out}"
+            assert "WIX0150" not in out, f"preprocessor aborted from {cwd}:\n{out}"
+            if platform.system() == "Windows":
+                assert (outdir / "RoofSpanSetup.exe").exists(), f"bundle did not build from {cwd}:\n{out}"
 
 
 def _build_fake_stage(stage: Path):
@@ -231,13 +247,50 @@ def test_postgres_step_generates_secure_password_and_uses_real_edb_installer():
     assert "IsNullOrWhiteSpace($pw)" in script
     assert "ProtectedData" in script and "LocalMachine" in script
     assert "pg_install.optionfile" in script and "superpassword=" in script
-    # The bundle carries the script as an embedded payload and still runs the REAL EDB installer.
+    # The bundle carries the script as an embedded, directory-anchored payload with an explicit Name and
+    # still runs the REAL EDB installer.
     bundle = _bundle_text()
-    assert 'SourceFile="scripts\\Prepare-PostgreSQL.ps1"' in bundle
+    assert 'SourceFile="$(sys.SOURCEFILEDIR)scripts\\Prepare-PostgreSQL.ps1"' in bundle
+    assert 'Name="Prepare-PostgreSQL.ps1"' in bundle
     assert '-File Prepare-PostgreSQL.ps1' in bundle
     assert 'SourceFile="$(var.PostgresInstaller)"' in bundle
     assert "--optionfile" in bundle
     assert "--mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL" in bundle
+
+
+def test_prep_script_handles_postgres_states_and_preserves_existing_secret():
+    """The prep step must validate ownership, refuse to touch other services, and never overwrite an
+    existing stored superuser password."""
+    script = _prep_script_text()
+    # RoofSpan-managed detection uses BOTH the service and the DPAPI credential.
+    assert "RoofSpanPostgreSQL" in script
+    assert "pg_super.bin" in script
+    # Port 5432 conflict handling that does NOT modify another service.
+    assert "5432" in script
+    assert "Get-NetTCPConnection" in script
+    # Actionable stop path (non-zero exit) rather than damaging existing data.
+    assert "ROOFSPAN-PREREQ-ERROR" in script and "exit 1" in script
+    # The existing secret is only written on the clean branch: the DPAPI write must be guarded by a
+    # prior "secret present" check so an existing password is never overwritten.
+    assert "$secretPresent = Test-Path $pgSuperBin" in script
+    assert script.index("$secretPresent = Test-Path $pgSuperBin") < script.index("WriteAllBytes($pgSuperBin")
+    # Transient plaintext option file is cleaned up on handled failure paths.
+    assert "Remove-OptionFileQuietly" in script
+
+
+def test_bundle_detects_managed_install_by_service_and_secret_and_is_permachine():
+    bundle = _bundle_text()
+    # RoofSpan-managed = service present AND RoofSpan credential present (service alone is insufficient).
+    assert 'Key="SYSTEM\\CurrentControlSet\\Services\\RoofSpanPostgreSQL"' in bundle
+    assert 'Variable="PgServicePresent"' in bundle
+    assert 'pg_super.bin' in bundle and 'Variable="PgSecretPresent"' in bundle
+    assert 'InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"' in bundle
+    assert 'DetectCondition="PgServicePresent AND PgSecretPresent"' in bundle
+    # Every package is PerMachine so a double-click elevates (UAC) without "Run as administrator".
+    for pkg_id in ("WebView2Runtime", "PostgreSQLPasswordPrep", "PostgreSQLPrereq", "PostgreSQLPasswordCleanup"):
+        tag = re.search(rf'<ExePackage\b[^>]*\bId="{pkg_id}".*?(?:/>|</ExePackage>)', bundle, re.DOTALL)
+        assert tag, f"missing ExePackage {pkg_id}"
+        assert 'PerMachine="yes"' in tag.group(0), f"{pkg_id} must be PerMachine"
 
 
 # The confirmed clean-computer 0x1 failure: Burn formats '[...]' tokens in InstallArguments, stripping
@@ -269,8 +322,8 @@ def test_no_exepackage_install_arguments_use_inline_command_script():
         assert args, f"powershell ExePackage without InstallArguments:\n{tag}"
         assert "-Command" not in args.group(1), "powershell helper must use -File payload, not inline -Command"
         assert "-File " in args.group(1)
-        assert re.search(r'<Payload\s+SourceFile="scripts\\[A-Za-z0-9\-]+\.ps1"\s*/>', tag), \
-            f"powershell ExePackage does not carry its .ps1 as an embedded Payload:\n{tag}"
+        assert re.search(r'<Payload\s+Name="[A-Za-z0-9\-]+\.ps1"\s+SourceFile="\$\(sys\.SOURCEFILEDIR\)scripts\\[A-Za-z0-9\-]+\.ps1"\s*/>', tag), \
+            f"powershell ExePackage does not carry its .ps1 as a directory-anchored embedded Payload:\n{tag}"
 
 
 def test_prep_and_cleanup_scripts_are_committed_and_ascii():
@@ -293,7 +346,7 @@ def test_all_bundle_prerequisites_are_embedded():
     bundle = _bundle_text()
     assert 'Compressed="no"' not in bundle
     assert 'SourceFile="$(var.PostgresInstaller)"' in bundle
-    assert 'SourceFile="$(var.WebView2Bootstrapper)"' in bundle
+    assert 'SourceFile="$(var.WebView2StandaloneInstaller)"' in bundle
     assert 'SourceFile="$(var.MsiPath)"' in bundle
     assert bundle.count('Compressed="yes"') >= 4
 

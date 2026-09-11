@@ -1,16 +1,18 @@
 # Builds RoofSpanOffice-{VERSION}.msi + RoofSpanSetup-{VERSION}.exe (Burn bundle) + RoofSpanSetup.exe.
 # HUMAN REQUIRED: run on Windows 10/11 x64 with the WiX Toolset 5.0.2 (`dotnet tool install --global wix --version 5.0.2`),
-# the staged tree (installer\stage.ps1), the EDB PostgreSQL installer, and (for release) an Authenticode
-# certificate + the offline update-signing private key. Do NOT commit certificates or private keys.
+# the staged tree (installer\stage.ps1), the EDB PostgreSQL installer, the FULL WebView2 Evergreen
+# Standalone x64 installer, and (for release) an Authenticode certificate + the offline update-signing
+# private key. Do NOT commit certificates or private keys.
 #
 #   .\stage.ps1  -StageDir ..\..\_stage -UpdatePublicKey <pub.pem>
 #   .\build.ps1  -StageDir ..\..\_stage -PostgresInstaller C:\prereq\postgresql-16-windows-x64.exe `
+#                -WebView2StandaloneInstaller C:\prereq\MicrosoftEdgeWebView2RuntimeInstallerX64.exe `
 #                [-Version <windows\VERSION>] [-SignCertThumbprint <thumb>] [-UpdateSigningPrivateKey <priv.pem>]
 param(
   [string]$Version = "",
   [Parameter(Mandatory=$true)][string]$StageDir,
   [Parameter(Mandatory=$true)][string]$PostgresInstaller,
-  [Parameter(Mandatory=$true)][string]$WebView2Bootstrapper,
+  [Parameter(Mandatory=$true)][string]$WebView2StandaloneInstaller,
   [string]$SignCertThumbprint = "",
   [string]$UpdateSigningPrivateKey = "",
   [string]$OutDir = ".\dist"
@@ -114,32 +116,41 @@ Assert-RelayConnectorBuildInfo -ExePath $relayExe -ExpectedSha $gitSha -Expected
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."
 }
-if (-not (Test-Path $WebView2Bootstrapper)) {
-  throw "WebView2 bootstrapper not found at '$WebView2Bootstrapper'. Download MicrosoftEdgeWebview2Setup.exe."
+if (-not (Test-Path $WebView2StandaloneInstaller)) {
+  throw "WebView2 Evergreen Standalone installer not found at '$WebView2StandaloneInstaller'. Download the FULL x64 runtime (MicrosoftEdgeWebView2RuntimeInstallerX64.exe) from https://developer.microsoft.com/microsoft-edge/webview2/ (Evergreen Standalone Installer, x64). The small MicrosoftEdgeWebview2Setup.exe download bootstrapper is NOT accepted - it requires internet at install time."
 }
 
+# Build into a CLEAN, isolated staging output first so a failed rebuild can never publish or copy an
+# older installer as the new output. Only after a fully successful build do we promote artifacts into
+# $OutDir and refresh the stable RoofSpanSetup.exe name.
+$stagingOut = Join-Path $OutDir ("_build-" + $Version)
+if (Test-Path $stagingOut) { Remove-Item -Recurse -Force $stagingOut }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$msi = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
-$setup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
+New-Item -ItemType Directory -Force -Path $stagingOut | Out-Null
+$msi   = Join-Path $stagingOut "RoofSpanOffice-$Version.msi"
+$setup = Join-Path $stagingOut "RoofSpanSetup-$Version.exe"
 
 Write-Host "==> Building RoofSpan Office $Version from $gitSha"
 
 # 1) MSI (payload harvested from $StageDir, including the native application shell).
 wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir" `
   -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
+if ($LASTEXITCODE -ne 0) { throw "MSI compile failed (wix exit $LASTEXITCODE)." }
 if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (WebView2 + PostgreSQL + Office MSI).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
   -d "PostgresInstaller=$PostgresInstaller" `
-  -d "WebView2Bootstrapper=$WebView2Bootstrapper" `
+  -d "WebView2StandaloneInstaller=$WebView2StandaloneInstaller" `
   -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
+if ($LASTEXITCODE -ne 0) { throw "Bundle compile failed (wix exit $LASTEXITCODE)." }
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 
 # 3) Authenticode signing.
 if ($SignCertThumbprint) {
   Write-Host "==> Signing $setup"
   signtool sign /sha1 $SignCertThumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 $setup
+  if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit $LASTEXITCODE); refusing to publish an unsigned or partially-signed installer." }
 } else {
   Write-Warning "UNSIGNED build (dev/test only). Production release MUST be Authenticode-signed."
 }
@@ -147,14 +158,36 @@ if ($SignCertThumbprint) {
 # 4) Signed UPDATE manifest.
 if ($UpdateSigningPrivateKey) {
   python ..\release\make_manifest.py --version $Version --installer $setup `
-    --min-supported $Version --signing-key $UpdateSigningPrivateKey --out (Join-Path $OutDir "latest.json")
+    --min-supported $Version --signing-key $UpdateSigningPrivateKey --out (Join-Path $stagingOut "latest.json")
+  if ($LASTEXITCODE -ne 0) { throw "Update manifest generation failed (exit $LASTEXITCODE)." }
 }
 
-# 5) Stable name expected at downloads.roofspan.io/latest/.
-Copy-Item $setup (Join-Path $OutDir "RoofSpanSetup.exe") -Force
+# 5) Promote the just-built artifacts into $OutDir and refresh the stable name. Because we built into an
+#    isolated folder and every native step above is exit-code checked, an older installer can never be
+#    republished as the new output. The stable RoofSpanSetup.exe is replaced ONLY on full success.
+$finalMsi   = Join-Path $OutDir "RoofSpanOffice-$Version.msi"
+$finalSetup = Join-Path $OutDir "RoofSpanSetup-$Version.exe"
+$stableSetup = Join-Path $OutDir "RoofSpanSetup.exe"
+Copy-Item $msi $finalMsi -Force
+Copy-Item $setup $finalSetup -Force
+Copy-Item $setup $stableSetup -Force
+if ($UpdateSigningPrivateKey) { Copy-Item (Join-Path $stagingOut "latest.json") (Join-Path $OutDir "latest.json") -Force }
+Remove-Item -Recurse -Force $stagingOut
+
+# 6) Report the exact release identity so the file under test is unambiguous.
+$setupItem = Get-Item $finalSetup
+$setupHash = (Get-FileHash $finalSetup -Algorithm SHA256).Hash
+$setupMB = [math]::Round($setupItem.Length / 1MB, 2)
 Write-Host "==> Artifacts in $OutDir :"
 Write-Host "    RoofSpanOffice-$Version.msi"
 Write-Host "    RoofSpanSetup-$Version.exe   -> upload to /releases/"
 Write-Host "    RoofSpanSetup.exe            -> upload to /latest/"
-Write-Host "    latest.json                  -> upload to /update/windows/ (if generated)"
+if ($UpdateSigningPrivateKey) { Write-Host "    latest.json                  -> upload to /update/windows/" }
+Write-Host ""
+Write-Host "==> Release identity (verify this exact file is what you test/ship):"
+Write-Host "    Version   : $Version"
+Write-Host "    Git SHA   : $gitSha"
+Write-Host "    Artifact  : RoofSpanSetup-$Version.exe"
+Write-Host "    Size      : $($setupItem.Length) bytes ($setupMB MB)"
+Write-Host "    SHA-256   : $setupHash"
 Write-Host "HUMAN REQUIRED: upload artifacts to the approved private S3 behind CloudFront."

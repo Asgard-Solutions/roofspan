@@ -122,10 +122,10 @@ def test_stage_validates_full_payload_before_success():
         assert needed in txt, f"stage completeness check must assert {needed}"
 
     txt = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
-    for param in ("$Version", "$StageDir", "$PostgresInstaller", "$WebView2Bootstrapper"):
+    for param in ("$Version", "$StageDir", "$PostgresInstaller", "$WebView2StandaloneInstaller"):
         assert param in txt, f"build.ps1 must accept {param}"
     # Prerequisites are validated (fail-fast) before the expensive wix build.
-    assert "WebView2 bootstrapper not found" in txt
+    assert "WebView2 Evergreen Standalone installer not found" in txt
     assert "PostgreSQL prerequisite installer not found" in txt
     assert "Staging incomplete" in txt
 
@@ -134,7 +134,7 @@ def test_bundle_prereqs_match_build_params():
     """Every prerequisite the bundle expects must be passed by build.ps1, and vice-versa."""
     bundle = (INSTALLER / "bundle.wxs").read_text(encoding="utf-8")
     build = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
-    for var in ("PostgresInstaller", "WebView2Bootstrapper"):
+    for var in ("PostgresInstaller", "WebView2StandaloneInstaller"):
         assert f'Name="{var}"' in bundle, f"bundle.wxs must declare Variable {var}"
         assert f'-d "{var}=' in build, f"build.ps1 must pass -d {var}= to the bundle"
     # WebView2 must be detected (skip if present) and installed before the Office MSI.
@@ -211,3 +211,32 @@ def test_build_stage_and_wxs_agree_on_onedir_service_paths():
         onefile = f"services\\{name}.exe"
         for label, text in (("build.ps1", build), ("RoofSpan.wxs", wxs)):
             assert onefile not in text, f"{label} still references obsolete ONEFILE path {onefile}"
+
+
+
+def test_build_never_publishes_a_stale_installer_on_failure():
+    """A failed rebuild must not copy or publish a previous installer as the new output. build.ps1 must:
+      - build into a CLEAN, isolated staging output that is removed up front,
+      - check the native exit code ($LASTEXITCODE) after MSI + bundle compile and after signing,
+      - only copy the stable RoofSpanSetup.exe AFTER a fully successful build,
+      - report the release version, size, and SHA-256 so the exact file under test is identifiable."""
+    build = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
+
+    # Isolated, cleaned output folder.
+    assert "$stagingOut = Join-Path $OutDir" in build
+    assert "Remove-Item -Recurse -Force $stagingOut" in build
+
+    # Native exit-code checks (fail-fast) after each compile and after signing.
+    assert build.count("$LASTEXITCODE -ne 0") >= 3, "must check exit code after MSI, bundle, and signtool"
+    assert "MSI compile failed" in build
+    assert "Bundle compile failed" in build
+    assert "signtool failed" in build
+
+    # The stable name is refreshed only after success, from the just-built artifact.
+    stable_copy = build.index("Copy-Item $setup $stableSetup -Force")
+    assert build.index("Bundle compile failed") < stable_copy, \
+        "stable RoofSpanSetup.exe must be produced only after a successful bundle build"
+
+    # Release identity reporting.
+    assert "Get-FileHash" in build and "SHA-256" in build
+    assert "Size" in build
