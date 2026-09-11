@@ -107,6 +107,17 @@ The current connector log starts with `relay: outbound connector loop started` a
 A log that says only `relay: outbound tunnel loop started -> .../api/relay/tunnel` identifies a pre-v2
 connector and must not be accepted as a current customer build.
 
+## Outstanding acceptance test (manual, clean VM)
+CI proves: the bundle compiles; the real Burn prep/cleanup path runs (supplied + generated password) with
+the production BA theme; a genuine EDB PostgreSQL + Office install offline (network blocked, source
+prerequisites deleted) with the real self-contained WebView2 desktop shell + production frontend; and the
+real WebView2 Evergreen Standalone installer + `/silent /install` args succeed.
+
+STILL REQUIRES a manual clean-VM sign-off (hosted GitHub runners ship WebView2 preinstalled and it cannot
+be cleanly removed): on a fresh Windows VM with BOTH PostgreSQL AND WebView2 ABSENT and networking blocked,
+double-click `RoofSpanSetup.exe` and confirm the UAC prompt appears, WebView2 + PostgreSQL both install
+from the embedded payloads with no internet, `RoofSpanPostgreSQL` starts, and the Office window loads.
+
 ## Guardrails
 All Windows `.ps1` build scripts are ASCII-only and validated by the PowerShell parser in CI
 (`.github/workflows/windows-build-scripts.yml`), plus Python regression checks in

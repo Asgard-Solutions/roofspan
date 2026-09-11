@@ -191,6 +191,21 @@ jobs:
           if (-not $cleanupArgsProd) { throw "production cleanup InstallArguments came back EMPTY" }
           Write-Host "prep args (from bundle.wxs): $prepArgsProd"
 
+          # Mirror the PRODUCTION bootstrapper application EXACTLY (theme + license URL) so the test cannot
+          # differ from what customers run. bundle.wxs uses Theme="hyperlinkLicense"; a different theme
+          # (e.g. "none") could change BA startup/elevation behavior and mask a real defect.
+          $themeM = [regex]::Match($bundleXml, 'WixStandardBootstrapperApplication[^>]*Theme="([^"]+)"')
+          $licM   = [regex]::Match($bundleXml, 'WixStandardBootstrapperApplication[^>]*LicenseUrl="([^"]+)"')
+          if (-not $themeM.Success) { throw "could not read production BA Theme from bundle.wxs" }
+          $prodTheme = $themeM.Groups[1].Value
+          $prodLicense = if ($licM.Success) { $licM.Groups[1].Value } else { "" }
+          Write-Host "production BA theme = '$prodTheme'; test bundle will use the SAME theme"
+          $baLine = if ($prodLicense) {
+            '      <bal:WixStandardBootstrapperApplication Theme="' + $prodTheme + '" SuppressOptionsUI="yes" LicenseUrl="' + $prodLicense + '" />'
+          } else {
+            '      <bal:WixStandardBootstrapperApplication Theme="' + $prodTheme + '" SuppressOptionsUI="yes" />'
+          }
+
           # NOTE: the parameter is deliberately NOT named `$args` - that collides with PowerShell's
           # automatic $args variable and produced an EMPTY InstallArguments (the WIX0006 regression).
           function New-Bundle($id, $upgrade, $installArgs, $payload) {
@@ -198,7 +213,7 @@ jobs:
               '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">',
               ('  <Bundle Name="RoofSpan Prep Runtime Test" Manufacturer="RoofSpan" Version="' + $version + '" UpgradeCode="' + $upgrade + '">'),
               '    <BootstrapperApplication>',
-              '      <bal:WixStandardBootstrapperApplication Theme="none" SuppressOptionsUI="yes" />',
+              $baLine,
               '    </BootstrapperApplication>',
               '    <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />',
               '    <Chain>',
@@ -271,10 +286,59 @@ jobs:
           if (-not (Test-Path $bin)) { throw "cleanup wrongly removed pg_super.bin (needed by first-run)" }
           Write-Host "OK: cleanup removed the transient option file and preserved pg_super.bin"
 
-      - name: Remove test identity artifacts
+      - name: Preserve prereq breadcrumb + Burn logs + generated bundles (even on pre-execution failure)
         if: always()
         shell: pwsh
-        run: Remove-Item -Recurse -Force "C:\ProgramData\RoofSpan\identity" -ErrorAction SilentlyContinue
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "burnprep"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Copy-Item "C:\ProgramData\RoofSpan\prereq-diag.log" (Join-Path $work "prereq-diag.log") -ErrorAction SilentlyContinue
+          # Burn also writes engine logs to %TEMP%; keep any that reference our test bundle.
+          Get-ChildItem $env:TEMP -Filter "*.log" -ErrorAction SilentlyContinue |
+            Where-Object { try { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'RoofSpan Prep Runtime Test' } catch { $false } } |
+            ForEach-Object { Copy-Item $_.FullName (Join-Path $work ("burn-" + $_.Name)) -ErrorAction SilentlyContinue }
+          Write-Host "preserved in $work :"; Get-ChildItem $work -ErrorAction SilentlyContinue | Format-Table Name,Length | Out-String | Write-Host
+
+      - name: Establish whether PowerShell / the prep script ever started (root-cause aid)
+        if: failure()
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "burnprep"
+          $diag = Join-Path $work "prereq-diag.log"
+          Write-Host "===== prereq breadcrumb (prereq-diag.log) ====="
+          if (Test-Path $diag) {
+            Get-Content $diag
+            if ((Get-Content $diag -Raw) -match 'PREP-START') {
+              Write-Host "CLASSIFICATION: powershell.exe launched AND Prepare-PostgreSQL.ps1 STARTED -> the failure is INSIDE the script (inspect the stop/end markers above)."
+            } else {
+              Write-Host "CLASSIFICATION: breadcrumb file exists but has NO PREP-START -> the script did not begin its body."
+            }
+          } else {
+            Write-Host "CLASSIFICATION: no prereq-diag.log at all -> PowerShell / the prep script NEVER ran. The failure is BEFORE package execution (bundle build or Burn engine/payload startup). Inspect the .wxs + Burn logs in the uploaded artifact; do NOT attribute this to the script body."
+          }
+          Write-Host "===== Burn logs (tail) ====="
+          Get-ChildItem $work -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName -Tail 150
+          }
+          Write-Host "===== generated bundle sources ====="
+          Get-ChildItem $work -Filter "*.wxs" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName
+          }
+
+      - name: Upload prep-runtime diagnostics (Burn logs + generated bundles + breadcrumb)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: burn-prep-runtime-diagnostics
+          path: ${{ runner.temp }}/burnprep
+          if-no-files-found: warn
+
+      - name: Remove test identity + breadcrumb artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "C:\ProgramData\RoofSpan\identity" -ErrorAction SilentlyContinue
+          Remove-Item -Force "C:\ProgramData\RoofSpan\prereq-diag.log" -ErrorAction SilentlyContinue
 
   # Build actual PyInstaller services, install the MSI, and prove SCM + upgrade behavior.
   services-install-smoke:
@@ -671,6 +735,24 @@ jobs:
           if ((Get-Content $cfg -Raw) -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still has the placeholder password" }
           Write-Host "OK: RoofSpan Office backend provisioned + healthy on the freshly installed PostgreSQL"
 
+      # OUTSTANDING ACCEPTANCE TEST (cannot run on hosted runners): a clean VM with WebView2 truly ABSENT
+      # AND networking blocked, proving the bundle INSTALLS the embedded WebView2 Evergreen runtime offline.
+      # Hosted windows-latest runners ship WebView2 preinstalled and it cannot be cleanly removed, so this
+      # job proves the real WebView2 installer + args work and that PostgreSQL + Office install offline, but
+      # the WebView2-absent install path stays a manual clean-VM sign-off (tracked in windows/BUILD.md).
+
+      - name: Collect Burn + service logs and breadcrumb into an artifact folder
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "full-install-diagnostics"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item (Join-Path $env:RUNNER_TEMP "setup.burn.log") $out -ErrorAction SilentlyContinue
+          Copy-Item "C:\ProgramData\RoofSpan\prereq-diag.log" $out -ErrorAction SilentlyContinue
+          Copy-Item "C:\ProgramData\RoofSpan\logs\*" $out -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "C:\ProgramData\RoofSpan\config\roofspan.env" (Join-Path $out "roofspan.env.txt") -ErrorAction SilentlyContinue
+          Write-Host "collected:"; Get-ChildItem $out -ErrorAction SilentlyContinue | Format-Table Name,Length | Out-String | Write-Host
+
       - name: Dump logs (on failure)
         if: failure()
         shell: pwsh
@@ -678,6 +760,17 @@ jobs:
           Get-ChildItem "C:\ProgramData\RoofSpan\logs" -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "===== $($_.FullName) ====="; Get-Content $_.FullName -Tail 150
           }
+          if (Test-Path "C:\ProgramData\RoofSpan\prereq-diag.log") {
+            Write-Host "===== prereq-diag.log ====="; Get-Content "C:\ProgramData\RoofSpan\prereq-diag.log"
+          }
           if (Test-Path (Join-Path $env:RUNNER_TEMP "setup.burn.log")) {
             Write-Host "===== setup.burn.log (tail) ====="; Get-Content (Join-Path $env:RUNNER_TEMP "setup.burn.log") -Tail 200
           }
+
+      - name: Upload full-install diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-machine-full-install-diagnostics
+          path: ${{ runner.temp }}/full-install-diagnostics
+          if-no-files-found: warn
