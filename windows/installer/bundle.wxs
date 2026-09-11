@@ -3,14 +3,22 @@
   RoofSpan Office - WiX 5 (Toolset 5.0.2) Burn bundle. Produces the customer-facing RoofSpanSetup.exe.
 
   Chain (in order):
-    1) WebView2 Evergreen Runtime — installed only if absent.
-    2) PostgreSQL prerequisite (EDB PostgreSQL silent installer) — installed ONLY if a compatible
-       PostgreSQL is not already present (detected via registry). Marked Permanent so it is NOT removed
-       on RoofSpan uninstall (the customer's database service + data are preserved).
-    3) RoofSpanOffice-{VERSION}.msi — the RoofSpan Office application.
+    1) WebView2 Evergreen Runtime - FULL Evergreen Standalone x64 installer (offline, no download),
+       installed only if absent, machine-level.
+    2) PostgreSQL prerequisite (EDB PostgreSQL silent installer) - installed ONLY if a working
+       RoofSpan-managed PostgreSQL is not already present. "RoofSpan-managed" means BOTH the
+       RoofSpanPostgreSQL service AND the RoofSpan DPAPI credential (pg_super.bin) exist; service
+       existence alone is NOT sufficient. Marked Permanent so it is NOT removed on RoofSpan uninstall
+       (the customer's database service + data are preserved).
+    3) RoofSpanOffice-{VERSION}.msi - the RoofSpan Office application.
+
+  Every package is PerMachine, so a normal double-click triggers the Windows elevation (UAC) prompt;
+  customers do NOT need to know to "Run as administrator".
 
   Contains NO secrets and is NOT customer-specific. Building/signing is HUMAN REQUIRED on Windows.
-  Prerequisite binaries are NOT committed; supply their paths through build.ps1.
+  Prerequisite binaries are NOT committed; supply their paths through build.ps1. The PostgreSQL helper
+  scripts ARE committed and anchored to this bundle's own source directory ($(sys.SOURCEFILEDIR)) so the
+  bundle compiles regardless of the caller's working directory (from the repo root OR from installer\).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
@@ -27,10 +35,20 @@
                                               LicenseUrl="https://roofspan.io/eula" />
     </BootstrapperApplication>
 
-    <!-- Detect an existing (RoofSpan-managed or compatible) PostgreSQL install so we do NOT reinstall. -->
-    <util:RegistrySearch Id="PgPresentSearch" Root="HKLM"
-                         Key="SOFTWARE\PostgreSQL\Installations"
-                         Result="exists" Variable="PgPresent" />
+    <!-- RoofSpan-managed PostgreSQL detection. Service existence alone is insufficient (an unrelated or
+         stale service by another name/owner must not satisfy the dependency), so a working managed
+         install requires BOTH signals:
+           - the RoofSpanPostgreSQL Windows service is registered, AND
+           - the RoofSpan DPAPI superuser credential (pg_super.bin) exists (proves RoofSpan owns it).
+         The deeper validation (port conflicts, stale/incomplete state, ownership before any repair) is
+         performed by Prepare-PostgreSQL.ps1, which runs BEFORE the EDB installer and halts the chain
+         with an actionable message when it is not safe to proceed. -->
+    <util:RegistrySearch Id="PgServiceSearch" Root="HKLM"
+                         Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
+                         Result="exists" Variable="PgServicePresent" />
+    <util:FileSearch Id="PgSecretSearch"
+                     Path="[CommonAppDataFolder]RoofSpan\identity\pg_super.bin"
+                     Result="exists" Variable="PgSecretPresent" />
 
     <!-- Detect the Evergreen WebView2 Runtime (machine-wide) so we do NOT reinstall it. RoofSpan Office
          requires WebView2. The 'pv' value exists once the runtime is installed. -->
@@ -40,7 +58,7 @@
 
     <!-- Overridable at build/runtime; no default binary is committed. -->
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
-    <Variable Name="WebView2Bootstrapper" Type="string" Value="$(var.WebView2Bootstrapper)" bal:Overridable="yes" />
+    <Variable Name="WebView2StandaloneInstaller" Type="string" Value="$(var.WebView2StandaloneInstaller)" bal:Overridable="yes" />
     <!-- EDB superuser password. NEVER committed and NEVER persisted. WiX 5 requires that a typed
          Variable also declare a Value, so this stays untyped/valueless (empty by default) yet Hidden
          (masked in Burn logs) and Overridable (an admin MAY inject one: RoofSpanSetup.exe PgSuperPassword=...).
@@ -49,13 +67,16 @@
     <Variable Name="PgSuperPassword" Hidden="yes" Persisted="no" bal:Overridable="yes" />
 
     <Chain>
-      <!-- 1) WebView2 Evergreen Runtime (silent), EMBEDDED in RoofSpanSetup.exe. Skipped when present.
-              CacheId is explicit and version-scoped so it cannot collide with another embedded payload,
-              even when test or vendor bootstrapper binaries happen to be byte-identical. -->
+      <!-- 1) WebView2 Evergreen Runtime - FULL Evergreen Standalone x64 installer, EMBEDDED in
+              RoofSpanSetup.exe (offline; the customer never downloads the runtime). Skipped when present.
+              PerMachine + /silent /install => a machine-wide runtime under elevation. CacheId is explicit
+              and version-scoped so it cannot collide with another embedded payload, even when test or
+              vendor binaries happen to be byte-identical. -->
       <ExePackage Id="WebView2Runtime"
                   CacheId="RoofSpanWebView2Runtime-$(var.Version)"
                   DisplayName="Microsoft Edge WebView2 Runtime (RoofSpan prerequisite)"
-                  SourceFile="$(var.WebView2Bootstrapper)"
+                  SourceFile="$(var.WebView2StandaloneInstaller)"
+                  PerMachine="yes"
                   Permanent="yes"
                   Vital="yes"
                   InstallCondition="NOT WebView2Present"
@@ -63,39 +84,44 @@
                   InstallArguments="/silent /install"
                   Compressed="yes" />
 
-      <!-- 2a) PostgreSQL password PREP (RoofSpan-owned helper, runs BEFORE the EDB installer). The prep
+      <!-- 2a) PostgreSQL PREP + VALIDATION (RoofSpan-owned helper, runs BEFORE the EDB installer). The
                logic lives in the CHECKED-IN, BUNDLE-EMBEDDED script Prepare-PostgreSQL.ps1 (a Burn
-               <Payload>), NOT inline: WiX Burn formats '[...]' tokens in InstallArguments and would strip
-               PowerShell type accelerators ([string], [Convert], [Security.Cryptography...], [IO.File],
-               [Text.Encoding]) and corrupt the command (the confirmed clean-computer 0x1 failure). Only
-               the legitimate [PgSuperPassword] Burn variable remains a bracket token here; it is Hidden
-               (masked in logs) and, when empty, the script generates a strong random password itself.
-               Uses the OS PowerShell as a small helper payload - it does NOT replace the PostgreSQL package.
-               Burn extracts the ExePackage payloads together and runs powershell.exe with that package
-               working directory, so the script is referenced by its payload name. -->
+               <Payload> with an explicit Name), NOT inline: WiX Burn formats '[...]' tokens in
+               InstallArguments and would strip PowerShell type accelerators ([string], [Convert],
+               [Security.Cryptography...], [IO.File], [Text.Encoding]) and corrupt the command (the
+               confirmed clean-computer 0x1 failure). Only the legitimate [PgSuperPassword] Burn variable
+               remains a bracket token here; it is Hidden (masked in logs) and, when empty, the script
+               generates a strong random password itself. The script also validates port 5432, detects
+               stale/incomplete or unrelated installs, and HALTS (non-zero, Vital) with an actionable
+               message rather than damaging existing data. Burn extracts the ExePackage payloads into the
+               package working directory and runs powershell.exe there, so the script is referenced by its
+               payload name; the payload SourceFile is anchored to this bundle's directory. -->
       <ExePackage Id="PostgreSQLPasswordPrep"
                   CacheId="RoofSpanPostgreSQLPasswordPrep"
                   DisplayName="RoofSpan PostgreSQL preparation"
                   SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
+                  PerMachine="yes"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT PgPresent"
+                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
                   InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Prepare-PostgreSQL.ps1 -PgSuperPassword &quot;[PgSuperPassword]&quot;"
                   Compressed="yes">
-        <Payload SourceFile="scripts\Prepare-PostgreSQL.ps1" />
+        <Payload Name="Prepare-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Prepare-PostgreSQL.ps1" />
       </ExePackage>
 
       <!-- 2b) PostgreSQL prerequisite = the REAL EDB installer, EMBEDDED in RoofSpanSetup.exe. Reads the
                generated superuser password from the option file; unattended flags + service name preserved.
-               Explicit version-scoped CacheId prevents collisions with any other embedded executable. -->
+               PerMachine + unattended => a machine-wide service under elevation. Explicit version-scoped
+               CacheId prevents collisions with any other embedded executable. -->
       <ExePackage Id="PostgreSQLPrereq"
                   CacheId="RoofSpanPostgreSQLPrereq-$(var.Version)"
                   DisplayName="PostgreSQL (RoofSpan prerequisite)"
                   SourceFile="$(var.PostgresInstaller)"
+                  PerMachine="yes"
                   Permanent="yes"
                   Vital="yes"
-                  InstallCondition="NOT PgPresent"
-                  DetectCondition="PgPresent"
+                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
+                  DetectCondition="PgServicePresent AND PgSecretPresent"
                   InstallArguments="--optionfile &quot;C:\ProgramData\RoofSpan\identity\pg_install.optionfile&quot; --mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL"
                   Compressed="yes" />
 
@@ -106,15 +132,16 @@
                   CacheId="RoofSpanPostgreSQLPasswordCleanup"
                   DisplayName="RoofSpan PostgreSQL cleanup"
                   SourceFile="$(env.SystemRoot)\System32\WindowsPowerShell\v1.0\powershell.exe"
+                  PerMachine="yes"
                   Permanent="yes"
                   Vital="no"
-                  InstallCondition="NOT PgPresent"
+                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
                   InstallArguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File Cleanup-PostgreSQL.ps1"
                   Compressed="yes">
-        <Payload SourceFile="scripts\Cleanup-PostgreSQL.ps1" />
+        <Payload Name="Cleanup-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Cleanup-PostgreSQL.ps1" />
       </ExePackage>
 
-      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. -->
+      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. perMachine (see RoofSpan.wxs Scope). -->
       <MsiPackage Id="RoofSpanOfficeMsi"
                   CacheId="RoofSpanOfficeMsi-$(var.Version)"
                   SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
