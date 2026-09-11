@@ -568,27 +568,25 @@ jobs:
           "WV_INSTALLER=$wv"  | Out-File -Append $env:GITHUB_ENV
           Write-Host "OK: real EDB ($([math]::Round((Get-Item $edb).Length/1MB)) MB) + WebView2 standalone ($([math]::Round((Get-Item $wv).Length/1MB)) MB)"
 
-      - name: Assemble stage and build the FULL RoofSpanSetup.exe via production build.ps1
+      - name: Enable yarn (corepack) for the real frontend build
+        run: corepack enable
+
+      - name: Build the FULL customer installer via the real stage.ps1 + build.ps1 (real shell + frontend)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $version = (Get-Content windows/VERSION -Raw).Trim()
           $stage = Join-Path $env:RUNNER_TEMP "stage"
-          New-Item -ItemType Directory -Force -Path `
-            (Join-Path $stage "frontend"), (Join-Path $stage "runtime"), `
-            (Join-Path $stage "config-templates"), (Join-Path $stage "shell") | Out-Null
-          pwsh -File windows/winbuild/build_exes.ps1 -OutDir (Join-Path $stage "services")
-          "<html><body>RoofSpan Office</body></html>" | Set-Content (Join-Path $stage "frontend\index.html")
-          "runtime" | Set-Content (Join-Path $stage "runtime\README.txt")
-          Copy-Item "$env:WINDIR\System32\where.exe" (Join-Path $stage "shell\RoofSpanOffice.exe")
-          Add-Type -AssemblyName System.Drawing
-          $iconStream = [IO.File]::Create((Join-Path $stage "runtime\RoofSpan.ico"))
-          try { [System.Drawing.SystemIcons]::Application.Save($iconStream) } finally { $iconStream.Dispose() }
-          Copy-Item windows/winbuild/config/* (Join-Path $stage "config-templates") -Recurse -Force
-          "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content (Join-Path $stage "config-templates\update_public_key.pem")
-
+          # Placeholder update PUBLIC key (release supplies the real one); lets staging + MSI complete in CI.
+          $pub = Join-Path $env:RUNNER_TEMP "update_public_key.pem"
+          "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content -Encoding ASCII $pub
           Push-Location windows/installer
           try {
+            # REAL staging: PyInstaller services + production yarn frontend build + the self-contained .NET
+            # WebView2 desktop shell + icon + config templates (the genuine customer payload, NOT where.exe
+            # or placeholder HTML).
+            .\stage.ps1 -StageDir $stage -UpdatePublicKey $pub
+            # REAL customer build path (clean isolated output, exit-code checks, SHA-256 report).
             .\build.ps1 -Version $version -StageDir $stage `
               -PostgresInstaller $env:EDB_INSTALLER `
               -WebView2StandaloneInstaller $env:WV_INSTALLER `
@@ -596,26 +594,51 @@ jobs:
           } finally { Pop-Location }
           $setup = Join-Path $env:RUNNER_TEMP "dist\RoofSpanSetup.exe"
           if (-not (Test-Path $setup)) { throw "build.ps1 did not produce RoofSpanSetup.exe" }
+          # The genuine self-contained .NET desktop shell must be present (proves it is not a where.exe stand-in).
+          $shellExe = Join-Path $stage "shell\RoofSpanOffice.exe"
+          if (-not (Test-Path $shellExe)) { throw "real Office shell missing from stage" }
+          if ((Get-Item $shellExe).Length -lt 20KB) { throw "Office shell looks like a placeholder (too small)" }
+          if (-not (Get-ChildItem (Join-Path $stage "shell") -Filter "*.dll" | Where-Object { $_.Name -match 'WebView2' })) {
+            throw "self-contained WebView2 shell dependencies missing from the staged shell"
+          }
           "SETUP_EXE=$setup" | Out-File -Append $env:GITHUB_ENV
           Write-Host ("setup size = {0} MB" -f [math]::Round((Get-Item $setup).Length/1MB, 1))
 
-      - name: Prove no download is needed at install time (delete the source prerequisites)
+      - name: Prove the REAL WebView2 Evergreen Standalone installer + production args work
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Remove-Item $env:EDB_INSTALLER, $env:WV_INSTALLER -Force
-          Write-Host "OK: source prerequisite installers removed; RoofSpanSetup.exe must be self-contained"
+          # Uses the already-downloaded standalone installer (before deletion) with the exact production
+          # arguments, proving the WebView2 prerequisite command is correct end to end.
+          $r = Start-Process $env:WV_INSTALLER -ArgumentList @("/silent","/install") -Wait -PassThru
+          if ($r.ExitCode -ne 0) { throw "WebView2 standalone /silent /install returned $($r.ExitCode)" }
+          Write-Host "OK: real WebView2 Evergreen Standalone installer + production args succeeded"
 
-      - name: Install the complete EXE and prove BOTH prerequisites + Office came up
+      - name: Go OFFLINE, delete source prerequisites, then install the complete EXE
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $log = Join-Path $env:RUNNER_TEMP "setup.burn.log"
-          $p = Start-Process $env:SETUP_EXE -ArgumentList @("/quiet","/norestart","/log","`"$log`"") -Wait -PassThru
-          if ($p.ExitCode -ne 0) {
-            if (Test-Path $log) { Get-Content $log -Tail 200 }
-            throw "RoofSpanSetup.exe failed (exit $($p.ExitCode))"
+          # Prove independence from BOTH the source files AND the network: delete the downloaded installers
+          # and block all outbound Internet traffic during install (loopback 127.0.0.0/8 is not filtered by
+          # Windows Firewall, so the local backend health check still works). A self-contained offline
+          # installer must succeed with no downloads.
+          Remove-Item $env:EDB_INSTALLER, $env:WV_INSTALLER -Force
+          New-NetFirewallRule -DisplayName "RoofSpanOfflineTest" -Direction Outbound -Action Block -RemoteAddress Internet -Profile Any | Out-Null
+          $code = 1
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "setup.burn.log"
+            $p = Start-Process $env:SETUP_EXE -ArgumentList @("/quiet","/norestart","/log","`"$log`"") -Wait -PassThru
+            $code = $p.ExitCode
+          } finally {
+            Remove-NetFirewallRule -DisplayName "RoofSpanOfflineTest" -ErrorAction SilentlyContinue
           }
+          if ($code -ne 0) { if (Test-Path $log) { Get-Content $log -Tail 200 }; throw "offline RoofSpanSetup.exe failed (exit $code)" }
+          Write-Host "OK: complete EXE installed with Internet blocked and the source prerequisites deleted"
+
+      - name: Prove BOTH prerequisites + Office came up (no reinstall)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
           # PostgreSQL: the REAL RoofSpan-managed EDB service must exist, be a genuine EDB install (binPath
           # under C:\Program Files\PostgreSQL), and be running. A stub or preinstalled server does not count.
@@ -647,18 +670,6 @@ jobs:
           if (-not (Test-Path $cfg)) { throw "first-run bootstrap did not create roofspan.env" }
           if ((Get-Content $cfg -Raw) -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still has the placeholder password" }
           Write-Host "OK: RoofSpan Office backend provisioned + healthy on the freshly installed PostgreSQL"
-
-      - name: The REAL WebView2 standalone installer + production args succeed (idempotent repair)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          # Re-download only to exercise the actual installer + '/silent /install' args end to end (proves
-          # the WebView2 prerequisite command is correct even though the bundle skipped it as present).
-          $wv = Join-Path $env:RUNNER_TEMP "wv2.exe"
-          Invoke-WebRequest "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $wv
-          $r = Start-Process $wv -ArgumentList @("/silent","/install") -Wait -PassThru
-          if ($r.ExitCode -ne 0) { throw "WebView2 standalone /silent /install returned $($r.ExitCode)" }
-          Write-Host "OK: real WebView2 Evergreen Standalone installer + production args succeeded"
 
       - name: Dump logs (on failure)
         if: failure()
