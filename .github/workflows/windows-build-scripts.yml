@@ -5,10 +5,15 @@ on:
   push:
     paths:
       - "windows/**"
+      - "frontend/**"
+      - "packages/roof-sketch-core/**"
       - ".github/workflows/windows-build-scripts.yml"
   pull_request:
     paths:
       - "windows/**"
+      - "frontend/**"
+      - "packages/roof-sketch-core/**"
+      - ".github/workflows/windows-build-scripts.yml"
 
 jobs:
   db-bootstrap-integration:
@@ -46,13 +51,20 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install validation dependencies
+        run: pip install pytest PyYAML
 
       - name: Python regression checks (ASCII, specs, venv, yarn, release contract)
         run: |
           pytest -q windows/tests/test_build_scripts.py
           pytest -q windows/tests/test_relay_connector_release_contract.py
+
+      - name: Parse inline workflow PowerShell (including the default Windows shell)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pytest -q windows/tests/test_workflow_powershell.py
+          if ($LASTEXITCODE -ne 0) { throw "Inline workflow PowerShell validation failed" }
 
       - name: PowerShell parser validation (real parse of every .ps1)
         shell: pwsh
@@ -273,8 +285,8 @@ jobs:
 
           function Assert-SinglePassword($result, [string]$label) {
             $arr = @($result)
-            if ($arr.Count -ne 1) { throw "$label: Invoke-Prep returned $($arr.Count) objects, expected exactly 1 (stdout leak?)" }
-            if ($arr[0] -isnot [string]) { throw "$label: Invoke-Prep returned a $($arr[0].GetType().Name), expected [string]" }
+            if ($arr.Count -ne 1) { throw "${label}: Invoke-Prep returned $($arr.Count) objects, expected exactly 1 (stdout leak?)" }
+            if ($arr[0] -isnot [string]) { throw "${label}: Invoke-Prep returned a $($arr[0].GetType().Name), expected [string]" }
             return [string]$arr[0]
           }
 
@@ -773,7 +785,7 @@ jobs:
           Copy-Item (Join-Path $env:RUNNER_TEMP "setup.burn.log") $out -ErrorAction SilentlyContinue
           Copy-Item "C:\ProgramData\RoofSpan\prereq-diag.log" $out -ErrorAction SilentlyContinue
           Copy-Item "C:\ProgramData\RoofSpan\logs\*" $out -Recurse -ErrorAction SilentlyContinue
-          Copy-Item "C:\ProgramData\RoofSpan\config\roofspan.env" (Join-Path $out "roofspan.env.txt") -ErrorAction SilentlyContinue
+          # roofspan.env contains database credentials; never include it in uploaded diagnostics.
           Write-Host "collected:"; Get-ChildItem $out -ErrorAction SilentlyContinue | Format-Table Name,Length | Out-String | Write-Host
 
       - name: Dump logs (on failure)
