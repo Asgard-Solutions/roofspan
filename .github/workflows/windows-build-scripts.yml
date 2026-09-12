@@ -703,6 +703,14 @@ jobs:
           "SETUP_EXE=$setup" | Out-File -Append $env:GITHUB_ENV
           Write-Host ("setup size = {0} MB" -f [math]::Round((Get-Item $setup).Length/1MB, 1))
 
+      - name: Verify the map worker is packaged with the real frontend
+        shell: pwsh
+        env:
+          ROOFSPAN_FRONTEND_BUILD: ${{ runner.temp }}/stage/frontend
+        run: |
+          node --test frontend/tests/maplibre-build.node.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "MapLibre offline worker packaging regression failed" }
+
       - name: Prove the REAL WebView2 Evergreen Standalone installer + production args work
         shell: pwsh
         run: |

@@ -1,5 +1,6 @@
 // craco.config.js
 const path = require("path");
+const MapLibreRuntimePlugin = require("./plugins/maplibre-runtime");
 require("dotenv").config();
 
 // Check if we're in development/preview mode (not production build)
@@ -84,6 +85,14 @@ let webpackConfig = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+
+      // MapLibre's dynamic URL resolves at runtime, not as a webpack dependency context.
+      // src/lib/maplibre.js supplies the worker URL; both native modules are emitted locally.
+      webpackConfig.module.rules.push({
+        test: /[\\/]maplibre-gl[\\/]dist[\\/]maplibre-gl\.mjs$/,
+        parser: { url: false },
+      });
+      webpackConfig.plugins.push(new MapLibreRuntimePlugin());
 
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {
