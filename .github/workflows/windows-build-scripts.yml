@@ -233,19 +233,27 @@ jobs:
           $opt = "C:\ProgramData\RoofSpan\identity\pg_install.optionfile"
           Add-Type -AssemblyName System.Security
 
-          function Invoke-Prep($password) {
+          function Invoke-Prep([string]$password) {
             Remove-Item -Recurse -Force "C:\ProgramData\RoofSpan\identity" -ErrorAction SilentlyContinue
             $prepWxs = Join-Path $work "prep.wxs"
             New-Bundle "PostgreSQLPasswordPrep" "5f5f5f5f-1111-4a11-9a11-aaaaaaaaaaaa" $prepArgsProd "Prepare-PostgreSQL.ps1" | Set-Content -Encoding UTF8 $prepWxs
             $prepSetup = Join-Path $work "PrepSetup.exe"
             Remove-Item $prepSetup -ErrorAction SilentlyContinue
-            wix build $prepWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $prepSetup
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $prepSetup)) { throw "prep test bundle did not build (WIX error?)" }
+            # Capture ALL wix build streams to a file (preserved in diagnostics) so build MESSAGES NEVER
+            # leak into this function's PowerShell output stream (that leak concatenated WiX text with the
+            # returned password and broke the equality check), and check the native exit code IMMEDIATELY.
+            $wixLog = Join-Path $work "prep-wixbuild.log"
+            wix build $prepWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $prepSetup *> $wixLog
+            $wixRc = $LASTEXITCODE
+            if ($wixRc -ne 0 -or -not (Test-Path $prepSetup)) {
+              if (Test-Path $wixLog) { Get-Content $wixLog }
+              throw "prep test bundle did not build (wix exit $wixRc)"
+            }
             $prepLog = Join-Path $work "prep.burn.log"
             $procArgs = @("/quiet","/norestart","/log","`"$prepLog`"")
             if ($password) { $procArgs += "PgSuperPassword=$password" }
             $p = Start-Process $prepSetup -ArgumentList $procArgs -Wait -PassThru
-            if ($p.ExitCode -ne 0) { if (Test-Path $prepLog) { Get-Content $prepLog -Tail 120 }; throw "Burn prep bundle exited $($p.ExitCode) (the 0x1 regression?)" }
+            if ($p.ExitCode -ne 0) { if (Test-Path $prepLog) { Get-Content $prepLog -Tail 120 }; throw "Burn prep bundle exited $($p.ExitCode)" }
             $log = if (Test-Path $prepLog) { Get-Content $prepLog -Raw } else { "" }
             foreach ($bad in @("::IsNullOrWhiteSpace","::Create()","::ToBase64String","::Protect","::WriteAllBytes","-replace '',")) {
               if ($log -match [regex]::Escape($bad)) { throw "Burn formatting corrupted the prep command: found '$bad'" }
@@ -254,22 +262,31 @@ jobs:
             if (-not (Test-Path $opt)) { throw "prep did not create pg_install.optionfile" }
             $optLine = (Get-Content $opt | Where-Object { $_ -match '^superpassword=' } | Select-Object -First 1)
             if (-not $optLine) { throw "option file has no superpassword line" }
-            $optPw = $optLine.Substring("superpassword=".Length)
+            $optPw = [string]$optLine.Substring("superpassword=".Length)
             if ([string]::IsNullOrWhiteSpace($optPw)) { throw "superpassword is empty" }
             $enc = [IO.File]::ReadAllBytes($bin)
             $dec = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine))
             if ($dec -ne $optPw) { throw "DPAPI-unprotected pg_super.bin does not match the option-file password" }
-            return $optPw
+            # Emit EXACTLY one string on the output stream (nothing else in this function writes to output).
+            Write-Output $optPw
           }
 
-          # 1) SUPPLIED password path: the admin-provided value must be honored end to end.
+          function Assert-SinglePassword($result, [string]$label) {
+            $arr = @($result)
+            if ($arr.Count -ne 1) { throw "$label: Invoke-Prep returned $($arr.Count) objects, expected exactly 1 (stdout leak?)" }
+            if ($arr[0] -isnot [string]) { throw "$label: Invoke-Prep returned a $($arr[0].GetType().Name), expected [string]" }
+            return [string]$arr[0]
+          }
+
+          # 1) SUPPLIED password path: the admin-provided value must be honored end to end. Assert type +
+          #    output count BEFORE comparing. Neither password is ever printed (only lengths, if unequal).
           $known = "Rs!Clean_" + [Guid]::NewGuid().ToString("N").Substring(0,12)
-          $got = Invoke-Prep $known
-          if ($got -ne $known) { throw "supplied PgSuperPassword was not honored by the prep step" }
-          Write-Host "OK: supplied-password prep ran through real Burn; option file + DPAPI round-trip verified"
+          $got = Assert-SinglePassword (Invoke-Prep $known) "supplied-password"
+          if ($got -ne $known) { throw "supplied PgSuperPassword was not honored by the prep step (lengths got=$($got.Length) expected=$($known.Length))" }
+          Write-Host "OK: supplied-password prep ran through real Burn; single-string return + DPAPI round-trip verified"
 
           # 2) GENERATED password path: with no PgSuperPassword, prep must generate a strong random one.
-          $gen = Invoke-Prep $null
+          $gen = Assert-SinglePassword (Invoke-Prep $null) "generated-password"
           if ($gen -eq $known) { throw "generated password unexpectedly equals the supplied one" }
           if ($gen.Length -lt 16) { throw "generated password is too short/weak: length $($gen.Length)" }
           Write-Host "OK: generated-password prep produced a strong random secret with DPAPI round-trip"
@@ -278,8 +295,9 @@ jobs:
           $cleanWxs = Join-Path $work "cleanup.wxs"
           New-Bundle "PostgreSQLPasswordCleanup" "6f6f6f6f-2222-4b22-9b22-bbbbbbbbbbbb" $cleanupArgsProd "Cleanup-PostgreSQL.ps1" | Set-Content -Encoding UTF8 $cleanWxs
           $cleanSetup = Join-Path $work "CleanupSetup.exe"
-          wix build $cleanWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $cleanSetup
-          if ($LASTEXITCODE -ne 0) { throw "cleanup test bundle did not build" }
+          $cleanWixLog = Join-Path $work "cleanup-wixbuild.log"
+          wix build $cleanWxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext -o $cleanSetup *> $cleanWixLog
+          if ($LASTEXITCODE -ne 0) { if (Test-Path $cleanWixLog) { Get-Content $cleanWixLog }; throw "cleanup test bundle did not build" }
           $c = Start-Process $cleanSetup -ArgumentList @("/quiet","/norestart") -Wait -PassThru
           if ($c.ExitCode -ne 0) { throw "Burn cleanup bundle exited $($c.ExitCode)" }
           if (Test-Path $opt) { throw "cleanup did not remove pg_install.optionfile" }
@@ -307,14 +325,19 @@ jobs:
           $diag = Join-Path $work "prereq-diag.log"
           Write-Host "===== prereq breadcrumb (prereq-diag.log) ====="
           if (Test-Path $diag) {
+            $c = Get-Content $diag -Raw
             Get-Content $diag
-            if ((Get-Content $diag -Raw) -match 'PREP-START') {
-              Write-Host "CLASSIFICATION: powershell.exe launched AND Prepare-PostgreSQL.ps1 STARTED -> the failure is INSIDE the script (inspect the stop/end markers above)."
+            $ended = ($c -match 'PREP-END-OK') -or ($c -match 'CLEANUP-END-OK') -or ($c -match 'VERIFY-END-OK')
+            $started = $c -match 'PREP-START'
+            if ($ended) {
+              Write-Host "CLASSIFICATION: a helper reached its *-END-OK marker AND its package exited 0 -> the prerequisite step COMPLETED SUCCESSFULLY. The failure is in a SUBSEQUENT test-harness assertion (e.g. return-value capture / password comparison), NOT the script or its launch. Inspect the step output above the breadcrumb."
+            } elseif ($started) {
+              Write-Host "CLASSIFICATION: PREP-START present but NO *-END-OK. The script STARTED but the run did not record success. PREP-START ALONE does NOT establish WHERE the failure occurred (it may be later in the script, the package, or a harness assertion). Inspect the Burn log + package exit code + wix build log below before attributing a cause."
             } else {
-              Write-Host "CLASSIFICATION: breadcrumb file exists but has NO PREP-START -> the script did not begin its body."
+              Write-Host "CLASSIFICATION: breadcrumb file exists but records no start/end markers -> INCONCLUSIVE. Inspect the Burn + wix build logs below."
             }
           } else {
-            Write-Host "CLASSIFICATION: no prereq-diag.log at all -> PowerShell / the prep script NEVER ran. The failure is BEFORE package execution (bundle build or Burn engine/payload startup). Inspect the .wxs + Burn logs in the uploaded artifact; do NOT attribute this to the script body."
+            Write-Host "CLASSIFICATION: no prereq-diag.log found. This is INCONCLUSIVE, NOT proof the script never ran: the breadcrumb writer suppresses its own errors (try/catch), so the file can be absent even if the script executed. Determine what actually happened from the wix build log (build failure?), the Burn log + package exit code (launch/execution?), and the step output below - do NOT conclude 'never started' from a missing breadcrumb alone."
           }
           Write-Host "===== Burn logs (tail) ====="
           Get-ChildItem $work -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {

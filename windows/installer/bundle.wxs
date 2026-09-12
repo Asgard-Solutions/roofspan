@@ -92,9 +92,12 @@
                [Convert], [Security.Cryptography...], [IO.File], [Text.Encoding]) and corrupt the command
                (the confirmed clean-computer 0x1 failure). The script is invoked by its ABSOLUTE cached path
                via the legitimate Burn engine variable [WixBundleExecutePackageCacheFolder] (NOT a relative
-               path - Burn's per-package working directory is not guaranteed, which caused the
-               0x80070490 ERROR_NOT_FOUND launch failure). [PgSuperPassword] stays Hidden (masked in logs)
-               and, when empty, the script generates a strong random password itself. -->
+               path). This is a deliberate robustness choice - Burn's per-package working directory is not a
+               documented guarantee, so an absolute path removes that dependency. NOTE: an earlier clean run
+               failed with 0x80070490 (ERROR_NOT_FOUND) under the previous relative-path launch, but that
+               specific cause was never isolated; the absolute path is retained as the safer contract, not
+               as a proven fix for that exit code. [PgSuperPassword] stays Hidden (masked in logs) and,
+               when empty, the script generates a strong random password itself. -->
       <ExePackage Id="PostgreSQLPasswordPrep"
                   CacheId="RoofSpanPostgreSQLPasswordPrep"
                   DisplayName="RoofSpan PostgreSQL preparation"
