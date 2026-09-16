@@ -153,6 +153,8 @@ const rowFor = (rows, tt, sketchId, metric) => rows.find((r) => r.target_type ==
 {
   const doc = R.acceptProposalDecision(baseDoc(), { target_type: "facet", metric: "area_sqft", target_id: "f1" }, "MF1", 80);
   const matched = detail(); matched.facets.find((f) => f.id === "MF1").area_sqft = 80;
+  const unknown = R.finalizeDecisions(doc, { measurementDetail: matched, measurementMutationState: "unknown" });
+  assert.strictEqual(unknown.changed, false, "unavailable queue metadata must not promote a pending acceptance");
   const f1 = R.finalizeDecisions(doc, { measurementDetail: matched, measurementMutationState: "synced" });
   assert.strictEqual(f1.changed, true); assert.strictEqual(f1.promoted.length, 1);
   const dec = f1.doc.proposal_decisions.find((x) => x.target_id === "MF1");

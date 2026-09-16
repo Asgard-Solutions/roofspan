@@ -2,11 +2,13 @@
 simple conflict detection, and backend-authorized photo upload (no object-storage creds on device)."""
 import os
 import uuid
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, func
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, field_validator
@@ -20,6 +22,7 @@ from services.object_storage import put_object, get_object
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
+from services import office_outbox
 from services.property_detail import build_property_detail, conflict_if_stale
 from visit_outcomes import validate_outcome
 from schemas_measurements import MeasurementRevisionIn
@@ -298,6 +301,56 @@ async def update_measurement(revision_id: str, payload: MeasurementRevisionIn, r
         await meas_svc.transition_status(db, rev, "field_complete", user)
     out = await meas_svc.build_out(db, rev)
     await log_action(db, user=user, action="measurement.update", entity_type="measurement_revision", entity_id=rev.id, detail={"via": "mobile"}, request=request)
+    await db.commit()
+    return out
+
+
+@router.post("/measurements/{revision_id}/new-revision", status_code=201)
+async def new_measurement_revision(
+    revision_id: str,
+    request: Request,
+    idempotency_key: str = Header(..., min_length=1, max_length=128),
+    user: User = Depends(require_roles(*FIELD_ROLES)),
+    db: AsyncSession = Depends(get_db),
+):
+    if not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank")
+    rev = await db.get(MeasurementRevision, revision_id)
+    if not rev:
+        raise HTTPException(status_code=404, detail="Measurement revision not found")
+    measurement_set = await db.get(MeasurementSet, rev.set_id)
+    # Check current ownership before reserving a key or exposing any replayed data.
+    await _assert_measurement_scope(db, measurement_set, user)
+
+    entity_type = "mobile_measurement_new_revision"
+    fingerprint = hashlib.sha256(f"{user.id}:{rev.id}".encode()).hexdigest()
+    # A conflicting insert waits for the winning transaction without rolling back
+    # this request. Always validate the winning key, including after a race.
+    inserted = (await db.execute(
+        insert(IdempotencyKey)
+        .values(key=idempotency_key, entity_type=entity_type, entity_id="pending", request_fingerprint=fingerprint)
+        .on_conflict_do_nothing(index_elements=[IdempotencyKey.key])
+        .returning(IdempotencyKey.key)
+    )).scalar_one_or_none()
+    key = await db.get(IdempotencyKey, idempotency_key)
+    if inserted is None:
+        if not key or key.entity_type != entity_type or key.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="Idempotency-Key already used for a different operation, user, or source revision")
+        prior = await db.get(MeasurementRevision, key.entity_id) if key.entity_id != "pending" else None
+        if not prior:
+            raise HTTPException(status_code=409, detail="The revision previously created with this key is unavailable")
+        out = await meas_svc.build_out(db, prior)
+        out["replayed"] = True
+        return out
+
+    new = await meas_svc.clone_revision(db, rev, user)
+    new.source = "field"
+    key.entity_id = str(new.id)
+    out = await meas_svc.build_out(db, new)
+    await log_action(db, user=user, action="measurement.new_revision", entity_type="measurement_revision",
+                     entity_id=str(new.id), detail={"via": "mobile", "from": rev.revision_number, "to": new.revision_number},
+                     request=request, commit=False)
+    await office_outbox.emit_for_revision(db, new, "measurement.new_revision")
     await db.commit()
     return out
 

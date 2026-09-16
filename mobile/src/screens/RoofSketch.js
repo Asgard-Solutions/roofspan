@@ -19,10 +19,20 @@ import SketchMeasurementsPanel from "../components/SketchMeasurementsPanel";
 import ProposalPanel from "../components/ProposalPanel";
 import { scopeStructureForGenerator } from "../sketchMeasurementsSummary";
 import { C } from "../theme";
+import RoofSketchPreview from "./RoofSketchPreview";
 
 const TOOLS = [["select", "Select"], ["draw", "Draw"], ["facet", "Facet"], ["penetration", "Roof feature"], ["pan", "Pan"]];
 
-export default function RoofSketch({ route }) {
+export default function RoofSketch(props) {
+  // A measurement-card preview is a separate read-only view of that exact snapshot. Never fetch a
+  // saved editor document while opening it, including when the snapshot is unavailable or invalid.
+  if (Object.prototype.hasOwnProperty.call(props.route?.params || {}, "measurement_preview")) {
+    return <RoofSketchPreview {...props} />;
+  }
+  return <RoofSketchEditor {...props} />;
+}
+
+function RoofSketchEditor({ route }) {
   const { revision_id, structure_id, structure_name = "Roof", editable = true } = route.params || {};
   const readOnly = !editable;
   const [ready, setReady] = useState(false);
@@ -39,6 +49,9 @@ export default function RoofSketch({ route }) {
   const [locked, setLocked] = useState(false);          // B3D: revision locked live while editor is open
   const [reviewOpen, setReviewOpen] = useState(false);  // B3C: conflict review modal visibility
   const [measDetail, setMeasDetail] = useState(null);   // Phase C: authoritative measurement revision detail
+  const [measLoadState, setMeasLoadState] = useState("loading");
+  const [measQueueError, setMeasQueueError] = useState(false);
+  const measReadSeq = useRef(0);
   const [measMutState, setMeasMutState] = useState(null); // Phase C: measurement_update mutation state
   const [proposal, setProposal] = useState(null);          // Generate-Proposed preview (unsaved), or null
   const [regen, setRegen] = useState(null);                // existing-sketch: {result, comparison, fingerprint}
@@ -265,18 +278,34 @@ export default function RoofSketch({ route }) {
   // then FINALIZE any pending acceptances whose value the revision now actually holds (durable promotion,
   // skipped while editing is blocked so a locked revision is never mutated). Event-driven off the queue.
   const refreshMeasurement = useCallback(async () => {
+    const seq = ++measReadSeq.current;
     try {
       const res = await cache.measurement(revision_id);
-      const detail = res && res.data ? res.data : null;
-      const mm = await currentMeasurementMutation(revision_id);
+      if (seq !== measReadSeq.current) return;
+      const detail = res?.data;
+      if (!detail || detail.id !== revision_id) throw new Error("measurement_unavailable");
+      // Display usable measurements before optional queue metadata is read. A queue failure must not
+      // discard a successful GET or turn a populated roof into a misleading 0 SF / 0 planes summary.
       setMeasDetail(detail);
+      setMeasLoadState(res.stale ? "cached" : "ready");
+      let mm;
+      try { mm = await currentMeasurementMutation(revision_id); }
+      catch (_) {
+        if (seq === measReadSeq.current) { setMeasQueueError(true); setMeasMutState("unknown"); }
+        return;
+      }
+      if (seq !== measReadSeq.current) return;
+      setMeasQueueError(false);
       setMeasMutState(mm ? mm.state : null);
       const ed = editorRef.current;
       if (ed && !editingBlockedRef.current) {
         const fin = RECON.finalizeDecisions(ed.document, { measurementDetail: detail, measurementMutationState: mm ? mm.state : null });
         if (fin.changed) { ed.commit(fin.doc); settle(); }
       }
-    } catch (e) { /* offline/cache miss — proposals simply compare against what we have */ }
+    } catch (_) {
+      if (seq !== measReadSeq.current) return;
+      setMeasDetail(null); setMeasLoadState("unavailable");
+    }
   }, [revision_id, settle]);
 
   useEffect(() => {
@@ -309,7 +338,7 @@ export default function RoofSketch({ route }) {
   // promotion happens only in refreshMeasurement once the authoritative revision holds the value.
   const onAcceptProposal = useCallback(async (row) => {
     const ed = editorRef.current;
-    if (!ed || editingBlockedRef.current || !row || !row.canAccept || !row.relational_id) return;
+    if (!ed || editingBlockedRef.current || measQueueError || !measDetail || !row || !row.canAccept || !row.relational_id) return;
     const rec = { target_type: row.target_type, metric: row.metric, target_id: row.sketch_id };
     const res = await cache.measurement(revision_id);
     const authoritative = res && res.data ? res.data : measDetail;
@@ -334,7 +363,7 @@ export default function RoofSketch({ route }) {
     ed.commit(RECON.acceptProposalDecision(ed.document, rec, row.relational_id, row.proposed));
     settle();
     refreshMeasurement();
-  }, [revision_id, measDetail, settle, refreshMeasurement]);
+  }, [revision_id, measDetail, measQueueError, settle, refreshMeasurement]);
 
   // Keep Current: provenance only — no measurement mutation. Durable via the sketch draft/queue.
   const onKeepCurrent = useCallback((row) => {
@@ -407,7 +436,7 @@ export default function RoofSketch({ route }) {
   const scaleResolved = editor.document.scale && editor.document.scale.resolved;
   const proposals = RECON.buildFieldProposals({
     doc: editor.document, measurementDetail: measDetail, structureId: structure_id,
-    editingBlocked, measurementMutationState: measMutState,
+    editingBlocked: editingBlocked || measQueueError || !measDetail, measurementMutationState: measMutState,
   });
 
   // --- Generate Proposed Sketch (Field, empty-sketch only) ----------------------------------------
@@ -622,7 +651,7 @@ export default function RoofSketch({ route }) {
         </View>
       ) : null}
 
-      <SketchMeasurementsPanel measDetail={measDetail} structureId={structure_id} />
+      <SketchMeasurementsPanel measDetail={measDetail} structureId={structure_id} loadState={measLoadState} queueError={measQueueError} onRetry={refreshMeasurement} />
 
       <ProposalPanel rows={proposals} onAccept={onAcceptProposal} onKeep={onKeepCurrent} />
 

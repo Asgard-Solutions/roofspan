@@ -87,7 +87,7 @@ function persistedMeasurementValue(detail, targetType, relationalId, metric) {
 // the proposed value AND the measurement-update mutation is no longer in a non-final state. A missing
 // mutation (null) means "not pending" — the value is already what it should be.
 function _mutationSettled(state) {
-  return state !== "pending" && state !== "failed" && state !== "conflict" && state !== "locked";
+  return state !== "unknown" && state !== "pending" && state !== "failed" && state !== "conflict" && state !== "locked";
 }
 function shouldPromote(decision, persisted, mutationState) {
   return !!decision && decision.decision === PENDING

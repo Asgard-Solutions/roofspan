@@ -41,6 +41,7 @@ function _statusMeta(sketchResult) {
 function resolveFieldSketchViewerOpen({ draft, sketchResult, mutation, mutationError, structureId, readOnly } = {}) {
   // A queue-lookup failure is OPTIONAL for viewing: default to no active mutation and keep opening.
   const hasActiveMutation = !mutationError && !!(mutation && (mutation.state === "pending" || mutation.state === "failed" || mutation.state === "conflict"));
+  const viewerDraft = readOnly ? null : draft;
   const server = sketchResult && sketchResult.data ? sketchResult.data : null;
   // AUTHORITATIVE "no sketch yet" (HTTP 404) is a legitimate empty state, NOT a load failure.
   const notFound = !!(sketchResult && sketchResult.notFound);
@@ -52,13 +53,13 @@ function resolveFieldSketchViewerOpen({ draft, sketchResult, mutation, mutationE
 
   // No local draft to fall back on and the sketch genuinely could not be loaded → explicit retryable
   // error. Never mark the screen ready with incomplete data. (An authoritative 404 is NOT this case.)
-  if ((!draft || !draft.document) && sketchLoadFailed) {
+  if ((!viewerDraft || !viewerDraft.document) && sketchLoadFailed) {
     return { phase: "error", reason: "sketch_load_failed", statusMeta, hasActiveMutation, diagnostics };
   }
 
-  const initial = resolveInitialSketch({ draft, server, structureId, hasActiveMutation, readOnly });
+  const initial = resolveInitialSketch({ draft: viewerDraft, server, structureId, hasActiveMutation, readOnly });
 
-  // Locked/read-only revision with no draft and no server/cached copy: the resolver would return a fresh
+  // Locked/read-only revision with no authoritative server/cached copy: the resolver would return a fresh
   // "new" document — that must NOT be presented as a real roof sketch on a locked revision.
   if (readOnly && initial.source === "new") {
     return { phase: "empty_readonly", statusMeta, hasActiveMutation, diagnostics };
