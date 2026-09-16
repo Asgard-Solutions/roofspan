@@ -85,8 +85,19 @@ def test_verify_authenticates_legacy_application_connection(tmp_path):
     assert "VERIFY-END-OK" in output
 
 
+def test_verify_uses_nondefault_port_from_legacy_application_connection(tmp_path):
+    import json
+    config = CONFIG.replace(":5432/", ":5442/")
+    result, output = run_helper(tmp_path, "Verify-PostgreSQL.ps1", config=config)
+    assert result.returncode == 0, output
+    args = json.loads((tmp_path / "query-args.json").read_text(encoding="utf-8-sig"))
+    assert str(args[args.index("-p") + 1]) == "5442"
+    assert "VERIFY-END-OK" in output
+
+
 @pytest.mark.parametrize("config", [None, "", CONFIG.replace("127.0.0.1", "example.com"),
-    CONFIG.replace(":5432/", ":5433/"), CONFIG.replace("/roofspan\n", "/other\n"),
+    CONFIG.replace(":5432/", ":0/"), CONFIG.replace(":5432/", ":65536/"),
+    CONFIG.replace(":5432/", ":notaport/"), CONFIG.replace("/roofspan\n", "/other\n"),
     CONFIG.replace("//roofspan:", "//postgres:"), CONFIG.replace(PASSWORD, "__GENERATED_AT_FIRST_RUN__"),
     CONFIG + CONFIG, CONFIG.replace("/roofspan\n", "/roofspan?host=example.com\n")])
 def test_verify_rejects_missing_or_noncanonical_legacy_credentials(tmp_path, config):

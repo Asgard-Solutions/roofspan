@@ -167,7 +167,8 @@ installer\build.ps1 -StageDir ..\..\_stage -PostgresInstaller <edb-postgresql-x6
   health check** → **RoofSpan MSI**. The health check authenticates the saved superuser credential or,
   for legacy installations without `pg_super.bin`, the provisioned local application credential in
   `roofspan.env`. Missing/invalid credentials stop setup before Office; service existence alone never
-  passes the health check. See BUILD.md for legacy recovery. Script payloads are anchored to the bundle directory (`$(sys.SOURCEFILEDIR)`)
+  passes the health check. Legacy verification uses the local PostgreSQL port saved in `DATABASE_URL`.
+  See BUILD.md for legacy recovery. Script payloads are anchored to the bundle directory (`$(sys.SOURCEFILEDIR)`)
   so the bundle compiles from the repo root or from `installer\`. No committed secrets
   (`PostgresInstaller`/`WebView2StandaloneInstaller`/`PgSuperPassword` are overridable install-time
   variables/paths).

@@ -97,9 +97,10 @@ Select-Object FullName,LastWriteTime,Length
 ## Upgrading an existing database without pg_super.bin
 Starting with 0.4.7, the installer can validate an older installation using its existing application
 credential in `C:\ProgramData\RoofSpan\config\roofspan.env`. It requires the backend's provisioned
-`DATABASE_URL=postgresql+asyncpg://roofspan:<password>@127.0.0.1:5432/roofspan` format, successful TCP
+`DATABASE_URL=postgresql+asyncpg://roofspan:<password>@127.0.0.1:<local-port>/roofspan` format, successful TCP
 authentication, read access to the existing `users` and `leads` tables, and a supported server version.
-The check does not change the password, generate a replacement `pg_super.bin`, or reinstall PostgreSQL.
+The verifier uses the saved local port, including legacy non-default ports such as 5442. The check does
+not change the password, generate a replacement `pg_super.bin`, or reinstall PostgreSQL.
 The backend already supports these legacy installations without a stored superuser credential.
 
 If neither credential is available or authentication fails, setup stops before Office installs. Restore

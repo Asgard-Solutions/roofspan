@@ -80,16 +80,25 @@ try {
         if (-not (Test-Path $configFile -PathType Leaf)) { throw 'Missing legacy configuration' }
         $dbLines = @(Get-Content $configFile | Where-Object { $_ -match '^\s*DATABASE_URL\s*=' })
         if ($dbLines.Count -ne 1) { throw 'Missing or duplicate DATABASE_URL' }
-        # Match the same unquoted, provisioned format consumed by db_bootstrap.py.
-        if ($dbLines[0].Trim() -cnotmatch '^DATABASE_URL=postgresql\+asyncpg://roofspan:([^@/\s]+)@127\.0\.0\.1:5432/roofspan$') {
+        # Match the same unquoted, provisioned format consumed by db_bootstrap.py. Older RoofSpan
+        # installations can use a non-default local PostgreSQL port; preserve and authenticate the exact
+        # saved local connection instead of assuming the fresh-install default (5432).
+        if ($dbLines[0].Trim() -cnotmatch '^DATABASE_URL=postgresql\+asyncpg://roofspan:([^@/\s]+)@127\.0\.0\.1:([0-9]{1,5})/roofspan$') {
             throw 'Noncanonical legacy connection'
         }
-        $pw = [Uri]::UnescapeDataString($Matches[1])
+        $encodedPw = $Matches[1]
+        $legacyPortText = $Matches[2]
+        $legacyPort = 0
+        if (-not [int]::TryParse($legacyPortText, [ref]$legacyPort) -or $legacyPort -lt 1 -or $legacyPort -gt 65535) {
+            throw 'Invalid legacy PostgreSQL port'
+        }
+        $pw = [Uri]::UnescapeDataString($encodedPw)
         if ([string]::IsNullOrWhiteSpace($pw) -or $pw -eq '__GENERATED_AT_FIRST_RUN__' -or $pw -match '[\x00\r\n]') {
             throw 'Unprovisioned legacy credential'
         }
         $dbUser = 'roofspan'
         $dbName = 'roofspan'
+        $pgPort = $legacyPort
         # Read permission on real application tables is required, not just a successful server login.
         # LIMIT 0 reads no customer rows and does not mutate the database.
         $query = 'SELECT 1 FROM public.users LIMIT 0; SELECT 1 FROM public.leads LIMIT 0; SHOW server_version_num;'
@@ -105,11 +114,12 @@ try {
 } catch {
     $pw = $null
     Stop-WithError ("The existing PostgreSQL credential could not be loaded. Legacy installs require a " +
-        "provisioned DATABASE_URL for roofspan on 127.0.0.1:5432/roofspan in $configFile; newer installs " +
+        "provisioned DATABASE_URL for roofspan on 127.0.0.1:<local-port>/roofspan in $configFile; newer installs " +
         "require a readable pg_super.bin. Restore the matching configuration/identity backup or contact " +
         "RoofSpan support. Do not delete the database or reset its password.")
 } finally {
     $dbLines = $null
+    $encodedPw = $null
     $Matches = $null
 }
 
