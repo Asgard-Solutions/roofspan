@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import * as maplibregl from "maplibre-gl";
+import * as maplibregl from "@/lib/maplibre";
 import Supercluster from "supercluster";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { toast } from "sonner";

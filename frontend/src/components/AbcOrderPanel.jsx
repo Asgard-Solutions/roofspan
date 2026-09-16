@@ -87,7 +87,6 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
       }
     })();
   }, [open, poState?.abc_branch_number]);
-  useEffect(() => { if (open && submitted) { refreshStatus(); loadActivity(); } /* eslint-disable-next-line */ }, [open, submitted]);
 
   const submit = async () => {
     setSubmitting(true); setResult(null);
@@ -115,11 +114,16 @@ export default function AbcOrderPanel({ open, onOpenChange, po, onChanged }) {
     } catch (e) { toast.error(apiError(e)); } finally { setSubmitting(false); }
   };
 
-  const refreshStatus = async () => {
+  const refreshStatus = useCallback(async () => {
+    if (!po?.id) return;
     setLoading(true);
     try { const { data } = await api.post(`/purchase-orders/${po.id}/abc-refresh-status`); setDetail(data.detail); onChanged && onChanged(); }
     catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
-  };
+  }, [po?.id, onChanged]);
+
+  useEffect(() => {
+    if (open && submitted) { refreshStatus(); loadActivity(); }
+  }, [open, submitted, refreshStatus, loadActivity]);
 
   const reconcile = async () => {
     setLoading(true);

@@ -49,6 +49,7 @@ const EDGE_COLOR = { ridge: "#0f172a", hip: "#2563eb", valley: "#dc2626", dead_v
 const VB_W = 720, VB_H = 380, PAD = 24;
 
 const SNAP_LEVELS = { off: 0, subtle: 8, normal: 14, strong: 22 };
+const EMPTY_OFFSETS = Object.freeze({});
 export default function CombinedSitePlan({ structures = [], facets = [], edges = [], penetrations = [], sitePlan = null, editable = false, onChangeOffsets, propertyAddress = "", preparedBy = "", customerName = "", revisionId = null, saveNonce = 0 }) {
   const svgRef = useRef(null);
   const [drag, setDrag] = useState(null); // { sid, startClientX, startClientY, tvbx, tvby, guides }
@@ -57,7 +58,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
   const [snapLevel, setSnapLevel] = useState(() => { try { return localStorage.getItem("sitePlanSnap") || "normal"; } catch (e) { return "normal"; } });
   const [preparedFor, setPreparedFor] = useState(customerName || "");
   useEffect(() => { setPreparedFor((p) => p || customerName || ""); }, [customerName]);
-  const offsets = (sitePlan && sitePlan.offsets) || {};
+  const offsets = sitePlan?.offsets || EMPTY_OFFSETS;
   const setSnap = (lvl) => { setSnapLevel(lvl); try { localStorage.setItem("sitePlanSnap", lvl); } catch (e) {} };
 
   useEffect(() => { let ok = true; api.get("/company").then((r) => { if (ok) setCompany(r.data); }).catch(() => {}); return () => { ok = false; }; }, []);
@@ -373,7 +374,7 @@ export default function CombinedSitePlan({ structures = [], facets = [], edges =
         pdf.addImage(png.dataUrl, "JPEG", (pw - png.w * r2) / 2, t2, png.w * r2, png.h * r2);
       }
       return pdf;
-  }, [combined, view, propertyAddress, preparedBy, preparedFor, structurePng, company]);
+  }, [combined, propertyAddress, preparedBy, preparedFor, structurePng, company]);
 
   const exportPdf = useCallback(async () => {
     try { const pdf = await buildPdfDoc(); if (pdf) pdf.save("site-plan.pdf"); }
