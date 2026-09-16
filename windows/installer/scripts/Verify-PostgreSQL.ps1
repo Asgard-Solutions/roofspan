@@ -4,7 +4,7 @@
   the RoofSpan-managed PostgreSQL is genuinely usable - not merely that a service exists:
 
     - the RoofSpanPostgreSQL Windows service is registered (else the EDB install failed / is absent),
-    - the RoofSpan DPAPI superuser credential authenticates over TCP on 127.0.0.1:5432, and
+    - the saved DPAPI superuser credential OR the legacy application credential authenticates over TCP,
     - the server version is compatible (>= the supported floor).
 
   This validates BOTH the fresh-install path (EDB just ran) AND the skip path (a pre-existing managed
@@ -25,6 +25,7 @@ $pgHost      = '127.0.0.1'
 $pgPort      = 5432
 $minVersion  = 130000   # server_version_num floor (PostgreSQL 13); RoofSpan ships and supports newer.
 $diagLog     = 'C:\ProgramData\RoofSpan\prereq-diag.log'
+$configFile  = 'C:\ProgramData\RoofSpan\config\roofspan.env'
 
 function Write-Diag([string]$m) {
     try {
@@ -34,7 +35,7 @@ function Write-Diag([string]$m) {
 }
 
 function Stop-WithError([string]$message) {
-    Write-Diag 'VERIFY-STOP'
+    Write-Diag ("VERIFY-STOP: " + $message)
     Write-Host "ROOFSPAN-PREREQ-ERROR: $message"
     exit 1
 }
@@ -57,12 +58,6 @@ if (-not $svc) {
         "is free, and re-run RoofSpanSetup.exe.")
 }
 
-# 2) The RoofSpan credential must exist and decrypt (LocalMachine DPAPI, as SYSTEM).
-if (-not (Test-Path $pgSuperBin)) {
-    Stop-WithError ("The RoofSpan PostgreSQL credential ($pgSuperBin) is missing, so the installed database " +
-        "cannot be validated. Re-run RoofSpanSetup.exe or contact RoofSpan support.")
-}
-
 # 3) Locate psql.exe from the service's own image path (the exact EDB install servicing this machine).
 $imagePath = $svc.PathName
 if ($imagePath -match '^\s*"([^"]+)"') { $svcExe = $matches[1] } else { $svcExe = ($imagePath -split '\s+')[0] }
@@ -73,30 +68,74 @@ if (-not (Test-Path $psql)) {
         "PostgreSQL installation appears incomplete. Re-run RoofSpanSetup.exe or contact RoofSpan support.")
 }
 
-# 4) Authenticate over TCP with the decrypted superuser credential and read the server version. The
-#    password lives only in memory and PGPASSWORD, cleared immediately afterward; it is never logged.
-Add-Type -AssemblyName System.Security
-$enc = [System.IO.File]::ReadAllBytes($pgSuperBin)
-$pw = [System.Text.Encoding]::UTF8.GetString(
-    [System.Security.Cryptography.ProtectedData]::Unprotect(
-        $enc, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine))
+# 4) Use the existing credential. Legacy recovery is deliberately restricted to the backend's
+# provisioned local roofspan role/database, never a remote URL, arbitrary role, or replacement password.
+$dbUser = 'postgres'
+$dbName = 'postgres'
+$query = 'SHOW server_version_num;'
+$pw = $null
+$legacy = -not (Test-Path $pgSuperBin)
+try {
+    if ($legacy) {
+        if (-not (Test-Path $configFile -PathType Leaf)) { throw 'Missing legacy configuration' }
+        $dbLines = @(Get-Content $configFile | Where-Object { $_ -match '^\s*DATABASE_URL\s*=' })
+        if ($dbLines.Count -ne 1) { throw 'Missing or duplicate DATABASE_URL' }
+        # Match the same unquoted, provisioned format consumed by db_bootstrap.py.
+        if ($dbLines[0].Trim() -cnotmatch '^DATABASE_URL=postgresql\+asyncpg://roofspan:([^@/\s]+)@127\.0\.0\.1:5432/roofspan$') {
+            throw 'Noncanonical legacy connection'
+        }
+        $pw = [Uri]::UnescapeDataString($Matches[1])
+        if ([string]::IsNullOrWhiteSpace($pw) -or $pw -eq '__GENERATED_AT_FIRST_RUN__' -or $pw -match '[\x00\r\n]') {
+            throw 'Unprovisioned legacy credential'
+        }
+        $dbUser = 'roofspan'
+        $dbName = 'roofspan'
+        # Read permission on real application tables is required, not just a successful server login.
+        # LIMIT 0 reads no customer rows and does not mutate the database.
+        $query = 'SELECT 1 FROM public.users LIMIT 0; SELECT 1 FROM public.leads LIMIT 0; SHOW server_version_num;'
+        Write-Diag 'VERIFY-LEGACY-APPLICATION-CREDENTIAL'
+    } else {
+        # A present but damaged DPAPI secret is an error; do not silently fall back to another identity.
+        Add-Type -AssemblyName System.Security
+        $enc = [System.IO.File]::ReadAllBytes($pgSuperBin)
+        $pw = [System.Text.Encoding]::UTF8.GetString(
+            [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $enc, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine))
+    }
+} catch {
+    $pw = $null
+    Stop-WithError ("The existing PostgreSQL credential could not be loaded. Legacy installs require a " +
+        "provisioned DATABASE_URL for roofspan on 127.0.0.1:5432/roofspan in $configFile; newer installs " +
+        "require a readable pg_super.bin. Restore the matching configuration/identity backup or contact " +
+        "RoofSpan support. Do not delete the database or reset its password.")
+} finally {
+    $dbLines = $null
+    $Matches = $null
+}
 
+# Do not load psqlrc, prompt, or print the connection URL/password. Bound connection waiting and
+# sanitize native failures (Windows PowerShell can turn redirected stderr into a terminating error).
 $verOut = $null
 $code = 1
+$oldTimeout = $env:PGCONNECT_TIMEOUT
 try {
     $env:PGPASSWORD = $pw
-    $verOut = & $psql -h $pgHost -p $pgPort -U postgres -d postgres -w -tAc 'SHOW server_version_num;' 2>&1
+    $env:PGCONNECT_TIMEOUT = '10'
+    $verOut = & $psql -X -h $pgHost -p $pgPort -U $dbUser -d $dbName -w -v ON_ERROR_STOP=1 -tAc $query 2>&1
     $code = $LASTEXITCODE
+} catch {
+    $code = -1
 } finally {
     $env:PGPASSWORD = ''
+    $env:PGCONNECT_TIMEOUT = $oldTimeout
     $pw = $null
 }
 
 if ($code -ne 0) {
     Stop-WithError ("Could not connect to or authenticate against the RoofSpan-managed PostgreSQL on " +
-        "$pgHost`:$pgPort with the stored superuser credential. The server may not be running or its " +
-        "password may have diverged. Start the '$serviceName' service and re-run RoofSpanSetup.exe, or " +
-        "contact RoofSpan support (existing data is left untouched).")
+        "$pgHost`:$pgPort using its existing credential, or the legacy account cannot read the RoofSpan " +
+        "tables. Check that '$serviceName' is running and restore the matching configuration/identity " +
+        "backup, or contact RoofSpan support. Existing data and passwords were not changed.")
 }
 
 $verNum = 0

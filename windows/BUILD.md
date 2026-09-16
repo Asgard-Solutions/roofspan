@@ -90,10 +90,28 @@ Select-Object FullName,LastWriteTime,Length
   - Produces the MSI, the versioned `RoofSpanSetup-<ver>.exe` Burn bundle, and `RoofSpanSetup.exe`.
 - Installer chain (`bundle.wxs`): every package is PerMachine (double-click elevates via UAC). WebView2
   Evergreen Standalone (skipped if already installed) -> PostgreSQL prep + validation -> EDB PostgreSQL
-  (skipped only when a working RoofSpan-managed instance is present, detected via BOTH the
-  RoofSpanPostgreSQL service AND the RoofSpan pg_super.bin credential) -> option-file cleanup -> RoofSpan
-  Office MSI. Both prerequisites are `Permanent` (never removed on RoofSpan uninstall), so existing
-  customer machines are not needlessly reinstalled.
+  (skipped whenever the RoofSpanPostgreSQL service exists) -> option-file cleanup -> mandatory database
+  authentication/version check -> Office MSI. Service detection only schedules EDB; it does not bypass
+  the health check. Both prerequisites are `Permanent` and retained on RoofSpan uninstall.
+
+## Upgrading an existing database without pg_super.bin
+Starting with 0.4.7, the installer can validate an older installation using its existing application
+credential in `C:\ProgramData\RoofSpan\config\roofspan.env`. It requires the backend's provisioned
+`DATABASE_URL=postgresql+asyncpg://roofspan:<password>@127.0.0.1:5432/roofspan` format, successful TCP
+authentication, read access to the existing `users` and `leads` tables, and a supported server version.
+The check does not change the password, generate a replacement `pg_super.bin`, or reinstall PostgreSQL.
+The backend already supports these legacy installations without a stored superuser credential.
+
+If neither credential is available or authentication fails, setup stops before Office installs. Restore
+the matching configuration/identity backup or contact support; do not delete the data directory, remove
+the PostgreSQL service, or replace the existing password as an installation workaround. Keep a current
+database backup before upgrading. Do not upload `roofspan.env`, `pg_super.bin`, or option files as logs.
+Read `C:\ProgramData\RoofSpan\prereq-diag.log` for the sanitized failure reason.
+
+The full-install CI job also builds a test-only higher-version bundle from the production authoring,
+removes the disposable runner's superuser secret, rejects an incorrect application password, and checks
+that a successful major upgrade preserves a database sentinel, the configuration bytes, and PostgreSQL
+start time. This fixture is not a release artifact; consult the CI result for the tested commit.
 
 ## Relay connector verification
 After installation, this command must report the build SHA used for the installer, the current version,
