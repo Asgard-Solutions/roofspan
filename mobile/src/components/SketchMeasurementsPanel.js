@@ -8,12 +8,24 @@ const PEN_LABELS = { pipe_boot: "Pipe Boot", static_vent: "Static Vent", skyligh
 const pitchText = (p) => (p == null ? "—" : `${p}/12`);
 
 // Read-only reference of the measurements entered for THIS structure, so the rep knows what to draw.
-export default function SketchMeasurementsPanel({ measDetail, structureId, defaultOpen = false }) {
+export default function SketchMeasurementsPanel({ measDetail, structureId, defaultOpen = false, loadState, queueError = false, onRetry }) {
   const [open, setOpen] = useState(defaultOpen);
+  if (!measDetail) return (
+    <View style={st.wrap} testID="sketch-meas-unavailable">
+      <Text style={st.toggleText}>{loadState === "loading" ? "Loading measurements…" : "Measurements unavailable"}</Text>
+      {onRetry && loadState !== "loading" ? <TouchableOpacity testID="sketch-meas-retry" onPress={onRetry} style={st.toggle}>
+        <Text style={st.toggleText}>Retry</Text>
+      </TouchableOpacity> : null}
+    </View>
+  );
   const s = summarizeStructureMeasurements(measDetail, structureId);
   const empty = !s.planes.length && !s.lines.length && !s.pens.length;
   return (
     <View style={st.wrap}>
+      {loadState === "cached" ? <Text style={st.dim}>Offline/cached measurements</Text> : null}
+      {queueError ? <TouchableOpacity testID="sketch-meas-retry" onPress={onRetry} style={st.toggle}>
+        <Text style={st.dim}>Measurement sync status unavailable · Retry</Text>
+      </TouchableOpacity> : null}
       <TouchableOpacity style={st.toggle} onPress={() => setOpen((v) => !v)} testID="sketch-meas-toggle" accessibilityRole="button">
         <Text style={st.toggleText}>{open ? "▾" : "▸"} Measurements</Text>
         <Text style={st.toggleSub}>{s.totals.area.toFixed(0)} SF · {s.totals.squares.toFixed(2)} sq · {s.totals.planeCount} planes</Text>

@@ -8,7 +8,8 @@ import { resolveMeasurementView, measurementSyncState, measurementDocumentFromRe
 import { canonicalFingerprint, threeWayMergeMeasurement } from "../measurementRecovery";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
-import RoofThumbnail from "../components/RoofThumbnail";
+import MeasurementSketchActions from "../components/MeasurementSketchActions";
+import NewMeasurementRevisionButton from "../components/NewMeasurementRevisionButton";
 import { LabeledField, SelectField, PitchField, ToggleRow } from "../components/MeasurementFields";
 import { computeAreaSqft } from "../measurementFieldControls";
 
@@ -62,7 +63,7 @@ function conflictDescriptor(mutation, revisionId, serverDetail) {
 }
 
 export default function Measurements({ route, navigation }) {
-  const { lead_id, property_id, inspection_id } = route.params || {};
+  const { lead_id, property_id, inspection_id, revision_id: requestedRevisionId } = route.params || {};
   const scope = useMemo(() => lead_id ? { lead_id } : (property_id ? { property_id } : { inspection_id }), [lead_id, property_id, inspection_id]);
   const [existing, setExisting] = useState(null);
   const [localDraft, setLocalDraft] = useState(null);
@@ -78,8 +79,11 @@ export default function Measurements({ route, navigation }) {
   const [conflict, setConflict] = useState(null);       // { serverDetail } when Office changed the same revision
   const [failure, setFailure] = useState(null);         // { reason } when the durable mutation FAILED to sync
   const [showGutters, setShowGutters] = useState(false);
+  const [restoredWorkingDraft, setRestoredWorkingDraft] = useState(false);
 
   const autosaveTimer = useRef(null);
+  const hydratedRef = useRef(false);
+  const loadSequence = useRef(0);
   const resolvingOfficeRef = useRef(false);
   // Bumping wdEpoch recreates a FRESH (unsealed) working-draft store after a Use-Office resolution, so a
   // sealed store can never block the rep's subsequent edits on the adopted Office copy.
@@ -101,7 +105,7 @@ export default function Measurements({ route, navigation }) {
   );
   // Persist the in-progress working draft locally (debounced) so entries survive background/restart BEFORE Save.
   const persistWorking = useCallback(async () => {
-    if (readonly) return true;
+    if (!hydratedRef.current || readonly) return true;
     // base_fingerprint = the COMPLETE canonical fingerprint of the authoritative baseline the rep opened
     // from. Startup recovery clears a content-bearing draft ONLY when the draft still fingerprints equal to
     // this — so an edit to ANY persisted field (material, notes, plane assignment, diameter, geometry, …)
@@ -125,6 +129,7 @@ export default function Measurements({ route, navigation }) {
   useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); flushRef.current(); }, []);
 
   const hydrateWorking = useCallback((wd) => {
+    hydratedRef.current = true;
     captureBaseline.current = true;
     setExisting(wd.base || null);
     setLocalDraft(wd.base ? null : (wd.local_client_id ? { local_draft: true, client_id: wd.local_client_id } : null));
@@ -139,6 +144,7 @@ export default function Measurements({ route, navigation }) {
 
   const hydrate = useCallback((full, stale = false, cached = null) => {
     if (!full) return;
+    hydratedRef.current = true;
     captureBaseline.current = true;
     if (measurementKeys.isLocalDraft(full)) {
       const body = full.body || {};
@@ -175,12 +181,16 @@ export default function Measurements({ route, navigation }) {
   }, []);
 
   const load = useCallback(async () => {
+    const seq = ++loadSequence.current;
     // Highest priority: the salesperson's in-progress working draft (unsaved edits) always wins so nothing
     // typed before Save is lost across navigate/background/restart.
     const wd = await loadMeasurementWorkingDraft(scope);
+    if (seq !== loadSequence.current) return;
     if (wd && wd.working && workingDraftHasContent(wd)) {
+      setRestoredWorkingDraft(!!requestedRevisionId && wd.base?.id !== requestedRevisionId);
       hydrateWorking(wd);
       const pend = wd.base ? await currentMeasurementMutation(wd.base.id) : (wd.local_client_id ? await currentMeasurementCreate(wd.local_client_id) : null);
+      if (seq !== loadSequence.current) return;
       const active = pend && pend.state !== "synced" ? pend : null;
       const st = measurementSyncState(active, isSyncing());
       setSyncStatus(st.state === "none" ? "Saved on device" : st.status);
@@ -190,11 +200,13 @@ export default function Measurements({ route, navigation }) {
     }
     // An empty/orphaned working draft must never shadow the authoritative Office copy — drop it so the
     // Field shows exactly what Office has.
-    if (wd && wd.working) { try { await clearMeasurementWorkingDraft(scope); } catch (e) { /* best effort */ } }
+    setRestoredWorkingDraft(false);
+    if (wd && wd.working && !workingDraftHasContent(wd)) { try { await clearMeasurementWorkingDraft(scope); } catch (e) { /* best effort */ } }
     const draft = await loadMeasurementDraft(scope);
     const listResult = await cache.measurements(scope);
-    const head = measurementKeys.pickCurrent(listResult.data || []);
+    const head = requestedRevisionId ? { id: requestedRevisionId } : measurementKeys.pickCurrent(listResult.data || []);
     const pendingCreate = draft ? await currentMeasurementCreate(draft.client_id) : null;
+    if (seq !== loadSequence.current) return;
 
     if (head) {
       // Capture the durable local optimistic detail BEFORE the read-through can overwrite it.
@@ -203,6 +215,7 @@ export default function Measurements({ route, navigation }) {
       const pu = await currentMeasurementMutation(head.id);
       const pendingUpdate = pu && pu.state !== "synced" ? pu : null;
       const detailResult = await cache.measurement(head.id);
+      if (seq !== loadSequence.current) return;
 
       const view = resolveMeasurementView({
         serverDetail: detailResult.data, serverStale: listResult.stale || detailResult.stale,
@@ -233,6 +246,8 @@ export default function Measurements({ route, navigation }) {
     }
     setExisting(null);
     setLocalDraft(null);
+    hydratedRef.current = true;
+    captureBaseline.current = true;
     setStructures([]);
     setFacets([]);
     setEdges([]);
@@ -244,13 +259,16 @@ export default function Measurements({ route, navigation }) {
     setSyncStatus(null);
     setConflict(null);
     setFailure(null);
-  }, [scope, hydrate]);
+  }, [scope, requestedRevisionId, hydrate, hydrateWorking]);
 
   // Autosave the working draft as the salesperson edits — debounced, local only (no network per keystroke).
   useEffect(() => {
-    if (readonly) return;
+    if (!hydratedRef.current || readonly) return;
     const cur = formJson();
-    if (captureBaseline.current) { baselineRef.current = cur; captureBaseline.current = false; return; }
+    if (captureBaseline.current) {
+      if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+      baselineRef.current = cur; captureBaseline.current = false; return;
+    }
     if (cur === baselineRef.current) {
       // All edits reverted to the authoritative baseline — clear any stale working draft so an older
       // autosaved value can never resurrect after a restart.
@@ -381,7 +399,7 @@ export default function Measurements({ route, navigation }) {
     navigation.goBack();
   }, [localDraft, scope, navigation]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => { load(); return () => { loadSequence.current++; }; }, [load]));
 
   // Lead-aware sync: on focus, register this scope as active and pull the canonical Office copy immediately.
   useFocusEffect(useCallback(() => {
@@ -588,6 +606,15 @@ export default function Measurements({ route, navigation }) {
         </View>
       )}
       {readonly && existing && <View style={s.lockedBanner} testID="meas-locked-banner"><Text style={s.lockedT}>This revision is locked</Text><Text style={s.lockedSub}>Ask the office to return it to the field, or create a new revision, to edit these measurements.</Text></View>}
+      {restoredWorkingDraft && <View style={s.lockedBanner} testID="meas-restored-working-draft">
+        <Text style={s.lockedT}>Unsaved measurements restored</Text>
+        <Text style={s.lockedSub}>Save or resolve these changes before opening another revision.</Text>
+      </View>}
+      {readonly && existing && <NewMeasurementRevisionButton revisionId={existing.id} scope={scope} onCreated={revision => {
+        loadSequence.current++;
+        hydrate(revision); setSyncStatus("Synced"); setConflict(null); setFailure(null);
+        navigation.setParams({ revision_id: revision.id });
+      }} />}
       {usingCached && <View style={s.offline}><Text style={s.offlineT}>Offline/cached measurement{cachedAt ? ` · saved ${new Date(cachedAt).toLocaleString()}` : ""}</Text></View>}
 
       <View style={s.totals} testID="meas-totals">
@@ -611,20 +638,8 @@ export default function Measurements({ route, navigation }) {
             <SelectField label="Attachment" value={st.attachment || ""} options={ATTACH_OPTS} disabled={readonly} onChange={(v) => setS(i, "attachment", v || null)} testID={`meas-structure-attachment-${i}`} />
             <LabeledField label="Structure Notes" placeholder="Optional" value={st.notes || ""} editable={!readonly} onChangeText={(v) => setS(i, "notes", v)} testID={`meas-structure-notes-${i}`} />
             {existing?.id && st.id ? (
-              <>
-                <RoofThumbnail structure={st} facets={facets} edges={edges} testID={`meas-structure-thumbnail-${i}`} />
-                {st.has_sketch ? (
-                  <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: !readonly })}>
-                    <Text style={s.sketchBtnText}>{readonly ? "View Roof Sketch" : "Edit Roof Sketch"}</Text>
-                  </TouchableOpacity>
-                ) : (readonly ? (
-                  <Text style={s.sketchHint} testID={`sketch-roof-none-${i}`}>No roof sketch has been saved for this structure.</Text>
-                ) : (
-                  <TouchableOpacity testID={`sketch-roof-${i}`} style={s.sketchBtn} onPress={() => navigation.navigate("RoofSketch", { revision_id: existing.id, structure_id: st.id, structure_name: st.name || "Roof", editable: true })}>
-                    <Text style={s.sketchBtnText}>Sketch Roof</Text>
-                  </TouchableOpacity>
-                ))}
-              </>
+              <MeasurementSketchActions revision={existing} structure={st} facets={facets} edges={edges} penetrations={pens}
+                readonly={readonly} stale={usingCached} scope={scope} navigation={navigation} index={i} styles={s} />
             ) : (
               <Text style={s.sketchHint} testID={`sketch-roof-disabled-${i}`}>Save the measurement first to create this structure before sketching the roof.</Text>
             )}

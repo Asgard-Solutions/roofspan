@@ -1,0 +1,62 @@
+name: Field roof preview and revision contract
+on:
+  pull_request:
+    paths:
+      - 'mobile/src/**'
+      - 'mobile/package.json'
+      - 'packages/roof-sketch-core/**'
+      - 'backend/routers/mobile.py'
+      - 'backend/services/measurements.py'
+      - 'backend/tests/test_mobile_new_revision.py'
+      - '.github/workflows/field-roof-preview.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/src/**'
+      - 'mobile/package.json'
+      - 'packages/roof-sketch-core/**'
+      - 'backend/routers/mobile.py'
+      - 'backend/services/measurements.py'
+      - 'backend/tests/test_mobile_new_revision.py'
+      - '.github/workflows/field-roof-preview.yml'
+permissions:
+  contents: read
+jobs:
+  field-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated component-test tooling
+        run: >-
+          npm install --prefix "$RUNNER_TEMP/field-preview-tools" --no-audit --no-fund
+          @babel/core@7.29.7 @babel/preset-react@7.29.7
+          @babel/plugin-transform-modules-commonjs@7.29.7 react@19.2.3 react-test-renderer@19.2.3
+      - name: Link the actual shared sketch package
+        run: |
+          mkdir -p mobile/node_modules/@roofspan
+          ln -s ../../../packages/roof-sketch-core mobile/node_modules/@roofspan/roof-sketch-core
+      - name: Verify component interactions and drawing parity
+        run: NODE_PATH="$RUNNER_TEMP/field-preview-tools/node_modules" npm run test:roof-preview --prefix mobile
+      - name: Verify sketch and measurement contracts
+        run: |
+          npm run test:sketch --prefix mobile
+          npm run test:measurements --prefix mobile
+  new-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated API-test dependencies
+        run: >-
+          python -m pip install pytest pytest-xdist fastapi==0.110.1 httpx
+          sqlalchemy asyncpg aiosqlite python-dotenv bcrypt pyjwt cryptography
+          boto3 python-multipart email-validator requests
+      - name: Verify authorization, cloning, replay and rollback
+        run: PYTHONPATH=backend pytest -q backend/tests/test_mobile_new_revision.py

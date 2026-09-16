@@ -163,4 +163,16 @@ function geometryPresent(initial) {
   ok("REPORTED BUG: locked revision shows the full Office sketch, a stray local draft never shadows it");
 }
 
+// A local draft is not an authoritative saved drawing for a locked revision.
+for (const sketchResult of [
+  { data: null, stale: false, notFound: true, error: null },
+  { data: null, stale: true, error: new Error("offline, no cached Office sketch") },
+]) {
+  const res = WIRE.resolveFieldSketchViewerOpen({ draft: draftOf(geomDoc, 2), sketchResult,
+    mutation: null, structureId: "s1", readOnly: true });
+  assert.strictEqual(res.phase, sketchResult.notFound ? "empty_readonly" : "error");
+  assert.strictEqual(res.initial, undefined, "a local-only draft cannot stand in for the locked saved sketch");
+  ok("locked with local-only draft → explicit no-saved-sketch/unavailable state");
+}
+
 console.log("\nP0 LOCKED ROOF SKETCH VIEWER: all " + n + " assertions passed");

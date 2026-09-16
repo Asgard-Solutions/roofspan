@@ -155,6 +155,9 @@ async def find_measurement_set(db: AsyncSession, *, inspection_id=None, property
 
 
 async def _next_revision_number(db: AsyncSession, set_id) -> int:
+    # All create/clone writers share this parent lock until their transaction ends.
+    # Locking before MAX prevents two requests from allocating the same revision.
+    await db.execute(select(MeasurementSet.id).where(MeasurementSet.id == set_id).with_for_update())
     n = (await db.execute(select(func.max(MeasurementRevision.revision_number)).where(MeasurementRevision.set_id == set_id))).scalar()
     return int(n or 0) + 1
 
