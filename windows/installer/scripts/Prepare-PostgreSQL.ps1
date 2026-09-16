@@ -12,9 +12,11 @@
 
     - Absent (clean machine)              -> generate/honor the superuser password + write the option
                                              file so the EDB installer runs.
-    - Working RoofSpan-managed present    -> no-op exit 0 (the separate Vital Verify-PostgreSQL.ps1 step
+    - Existing service + saved credential -> no-op exit 0 (the separate Vital Verify-PostgreSQL.ps1 step
                                              then proves the server is actually healthy - version,
                                              credentials, connectivity - before Office is installed).
+    - Legacy service + roofspan.env       -> preserve the service and application credential; the Vital
+                                             verify step must authenticate before Office installs.
     - Unrelated PostgreSQL on port 5432   -> STOP (exit 1) with an actionable message. RoofSpan never
                                              stops, reconfigures, or modifies another application's
                                              service or database.
@@ -39,6 +41,7 @@ $optionFile  = Join-Path $identityDir 'pg_install.optionfile'
 $serviceName = 'RoofSpanPostgreSQL'
 $pgPort      = 5432
 $diagLog     = 'C:\ProgramData\RoofSpan\prereq-diag.log'
+$configFile  = 'C:\ProgramData\RoofSpan\config\roofspan.env'
 
 function Write-Diag([string]$m) {
     try {
@@ -58,7 +61,7 @@ function Remove-OptionFileQuietly {
 function Stop-WithError([string]$message) {
     # Never leave a transient plaintext credential behind on a handled failure path.
     Remove-OptionFileQuietly
-    Write-Diag 'PREP-STOP'
+    Write-Diag ("PREP-STOP: " + $message)
     Write-Host "ROOFSPAN-PREREQ-ERROR: $message"
     exit 1
 }
@@ -68,16 +71,29 @@ $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 $secretPresent = Test-Path $pgSuperBin
 if ($svc) {
     if ($secretPresent) {
-        # Healthy RoofSpan-managed install; nothing to prepare (Burn normally skips this step entirely).
+        # Existing credential; the mandatory health gate still authenticates before Office installs.
         Write-Host "RoofSpan-managed PostgreSQL service is present and owned by RoofSpan; skipping preparation."
         Write-Diag 'PREP-END-SKIP-MANAGED'
         exit 0
     }
-    Stop-WithError ("A '$serviceName' service already exists but the RoofSpan credential " +
-        "($pgSuperBin) is missing, so RoofSpan cannot establish ownership of it. To protect any " +
-        "existing data, installation was stopped. Resolution: if this service is not a RoofSpan " +
-        "installation, remove or rename it; if it IS a prior RoofSpan install, restore its identity " +
-        "folder from backup or contact RoofSpan support. Then re-run RoofSpanSetup.exe.")
+    if (Test-Path $configFile -PathType Leaf) {
+        # Older provisioned installs can have only the application credential. Do not generate a
+        # replacement superuser password or run EDB over their database. Verify-PostgreSQL.ps1 must
+        # authenticate this exact local application connection before the Office MSI is allowed to run.
+        Write-Host "Existing RoofSpan configuration found; preserving PostgreSQL for legacy credential validation."
+        Write-Diag 'PREP-END-SKIP-LEGACY'
+        exit 0
+    }
+    Stop-WithError ("A '$serviceName' service already exists but neither its saved superuser credential " +
+        "($pgSuperBin) nor its application configuration ($configFile) is available. Restore the matching " +
+        "configuration/identity backup or contact RoofSpan support. Do not delete the database, remove " +
+        "the service, or reset its password. Setup stopped before reinstalling PostgreSQL.")
+}
+
+if (Test-Path $configFile) {
+    Stop-WithError ("An existing RoofSpan configuration ($configFile) was found but the '$serviceName' " +
+        "service is missing. Restore the existing database service or contact RoofSpan support. " +
+        "Do not delete the configuration or database files; setup will not create a replacement database.")
 }
 
 # --- 2) No RoofSpan service. Port 5432 must be free (RoofSpan requires it and will not touch others). ---
@@ -125,7 +141,8 @@ try {
 
     Set-Content -Encoding ASCII -Path $optionFile -Value ('superpassword=' + $pw)
 } catch {
-    Stop-WithError ("PostgreSQL preparation failed: " + $_.Exception.Message)
+    # Do not persist raw exception text that might contain credential material.
+    Stop-WithError "PostgreSQL credential preparation failed. Check access to the RoofSpan identity folder and Windows DPAPI; existing database files were not changed."
 }
 
 Write-Diag 'PREP-END-OK'

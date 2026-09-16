@@ -279,14 +279,18 @@ def test_prep_script_handles_postgres_states_and_preserves_existing_secret():
     assert "Remove-OptionFileQuietly" in script
 
 
-def test_bundle_detects_managed_install_by_service_and_secret_and_is_permachine():
+def test_bundle_preserves_existing_service_and_requires_health_gate():
     bundle = _bundle_text()
-    # RoofSpan-managed = service present AND RoofSpan credential present (service alone is insufficient).
+    # Existing services must not be reinstalled, even when their credential is missing/damaged.
+    # This is only EDB scheduling; the always-run Vital gates establish usability before Office.
     assert 'Key="SYSTEM\\CurrentControlSet\\Services\\RoofSpanPostgreSQL"' in bundle
     assert 'Variable="PgServicePresent"' in bundle
-    assert 'pg_super.bin' in bundle and 'Variable="PgSecretPresent"' in bundle
-    assert 'InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"' in bundle
-    assert 'DetectCondition="PgServicePresent AND PgSecretPresent"' in bundle
+    assert 'InstallCondition="NOT PgServicePresent"' in bundle
+    assert 'DetectCondition="PgServicePresent"' in bundle
+    for gate in ("PostgreSQLPasswordPrep", "PostgreSQLVerify"):
+        tag = _exepackage_tag(gate)
+        assert 'Vital="yes"' in tag
+        assert 'InstallCondition=' not in tag and 'DetectCondition=' not in tag
     # Every package is PerMachine so a double-click elevates (UAC) without "Run as administrator".
     for pkg_id in ("WebView2Runtime", "PostgreSQLPasswordPrep", "PostgreSQLPrereq",
                    "PostgreSQLPasswordCleanup", "PostgreSQLVerify"):

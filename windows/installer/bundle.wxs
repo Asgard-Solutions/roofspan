@@ -5,10 +5,10 @@
   Chain (in order):
     1) WebView2 Evergreen Runtime - FULL Evergreen Standalone x64 installer (offline, no download),
        installed only if absent, machine-level.
-    2) PostgreSQL prerequisite (EDB PostgreSQL silent installer) - installed ONLY if a working
-       RoofSpan-managed PostgreSQL is not already present. "RoofSpan-managed" means BOTH the
-       RoofSpanPostgreSQL service AND the RoofSpan DPAPI credential (pg_super.bin) exist; service
-       existence alone is NOT sufficient. Marked Permanent so it is NOT removed on RoofSpan uninstall
+    2) PostgreSQL prerequisite (EDB PostgreSQL silent installer) - installed ONLY if the
+       RoofSpanPostgreSQL service is absent and preparation permits a fresh install. Existing services
+       are preserved; the mandatory health gate authenticates the saved superuser or legacy application
+       credential before Office installs. Marked Permanent so it is NOT removed on RoofSpan uninstall
        (the customer's database service + data are preserved).
     3) RoofSpanOffice-{VERSION}.msi - the RoofSpan Office application.
 
@@ -35,20 +35,13 @@
                                               LicenseUrl="https://roofspan.io/eula" />
     </BootstrapperApplication>
 
-    <!-- RoofSpan-managed PostgreSQL detection. Service existence alone is insufficient (an unrelated or
-         stale service by another name/owner must not satisfy the dependency), so a working managed
-         install requires BOTH signals:
-           - the RoofSpanPostgreSQL Windows service is registered, AND
-           - the RoofSpan DPAPI superuser credential (pg_super.bin) exists (proves RoofSpan owns it).
-         The deeper validation (port conflicts, stale/incomplete state, ownership before any repair) is
-         performed by Prepare-PostgreSQL.ps1, which runs BEFORE the EDB installer and halts the chain
-         with an actionable message when it is not safe to proceed. -->
+    <!-- Detection schedules EDB only; it is not a health assertion. Never run EDB over an existing
+         RoofSpanPostgreSQL service, including legacy installs without pg_super.bin. Always-run Vital
+         preparation and verification separately validate credentials and database health before Office.
+         Unrelated PostgreSQL service names do not satisfy this search; prep checks port conflicts. -->
     <util:RegistrySearch Id="PgServiceSearch" Root="HKLM"
                          Key="SYSTEM\CurrentControlSet\Services\RoofSpanPostgreSQL"
                          Result="exists" Variable="PgServicePresent" />
-    <util:FileSearch Id="PgSecretSearch"
-                     Path="[CommonAppDataFolder]RoofSpan\identity\pg_super.bin"
-                     Result="exists" Variable="PgSecretPresent" />
 
     <!-- Detect the Evergreen WebView2 Runtime (machine-wide) so we do NOT reinstall it. RoofSpan Office
          requires WebView2. The 'pv' value exists once the runtime is installed. -->
@@ -116,7 +109,8 @@
                failure here must NOT halt the chain before the cleanup step, so the transient plaintext
                option file is always removed. The subsequent Vital PostgreSQLVerify step re-imposes the
                "PostgreSQL must be healthy before Office" requirement and stops with an actionable error if
-               EDB actually failed. Skipped when a working RoofSpan-managed instance already exists. -->
+               EDB actually failed. Any existing RoofSpanPostgreSQL service skips EDB; a broken existing
+               installation must fail verification rather than be reinstalled over customer data. -->
       <ExePackage Id="PostgreSQLPrereq"
                   CacheId="RoofSpanPostgreSQLPrereq-$(var.Version)"
                   DisplayName="PostgreSQL (RoofSpan prerequisite)"
@@ -124,8 +118,8 @@
                   PerMachine="yes"
                   Permanent="yes"
                   Vital="no"
-                  InstallCondition="NOT (PgServicePresent AND PgSecretPresent)"
-                  DetectCondition="PgServicePresent AND PgSecretPresent"
+                  InstallCondition="NOT PgServicePresent"
+                  DetectCondition="PgServicePresent"
                   InstallArguments="--optionfile &quot;C:\ProgramData\RoofSpan\identity\pg_install.optionfile&quot; --mode unattended --unattendedmodeui minimal --servicename RoofSpanPostgreSQL"
                   Compressed="yes" />
 
@@ -146,7 +140,7 @@
       </ExePackage>
 
       <!-- 2d) HEALTH GATE (Vital): before Office is installed, prove the RoofSpan-managed PostgreSQL is
-               actually usable - the RoofSpanPostgreSQL service exists, the DPAPI credential authenticates
+               actually usable - the RoofSpanPostgreSQL service exists, its saved credential authenticates
                over TCP on 127.0.0.1:5432, and the server version is compatible. This validates BOTH the
                fresh-install path (EDB succeeded) AND the skip path (a pre-existing managed install is
                genuinely healthy, not just present). It halts with an actionable error otherwise, so Office
