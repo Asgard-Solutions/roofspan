@@ -1,5 +1,18 @@
 # RoofSpan — Product Requirements & Status
 
+## Feature — First-Run "New Company Setup" wizard (fresh install onboarding) — IMPLEMENTED & VERIFIED (2026-06)
+- PROBLEM: On a clean install the Windows installer provisions PostgreSQL but NO owner account (ADMIN_EMAIL/ADMIN_PASSWORD were never written to roofspan.env), so nobody could sign in. User decisions: 1a (built-in first-run wizard, single exe), 2a (owner only), 3b (replace env seeding entirely).
+- BACKEND: new `backend/routers/setup.py` (prefix `/api/setup`, public):
+  - `GET /api/setup/status` -> `{needs_setup: bool}` (true only when the users table is empty).
+  - `POST /api/setup/initialize` -> creates the first owner (role=owner) + company_profile AppConfig, mints access+refresh tokens (mirrors auth login), logs `setup.initialize`. FAILS CLOSED with 409 the moment any user exists (cannot create a 2nd privileged account or reset an install).
+  - Schemas added to `schemas.py`: SetupStatus, SetupCompany, SetupInitializeRequest (owner_password min_length=8).
+  - `server.py`: registered router; REMOVED `seed_owner()` env-var seeding + now-unused imports.
+  - `licensing/middleware.py`: added `/api/setup` to the SubscriptionGuardMiddleware allowlist so the wizard is reachable on a fresh/unlicensed install (like `/api/auth`).
+- FRONTEND: new `frontend/src/pages/Setup.jsx` two-step wizard (Step 1 Company details, Step 2 Owner account) matching the Login brand aesthetic; `AuthContext.completeSetup()` stores session; `App.js` route `/setup`; `Login.jsx` redirects to `/setup` when needs_setup; `Setup.jsx` redirects to `/login` when already set up.
+- VERIFIED: isolated scratch-DB pytest `backend/tests/test_first_run_setup.py` (empty DB -> status true -> initialize creates owner -> token authenticates -> status flips false -> 2nd initialize 409 -> company profile persisted) PASSES. Live: status=false + initialize 409 (guard) + login intact. Frontend: wizard both steps render, gating verified both directions (screenshots).
+- NOTE: Windows installer/CI untouched under this plan (app-level first-run detection works regardless of install method). The pre-seeded pjacobsen owner persists in the dev/preview Postgres volume so existing login continues to work.
+
+
 
 ## P0 — Windows Installer: burn-prep-runtime harness fix (WiX stdout leak) + classifier correctness (2026-06)
 - WINDOWS EVIDENCE (latest run): PostgreSQL preparation now STARTS and COMPLETES on Windows - breadcrumb PREP-END-OK, package exit 0x0, Burn exit 0x0. The prerequisite step itself is proven working. The remaining failure was in the TEST HARNESS, after prep.

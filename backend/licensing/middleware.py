@@ -20,6 +20,7 @@ _ALLOWLIST = (
     "/api/health",
     "/api/version",
     "/api/auth",
+    "/api/setup",
     "/api/subscription",
     "/api/license",
     "/api/billing",
