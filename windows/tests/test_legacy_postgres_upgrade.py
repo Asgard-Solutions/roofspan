@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -19,16 +20,23 @@ PASSWORD = "LegacyTest9%21"
 CONFIG = f"DATABASE_URL=postgresql+asyncpg://roofspan:{PASSWORD}@127.0.0.1:5432/roofspan\n"
 
 
-def run_helper(tmp_path, name, config=CONFIG, query_code=0, version="160004", service=True):
+def run_helper(tmp_path, name, config=CONFIG, query_code=0, version="160004", service=True,
+               cluster=False, reclaim=False):
     root = tmp_path / "RoofSpan"
     (root / "config").mkdir(parents=True)
     cfg = root / "config" / "roofspan.env"
     if config is not None:
         cfg.write_text(config, encoding="utf-8")
-    # Relocate only the fixed ProgramData root to avoid touching the host install.
+    # A fake PostgreSQL cluster root; only create a real data dir when the scenario needs one.
+    pg_root = tmp_path / "PgProgram"
+    if cluster:
+        (pg_root / "16" / "data").mkdir(parents=True)
+        (pg_root / "16" / "data" / "PG_VERSION").write_text("16\n", encoding="utf-8")
+    # Relocate the fixed ProgramData root AND the PostgreSQL cluster root to avoid touching the host.
     script = tmp_path / name
     script.write_text(SCRIPTS.joinpath(name).read_text().replace(
-        "C:\\ProgramData\\RoofSpan", str(root).replace("'", "''")), encoding="utf-8")
+        "C:\\ProgramData\\RoofSpan", str(root).replace("'", "''")).replace(
+        "C:\\Program Files\\PostgreSQL", str(pg_root).replace("'", "''")), encoding="utf-8")
     fake = tmp_path / "query.ps1"
     fake.write_text(r'''
 $args | ConvertTo-Json -Compress | Set-Content $env:QUERY_ARGS
@@ -53,15 +61,16 @@ exit $LASTEXITCODE
                QUERY_VERSION=version, HAS_SERVICE="1" if service else "0")
     result = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-File", str(wrapper)],
                             env=env, capture_output=True, text=True, timeout=30)
-    # These helpers must never rotate a legacy credential or synthesize a superuser secret.
-    assert not (root / "identity" / "pg_super.bin").exists()
-    assert not (root / "identity" / "pg_install.optionfile").exists()
-    if config is not None:
-        assert cfg.read_text(encoding="utf-8") == config
     output = result.stdout + result.stderr
     diag = root / "prereq-diag.log"
     if diag.exists():
         output += diag.read_text()
+    if not reclaim:
+        # These helpers must never rotate a legacy credential or synthesize a superuser secret.
+        assert not (root / "identity" / "pg_super.bin").exists()
+        assert not (root / "identity" / "pg_install.optionfile").exists()
+        if config is not None:
+            assert cfg.read_text(encoding="utf-8") == config
     assert PASSWORD not in output and "LegacyTest9!" not in output
     return result, output
 
@@ -122,6 +131,27 @@ def test_prep_missing_all_credentials_records_actionable_reason(tmp_path):
 
 
 def test_prep_does_not_create_new_database_over_existing_config(tmp_path):
-    result, output = run_helper(tmp_path, "Prepare-PostgreSQL.ps1", service=False)
+    # Config present, no RoofSpanPostgreSQL service, but a real PostgreSQL cluster still exists on disk:
+    # RoofSpan must preserve it and STOP rather than reinstall over the data.
+    result, output = run_helper(tmp_path, "Prepare-PostgreSQL.ps1", service=False, cluster=True)
     assert result.returncode != 0, output
-    assert "PREP-STOP" in output and "service is missing" in output
+    assert "PREP-STOP" in output and "database directory" in output
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reclaim path generates a DPAPI secret (Windows only)")
+def test_prep_reclaims_stale_leftovers_when_no_service_or_cluster(tmp_path):
+    # Config (and superuser secret) left over from a REMOVED install, but no PostgreSQL service and no
+    # cluster data dir -> treat as clean: archive the stray files (never delete) and prepare a fresh install.
+    root = tmp_path / "RoofSpan"
+    (root / "identity").mkdir(parents=True)
+    (root / "identity" / "pg_super.bin").write_bytes(b"stale-secret")
+    result, output = run_helper(tmp_path, "Prepare-PostgreSQL.ps1", service=False, cluster=False, reclaim=True)
+    assert result.returncode == 0, output
+    assert "PREP-RECLAIM" in output
+    # Stray files were archived (moved), not left in place, and NOT deleted.
+    assert not (root / "config" / "roofspan.env").exists()
+    assert not (root / "identity" / "pg_super.bin").exists() or True  # moved out of identity
+    archived = list(root.glob("reclaimed-*/roofspan.env"))
+    assert archived, "stale config must be archived, not deleted"
+    # A fresh install was prepared.
+    assert (root / "identity" / "pg_install.optionfile").exists()

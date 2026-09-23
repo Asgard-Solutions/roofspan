@@ -17,11 +17,13 @@
                                              credentials, connectivity - before Office is installed).
     - Legacy service + roofspan.env       -> preserve the service and application credential; the Vital
                                              verify step must authenticate before Office installs.
+    - Leftover files, NO service/database -> archive the stray config/identity (never delete) and proceed
+                                             as a clean install (a prior install was removed but left files).
     - Unrelated PostgreSQL on port 5432   -> STOP (exit 1) with an actionable message. RoofSpan never
                                              stops, reconfigures, or modifies another application's
                                              service or database.
-    - Incomplete/stale RoofSpan install   -> repair ONLY when ownership can be established AND data is
-                                             preserved; otherwise STOP (exit 1) with an actionable message.
+    - Leftover files + real DB/service    -> STOP (exit 1): preserve possibly-existing data; require a
+                                             restore or support rather than reinstalling over it.
 
   Credential contract (unchanged): honor an admin-supplied -PgSuperPassword, else generate a
   cryptographically strong random one; DPAPI-protect it (LocalMachine) to identity\pg_super.bin for
@@ -42,6 +44,7 @@ $serviceName = 'RoofSpanPostgreSQL'
 $pgPort      = 5432
 $diagLog     = 'C:\ProgramData\RoofSpan\prereq-diag.log'
 $configFile  = 'C:\ProgramData\RoofSpan\config\roofspan.env'
+$pgClusterRoot = 'C:\Program Files\PostgreSQL'
 
 function Write-Diag([string]$m) {
     try {
@@ -64,6 +67,17 @@ function Stop-WithError([string]$message) {
     Write-Diag ("PREP-STOP: " + $message)
     Write-Host "ROOFSPAN-PREREQ-ERROR: $message"
     exit 1
+}
+
+# True only when a real PostgreSQL cluster (a data directory with PG_VERSION) exists under the EDB
+# install root. Used to distinguish "stale RoofSpan files but no database" (reclaimable) from "a real
+# database is still on disk" (must be preserved).
+function Test-ExistingPgCluster {
+    if (-not (Test-Path $pgClusterRoot)) { return $false }
+    $hits = Get-ChildItem -Path $pgClusterRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'data\PG_VERSION' } |
+        Where-Object { Test-Path $_ }
+    return [bool]$hits
 }
 
 # --- 1) A registered RoofSpanPostgreSQL service means a prior (managed) install. Validate ownership. ---
@@ -91,9 +105,25 @@ if ($svc) {
 }
 
 if (Test-Path $configFile) {
-    Stop-WithError ("An existing RoofSpan configuration ($configFile) was found but the '$serviceName' " +
-        "service is missing. Restore the existing database service or contact RoofSpan support. " +
-        "Do not delete the configuration or database files; setup will not create a replacement database.")
+    # An existing RoofSpan config but no RoofSpanPostgreSQL service. Only STOP when a real database could
+    # still be present (another PostgreSQL service, or a cluster data directory on disk). If nothing but
+    # stray files remain, this is a leftover from a prior/removed install and is safe to reclaim.
+    $otherPgService = @(Get-Service -Name '*postgres*' -ErrorAction SilentlyContinue)
+    if ($otherPgService -or (Test-ExistingPgCluster)) {
+        Stop-WithError ("An existing RoofSpan configuration ($configFile) was found alongside a PostgreSQL " +
+            "service or database directory, but the '$serviceName' service is missing. Restore the existing " +
+            "database service or contact RoofSpan support. Do not delete the configuration or database " +
+            "files; setup will not create a replacement database.")
+    }
+    # Reclaim: archive (never delete) the stray RoofSpan files so a prior credential/config can still be
+    # recovered, then proceed with a clean install.
+    $backup = Join-Path 'C:\ProgramData\RoofSpan' ('reclaimed-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+    New-Item -ItemType Directory -Force -Path $backup | Out-Null
+    Move-Item -Force $configFile (Join-Path $backup 'roofspan.env')
+    if ($secretPresent) { Move-Item -Force $pgSuperBin (Join-Path $backup 'pg_super.bin'); $secretPresent = $false }
+    Remove-OptionFileQuietly
+    Write-Diag ('PREP-RECLAIM-STALE-LEFTOVERS archived to ' + $backup)
+    Write-Host "No PostgreSQL service or database directory found; archived stale RoofSpan files and proceeding with a fresh install."
 }
 
 # --- 2) No RoofSpan service. Port 5432 must be free (RoofSpan requires it and will not touch others). ---
@@ -110,14 +140,24 @@ if ($listening) {
         "port $pgPort is free, then re-run RoofSpanSetup.exe.")
 }
 
-# --- 3) No service + a leftover RoofSpan credential = an incomplete/stale prior install we cannot safely
-#         reconcile without risking existing data. Do NOT overwrite the stored superuser password. ---
+# --- 3) No service, no config, but a leftover RoofSpan credential. Reclaim when no real database remains
+#         (no PostgreSQL service, no cluster on disk); otherwise STOP without overwriting the stored
+#         superuser password (an existing database may still use it). ---
 if ($secretPresent) {
-    Stop-WithError ("A RoofSpan PostgreSQL credential ($pgSuperBin) exists but the '$serviceName' service " +
-        "is not registered - an incomplete or interrupted prior installation. RoofSpan will not overwrite " +
-        "the stored superuser password (an existing database may still use it). Resolution: if you have a " +
-        "backup of the prior RoofSpan database, restore the service; otherwise back up and remove " +
-        "'$identityDir' and re-run RoofSpanSetup.exe, or contact RoofSpan support.")
+    $otherPgService = @(Get-Service -Name '*postgres*' -ErrorAction SilentlyContinue)
+    if ($otherPgService -or (Test-ExistingPgCluster)) {
+        Stop-WithError ("A RoofSpan PostgreSQL credential ($pgSuperBin) exists alongside a PostgreSQL " +
+            "service or database directory, but the '$serviceName' service is not registered - an " +
+            "incomplete or interrupted prior installation. RoofSpan will not overwrite the stored " +
+            "superuser password. Restore the prior database/service from backup or contact RoofSpan support.")
+    }
+    $backup = Join-Path 'C:\ProgramData\RoofSpan' ('reclaimed-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+    New-Item -ItemType Directory -Force -Path $backup | Out-Null
+    Move-Item -Force $pgSuperBin (Join-Path $backup 'pg_super.bin')
+    $secretPresent = $false
+    Remove-OptionFileQuietly
+    Write-Diag ('PREP-RECLAIM-STALE-SECRET archived to ' + $backup)
+    Write-Host "No PostgreSQL service or database directory found; archived stale RoofSpan credential and proceeding with a fresh install."
 }
 
 # --- 4) Clean machine: honor a supplied password or generate a strong random one; DPAPI-protect it and
