@@ -10,13 +10,11 @@ load_dotenv(ROOT_DIR / ".env")
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
-from sqlalchemy import select
 
 from db import engine, SessionLocal
-from models import User
-from core import hash_password, verify_password
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
+from routers import setup as setup_router
 from routers import customers, inspections, estimates, quotes, invoices, jobs
 from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, building_tiles, licensing as licensing_router
 from routers import abc_supply
@@ -78,6 +76,7 @@ async def version():
 
 
 app.include_router(auth.router)
+app.include_router(setup_router.router)
 app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(abc_supply.router)
@@ -152,25 +151,6 @@ app.add_middleware(
 )
 
 
-async def seed_owner():
-    email = os.environ.get("ADMIN_EMAIL", "").lower().strip()
-    password = os.environ.get("ADMIN_PASSWORD", "")
-    name = os.environ.get("ADMIN_NAME", "Owner")
-    if not email or not password:
-        logger.warning("ADMIN_EMAIL/ADMIN_PASSWORD not set; skipping owner seed")
-        return
-    async with SessionLocal() as db:
-        existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
-        if existing is None:
-            db.add(User(email=email, full_name=name, password_hash=hash_password(password), role="owner", is_active=True))
-            await db.commit()
-            logger.info("Seeded owner account: %s", email)
-        elif not verify_password(password, existing.password_hash):
-            existing.password_hash = hash_password(password)
-            await db.commit()
-            logger.info("Updated owner password: %s", email)
-
-
 async def cleanup_duplicates_then_refresh_locations():
     """Remove conservative RentCast duplicates before spending Mapbox calls on the backfill."""
     from property_dedup import cleanup_duplicate_properties
@@ -190,7 +170,7 @@ async def on_startup():
     # propagate directly before uvicorn starts; normal/dev execution still runs them here.
     if os.environ.get("ROOFSPAN_MIGRATIONS_PREAPPLIED") != "1":
         await asyncio.to_thread(run_migrations)
-    await seed_owner()
+    # First-run owner creation is handled interactively by the /api/setup wizard (no env seeding).
     async with SessionLocal() as db:
         await licensing_service.bootstrap(db)
     try:

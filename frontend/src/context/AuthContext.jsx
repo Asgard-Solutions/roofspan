@@ -29,6 +29,12 @@ export function AuthProvider({ children }) {
     return data.user;
   };
 
+  const completeSetup = (data) => {
+    setToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
   const logout = async () => {
     try {
       await api.post("/auth/logout");
@@ -42,7 +48,7 @@ export function AuthProvider({ children }) {
   const isSensitive = !!user && SENSITIVE.includes(user.role);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, isSensitive }}>
+    <AuthContext.Provider value={{ user, login, logout, completeSetup, isSensitive }}>
       {children}
     </AuthContext.Provider>
   );

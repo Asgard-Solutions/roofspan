@@ -112,6 +112,26 @@ class CompanyProfile(BaseModel):
     quote_expiration_days: int = 30
 
 
+# ---- First-run setup ----
+class SetupStatus(BaseModel):
+    needs_setup: bool
+
+
+class SetupCompany(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    phone: str = ""
+    email: str = ""
+    address: str = ""
+    license_number: str = ""
+
+
+class SetupInitializeRequest(BaseModel):
+    company: SetupCompany
+    owner_full_name: str = Field(min_length=1, max_length=255)
+    owner_email: EmailStr
+    owner_password: str = Field(min_length=8)
+
+
 class AuditOut(BaseModel):
     id: str
     timestamp: datetime
