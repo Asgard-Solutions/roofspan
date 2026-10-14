@@ -29,6 +29,9 @@
           <Directory Id="UpdateSvcDir" Name="roofspan-update-service">
             <Directory Id="UpdateInternalDir" Name="_internal" />
           </Directory>
+          <Directory Id="BrokerSvcDir" Name="roofspan-update-broker">
+            <Directory Id="BrokerInternalDir" Name="_internal" />
+          </Directory>
         </Directory>
         <Directory Id="ShellDir" Name="shell" />
         <Directory Id="FrontendDir" Name="frontend" />
@@ -44,6 +47,12 @@
         <Directory Id="LogsDir" Name="logs" />
         <Directory Id="ConfigDir" Name="config" />
         <Directory Id="ImagesDir" Name="images" />
+        <Directory Id="UpdateDataDir" Name="update">
+          <Directory Id="UpdateStateDir" Name="state" />
+          <Directory Id="UpdateRequestsDir" Name="requests" />
+          <Directory Id="UpdateDownloadsDir" Name="downloads" />
+          <Directory Id="UpdateBrokerDir" Name="broker" />
+        </Directory>
       </Directory>
     </StandardDirectory>
 
@@ -128,7 +137,7 @@
       <Component Id="Svc_Updater" Directory="UpdateSvcDir" Guid="*">
         <File Id="UpdaterExe" Source="$(var.StageDir)\services\roofspan-update-service\roofspan-update-service.exe" KeyPath="yes" />
         <ServiceInstall Id="RoofSpanUpdate" Name="RoofSpanUpdateService" DisplayName="RoofSpan Update Service"
-                        Description="Checks downloads.roofspan.io for signed updates every 12h; verifies and applies safely."
+                        Description="Checks downloads.roofspan.io for signed RoofSpan updates and verifies them. Automatic installation is disabled until enabled by RoofSpan."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
                         Account="NT SERVICE\RoofSpanUpdateService">
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
@@ -136,12 +145,25 @@
         </ServiceInstall>
         <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
+
+      <Component Id="Svc_Broker" Directory="BrokerSvcDir" Guid="*">
+        <File Id="BrokerExe" Source="$(var.StageDir)\services\roofspan-update-broker\roofspan-update-broker.exe" KeyPath="yes" />
+        <ServiceInstall Id="RoofSpanUpdateBroker" Name="RoofSpanUpdateBroker" DisplayName="RoofSpan Update Broker"
+                        Description="Installs only RoofSpan updates that it has independently verified (signed manifest, hash, Authenticode publisher). Started on demand; no network access."
+                        Type="ownProcess" Start="demand" ErrorControl="normal" Account="LocalSystem">
+          <util:PermissionEx User="RoofSpanUpdateService" Domain="NT SERVICE" ServiceStart="yes" ServiceQueryStatus="yes" />
+        </ServiceInstall>
+        <ServiceControl Id="CtlBroker" Name="RoofSpanUpdateBroker" Stop="both" Remove="uninstall" Wait="yes" />
+        <fw:FirewallException Id="BrokerNoNetwork" Name="RoofSpan Update Broker (no network)" Program="[#BrokerExe]"
+                              Outbound="yes" Action="block" Scope="any" Profile="all" />
+      </Component>
     </ComponentGroup>
 
     <ComponentGroup Id="ServiceInternals">
       <Files Include="$(var.StageDir)\services\roofspan-backend\_internal\**" Directory="BackendInternalDir" />
       <Files Include="$(var.StageDir)\services\roofspan-relay-connector\_internal\**" Directory="RelayInternalDir" />
       <Files Include="$(var.StageDir)\services\roofspan-update-service\_internal\**" Directory="UpdateInternalDir" />
+      <Files Include="$(var.StageDir)\services\roofspan-update-broker\_internal\**" Directory="BrokerInternalDir" />
     </ComponentGroup>
 
     <Component Id="DataDirs" Directory="DataRoot" Guid="*" Permanent="yes" NeverOverwrite="yes">
@@ -187,6 +209,17 @@
       </CreateFolder>
     </Component>
 
+    <!-- Update folders: protected DACLs (no inheritance from ProgramData, so ordinary users cannot create files).
+         SYSTEM + Administrators full; the update checker's service SID Modify; broker staging SYSTEM/Admins only. -->
+    <Component Id="UpdateDirsAcl" Directory="UpdateDataDir" Guid="*" Permanent="yes" NeverOverwrite="yes">
+      <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="UpdateDir" Type="string" Value="[UpdateDataDir]" KeyPath="yes" />
+      <CreateFolder><PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;S-1-5-80-2241140877-3920988836-2552854224-3878876103-2025631134)" /></CreateFolder>
+      <CreateFolder Directory="UpdateStateDir"><PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;S-1-5-80-2241140877-3920988836-2552854224-3878876103-2025631134)" /></CreateFolder>
+      <CreateFolder Directory="UpdateRequestsDir"><PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;S-1-5-80-2241140877-3920988836-2552854224-3878876103-2025631134)" /></CreateFolder>
+      <CreateFolder Directory="UpdateDownloadsDir"><PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;S-1-5-80-2241140877-3920988836-2552854224-3878876103-2025631134)" /></CreateFolder>
+      <CreateFolder Directory="UpdateBrokerDir"><PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" /></CreateFolder>
+    </Component>
+
     <Feature Id="Main" Title="RoofSpan Office" Level="1">
       <ComponentGroupRef Id="FrontendFiles" />
       <ComponentGroupRef Id="RuntimeFiles" />
@@ -201,6 +234,7 @@
       <ComponentRef Id="ImagesDirAcl" />
       <ComponentRef Id="IdentityDirAcl" />
       <ComponentRef Id="ConfigDirAcl" />
+      <ComponentRef Id="UpdateDirsAcl" />
     </Feature>
 
     <!-- First run opens the native RoofSpan application window. The local URL remains internal to it. -->

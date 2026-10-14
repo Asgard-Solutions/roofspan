@@ -1,0 +1,7 @@
+{
+  "auto_install_enabled": false,
+  "channel": "stable",
+  "allowed_hosts": ["downloads.roofspan.io"],
+  "publisher_subject": "",
+  "publisher_thumbprints": []
+}

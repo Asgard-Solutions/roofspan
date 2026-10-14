@@ -3,7 +3,7 @@
 #   .\stage.ps1 -StageDir ..\..\_stage
 #
 # Produces:
-#   _stage\services\...             (three PyInstaller ONEDIR Windows services)
+#   _stage\services\...             (four PyInstaller ONEDIR Windows services + services-build-manifest.json)
 #   _stage\frontend\**             (production Office UI)
 #   _stage\shell\RoofSpanOffice.exe + self-contained .NET/WebView2 host payload
 #   _stage\runtime\RoofSpan.ico     (Windows shell icon)
@@ -114,6 +114,8 @@ $requiredStage = @(
   (Join-Path $services "roofspan-backend\_internal\control_plane\alembic\versions"),
   (Join-Path $services "roofspan-relay-connector\roofspan-relay-connector.exe"),
   (Join-Path $services "roofspan-update-service\roofspan-update-service.exe"),
+  (Join-Path $services "roofspan-update-broker\roofspan-update-broker.exe"),
+  (Join-Path $services "services-build-manifest.json"),
   (Join-Path $frontend "index.html"),
   (Join-Path $shell "RoofSpanOffice.exe"),
   (Join-Path $runtime "RoofSpan.ico"),

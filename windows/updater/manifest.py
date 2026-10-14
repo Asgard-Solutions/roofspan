@@ -31,6 +31,8 @@ class Manifest:
     required: bool = False
     published_at: str | None = None
     release_notes: str | None = None
+    channel: str | None = None
+    expires_at: str | None = None
     signature: str | None = None
 
     def payload(self) -> dict:
@@ -63,7 +65,8 @@ def parse_manifest(raw: str | bytes | dict) -> Manifest:
         installer_url=str(obj["installer_url"]), sha256=str(obj["sha256"]).lower(),
         required=bool(obj.get("required", False)),
         published_at=obj.get("published_at") or obj.get("release_date"),
-        release_notes=obj.get("release_notes"), signature=obj.get("signature"),
+        release_notes=obj.get("release_notes"), channel=obj.get("channel"), expires_at=obj.get("expires_at"),
+        signature=obj.get("signature"),
     )
 
 

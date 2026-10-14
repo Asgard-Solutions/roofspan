@@ -136,7 +136,7 @@ def test_relay_url_has_production_default(monkeypatch):
     monkeypatch.setenv("ROOFSPAN_INSTALL_ROOT", "/nonexistent-roofspan-install")
     rs.load_runtime_config()
     # The relay endpoint must resolve WITHOUT the customer setting an env var.
-    assert os.environ["ROOFSPAN_RELAY_WS_URL"] == "wss://relay.roofspan.io/api/relay/tunnel"
+    assert os.environ["ROOFSPAN_RELAY_WS_URL"] == "wss://relay.roofspan.io/api/relay/installation"
 
 
 # ---- SCM lifecycle contract (simulated; no pywin32) -------------------------------------------------
@@ -275,6 +275,8 @@ def test_backend_surfaces_and_logs_lifespan_startup_failure(tmp_path, monkeypatc
     import backend_entry
 
     monkeypatch.setenv("ROOFSPAN_DATA_ROOT", str(tmp_path))
+    # The frozen backend has backend/ on its path (spec pathex); do not rely on another test having added it.
+    monkeypatch.syspath_prepend(str(WINBUILD.parents[1] / "backend"))
 
     class _FakeServer:
         def __init__(self, config):
@@ -343,11 +345,16 @@ def test_backend_uvicorn_config_builds_without_a_console(monkeypatch):
     assert "use_colors=False" in src
 
 
-def test_relay_does_not_require_user_shell_env_var():
+def test_relay_does_not_require_user_shell_env_var(monkeypatch, tmp_path):
+    import relay_entry
     src = (WINBUILD / "relay_entry.py").read_text(encoding="utf-8")
-    # Must NOT hard-require the env var (os.environ["ROOFSPAN_RELAY_WS_URL"]); must use a default.
-    assert 'os.environ["ROOFSPAN_RELAY_WS_URL"]' not in src
-    assert 'os.environ.get("ROOFSPAN_RELAY_WS_URL"' in src
+    # The connector takes its Relay URL only from the loopback identity endpoint, never from an env var.
+    assert "ROOFSPAN_RELAY_WS_URL" not in src
+    # The SCM service environment (no user shell) still gets a canonical production default.
+    monkeypatch.setattr(os, "environ", {"ROOFSPAN_DATA_ROOT": str(tmp_path / "nodata")})
+    rs.load_runtime_config()
+    url = os.environ["ROOFSPAN_RELAY_WS_URL"]
+    assert url.startswith("wss://relay.roofspan.io") and url.endswith(relay_entry.INSTALLATION_RELAY_PATH)
 
 
 def test_services_log_to_programdata_paths():
@@ -355,6 +362,7 @@ def test_services_log_to_programdata_paths():
         "backend_entry.py": "backend-service.log",
         "relay_entry.py": "relay-service.log",
         "update_service_entry.py": "update-service.log",
+        "update_broker_entry.py": "update-broker.log",
     }
     for fname, logname in expected.items():
         src = (WINBUILD / fname).read_text(encoding="utf-8")
@@ -362,7 +370,8 @@ def test_services_log_to_programdata_paths():
 
 
 def test_specs_are_onedir_with_pywin32():
-    for spec in ("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec"):
+    for spec in ("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec",
+                 "roofspan-update-broker.spec"):
         src = (WINBUILD / spec).read_text(encoding="utf-8")
         assert "COLLECT(" in src and "exclude_binaries=True" in src, f"{spec} must be ONEDIR (COLLECT)"
         assert "onefile=True" not in src, f"{spec} must not be onefile (breaks pywin32 SCM start)"

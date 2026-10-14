@@ -2753,3 +2753,12 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Status today (no baselines, no VM): 16 hosted RUN, 12 BLOCKED_MISSING_BASELINE, 3 PENDING_VM. Local tests: test_failure_matrix.py 56 pass, test_failure_matrix_pg.py 3 pass (PG15).
 - Predicted risk: interrupted-upgrade-retry may FAIL if msiexec finishes installing N after the kill: on retry the bundle sees N installed, runs the plain MSI and skips the coordinator (InstallCondition installed < bundle), leaving the DB unmigrated until the boot recovery task runs. Needs a product decision.
 - Backlog: run matrix on Windows CI; supply N-1/N-2 baselines; provision disposable VM runner; fix the retry gap if confirmed; the 3 pre-existing unrelated test failures.
+
+## 2026-06 — Auto-update Phase 1: broker build/packaging + security hardening (DONE, Linux-verified)
+- roofspan-update-broker added to winbuild/targets.py; single service list in installer/ServicesBuild.psm1 used by build_exes.ps1 + build.ps1.
+- build_exes.ps1 writes services/services-build-manifest.json (SHA-256 per exe) and fails if any exe is missing; build.ps1 refuses WiX unless staged exes match; Test-InstallerArtifact.ps1 compares MSI-packaged exe hashes.
+- Broker: request provenance authorization (owner/DACL via same handle; allowed SYSTEM/Admins/NT SERVICE\RoofSpanUpdateService), fixed roots (no env/roofspan.env), fixed argv checked twice, stale/missing/ambiguous coordinator evidence -> FAILED_SUPPORT_REQUIRED; fixed FAILED-coordinator StateError bug.
+- Policy URL path aligned to /releases/; publish.build_manifest now emits Z timestamps, channel, expires_at.
+- Legacy test fixes: website test (Next.js config), auth-secret test isolation (CP repair stub), relay test (connector gets URL from identity endpoint; default now /api/relay/installation), backend lifespan test sys.path isolation.
+- Tests: test_update_broker.py, test_update_broker_packaging.py (real pwsh), test_update_broker_windows.py (Windows-only; runs in bundle-compile job, skips fail there). Full suite: 364 passed, 0 failed.
+- PENDING: Windows CI run (Save to Github); Phase 2 (admin UI/API, maintenance windows, release publication).

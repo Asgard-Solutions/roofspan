@@ -155,7 +155,7 @@ def _build_fake_stage(stage: Path):
     """Build the complete minimum stage required by the real RoofSpan.wxs authoring."""
     for sub in ("frontend", "runtime", "config-templates", "shell"):
         (stage / sub).mkdir(parents=True, exist_ok=True)
-    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service"):
+    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service", "roofspan-update-broker"):
         service = stage / "services" / name
         (service / "_internal").mkdir(parents=True, exist_ok=True)
         (service / f"{name}.exe").write_bytes(b"MZ" + b"\0" * 4096)

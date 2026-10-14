@@ -117,8 +117,8 @@ def test_stage_normalizes_paths_before_directory_changes():
 
 def test_stage_validates_full_payload_before_success():
     txt = (INSTALLER / "stage.ps1").read_text(encoding="utf-8")
-    for needed in ("roofspan-backend.exe", "roofspan-relay-connector.exe",
-                   "roofspan-update-service.exe", "index.html"):
+    for needed in ("roofspan-backend.exe", "roofspan-relay-connector.exe", "roofspan-update-service.exe",
+                   "roofspan-update-broker.exe", "services-build-manifest.json", "index.html"):
         assert needed in txt, f"stage completeness check must assert {needed}"
 
     txt = (INSTALLER / "build.ps1").read_text(encoding="utf-8")
@@ -184,6 +184,7 @@ ONEDIR_SERVICE_PATHS = [
     r"roofspan-backend\roofspan-backend.exe",
     r"roofspan-relay-connector\roofspan-relay-connector.exe",
     r"roofspan-update-service\roofspan-update-service.exe",
+    r"roofspan-update-broker\roofspan-update-broker.exe",
 ]
 
 
@@ -207,7 +208,7 @@ def test_build_stage_and_wxs_agree_on_onedir_service_paths():
         assert f"services\\{onedir}" in wxs
 
     # The obsolete ONEFILE paths (services\<name>.exe with no per-service subfolder) must be gone.
-    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service"):
+    for name in ("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service", "roofspan-update-broker"):
         onefile = f"services\\{name}.exe"
         for label, text in (("build.ps1", build), ("RoofSpan.wxs", wxs)):
             assert onefile not in text, f"{label} still references obsolete ONEFILE path {onefile}"

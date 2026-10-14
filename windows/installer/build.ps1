@@ -103,6 +103,7 @@ $required = @(
   (Join-Path $StageDir "services\roofspan-backend\roofspan-backend.exe"),
   $relayExe,
   (Join-Path $StageDir "services\roofspan-update-service\roofspan-update-service.exe"),
+  (Join-Path $StageDir "services\roofspan-update-broker\roofspan-update-broker.exe"),
   (Join-Path $StageDir "frontend\index.html"),
   (Join-Path $StageDir "shell\RoofSpanOffice.exe"),
   (Join-Path $StageDir "runtime\RoofSpan.ico"),
@@ -113,7 +114,11 @@ foreach ($p in $required) {
 }
 Assert-RelayConnectorBuildInfo -ExePath $relayExe -ExpectedSha $gitSha -ExpectedVersion $Version
 # Every staged service executable must carry the immutable build identity of THIS source + version.
-foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service")) {
+# WiX must package exactly the executables build_exes.ps1 produced for THIS source + version.
+Import-Module (Join-Path $PSScriptRoot "ServicesBuild.psm1") -Force
+$requiredServices = Get-RoofSpanRequiredServices
+$servicesManifest = Assert-ServicesBuildManifest -ServicesDir (Join-Path $StageDir "services") -Version $Version -GitSha $gitSha
+foreach ($svcName in $requiredServices) {
   $svcExe = Join-Path $StageDir "services\$svcName\$svcName.exe"
   $lines = @(& $svcExe --build-info)
   if ($LASTEXITCODE -ne 0) { throw "Staged $svcName --build-info failed (exit $LASTEXITCODE). Remove _stage and run stage.ps1 again." }
@@ -253,6 +258,7 @@ $metadata = [ordered]@{
     webview2 = Get-FileFacts $WebView2StandaloneInstaller
   }
   upgrade_coordinator = Get-FileFacts $upgradeExe
+  service_executables = $servicesManifest.executables
   update_public_key_sha256 = if (Test-Path $updateKey) { (Get-FileHash $updateKey -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
   update_public_key_placeholder = [bool]$updateKeyPlaceholder
   signed = [bool]$SignCertThumbprint

@@ -97,7 +97,7 @@ def load_runtime_config() -> None:
     os.environ.setdefault("ROOFSPAN_UPDATE_PUBLIC_KEY",
                           os.path.join(root, "config-templates", "update_public_key.pem"))
     # Production defaults (outbound relay + signed-update manifest). NOT derived from a user shell.
-    os.environ.setdefault("ROOFSPAN_RELAY_WS_URL", "wss://relay.roofspan.io/api/relay/tunnel")
+    os.environ.setdefault("ROOFSPAN_RELAY_WS_URL", "wss://relay.roofspan.io/api/relay/installation")
     os.environ.setdefault("ROOFSPAN_LOCAL_API_URL", "http://127.0.0.1:8001")
     os.environ.setdefault("ROOFSPAN_WINDOWS_UPDATE_MANIFEST_URL",
                           "https://downloads.roofspan.io/update/windows/latest.json")

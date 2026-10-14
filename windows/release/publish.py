@@ -31,14 +31,23 @@ def versioned_url(version: str) -> str:
     return f"{DOWNLOADS_BASE}/releases/{versioned_name(version)}"
 
 
+MANIFEST_LIFETIME = datetime.timedelta(days=30)
+
+
+def _utc(t: datetime.datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")  # the exact form updater.policy accepts
+
+
 def build_manifest(*, version: str, installer_bytes: bytes, minimum_supported_version: str,
-                   required: bool, signing_private_pem: str, release_notes: str | None = None) -> dict:
+                   required: bool, signing_private_pem: str, release_notes: str | None = None,
+                   channel: str = "stable", now: datetime.datetime | None = None) -> dict:
+    now = now or datetime.datetime.now(datetime.timezone.utc)
     m = Manifest(
         manifest_version=MANIFEST_VERSION, version=version,
         minimum_supported_version=minimum_supported_version,
         installer_url=versioned_url(version), sha256=sha256_hex(installer_bytes),
-        required=required, published_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        release_notes=release_notes,
+        required=required, published_at=_utc(now), release_notes=release_notes,
+        channel=channel, expires_at=_utc(now + MANIFEST_LIFETIME),
     )
     m.signature = sign_manifest(m, signing_private_pem)
     out = m.payload()

@@ -69,6 +69,8 @@ jobs:
           pytest -q windows/tests/test_relay_connector_release_contract.py
           pytest -q windows/tests/test_release_gate.py
           pytest -q windows/tests/test_build_identity.py windows/tests/test_config_reconcile.py
+          pytest -q windows/tests/test_update_broker.py windows/tests/test_update_broker_packaging.py
+          pytest -q windows/tests/test_windows_auth_secrets.py windows/tests/test_windows_services.py windows/tests/test_installer_static.py
 
       - name: Parse inline workflow PowerShell (including the default Windows shell)
         shell: pwsh
@@ -88,7 +90,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $failed = $false
-          Get-ChildItem -Path windows -Recurse -Filter *.ps1 |
+          Get-ChildItem -Path windows -Recurse -Include *.ps1,*.psm1 |
             Where-Object { $_.FullName -notmatch "node_modules" } |
             ForEach-Object {
               $tokens = $null; $errors = $null
@@ -128,6 +130,18 @@ jobs:
 
       - name: Real WiX 5 Burn-bundle + MSI compile smoke test
         run: pytest -q windows/tests/test_bundle_compile.py
+
+      # Windows-only half of the RoofSpanUpdateBroker security tests (real DACLs, owners, junctions, share modes).
+      # These are skipped on Linux by design; here a single skip is a failure.
+      - name: Update broker Windows security tests (no skips allowed)
+        shell: pwsh
+        run: |
+          pip install pywin32 cryptography httpx
+          $out = python -m pytest -q -rs windows/tests/test_update_broker_windows.py windows/tests/test_update_broker.py 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { throw "Update broker tests failed (pytest exit $code)" }
+          if (($out -join "`n") -match '\bskipped\b') { throw "Update broker Windows tests must not be skipped on Windows" }
 
       - name: Prerequisites are embedded and RoofSpanSetup.exe is self-contained
         shell: pwsh

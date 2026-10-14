@@ -142,7 +142,7 @@ def test_template_carries_no_build_identity():
 
 def test_all_three_specs_embed_the_same_build_info_hook():
     for spec in ("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec",
-                 "roofspan-upgrade.spec"):
+                 "roofspan-update-broker.spec", "roofspan-upgrade.spec"):
         txt = (WINBUILD / spec).read_text(encoding="utf-8")
         assert 'BUILD_INFO_HOOK = os.environ.get("ROOFSPAN_BUILD_INFO_HOOK", "")' in txt, spec
         assert "runtime_hooks=RUNTIME_HOOKS" in txt, spec
@@ -154,6 +154,7 @@ def test_all_three_specs_embed_the_same_build_info_hook():
 @pytest.mark.parametrize("entry,service", [("backend_entry.py", "roofspan-backend"),
                                            ("relay_entry.py", "roofspan-relay-connector"),
                                            ("update_service_entry.py", "roofspan-update-service"),
+                                           ("update_broker_entry.py", "roofspan-update-broker"),
                                            ("upgrade_entry.py", "roofspan-upgrade")])
 def test_every_executable_has_build_info_command(tmp_path, entry, service):
     env = dict(os.environ, ROOFSPAN_DATA_ROOT=str(tmp_path / "nodata"),

@@ -1,4 +1,4 @@
-# Builds the three RoofSpan Office service executables with PyInstaller.
+# Builds the four RoofSpan Office service executables with PyInstaller (list: winbuild\targets.py SERVICE_TARGETS).
 # HUMAN REQUIRED: run on Windows with `pip install pyinstaller` available in the repo venv or PATH.
 #   .\build_exes.ps1 -OutDir ..\..\_stage\services
 param(
@@ -186,8 +186,13 @@ function Assert-RelayConnectorBuildInfo {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+Import-Module (Join-Path $PSScriptRoot "..\installer\ServicesBuild.psm1") -Force
+$requiredServices = Get-RoofSpanRequiredServices
+$builtExes = [ordered]@{}
+Remove-Item (Get-ServicesBuildManifestPath $OutDir) -Force -ErrorAction SilentlyContinue
+
 try {
-  $specs = @("roofspan-backend.spec", "roofspan-relay-connector.spec", "roofspan-update-service.spec")
+  $specs = @($requiredServices | ForEach-Object { "$_.spec" })
   foreach ($spec in $specs) {
     $specPath = Join-Path $PSScriptRoot $spec
     if (-not (Test-Path $specPath)) { throw "Missing spec: $specPath" }
@@ -235,10 +240,15 @@ try {
     $stagedExe = Join-Path $destDir "$name.exe"
     if (-not (Test-Path $stagedExe)) { throw "Staging did not place $name.exe under $destDir" }
     Assert-ServiceBuildInfo -ExePath $stagedExe -Service $name -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
+    $builtExes[$name] = Get-ServiceExeSha256 $exe  # hash of the PyInstaller output, re-checked on the staged copy
     if ($name -eq "roofspan-relay-connector") {
       Assert-RelayConnectorBuildInfo -ExePath $stagedExe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     }
   }
+
+  # Every required service executable must exist (built from source in THIS run) before packaging may begin.
+  $manifestPath = Write-ServicesBuildManifest -OutDir $OutDir -Version $releaseVersion -GitSha $gitSha -BuiltHashes $builtExes
+  Write-Host "==> Wrote $manifestPath ($($builtExes.Count) service executables)"
 
   if ($UpgradeOutDir) {
     Write-Host "==> PyInstaller roofspan-upgrade.spec (onefile coordinator)"

@@ -17,7 +17,7 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=["roofspan_service", "build_identity", "_roofspan_build_identity", "updater.manifest", "updater.signing", "updater.service",
-                   "updater.orchestrator", "httpx"] + PYWIN32,
+                   "updater.orchestrator", "updater.policy", "updater.states", "updater.autoupdate", "updater.winupdate", "updater.authenticode", "httpx"] + PYWIN32,
     runtime_hooks=RUNTIME_HOOKS,
     excludes=[],
 )

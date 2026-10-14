@@ -109,9 +109,12 @@ $adminLog = Join-Path $WorkDir "msi-admin.log"
 $p = Start-Process msiexec.exe -ArgumentList @("/a", "`"$msi`"", "/qn", "TARGETDIR=`"$adminDir`"", "/L*v", "`"$adminLog`"") -Wait -PassThru
 Assert-That ($p.ExitCode -eq 0) "msiexec /a administrative extraction failed (exit $($p.ExitCode)); see $adminLog"
 $serviceIdentity = [ordered]@{}
-foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service")) {
+foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service", "roofspan-update-broker")) {
   $exe = Get-ChildItem $adminDir -Recurse -Filter "$svcName.exe" | Select-Object -First 1
   Assert-That ($null -ne $exe) "packaged $svcName.exe not found in the MSI"
+  $packagedHash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+  $builtHash = $meta.service_executables.$svcName.sha256
+  Assert-That ($builtHash -and $packagedHash -eq $builtHash) "packaged $svcName.exe ($packagedHash) is not the executable the build produced ($builtHash)"
   $infoLine = @(& $exe.FullName --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
   Assert-That ($LASTEXITCODE -eq 0 -and $infoLine) "packaged $svcName --build-info failed"
   $bi = $infoLine | ConvertFrom-Json

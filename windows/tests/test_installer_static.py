@@ -136,7 +136,15 @@ def test_update_cadence_is_12h():
 
 
 def test_public_website_download_wired_to_cloudfront():
-    """Live download URLs were intentionally wired for RoofSpan Office GA (downloads.roofspan.io)."""
-    env = _read(os.path.join(os.path.dirname(HERE), "roofspan-website", ".env"))
-    assert "REACT_APP_WINDOWS_INSTALLER_AVAILABLE=true" in env
-    assert "downloads.roofspan.io/latest/RoofSpanSetup.exe" in env
+    """The public site (Next.js) links downloads straight to CloudFront (downloads.roofspan.io); whether the
+    download CTA is live is the explicit NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE release decision."""
+    site = os.path.join(os.path.dirname(HERE), "roofspan-website")
+    cfg = _read(os.path.join(site, "src", "config.js"))
+    env = _read(os.path.join(site, ".env"))
+    assert 'APPROVED_INSTALLER_HOST = "downloads.roofspan.io"' in cfg
+    assert f'CLOUDFRONT_INSTALLER = "{publish.stable_url()}"' in cfg
+    assert f'CLOUDFRONT_RELEASES_BASE = "{publish.versioned_url("0.0.0").rsplit("/", 1)[0]}"' in cfg
+    assert 'CLOUDFRONT_UPDATE_MANIFEST = "https://downloads.roofspan.io/update/windows/latest.json"' in cfg
+    assert "env.NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE" in cfg
+    assert re.search(r"^NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE=(true|false)$", env, re.MULTILINE)
+    assert "REACT_APP_" not in env, "the site is Next.js; REACT_APP_* variables are never read"

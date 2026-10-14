@@ -18,6 +18,7 @@ SVC_NAME = "RoofSpanUpdateService"
 SVC_DISPLAY = "RoofSpan Update Service"
 LOG_FILE = "update-service.log"
 SVC_NAME_ID = "roofspan-update-service"
+ACTIVE_STATES = ("UPDATE_AVAILABLE", "DOWNLOADING", "DOWNLOAD_PAUSED", "DOWNLOADED", "VERIFYING", "SCHEDULED")
 
 
 def _current_version() -> str:
@@ -27,6 +28,19 @@ def _current_version() -> str:
 def _public_pem() -> str:
     with open(os.environ["ROOFSPAN_UPDATE_PUBLIC_KEY"], "r") as f:
         return f.read()
+
+
+def tick_once(logger) -> str:
+    """Signed-update state machine (download + verify + schedule) when the install-owned trust policy is valid;
+    otherwise the legacy check-and-log behavior. Installation itself only ever happens in RoofSpanUpdateBroker."""
+    from updater.autoupdate import Checker
+    from updater.winupdate import WinUpdateOps, load_trust
+    policy, auto, reason = load_trust()
+    if policy is None:
+        logger.info("update: automatic download/install disabled (%s); check only", reason)
+        return check_once(logger)
+    return Checker(WinUpdateOps(), policy, _current_version(), os.environ.get("ROOFSPAN_DATA_ROOT", r"C:\ProgramData\RoofSpan"),
+                   logger, auto).tick()
 
 
 def check_once(logger) -> str:
@@ -57,12 +71,14 @@ class UpdateWorker:
             self.log.info("update: checker started (interval %ss) current_version=%s build_sha=%s",
                           CHECK_INTERVAL_SECONDS, _current_version(), build_identity.BUILD_SHA)
             while not self._stop.is_set():
+                state = "IDLE"
                 try:
-                    check_once(self.log)
+                    state = tick_once(self.log)
                 except Exception as e:  # noqa: BLE001  - all update-check failures are recoverable
-                    self.log.warning("update check failed (will retry): %s", str(e)[:200])
-                # Interruptible sleep so SCM stop is prompt.
-                self._stop.wait(CHECK_INTERVAL_SECONDS)
+                    self.log.warning("update check failed (will retry): %s", type(e).__name__)
+                # Active download/verify/schedule states are polled every minute; otherwise the 12h cadence.
+                # Interruptible wait so SCM stop is prompt.
+                self._stop.wait(60 if state in ACTIVE_STATES else CHECK_INTERVAL_SECONDS)
 
         self._thread = threading.Thread(target=_run, name="roofspan-update", daemon=True)
         self._thread.start()
