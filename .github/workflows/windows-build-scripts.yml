@@ -2,18 +2,27 @@ name: windows-build-scripts
 
 # Guards the Windows release-engineering scripts so changes cannot silently break the build.
 on:
+  # Every pull request into main runs ALL six Windows jobs (no path filter), so required checks can never be
+  # left "Expected - waiting" and an installer change can never merge without them.
+  pull_request:
+    branches: [main]
+  # Pushes run whenever ANY packaged input changes (see windows/tests/test_release_gate.py).
   push:
     paths:
       - "windows/**"
+      - "backend/**"
       - "frontend/**"
       - "packages/roof-sketch-core/**"
+      - "backend/requirements.txt"
+      - "frontend/package.json"
+      - "frontend/yarn.lock"
+      - "packages/roof-sketch-core/package.json"
+      - "package.json"
+      - "package-lock.json"
+      - "windows/shell/*.csproj"
       - ".github/workflows/windows-build-scripts.yml"
-  pull_request:
-    paths:
-      - "windows/**"
-      - "frontend/**"
-      - "packages/roof-sketch-core/**"
-      - ".github/workflows/windows-build-scripts.yml"
+      - ".github/workflows/release-promote.yml"
+  workflow_dispatch:
 
 jobs:
   db-bootstrap-integration:
@@ -58,6 +67,7 @@ jobs:
         run: |
           pytest -q windows/tests/test_build_scripts.py
           pytest -q windows/tests/test_relay_connector_release_contract.py
+          pytest -q windows/tests/test_release_gate.py
 
       - name: Parse inline workflow PowerShell (including the default Windows shell)
         shell: pwsh
@@ -179,6 +189,76 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python (prerequisite-script regression tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Legacy + reclaim prerequisite tests on Windows (pwsh 7 AND Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          # The reclaim test needs real Windows DPAPI, so it can only execute here (it is skipped on Linux).
+          # -rs prints skip reasons; any skip of the reclaim test on Windows is treated as a failure.
+          foreach ($host_ in @("pwsh", "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")) {
+            $env:ROOFSPAN_TEST_POWERSHELL = (Get-Command $host_).Source
+            Write-Host "===== PowerShell host: $env:ROOFSPAN_TEST_POWERSHELL ====="
+            $out = python -m pytest -q -rs windows/tests/test_legacy_postgres_upgrade.py 2>&1
+            $code = $LASTEXITCODE
+            $out | Write-Host
+            if ($code -ne 0) { throw "prerequisite regression tests failed under $host_ (exit $code)" }
+            if ($out -match 'SKIPPED.*reclaim') { throw "reclaim test was skipped on Windows under $host_" }
+          }
+          Remove-Item Env:\ROOFSPAN_TEST_POWERSHELL
+
+      - name: Prove the reclaim test FAILS against old/incorrect behavior (mutation check)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $src = (Resolve-Path "windows/installer/scripts").Path
+          $base = Join-Path $env:RUNNER_TEMP "reclaim-mutants"
+          git fetch --no-tags --depth=1 origin 5380ddf9d40c66f0ddc45f1c20a55083c899c179
+          if ($LASTEXITCODE -ne 0) { throw "could not fetch the pre-PR-122 baseline commit" }
+          function Invoke-Mutant([string]$Label, [int]$Expected, [scriptblock]$Mutate) {
+            $dir = Join-Path $base $Label
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            Copy-Item (Join-Path $src "*.ps1") $dir
+            $prep = Join-Path $dir "Prepare-PostgreSQL.ps1"
+            $before = Get-Content $prep -Raw
+            & $Mutate $prep
+            if ($Expected -ne 0 -and (Get-Content $prep -Raw) -eq $before) { throw "mutant '$Label' did not change the script" }
+            $env:ROOFSPAN_TEST_SCRIPTS_DIR = $dir
+            try {
+              python -m pytest -q windows/tests/test_legacy_postgres_upgrade.py -k reclaims
+              $code = $LASTEXITCODE
+            } finally { Remove-Item Env:\ROOFSPAN_TEST_SCRIPTS_DIR }
+            if ($code -ne $Expected) { throw "'$Label': pytest exit $code, expected $Expected (0 = pass, 1 = test failed)" }
+            Write-Host "OK: '$Label' -> pytest exit $code as expected"
+          }
+          function Set-Replaced([string]$Path, [string]$Old, [string]$New) {
+            $t = Get-Content $Path -Raw
+            if (-not $t.Contains($Old)) { throw "mutation anchor not found: $Old" }
+            Set-Content -Encoding ASCII -NoNewline -Path $Path -Value $t.Replace($Old, $New)
+          }
+          # Positive control: the unmodified scripts pass through the same harness.
+          Invoke-Mutant "current" 0 { param($p) }
+          # Old behavior (before PR #122): leftover config/secret => PREP-STOP.
+          Invoke-Mutant "pre-pr-122" 1 { param($p)
+            $old = git show 5380ddf9d40c66f0ddc45f1c20a55083c899c179:windows/installer/scripts/Prepare-PostgreSQL.ps1
+            if ($LASTEXITCODE -ne 0) { throw "git show failed" }
+            Set-Content -Encoding ASCII -Path $p -Value $old }
+          # Deletes the stray files instead of archiving them.
+          Invoke-Mutant "delete-instead-of-archive" 1 { param($p)
+            Set-Replaced $p "Move-Item -Force `$configFile (Join-Path `$backup 'roofspan.env')" "Remove-Item -Force `$configFile"
+            Set-Replaced $p "Move-Item -Force `$pgSuperBin (Join-Path `$backup 'pg_super.bin'); `$secretPresent = `$false" "Remove-Item -Force `$pgSuperBin; `$secretPresent = `$false" }
+          # Restores the stale credential instead of generating a fresh one.
+          Invoke-Mutant "reuse-stale-secret" 1 { param($p)
+            Set-Replaced $p "[System.IO.File]::WriteAllBytes(`$pgSuperBin, `$protected)" "Copy-Item (Join-Path `$backup 'pg_super.bin') `$pgSuperBin" }
+          # The expected-failure pytest runs leave LASTEXITCODE=1; every mutant was checked above.
+          exit 0
 
       - name: Install WiX Toolset 5.0.2 + BootstrapperApplications extension
         run: |
@@ -669,6 +749,18 @@ jobs:
           Invoke-WebRequest "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $wv
           if ((Get-Item $edb).Length -lt 100MB) { throw "EDB installer download looks wrong (too small)" }
           if ((Get-Item $wv).Length -lt 100MB) { throw "WebView2 STANDALONE download looks wrong (too small = probably the bootstrapper)" }
+          # EDB 16.4-1 is a fixed, versioned file: pin its exact bytes.
+          $edbExpected = "f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc"
+          $edbActual = (Get-FileHash $edb -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($edbActual -ne $edbExpected) { throw "EDB installer SHA-256 $edbActual does not match the pinned $edbExpected" }
+          # The WebView2 Evergreen permalink always serves Microsoft's latest runtime, so it cannot be hash-pinned;
+          # require a valid Microsoft Authenticode signature instead (its exact hash/version is recorded in build-metadata.json).
+          foreach ($pair in @(@($edb, "EnterpriseDB"), @($wv, "Microsoft Corporation"))) {
+            $sig = Get-AuthenticodeSignature -FilePath $pair[0]
+            if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch [regex]::Escape($pair[1])) {
+              throw "prerequisite $($pair[0]) is not validly signed by $($pair[1]) (status $($sig.Status), signer $($sig.SignerCertificate.Subject))"
+            }
+          }
           "EDB_INSTALLER=$edb" | Out-File -Append $env:GITHUB_ENV
           "WV_INSTALLER=$wv"  | Out-File -Append $env:GITHUB_ENV
           Write-Host "OK: real EDB ($([math]::Round((Get-Item $edb).Length/1MB)) MB) + WebView2 standalone ($([math]::Round((Get-Item $wv).Length/1MB)) MB)"
@@ -676,28 +768,66 @@ jobs:
       - name: Enable yarn (corepack) for the real frontend build
         run: corepack enable
 
+      - name: Configure release signing certificate + real update public key (when configured)
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.ROOFSPAN_WINDOWS_SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.ROOFSPAN_WINDOWS_SIGNING_PFX_PASSWORD }}
+          UPDATE_PUBLIC_KEY_PEM: ${{ vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pub = Join-Path $env:RUNNER_TEMP "update_public_key.pem"
+          if ($env:UPDATE_PUBLIC_KEY_PEM) {
+            Set-Content -Encoding ASCII -NoNewline -Path $pub -Value $env:UPDATE_PUBLIC_KEY_PEM
+            python -c "import sys; from cryptography.hazmat.primitives import serialization as s; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey as K; k=s.load_pem_public_key(open(sys.argv[1],'rb').read()); sys.exit(0 if isinstance(k,K) else 1)" $pub
+            if ($LASTEXITCODE -ne 0) { throw "vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM is not a valid Ed25519 public key PEM" }
+            Write-Host "Using the real update public key from vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM"
+          } else {
+            "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content -Encoding ASCII $pub
+            Write-Warning "NOT RELEASABLE: vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM is not configured; staging a placeholder key"
+          }
+          "UPDATE_PUB_PATH=$pub" | Out-File -Append $env:GITHUB_ENV
+          if ($env:SIGNING_PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            try {
+              $pw = ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
+              $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+            } finally { Remove-Item -Force $pfx }
+            $cert = @($cert | Where-Object { $_.HasPrivateKey })[0]
+            if (-not $cert) { throw "the signing PFX did not contain a certificate with a private key" }
+            "SIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append $env:GITHUB_ENV
+            Write-Host "Release signing certificate imported: $($cert.Subject)"
+          } else {
+            Write-Warning "NOT RELEASABLE: secrets.ROOFSPAN_WINDOWS_SIGNING_PFX_BASE64 is not configured; the installer will be UNSIGNED"
+          }
+
       - name: Build the FULL customer installer via the real stage.ps1 + build.ps1 (real shell + frontend)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $version = (Get-Content windows/VERSION -Raw).Trim()
           $stage = Join-Path $env:RUNNER_TEMP "stage"
-          # Placeholder update PUBLIC key (release supplies the real one); lets staging + MSI complete in CI.
-          $pub = Join-Path $env:RUNNER_TEMP "update_public_key.pem"
-          "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content -Encoding ASCII $pub
+          $dist = Join-Path $env:RUNNER_TEMP "dist"
+          $logs = Join-Path $env:RUNNER_TEMP "build-logs"
+          New-Item -ItemType Directory -Force -Path $logs | Out-Null
+          $signArgs = @{}
+          if ($env:SIGN_THUMBPRINT) { $signArgs["SignCertThumbprint"] = $env:SIGN_THUMBPRINT }
           Push-Location windows/installer
+          Start-Transcript -Path (Join-Path $logs "stage-and-build.log") | Out-Null
           try {
             # REAL staging: PyInstaller services + production yarn frontend build + the self-contained .NET
             # WebView2 desktop shell + icon + config templates (the genuine customer payload, NOT where.exe
             # or placeholder HTML).
-            .\stage.ps1 -StageDir $stage -UpdatePublicKey $pub
-            # REAL customer build path (clean isolated output, exit-code checks, SHA-256 report).
+            .\stage.ps1 -StageDir $stage -UpdatePublicKey $env:UPDATE_PUB_PATH
+            # REAL customer build path (clean isolated output, exit-code checks, signing, SHA-256 report).
+            # This is the ONLY place the release installer is built; it is tested and uploaded as-is.
             .\build.ps1 -Version $version -StageDir $stage `
               -PostgresInstaller $env:EDB_INSTALLER `
               -WebView2StandaloneInstaller $env:WV_INSTALLER `
-              -OutDir (Join-Path $env:RUNNER_TEMP "dist")
-          } finally { Pop-Location }
-          $setup = Join-Path $env:RUNNER_TEMP "dist\RoofSpanSetup.exe"
+              -OutDir $dist @signArgs
+          } finally { Stop-Transcript | Out-Null; Pop-Location }
+          $setup = Join-Path $dist "RoofSpanSetup.exe"
           if (-not (Test-Path $setup)) { throw "build.ps1 did not produce RoofSpanSetup.exe" }
           # The genuine self-contained .NET desktop shell must be present (proves it is not a where.exe stand-in).
           $shellExe = Join-Path $stage "shell\RoofSpanOffice.exe"
@@ -707,7 +837,21 @@ jobs:
             throw "self-contained WebView2 shell dependencies missing from the staged shell"
           }
           "SETUP_EXE=$setup" | Out-File -Append $env:GITHUB_ENV
+          "DIST_DIR=$dist" | Out-File -Append $env:GITHUB_ENV
+          "RS_RELEASE_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
           Write-Host ("setup size = {0} MB" -f [math]::Round((Get-Item $setup).Length/1MB, 1))
+
+      - name: Verify the built artifact (Git SHA, version, embedded prerequisites, hashes) before testing it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sha = (git rev-parse HEAD).Trim()
+          & windows/installer/Test-InstallerArtifact.ps1 -DistDir $env:DIST_DIR -ExpectedGitSha $sha `
+            -ExpectedVersion $env:RS_RELEASE_VERSION -WorkDir (Join-Path $env:RUNNER_TEMP "artifact-verify")
+          $hash = (Get-FileHash $env:SETUP_EXE -Algorithm SHA256).Hash.ToLowerInvariant()
+          "ARTIFACT_SHA256=$hash" | Out-File -Append $env:GITHUB_ENV
+          "BUILT_GIT_SHA=$sha" | Out-File -Append $env:GITHUB_ENV
+          Write-Host "Tested artifact SHA-256 (recorded BEFORE install): $hash"
 
       - name: Compile a test-only major-upgrade pair from the production MSI and bundle authoring
         shell: pwsh
@@ -769,6 +913,9 @@ jobs:
           }
           if ($code -ne 0) { if (Test-Path $log) { Get-Content $log -Tail 200 }; throw "offline RoofSpanSetup.exe failed (exit $code)" }
           Write-Host "OK: complete EXE installed with Internet blocked and the source prerequisites deleted"
+          $after = (Get-FileHash $env:SETUP_EXE -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($after -ne $env:ARTIFACT_SHA256) { throw "the installed RoofSpanSetup.exe changed during the test ($after != $env:ARTIFACT_SHA256)" }
+          Write-Host "OK: the installed bytes are the verified artifact (SHA-256 $after)"
 
       - name: Prove BOTH prerequisites + Office came up (no reinstall)
         shell: pwsh
@@ -817,6 +964,72 @@ jobs:
       # Hosted windows-latest runners ship WebView2 preinstalled and it cannot be cleanly removed, so this
       # job proves the real WebView2 installer + args work and that PostgreSQL + Office install offline, but
       # the WebView2-absent install path stays a manual clean-VM sign-off (tracked in windows/BUILD.md).
+
+      - name: Confirm the release artifact is still the exact bytes that passed every acceptance step
+        shell: pwsh
+        env:
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_EVENT: ${{ github.event_name }}
+          CI_REF: ${{ github.ref }}
+          CI_SHA: ${{ github.sha }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $names = @("RoofSpanSetup.exe", "RoofSpanSetup-$env:RS_RELEASE_VERSION.exe")
+          foreach ($n in $names) {
+            $h = (Get-FileHash (Join-Path $env:DIST_DIR $n) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($h -ne $env:ARTIFACT_SHA256) { throw "$n hash $h != tested $env:ARTIFACT_SHA256" }
+          }
+          $rel = Join-Path $env:RUNNER_TEMP "release-artifact"
+          New-Item -ItemType Directory -Force -Path $rel | Out-Null
+          Copy-Item (Join-Path $env:DIST_DIR "RoofSpanSetup.exe"), (Join-Path $env:DIST_DIR "RoofSpanSetup-$env:RS_RELEASE_VERSION.exe"), `
+            (Join-Path $env:DIST_DIR "RoofSpanOffice-$env:RS_RELEASE_VERSION.msi"), (Join-Path $env:DIST_DIR "SHA256SUMS.txt"), `
+            (Join-Path $env:DIST_DIR "build-metadata.json"), (Join-Path $env:DIST_DIR "artifact-verification.json") $rel
+          $ci = [ordered]@{
+            run_id = $env:CI_RUN_ID; run_attempt = $env:CI_RUN_ATTEMPT; event = $env:CI_EVENT
+            ref = $env:CI_REF; built_git_sha = $env:BUILT_GIT_SHA; workflow_sha = $env:CI_SHA
+            pull_request_head_sha = $env:CI_PR_HEAD_SHA
+            tested_setup_sha256 = $env:ARTIFACT_SHA256; job = "clean-machine-full-install"
+          }
+          $ci | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $rel "ci-provenance.json")
+          $rel2 = Join-Path $rel "build-logs"; New-Item -ItemType Directory -Force -Path $rel2 | Out-Null
+          Copy-Item (Join-Path $env:RUNNER_TEMP "build-logs\*") $rel2 -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $env:RUNNER_TEMP "artifact-verify\msi-admin.log") $rel2 -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $env:RUNNER_TEMP "setup.burn.log") $rel2 -ErrorAction SilentlyContinue
+
+      - name: Upload the ONE release installer artifact (exact tested bytes)
+        id: release_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roofspan-office-installer
+          path: ${{ runner.temp }}/release-artifact
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+      - name: Publish the tested artifact identity to the job summary
+        shell: pwsh
+        run: |
+          $v = Get-Content (Join-Path $env:DIST_DIR "artifact-verification.json") -Raw | ConvertFrom-Json
+          @(
+            "## RoofSpan Office installer artifact",
+            "| Field | Value |", "|---|---|",
+            "| Version | $env:RS_RELEASE_VERSION |",
+            "| Built Git SHA | $env:BUILT_GIT_SHA |",
+            "| RoofSpanSetup.exe SHA-256 (tested) | ``$env:ARTIFACT_SHA256`` |",
+            "| MSI SHA-256 | ``$($v.msi.sha256)`` |",
+            "| PostgreSQL payload | $($v.prerequisites.postgresql.name) ``$($v.prerequisites.postgresql.sha256)`` |",
+            "| WebView2 payload | $($v.prerequisites.webview2.name) $($v.prerequisites.webview2.product_version) ``$($v.prerequisites.webview2.sha256)`` |",
+            "| Artifact | roofspan-office-installer (id ${{ steps.release_artifact.outputs.artifact-id }}, zip digest ``${{ steps.release_artifact.outputs.artifact-digest }}``) |",
+            "| Releasable | $($v.releasable) $(($v.not_releasable_reasons) -join '; ') |"
+          ) -join "`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
+      - name: Remove the imported signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SIGN_THUMBPRINT) { Remove-Item -Force "Cert:\CurrentUser\My\$env:SIGN_THUMBPRINT" -ErrorAction SilentlyContinue }
 
       - name: Collect Burn + service logs and breadcrumb into an artifact folder
         if: always()

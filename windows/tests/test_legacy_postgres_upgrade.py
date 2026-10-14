@@ -5,16 +5,18 @@ branch decisions, exit codes and credential preservation are exercised by PowerS
 The full Windows CI job also exercises this path with real EDB PostgreSQL and Burn.
 """
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-
-SCRIPTS = Path(__file__).resolve().parents[1] / "installer" / "scripts"
-PWSH = shutil.which("pwsh")
+# CI overrides: run the suite under Windows PowerShell 5.1 (the production host) and against mutated or
+# historical copies of the scripts to prove the assertions can fail.
+SCRIPTS = Path(os.environ.get("ROOFSPAN_TEST_SCRIPTS_DIR") or
+               Path(__file__).resolve().parents[1] / "installer" / "scripts")
+PWSH = os.environ.get("ROOFSPAN_TEST_POWERSHELL") or shutil.which("pwsh")
 pytestmark = pytest.mark.skipif(not PWSH, reason="PowerShell required")
 PASSWORD = "LegacyTest9%21"
 CONFIG = f"DATABASE_URL=postgresql+asyncpg://roofspan:{PASSWORD}@127.0.0.1:5432/roofspan\n"
@@ -26,7 +28,7 @@ def run_helper(tmp_path, name, config=CONFIG, query_code=0, version="160004", se
     (root / "config").mkdir(parents=True)
     cfg = root / "config" / "roofspan.env"
     if config is not None:
-        cfg.write_text(config, encoding="utf-8")
+        cfg.write_bytes(config.encode("utf-8"))
     # A fake PostgreSQL cluster root; only create a real data dir when the scenario needs one.
     pg_root = tmp_path / "PgProgram"
     if cluster:
@@ -60,7 +62,7 @@ exit $LASTEXITCODE
                QUERY_ARGS=str(tmp_path / "query-args.json"), QUERY_CODE=str(query_code),
                QUERY_VERSION=version, HAS_SERVICE="1" if service else "0")
     result = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-File", str(wrapper)],
-                            env=env, capture_output=True, text=True, timeout=30)
+                            env=env, capture_output=True, text=True, timeout=30, check=False)
     output = result.stdout + result.stderr
     diag = root / "prereq-diag.log"
     if diag.exists():
@@ -140,18 +142,52 @@ def test_prep_does_not_create_new_database_over_existing_config(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="reclaim path generates a DPAPI secret (Windows only)")
 def test_prep_reclaims_stale_leftovers_when_no_service_or_cluster(tmp_path):
-    # Config (and superuser secret) left over from a REMOVED install, but no PostgreSQL service and no
-    # cluster data dir -> treat as clean: archive the stray files (never delete) and prepare a fresh install.
+    # Config + superuser secret left over from a REMOVED install, but no PostgreSQL service and no cluster
+    # data dir -> archive the exact stray files (never delete) and prepare a separate, fresh credential.
     root = tmp_path / "RoofSpan"
-    (root / "identity").mkdir(parents=True)
-    (root / "identity" / "pg_super.bin").write_bytes(b"stale-secret")
+    identity = root / "identity"
+    identity.mkdir(parents=True)
+    stale_secret = b"\x01stale-dpapi-blob-from-a-removed-install\xfe\x00"
+    (identity / "pg_super.bin").write_bytes(stale_secret)
+
     result, output = run_helper(tmp_path, "Prepare-PostgreSQL.ps1", service=False, cluster=False, reclaim=True)
     assert result.returncode == 0, output
-    assert "PREP-RECLAIM" in output
-    # Stray files were archived (moved), not left in place, and NOT deleted.
+    assert "PREP-RECLAIM" in output and "PREP-END-OK" in output
+
+    # Exactly one archive folder, directly under the RoofSpan data root, holding exactly the two stray files.
+    archives = sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("reclaimed-"))
+    assert len(archives) == 1, [p.name for p in root.iterdir()]
+    archive = archives[0]
+    assert sorted(p.name for p in archive.iterdir()) == ["pg_super.bin", "roofspan.env"]
+    assert archive.name in output, "the diagnostic breadcrumb must record where the files were archived"
+
+    # The archived bytes are the original bytes.
+    assert (archive / "pg_super.bin").read_bytes() == stale_secret
+    assert (archive / "roofspan.env").read_bytes() == CONFIG.encode("utf-8")
     assert not (root / "config" / "roofspan.env").exists()
-    assert not (root / "identity" / "pg_super.bin").exists() or True  # moved out of identity
-    archived = list(root.glob("reclaimed-*/roofspan.env"))
-    assert archived, "stale config must be archived, not deleted"
-    # A fresh install was prepared.
-    assert (root / "identity" / "pg_install.optionfile").exists()
+
+    # A NEW credential was generated as a separate file with different content.
+    fresh_bin = identity / "pg_super.bin"
+    assert fresh_bin.is_file()
+    fresh = fresh_bin.read_bytes()
+    assert fresh and fresh != stale_secret
+    assert not os.path.samefile(fresh_bin, archive / "pg_super.bin")
+
+    # A fresh option file exists, is separate from the archive, and carries the NEW password (it decrypts
+    # from the new DPAPI blob). Values are compared in memory only; nothing secret is printed.
+    option = identity / "pg_install.optionfile"
+    assert option.is_file()
+    assert not any(p.name == option.name for p in archive.iterdir())
+    lines = option.read_text(encoding="ascii").splitlines()
+    assert len(lines) == 1 and lines[0].startswith("superpassword=")
+    option_pw = lines[0][len("superpassword="):]
+    assert len(option_pw) >= 24
+    decrypt = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command",
+         ("Add-Type -AssemblyName System.Security; $b=[IO.File]::ReadAllBytes($env:BIN); "
+          "[Console]::Out.Write([Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect("
+          "$b,$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)))")],
+        env=dict(os.environ, BIN=str(fresh_bin)), capture_output=True, text=True, timeout=30, check=False)
+    assert decrypt.returncode == 0, "new pg_super.bin must be a valid LocalMachine DPAPI blob"
+    assert decrypt.stdout == option_pw, "option file must carry the newly generated credential"
+    assert option_pw not in output

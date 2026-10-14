@@ -2725,3 +2725,11 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
    test_mobile_map_properties 8/8; Babel/Metro compile of all changed screens OK.
  - REQUIRES USER: physical Android build + on-device acceptance (native MapLibre v10 render on Expo 57 /
    RN 0.86 New Arch cannot be verified in-container; diagnostics now record mount attempted/succeeded).
+
+## 2026-06 P0 Windows installer release gate (implemented locally; Windows CI PENDING)
+- Root cause: `main` unprotected (`protected:false`, no required checks); PR #122 merged 36 s after its Windows run started (clean-machine-full-install later cancelled). Reclaim test was Windows-only but ran only in the ubuntu `validate` job (always skipped) and had `... or True`.
+- Changes: reclaim test rewritten (archive location + byte equality + fresh DPAPI secret/option file); runs on Windows in `burn-prep-runtime` under pwsh 7 and Windows PowerShell 5.1, plus mutation check (pre-PR-122 script, delete-instead-of-archive, reuse-stale-secret must FAIL).
+- Workflow: PRs to main always run all 6 jobs; push paths cover windows/backend/frontend/roof-sketch-core/root manifests/workflows. EDB pinned by SHA-256; WebView2 signer-checked.
+- build.ps1: signs MSI -> Burn engine (detach/reattach) -> bundle; writes build-metadata.json + SHA256SUMS.txt; `releasable` false if unsigned/placeholder update key.
+- New `windows/installer/Test-InstallerArtifact.ps1`; single artifact `roofspan-office-installer` uploaded from clean-machine-full-install after acceptance; new `.github/workflows/release-promote.yml` (draft GitHub Release, no rebuild).
+- Secrets needed: ROOFSPAN_WINDOWS_SIGNING_PFX_BASE64, ROOFSPAN_WINDOWS_SIGNING_PFX_PASSWORD, vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM. Branch protection: MANUAL (no permission from agent).

@@ -1,0 +1,119 @@
+name: release-promote
+
+# Promotes the EXACT installer bytes that passed windows-build-scripts on main to a DRAFT GitHub Release.
+# It never builds, stages, compiles, or signs anything: it only downloads the tested artifact, re-verifies
+# it, and attaches the same files. S3/CloudFront publishing remains a manual, human-approved step.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "windows-build-scripts run ID (push to main) whose tested artifact is promoted"
+        required: true
+      expected_sha256:
+        description: "RoofSpanSetup.exe SHA-256 shown in that run's job summary"
+        required: true
+      tag:
+        description: "Release tag to create, e.g. office-v0.4.9"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.run_id }}
+      EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Verify the source run passed ALL six Windows jobs on a push to main
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric"; exit 1; }
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "expected_sha256 must be 64 lowercase hex characters"; exit 1; }
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "tag contains unsupported characters"; exit 1; }
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json
+          python3 - <<'PY'
+          import json, os, sys
+          r = json.load(open("run.json"))
+          problems = []
+          if r.get("path") != ".github/workflows/windows-build-scripts.yml": problems.append(f"workflow is {r.get('path')}")
+          if r.get("event") != "push": problems.append(f"event is {r.get('event')} (only push-to-main runs are promotable)")
+          if r.get("head_branch") != "main": problems.append(f"branch is {r.get('head_branch')}")
+          if r.get("status") != "completed" or r.get("conclusion") != "success": problems.append(f"run is {r.get('status')}/{r.get('conclusion')}")
+          if problems: sys.exit("REFUSING TO PROMOTE: " + "; ".join(problems))
+          with open(os.environ["GITHUB_ENV"], "a") as f: f.write(f"HEAD_SHA={r['head_sha']}\n")
+          PY
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" > jobs.json
+          python3 - <<'PY'
+          import json, sys
+          required = ["bundle-compile", "validate", "burn-prep-runtime", "clean-machine-full-install",
+                      "services-install-smoke", "db-bootstrap-integration"]
+          jobs = json.load(open("jobs.json"))["jobs"]
+          bad = []
+          for name in required:
+              m = [j for j in jobs if j["name"] == name]
+              if len(m) != 1 or m[0]["conclusion"] != "success":
+                  bad.append(f"{name}={[j['conclusion'] for j in m] or 'missing'}")
+          if bad: sys.exit("REFUSING TO PROMOTE: required Windows jobs not successful: " + ", ".join(bad))
+          print("OK: all six required Windows jobs succeeded")
+          PY
+
+      - name: Download the tested installer artifact from that run (no rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: roofspan-office-installer
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: promote
+
+      - name: Re-verify the exact bytes, provenance, and release eligibility
+        working-directory: promote
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
+          actual=$(sha256sum RoofSpanSetup.exe | cut -d' ' -f1)
+          [[ "$actual" == "$EXPECTED_SHA256" ]] || { echo "REFUSING: RoofSpanSetup.exe is $actual, expected $EXPECTED_SHA256"; exit 1; }
+          python3 - <<'PY'
+          import json, os, sys
+          meta = json.load(open("build-metadata.json", encoding="utf-8-sig"))
+          ver = json.load(open("artifact-verification.json", encoding="utf-8-sig"))
+          ci = json.load(open("ci-provenance.json", encoding="utf-8-sig"))
+          expected = os.environ["EXPECTED_SHA256"]
+          problems = []
+          if meta["git_sha"] != os.environ["HEAD_SHA"]: problems.append("build git_sha != run head_sha")
+          if ver.get("verified") is not True: problems.append("artifact verification did not pass")
+          if ver["setup"]["sha256"] != expected: problems.append("verified setup hash differs")
+          if ci["tested_setup_sha256"] != expected: problems.append("tested hash differs")
+          if str(ci["run_id"]) != os.environ["RUN_ID"]: problems.append("artifact came from a different run")
+          if not (meta.get("releasable") and ver.get("releasable")):
+              problems.append("NOT RELEASABLE: " + "; ".join(sorted(set(meta.get("not_releasable_reasons", []) + ver.get("not_releasable_reasons", [])))))
+          if problems: sys.exit("REFUSING TO PROMOTE: " + "; ".join(problems))
+          with open(os.environ["GITHUB_ENV"], "a") as f: f.write(f"RELEASE_VERSION={meta['version']}\n")
+          print("OK: exact tested, signed bytes", expected)
+          PY
+          v=$(python3 -c 'import json;print(json.load(open("build-metadata.json",encoding="utf-8-sig"))["version"])')
+          cmp RoofSpanSetup.exe "RoofSpanSetup-$v.exe"
+
+      - name: Create a DRAFT release with the exact tested bytes
+        working-directory: promote
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then echo "REFUSING: release $TAG already exists"; exit 1; fi
+          gh release create "$TAG" --repo "$REPO" --draft --target "$HEAD_SHA" \
+            --title "RoofSpan Office $RELEASE_VERSION" \
+            --notes "Promoted without rebuilding from windows-build-scripts run $RUN_ID (commit $HEAD_SHA). RoofSpanSetup.exe SHA-256: $EXPECTED_SHA256" \
+            RoofSpanSetup.exe "RoofSpanSetup-$RELEASE_VERSION.exe" "RoofSpanOffice-$RELEASE_VERSION.msi" \
+            SHA256SUMS.txt build-metadata.json artifact-verification.json ci-provenance.json
+          mkdir ../roundtrip
+          gh release download "$TAG" --repo "$REPO" --dir ../roundtrip --pattern "RoofSpanSetup.exe"
+          [[ "$(sha256sum ../roundtrip/RoofSpanSetup.exe | cut -d' ' -f1)" == "$EXPECTED_SHA256" ]] || { echo "release asset hash mismatch"; exit 1; }
+          echo "Draft release $TAG holds RoofSpanSetup.exe $EXPECTED_SHA256 (S3/CloudFront upload remains manual)" | tee -a "$GITHUB_STEP_SUMMARY"

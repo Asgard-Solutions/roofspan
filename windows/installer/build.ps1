@@ -132,11 +132,33 @@ $setup = Join-Path $stagingOut "RoofSpanSetup-$Version.exe"
 
 Write-Host "==> Building RoofSpan Office $Version from $gitSha"
 
+function Resolve-SignTool {
+  $cmd = Get-Command signtool.exe -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+  $found = Get-ChildItem $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+  if (-not $found) { throw "signtool.exe not found (install the Windows SDK); refusing to produce an unsigned release." }
+  return $found.FullName
+}
+
+function Invoke-Sign([string]$Path, [string]$What) {
+  Write-Host "==> Signing $What ($Path)"
+  & $script:SignTool sign /sha1 $SignCertThumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 /d "RoofSpan Office" $Path
+  if ($LASTEXITCODE -ne 0) { throw "signtool failed for $What (exit $LASTEXITCODE); refusing to publish an unsigned or partially-signed installer." }
+  $sig = Get-AuthenticodeSignature -FilePath $Path
+  if ($sig.Status -ne 'Valid') { throw "Authenticode signature on $What is not valid ($($sig.Status)); refusing to publish." }
+}
+
+if ($SignCertThumbprint) { $script:SignTool = Resolve-SignTool }
+
 # 1) MSI (payload harvested from $StageDir, including the native application shell).
 wix build .\RoofSpan.wxs -arch x64 -d "Version=$Version" -d "StageDir=$StageDir" `
   -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
 if ($LASTEXITCODE -ne 0) { throw "MSI compile failed (wix exit $LASTEXITCODE)." }
 if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
+# The MSI is signed BEFORE the bundle is built because Burn records the embedded MSI's hash.
+if ($SignCertThumbprint) { Invoke-Sign $msi "Office MSI" }
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (WebView2 + PostgreSQL + Office MSI).
 wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
@@ -146,11 +168,19 @@ wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
 if ($LASTEXITCODE -ne 0) { throw "Bundle compile failed (wix exit $LASTEXITCODE)." }
 if (-not (Test-Path $setup)) { throw "Bundle build failed: $setup not produced." }
 
-# 3) Authenticode signing.
+# 3) Authenticode signing. A Burn bundle's elevated engine must be signed too: detach the engine, sign
+#    it, reattach it, then sign the complete bundle.
 if ($SignCertThumbprint) {
-  Write-Host "==> Signing $setup"
-  signtool sign /sha1 $SignCertThumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 $setup
-  if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit $LASTEXITCODE); refusing to publish an unsigned or partially-signed installer." }
+  $engine = Join-Path $stagingOut "burn-engine.exe"
+  $reattached = Join-Path $stagingOut "RoofSpanSetup-$Version.reattached.exe"
+  wix burn detach $setup -engine $engine
+  if ($LASTEXITCODE -ne 0) { throw "wix burn detach failed (exit $LASTEXITCODE)." }
+  Invoke-Sign $engine "Burn engine"
+  wix burn reattach $setup -engine $engine -o $reattached
+  if ($LASTEXITCODE -ne 0) { throw "wix burn reattach failed (exit $LASTEXITCODE)." }
+  Move-Item -Force $reattached $setup
+  Remove-Item -Force $engine
+  Invoke-Sign $setup "RoofSpanSetup bundle"
 } else {
   Write-Warning "UNSIGNED build (dev/test only). Production release MUST be Authenticode-signed."
 }
@@ -174,7 +204,50 @@ Copy-Item $setup $stableSetup -Force
 if ($UpdateSigningPrivateKey) { Copy-Item (Join-Path $stagingOut "latest.json") (Join-Path $OutDir "latest.json") -Force }
 Remove-Item -Recurse -Force $stagingOut
 
-# 6) Report the exact release identity so the file under test is unambiguous.
+# 6) Release metadata + SHA256SUMS describing exactly these bytes (written only after full success).
+function Get-FileFacts([string]$Path) {
+  $item = Get-Item $Path
+  $sig = Get-AuthenticodeSignature -FilePath $Path
+  [ordered]@{
+    name = $item.Name
+    size = $item.Length
+    sha256 = (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    file_version = $item.VersionInfo.FileVersion
+    product_version = $item.VersionInfo.ProductVersion
+    signature_status = [string]$sig.Status
+    signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null }
+  }
+}
+$updateKey = Join-Path $StageDir "config-templates\update_public_key.pem"
+$updateKeyText = if (Test-Path $updateKey) { Get-Content $updateKey -Raw } else { "" }
+$updateKeyPlaceholder = (-not $updateKeyText) -or ($updateKeyText -match 'PLACEHOLDER') -or ($updateKeyText -notmatch 'BEGIN PUBLIC KEY')
+$artifacts = @($finalSetup, $stableSetup, $finalMsi) | ForEach-Object { Get-FileFacts $_ }
+$reasons = @()
+if (-not $SignCertThumbprint) { $reasons += "unsigned" }
+foreach ($a in $artifacts) { if ($a.signature_status -ne 'Valid') { $reasons += "signature not valid: $($a.name)" } }
+if ($updateKeyPlaceholder) { $reasons += "update public key missing or placeholder" }
+$metadata = [ordered]@{
+  schema = "roofspan-installer-build-v1"
+  product = "RoofSpan Office"
+  version = $Version
+  git_sha = $gitSha
+  built_utc = (Get-Date).ToUniversalTime().ToString("o")
+  artifacts = $artifacts
+  prerequisites = [ordered]@{
+    postgresql = Get-FileFacts $PostgresInstaller
+    webview2 = Get-FileFacts $WebView2StandaloneInstaller
+  }
+  update_public_key_sha256 = if (Test-Path $updateKey) { (Get-FileHash $updateKey -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+  update_public_key_placeholder = [bool]$updateKeyPlaceholder
+  signed = [bool]$SignCertThumbprint
+  signing_thumbprint = if ($SignCertThumbprint) { $SignCertThumbprint } else { $null }
+  releasable = ($reasons.Count -eq 0)
+  not_releasable_reasons = $reasons
+}
+$metadata | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $OutDir "build-metadata.json")
+($artifacts | ForEach-Object { "$($_.sha256)  $($_.name)" }) | Set-Content -Encoding ASCII (Join-Path $OutDir "SHA256SUMS.txt")
+
+# 7) Report the exact release identity so the file under test is unambiguous.
 $setupItem = Get-Item $finalSetup
 $setupHash = (Get-FileHash $finalSetup -Algorithm SHA256).Hash
 $setupMB = [math]::Round($setupItem.Length / 1MB, 2)
@@ -182,12 +255,14 @@ Write-Host "==> Artifacts in $OutDir :"
 Write-Host "    RoofSpanOffice-$Version.msi"
 Write-Host "    RoofSpanSetup-$Version.exe   -> upload to /releases/"
 Write-Host "    RoofSpanSetup.exe            -> upload to /latest/"
+Write-Host "    build-metadata.json, SHA256SUMS.txt"
 if ($UpdateSigningPrivateKey) { Write-Host "    latest.json                  -> upload to /update/windows/" }
 Write-Host ""
 Write-Host "==> Release identity (verify this exact file is what you test/ship):"
-Write-Host "    Version   : $Version"
-Write-Host "    Git SHA   : $gitSha"
-Write-Host "    Artifact  : RoofSpanSetup-$Version.exe"
-Write-Host "    Size      : $($setupItem.Length) bytes ($setupMB MB)"
-Write-Host "    SHA-256   : $setupHash"
+Write-Host "    Version    : $Version"
+Write-Host "    Git SHA    : $gitSha"
+Write-Host "    Artifact   : RoofSpanSetup-$Version.exe"
+Write-Host "    Size       : $($setupItem.Length) bytes ($setupMB MB)"
+Write-Host "    SHA-256    : $setupHash"
+Write-Host "    Releasable : $($metadata.releasable) $(if ($reasons) { '(' + ($reasons -join '; ') + ')' })"
 Write-Host "HUMAN REQUIRED: upload artifacts to the approved private S3 behind CloudFront."
