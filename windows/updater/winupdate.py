@@ -13,7 +13,9 @@ DATA_ROOT = r"C:\ProgramData\RoofSpan"
 INSTALL_ROOT = r"C:\Program Files\RoofSpan Office"
 MANIFEST_URL = "https://downloads.roofspan.io/update/windows/latest.json"
 BROKER_SERVICE = "RoofSpanUpdateBroker"
-SYSTEM_ADMIN_ONLY = ["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
+# Same protected DACL the MSI puts on update\broker (RoofSpan.wxs UpdateBrokerDir); applied as a WHOLE DACL so no
+# pre-existing explicit ACE can survive (icacls /inheritance:r /grant:r would keep them).
+BROKER_SDDL = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 # Rights that let a principal change the request: write/append data, EA, delete(-child), DACL, owner, generic.
 WRITE_RIGHTS = 0x2 | 0x4 | 0x10 | 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
 INHERIT_ONLY_ACE = 0x8
@@ -66,6 +68,17 @@ def security_facts(sd) -> dict:
         if ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE and not flags & INHERIT_ONLY_ACE and mask & WRITE_RIGHTS:
             writers.add(win32security.ConvertSidToStringSid(sid))
     return {"owner": owner, "writers": sorted(writers)}
+
+
+def apply_protected_acl(path: str, sddl: str) -> None:
+    """Owner SYSTEM + exactly `sddl` as a protected DACL (propagated to existing children)."""
+    import win32security
+    sd = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, win32security.SDDL_REVISION_1)
+    info = (win32security.OWNER_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION
+            | win32security.PROTECTED_DACL_SECURITY_INFORMATION)
+    system = win32security.ConvertStringSidToSid("S-1-5-18")
+    win32security.SetNamedSecurityInfo(path, win32security.SE_FILE_OBJECT, info, system, None,
+                                       sd.GetSecurityDescriptorDacl(), None)
 
 
 def path_security_facts(path: str) -> dict:
@@ -183,15 +196,14 @@ class WinUpdateOps:
         d = os.path.dirname(dst)
         _safe_dir(d, self.update_root)
         os.makedirs(d, exist_ok=True)
-        broker = os.path.join(self.update_root, "broker")
-        subprocess.run(["icacls", broker, "/setowner", "*S-1-5-18", "/T"], capture_output=True, check=True)
-        subprocess.run(["icacls", broker] + SYSTEM_ADMIN_ONLY, capture_output=True, check=True)
+        apply_protected_acl(os.path.join(self.update_root, "broker"), BROKER_SDDL)
         with contextlib.suppress(FileNotFoundError):
             os.remove(dst)
         with self.open_locked(src) as s:
             import msvcrt
             fd = msvcrt.open_osfhandle(s._dup(), os.O_RDONLY | os.O_BINARY)
             with os.fdopen(fd, "rb") as r, open(dst, "xb") as w:
+                r.seek(0)
                 for chunk in iter(lambda: r.read(1 << 20), b""):
                     w.write(chunk)
                 w.flush()

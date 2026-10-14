@@ -13,9 +13,15 @@ on:
       n2_sha256: { description: "N-2 RoofSpanSetup.exe SHA-256", required: false, default: "" }
       n2_version: { description: "N-2 version (MAJOR.MINOR.PATCH)", required: false, default: "" }
       release_build: { description: "Release gate: every required scenario must PASS (no PENDING/BLOCKED/SKIP)", type: boolean, default: false }
+  # Relevant main changes run automatically; release tags always run (GitHub does not apply `paths` to tag pushes).
   push:
-    branches: [test/windows-upgrade-failure-matrix]
+    branches: [main, test/windows-upgrade-failure-matrix]
     tags: ["v*"]
+    paths:
+      - "windows/**"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/windows-installer-matrix.yml"
   pull_request:
     branches: [main]
     paths:

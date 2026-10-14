@@ -452,3 +452,12 @@ def test_scenario_runner_refuses_outside_a_disposable_environment(tmp_path):
     assert r.returncode != 0
     assert "GUARD-REFUSED" in r.stdout + r.stderr
     assert not ev.exists(), "nothing may be created before the guard approves"
+
+
+def test_matrix_runs_for_relevant_main_changes_tags_and_manual():
+    on = WF.get("on", WF.get(True))
+    relevant = ["windows/**", "backend/**", "frontend/**", ".github/workflows/windows-installer-matrix.yml"]
+    assert "main" in on["push"]["branches"] and on["push"]["paths"] == relevant
+    assert on["push"]["tags"] == ["v*"]
+    assert on["pull_request"]["branches"] == ["main"] and on["pull_request"]["paths"] == relevant
+    assert "workflow_dispatch" in on

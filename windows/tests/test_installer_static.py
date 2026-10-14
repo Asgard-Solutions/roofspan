@@ -4,8 +4,11 @@ Guards against the reported blockers regressing: bundle.wxs must exist, WiX GUID
 service exes must match what the build produces, release filenames must stay consistent, VERSION must be
 valid, CloudFront URLs must be correct, and the public download must remain disabled.
 """
+import json
 import os
 import re
+import shutil
+import subprocess
 
 import version as ver
 from winbuild.targets import SERVICE_EXES, SERVICE_TARGETS
@@ -135,16 +138,40 @@ def test_update_cadence_is_12h():
     assert CHECK_INTERVAL_SECONDS == 12 * 60 * 60
 
 
-def test_public_website_download_wired_to_cloudfront():
-    """The public site (Next.js) links downloads straight to CloudFront (downloads.roofspan.io); whether the
-    download CTA is live is the explicit NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE release decision."""
-    site = os.path.join(os.path.dirname(HERE), "roofspan-website")
-    cfg = _read(os.path.join(site, "src", "config.js"))
-    env = _read(os.path.join(site, ".env"))
+SITE_CONFIG = os.path.join(os.path.dirname(HERE), "roofspan-website", "src", "config.js")
+
+
+def _site_config(tmp_path, env):
+    """Evaluate the COMMITTED src/config.js in Node with `env` as the build environment (no .env file)."""
+    node = shutil.which("node")
+    assert node, "node is required to evaluate the public website configuration"
+    mod = tmp_path / "config.mjs"
+    shutil.copyfile(SITE_CONFIG, mod)
+    script = (f"const c = await import({json.dumps(mod.as_uri())});"
+              "console.log(JSON.stringify({inst: c.resolveInstaller(), status: c.productStatus()}));")
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("NEXT_PUBLIC_")}
+    p = subprocess.run([node, "--input-type=module", "-e", script], env={**clean, **env},
+                       capture_output=True, text=True, timeout=60)
+    return p
+
+
+def test_public_website_download_wired_to_cloudfront(tmp_path):
+    """The public site links downloads straight to CloudFront (downloads.roofspan.io); the download CTA is
+    live only when the build sets NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE=true."""
+    cfg = _read(SITE_CONFIG)
     assert 'APPROVED_INSTALLER_HOST = "downloads.roofspan.io"' in cfg
-    assert f'CLOUDFRONT_INSTALLER = "{publish.stable_url()}"' in cfg
-    assert f'CLOUDFRONT_RELEASES_BASE = "{publish.versioned_url("0.0.0").rsplit("/", 1)[0]}"' in cfg
-    assert 'CLOUDFRONT_UPDATE_MANIFEST = "https://downloads.roofspan.io/update/windows/latest.json"' in cfg
-    assert "env.NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE" in cfg
-    assert re.search(r"^NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE=(true|false)$", env, re.MULTILINE)
-    assert "REACT_APP_" not in env, "the site is Next.js; REACT_APP_* variables are never read"
+
+    on = _site_config(tmp_path, {"NEXT_PUBLIC_WINDOWS_INSTALLER_AVAILABLE": "true"})
+    assert on.returncode == 0, on.stderr
+    on = json.loads(on.stdout.strip().splitlines()[-1])
+    assert on["inst"] == {"url": publish.stable_url(), "available": True,
+                          "releasesBaseUrl": publish.versioned_url("0.0.0").rsplit("/", 1)[0],
+                          "updateManifestUrl": "https://downloads.roofspan.io/update/windows/latest.json"}
+    assert on["status"]["primaryIsDownload"] is True and on["status"]["primaryCtaHref"] == publish.stable_url()
+
+    off = json.loads(_site_config(tmp_path, {}).stdout.strip().splitlines()[-1])
+    assert off["inst"]["available"] is False and off["status"]["primaryIsDownload"] is False
+    assert off["inst"]["url"] == publish.stable_url()
+
+    evil = _site_config(tmp_path, {"NEXT_PUBLIC_WINDOWS_INSTALLER_URL": "https://cdn.example.com/RoofSpanSetup.exe"})
+    assert evil.returncode != 0 and "non-approved installer host" in evil.stderr

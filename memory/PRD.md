@@ -2762,3 +2762,11 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Legacy test fixes: website test (Next.js config), auth-secret test isolation (CP repair stub), relay test (connector gets URL from identity endpoint; default now /api/relay/installation), backend lifespan test sys.path isolation.
 - Tests: test_update_broker.py, test_update_broker_packaging.py (real pwsh), test_update_broker_windows.py (Windows-only; runs in bundle-compile job, skips fail there). Full suite: 364 passed, 0 failed.
 - PENDING: Windows CI run (Save to Github); Phase 2 (admin UI/API, maintenance windows, release publication).
+
+## 2026-06 — Corrections after first Windows CI run (Linux-verified; Phase 1 NOT Windows-passing)
+- authenticode.py: typed kernel32/wintrust loaders (HANDLE-sized argtypes/restype; fixes DuplicateHandle ERROR_INVALID_HANDLE); hashing rewinds the shared file pointer.
+- winupdate.stage: broker dir gets the MSI SDDL as a whole protected DACL + SYSTEM owner (BROKER_SDDL), replacing icacls /grant:r.
+- Windows ACL tests apply the exact SDDL parsed from RoofSpan.wxs via the product's apply_protected_acl; no runner-SID allowance.
+- validate job: pip install -r backend/requirements.txt (uvicorn etc.) + setup-node; website test evaluates committed src/config.js in Node with injected NEXT_PUBLIC_* (no .env).
+- Installer matrix: push to main (path-filtered) + PRs into main + v* tags + manual (+ test branch kept).
+- Full Linux suite: 367 passed, 24 skipped (9 Windows-only broker tests).

@@ -12,12 +12,16 @@ import json
 import os
 import subprocess
 import uuid
+from ctypes import wintypes
 
 GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING = 0x80000000, 0x1, 3
 FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT = 0x400, 0x00200000
 WTD_UI_NONE, WTD_REVOKE_WHOLECHAIN, WTD_CHOICE_FILE = 2, 1, 1
 WTD_STATEACTION_VERIFY, WTD_STATEACTION_CLOSE = 1, 2
 WTD_REVOCATION_CHECK_CHAIN, WTD_CACHE_ONLY_URL_RETRIEVAL = 0x40, 0x1000
+DUPLICATE_SAME_ACCESS = 0x2
+INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 REVOKED = {0x800B010C}
 REVOCATION_UNKNOWN = {0x80092012, 0x80092013}
 UNSIGNED = {0x800B0100}
@@ -30,16 +34,38 @@ class _GUID(ctypes.Structure):
 
 
 class _FILE_INFO(ctypes.Structure):
-    _fields_ = [("cbStruct", ctypes.c_ulong), ("pcwszFilePath", ctypes.c_wchar_p), ("hFile", ctypes.c_void_p),
-                ("pgKnownSubject", ctypes.c_void_p)]
+    _fields_ = [("cbStruct", wintypes.DWORD), ("pcwszFilePath", wintypes.LPCWSTR), ("hFile", wintypes.HANDLE),
+                ("pgKnownSubject", ctypes.POINTER(_GUID))]
 
 
 class _TRUST_DATA(ctypes.Structure):
-    _fields_ = [("cbStruct", ctypes.c_ulong), ("pPolicyCallbackData", ctypes.c_void_p), ("pSIPClientData", ctypes.c_void_p),
-                ("dwUIChoice", ctypes.c_ulong), ("fdwRevocationChecks", ctypes.c_ulong), ("dwUnionChoice", ctypes.c_ulong),
-                ("pFile", ctypes.POINTER(_FILE_INFO)), ("dwStateAction", ctypes.c_ulong), ("hWVTStateData", ctypes.c_void_p),
-                ("pwszURLReference", ctypes.c_wchar_p), ("dwProvFlags", ctypes.c_ulong), ("dwUIContext", ctypes.c_ulong),
+    _fields_ = [("cbStruct", wintypes.DWORD), ("pPolicyCallbackData", ctypes.c_void_p), ("pSIPClientData", ctypes.c_void_p),
+                ("dwUIChoice", wintypes.DWORD), ("fdwRevocationChecks", wintypes.DWORD), ("dwUnionChoice", wintypes.DWORD),
+                ("pFile", ctypes.POINTER(_FILE_INFO)), ("dwStateAction", wintypes.DWORD), ("hWVTStateData", wintypes.HANDLE),
+                ("pwszURLReference", wintypes.LPWSTR), ("dwProvFlags", wintypes.DWORD), ("dwUIContext", wintypes.DWORD),
                 ("pSignatureSettings", ctypes.c_void_p)]
+
+
+def _kernel32():
+    """kernel32 with full prototypes: HANDLEs are pointer-sized (an implicit c_int truncates them on x64)."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetFileAttributesW.argtypes, k32.GetFileAttributesW.restype = [wintypes.LPCWSTR], wintypes.DWORD
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                wintypes.DWORD, wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.GetCurrentProcess.argtypes, k32.GetCurrentProcess.restype = [], wintypes.HANDLE
+    k32.DuplicateHandle.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.HANDLE),
+                                    wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.DuplicateHandle.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes, k32.CloseHandle.restype = [wintypes.HANDLE], wintypes.BOOL
+    return k32
+
+
+def _wintrust():
+    wt = ctypes.WinDLL("wintrust")
+    wt.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(_TRUST_DATA)]
+    wt.WinVerifyTrust.restype = wintypes.LONG
+    return wt
 
 
 def _generic_verify_v2() -> _GUID:
@@ -51,14 +77,12 @@ class LockedFile:
     """Exclusive-against-writers handle on a regular (non-reparse) file."""
 
     def __init__(self, path: str):
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.CreateFileW.restype = ctypes.c_void_p
-        attrs = k32.GetFileAttributesW(ctypes.c_wchar_p(path))
-        if attrs == 0xFFFFFFFF or attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+        k32 = _kernel32()
+        attrs = k32.GetFileAttributesW(path)
+        if attrs == INVALID_FILE_ATTRIBUTES or attrs & FILE_ATTRIBUTE_REPARSE_POINT:
             raise OSError("not a regular file")
-        h = k32.CreateFileW(ctypes.c_wchar_p(path), GENERIC_READ, FILE_SHARE_READ, None, OPEN_EXISTING,
-                            FILE_FLAG_OPEN_REPARSE_POINT, None)
-        if h in (None, ctypes.c_void_p(-1).value):
+        h = k32.CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, None, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, None)
+        if h is None or h == INVALID_HANDLE_VALUE:
             raise OSError(ctypes.get_last_error(), "open failed")
         self.path, self.handle, self._k32 = path, h, k32
 
@@ -67,20 +91,22 @@ class LockedFile:
         fd = msvcrt.open_osfhandle(self._dup(), os.O_RDONLY | os.O_BINARY)
         h = hashlib.sha256()
         with os.fdopen(fd, "rb") as f:
+            f.seek(0)  # a duplicated handle shares the file pointer of the locked handle
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         return h.hexdigest()
 
     def _dup(self) -> int:
-        out = ctypes.c_void_p()
+        """A second handle to the SAME open file object (so the share mode keeps applying), for msvcrt reads."""
+        out = wintypes.HANDLE()
         proc = self._k32.GetCurrentProcess()
-        if not self._k32.DuplicateHandle(proc, ctypes.c_void_p(self.handle), proc, ctypes.byref(out), 0, False, 2):
+        if not self._k32.DuplicateHandle(proc, self.handle, proc, ctypes.byref(out), 0, False, DUPLICATE_SAME_ACCESS):
             raise OSError(ctypes.get_last_error(), "DuplicateHandle failed")
         return out.value
 
     def close(self):
         if self.handle:
-            self._k32.CloseHandle(ctypes.c_void_p(self.handle))
+            self._k32.CloseHandle(self.handle)
             self.handle = None
 
 
@@ -90,7 +116,7 @@ def win_verify_trust(locked: LockedFile, cache_only: bool) -> int:
     td.cbStruct, td.dwUIChoice, td.fdwRevocationChecks = ctypes.sizeof(_TRUST_DATA), WTD_UI_NONE, WTD_REVOKE_WHOLECHAIN
     td.dwUnionChoice, td.pFile, td.dwStateAction = WTD_CHOICE_FILE, ctypes.pointer(fi), WTD_STATEACTION_VERIFY
     td.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN | (WTD_CACHE_ONLY_URL_RETRIEVAL if cache_only else 0)
-    wt = ctypes.WinDLL("wintrust")
+    wt = _wintrust()
     guid = _generic_verify_v2()
     rc = wt.WinVerifyTrust(None, ctypes.byref(guid), ctypes.byref(td)) & 0xFFFFFFFF
     td.dwStateAction = WTD_STATEACTION_CLOSE

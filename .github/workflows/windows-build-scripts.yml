@@ -60,8 +60,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node.js (evaluates the committed public-website config)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The service/entry tests import the real backend stack (uvicorn, FastAPI, SQLAlchemy, ...), exactly as frozen.
       - name: Install validation dependencies
-        run: pip install pytest PyYAML cryptography
+        run: pip install -r backend/requirements.txt pytest PyYAML cryptography
 
       - name: Python regression checks (ASCII, specs, venv, yarn, release contract)
         run: |

@@ -191,3 +191,52 @@ def test_packaging_gate_rejects_manifest_without_broker(tmp_path):
     (svc / SERVICES_BUILD_MANIFEST).write_text(json.dumps(m), encoding="utf-8")
     r = _pwsh(f"Assert-ServicesBuildManifest -ServicesDir '{svc}' -Version 1.2.3 -GitSha abc")
     assert r.returncode != 0 and "expected [" in r.text
+
+
+# ---- Win32 prototypes (a missing restype truncates 64-bit HANDLEs: DuplicateHandle -> ERROR_INVALID_HANDLE) ----
+
+class _Fn:
+    pass
+
+
+class _FakeDLL:
+    def __init__(self, name, use_last_error=False):
+        self.fns = {}
+
+    def __getattr__(self, name):
+        return self.__dict__["fns"].setdefault(name, _Fn())
+
+
+def test_every_win32_call_declares_pointer_sized_prototypes(monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+
+    from updater import authenticode as A
+    monkeypatch.setattr(ctypes, "WinDLL", _FakeDLL, raising=False)
+    k32, wt = A._kernel32(), A._wintrust()
+    H = wintypes.HANDLE
+    expect = {
+        "GetFileAttributesW": ([wintypes.LPCWSTR], wintypes.DWORD),
+        "CreateFileW": ([wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                         wintypes.DWORD, H], H),
+        "GetCurrentProcess": ([], H),
+        "DuplicateHandle": ([H, H, H, ctypes.POINTER(H), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.BOOL),
+        "CloseHandle": ([H], wintypes.BOOL),
+    }
+    assert set(k32.fns) == set(expect)
+    for name, (args, res) in expect.items():
+        assert (k32.fns[name].argtypes, k32.fns[name].restype) == (args, res), name
+    assert wt.fns["WinVerifyTrust"].restype is wintypes.LONG
+    assert wt.fns["WinVerifyTrust"].argtypes[0] is wintypes.HWND
+    assert dict(A._FILE_INFO._fields_)["hFile"] is H and dict(A._TRUST_DATA._fields_)["hWVTStateData"] is H
+    src = (WINDOWS / "updater" / "authenticode.py").read_text(encoding="utf-8")
+    assert 'ctypes.WinDLL("kernel32"' in src and src.count("ctypes.WinDLL(") == 2, "all DLL access goes through the typed loaders"
+    assert "f.seek(0)" in src, "the duplicated handle shares the file pointer; hashing must rewind"
+
+
+def test_broker_staging_acl_is_the_msi_acl_applied_as_a_whole_dacl():
+    from updater.winupdate import BROKER_SDDL
+    wxs = _read(INSTALLER / "RoofSpan.wxs")
+    assert f'<CreateFolder Directory="UpdateBrokerDir"><PermissionEx Sddl="{BROKER_SDDL}" />' in wxs
+    win = _read(WINDOWS / "updater" / "winupdate.py")
+    assert "PROTECTED_DACL_SECURITY_INFORMATION" in win and "/grant:r" not in win.split("BROKER_SDDL =")[1]
