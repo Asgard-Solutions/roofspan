@@ -110,8 +110,10 @@ Packaged into the install (customer installs nothing manually):
 `windows/version.py` reads it and exposes `ROOFSPAN_VERSION` / `CHANNEL` / `DISPLAY_VERSION` +
 `parse_version`/`is_valid_version`/`is_dev`. Consumers: `RoofSpan.wxs` `Version="$(var.Version)"`,
 `build.ps1` defaults `-Version` from `VERSION`, `make_manifest.py` defaults `--version`/`--min-supported`
-from it. The installed backend's `ROOFSPAN_VERSION` env is written from this file at install time (keeps
-app / installer / updater / release artifacts on ONE version). This is a **DEV** version — not a claimed
+from it. Build identity is NOT configuration: `build_exes.ps1` freezes the version + full Git SHA into all
+three service executables (`<service>.exe --build-info` prints `service`, `version`, `build_sha`,
+`build_contract`). `roofspan.env` never overrides them; the backend's configuration reconciliation removes
+stale `ROOFSPAN_VERSION`/`ROOFSPAN_BUILD_SHA` lines (see `winbuild/config_reconcile.py` for ownership rules). This is a **DEV** version — not a claimed
 1.0.0 production release. Responsibility boundary: **Control Plane `version_policy`** = supported/minimum/
 recommended authority; the **CloudFront manifest** = downloadable-artifact metadata; the updater reconciles both.
 

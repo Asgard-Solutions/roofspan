@@ -7,8 +7,11 @@ before uvicorn starts so migration failures surface directly in backend-service.
 hidden inside FastAPI lifespan handling.
 """
 import os
+import sys
 import threading
 
+import build_identity
+import config_reconcile
 import db_bootstrap
 from roofspan_service import (config_path, dispatch, install_root, load_runtime_config,
                               make_service_class)
@@ -31,6 +34,8 @@ class BackendWorker:
     def _provision_database(self):
         """First-install local PostgreSQL bootstrap. MUST complete (setting DATABASE_URL) before app import."""
         template = os.path.join(install_root(), "config-templates", "roofspan.env.template")
+        # Upgrade/repair: reconcile an existing saved config (targeted, atomic, idempotent) before reuse.
+        config_reconcile.reconcile(config_path(), template, install_root(), self.log)
         db_bootstrap.bootstrap(
             self.log,
             template_path=template,
@@ -72,6 +77,10 @@ class BackendWorker:
         self.log.info("backend: applying Alembic migrations before uvicorn startup")
         run_migrations()
         os.environ["ROOFSPAN_MIGRATIONS_PREAPPLIED"] = "1"
+
+        from licensing import config as licensing_config
+        self.log.info("backend: build identity version=%s build_sha=%s licensing_software_version=%s",
+                      build_identity.VERSION, build_identity.BUILD_SHA, licensing_config.SOFTWARE_VERSION)
 
         # 4) Start the existing app. log_config=None prevents uvicorn from replacing the service's logging
         # configuration; use_colors=False keeps the no-console SCM path safe.
@@ -131,6 +140,9 @@ def _worker_factory(logger):
 
 
 def main():
+    if "--build-info" in sys.argv[1:]:
+        build_identity.print_build_info("roofspan-backend")
+        return
     load_runtime_config()
     dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))
 

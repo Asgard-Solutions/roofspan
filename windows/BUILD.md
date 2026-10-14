@@ -114,6 +114,22 @@ removes the disposable runner's superuser secret, rejects an incorrect applicati
 that a successful major upgrade preserves a database sentinel, the configuration bytes, and PostgreSQL
 start time. This fixture is not a release artifact; consult the CI result for the tested commit.
 
+## Build identity and configuration ownership
+Each service executable (`roofspan-backend`, `roofspan-relay-connector`, `roofspan-update-service`) embeds
+the release version and full Git SHA. Check any of them with `<exe> --build-info`; the output is JSON with
+`service`, `version`, `build_sha`, `build_contract` (`roofspan-build-identity-v1`) and `embedded`.
+`build_exes.ps1`, `build.ps1` and `Test-InstallerArtifact.ps1` stop when any executable reports a different
+version or SHA. Before reusing a saved `roofspan.env`, the backend reconciles it atomically and
+idempotently:
+- build identity is removed (the executable is authoritative);
+- generated secrets, database credentials, customer settings, data paths and unknown keys are preserved
+  byte-for-byte;
+- missing supported defaults are appended;
+- `ROOFSPAN_STATIC_DIR` and `ROOFSPAN_UPDATE_PUBLIC_KEY` are refreshed only when the saved path no
+  longer exists and the installed one does.
+
+Only key names are logged.
+
 ## Relay connector verification
 After installation, this command must report the build SHA used for the installer, the current version,
 and contract `hosted-installation-identity-v2`:

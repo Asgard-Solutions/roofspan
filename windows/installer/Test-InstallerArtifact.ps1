@@ -98,13 +98,20 @@ $adminDir = Join-Path $WorkDir "msi-admin"
 $adminLog = Join-Path $WorkDir "msi-admin.log"
 $p = Start-Process msiexec.exe -ArgumentList @("/a", "`"$msi`"", "/qn", "TARGETDIR=`"$adminDir`"", "/L*v", "`"$adminLog`"") -Wait -PassThru
 Assert-That ($p.ExitCode -eq 0) "msiexec /a administrative extraction failed (exit $($p.ExitCode)); see $adminLog"
-$relay = Get-ChildItem $adminDir -Recurse -Filter "roofspan-relay-connector.exe" | Select-Object -First 1
-Assert-That ($null -ne $relay) "packaged roofspan-relay-connector.exe not found in the MSI"
-$infoLine = @(& $relay.FullName --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
-Assert-That ($LASTEXITCODE -eq 0 -and $infoLine) "packaged Relay connector --build-info failed"
-$info = $infoLine | ConvertFrom-Json
-Assert-That ($info.build_sha -eq $ExpectedGitSha) "packaged build SHA '$($info.build_sha)' != '$ExpectedGitSha'"
-Assert-That ($info.version -eq $ExpectedVersion) "packaged version '$($info.version)' != '$ExpectedVersion'"
+$serviceIdentity = [ordered]@{}
+foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service")) {
+  $exe = Get-ChildItem $adminDir -Recurse -Filter "$svcName.exe" | Select-Object -First 1
+  Assert-That ($null -ne $exe) "packaged $svcName.exe not found in the MSI"
+  $infoLine = @(& $exe.FullName --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+  Assert-That ($LASTEXITCODE -eq 0 -and $infoLine) "packaged $svcName --build-info failed"
+  $bi = $infoLine | ConvertFrom-Json
+  Assert-That ($bi.service -eq $svcName) "packaged $svcName reports service '$($bi.service)'"
+  Assert-That ($bi.build_sha -eq $ExpectedGitSha) "packaged $svcName build SHA '$($bi.build_sha)' != '$ExpectedGitSha'"
+  Assert-That ($bi.version -eq $ExpectedVersion) "packaged $svcName version '$($bi.version)' != '$ExpectedVersion'"
+  Assert-That ($bi.build_contract -eq "roofspan-build-identity-v1" -and $bi.embedded -eq $true) "packaged $svcName lacks the embedded build identity contract"
+  $serviceIdentity[$svcName] = [ordered]@{ version = $bi.version; build_sha = $bi.build_sha; build_contract = $bi.build_contract }
+  if ($svcName -eq "roofspan-relay-connector") { $info = $bi }
+}
 
 # 6) Release eligibility (reported, not a verification failure).
 $setupSig = Get-AuthenticodeSignature -FilePath $setup
@@ -127,6 +134,7 @@ $result = [ordered]@{
   stable_setup_sha256 = $setupSha
   msi = [ordered]@{ name = $msiName; sha256 = $msiSha; signature_status = [string]$msiSig.Status }
   prerequisites = $prereqs
+  service_build_identity = $serviceIdentity
   releasable = ($reasons.Count -eq 0)
   not_releasable_reasons = $reasons
 }

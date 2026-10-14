@@ -6,10 +6,10 @@ RECOVERABLE: they are logged and retried later - they never terminate the Window
 verification PUBLIC key path is install-owned (ROOFSPAN_UPDATE_PUBLIC_KEY); no user-shell env var.
 """
 import os
+import sys
 import threading
 
-import httpx
-
+import build_identity
 from roofspan_service import dispatch, load_runtime_config, make_service_class
 from updater.manifest import parse_manifest
 from updater.service import CHECK_INTERVAL_SECONDS, plan_update
@@ -17,10 +17,11 @@ from updater.service import CHECK_INTERVAL_SECONDS, plan_update
 SVC_NAME = "RoofSpanUpdateService"
 SVC_DISPLAY = "RoofSpan Update Service"
 LOG_FILE = "update-service.log"
+SVC_NAME_ID = "roofspan-update-service"
 
 
 def _current_version() -> str:
-    return os.environ.get("ROOFSPAN_VERSION", "0.1.0")
+    return build_identity.VERSION
 
 
 def _public_pem() -> str:
@@ -29,6 +30,8 @@ def _public_pem() -> str:
 
 
 def check_once(logger) -> str:
+    import httpx
+
     url = os.environ.get("ROOFSPAN_WINDOWS_UPDATE_MANIFEST_URL",
                          "https://downloads.roofspan.io/update/windows/latest.json")
     resp = httpx.get(url, timeout=30)
@@ -51,7 +54,8 @@ class UpdateWorker:
             self._ready.set()
             if on_ready:
                 on_ready()
-            self.log.info("update: checker started (interval %ss)", CHECK_INTERVAL_SECONDS)
+            self.log.info("update: checker started (interval %ss) current_version=%s build_sha=%s",
+                          CHECK_INTERVAL_SECONDS, _current_version(), build_identity.BUILD_SHA)
             while not self._stop.is_set():
                 try:
                     check_once(self.log)
@@ -80,6 +84,9 @@ def _worker_factory(logger):
 
 
 def main():
+    if "--build-info" in sys.argv[1:]:
+        build_identity.print_build_info(SVC_NAME_ID)
+        return
     load_runtime_config()
     dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))
 

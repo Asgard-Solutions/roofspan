@@ -36,12 +36,12 @@ def test_generated_db_password_is_strong_and_differs_from_superuser():
 def test_render_env_replaces_placeholder_only():
     template = (
         "DATABASE_URL=postgresql+asyncpg://roofspan:__GENERATED_AT_FIRST_RUN__@127.0.0.1:5432/roofspan\n"
-        "ROOFSPAN_VERSION=0.2.0\n"
+        "CONTROL_PLANE_BASE_URL=https://cp.example\n"
     )
     out = boot.render_env_from_template(template, "AbC123xyz")
     assert "__GENERATED_AT_FIRST_RUN__" not in out
     assert "postgresql+asyncpg://roofspan:AbC123xyz@127.0.0.1:5432/roofspan" in out
-    assert "ROOFSPAN_VERSION=0.2.0" in out
+    assert "CONTROL_PLANE_BASE_URL=https://cp.example" in out
 
 
 def test_config_provisioned_detection(tmp_path):
@@ -72,7 +72,9 @@ def test_bootstrap_reuses_existing_credentials_without_touching_postgres(tmp_pat
                          identity_dir=str(tmp_path / "identity"))
     assert url == "postgresql+asyncpg://roofspan:KeepMe9999@127.0.0.1:5432/roofspan"
     assert os.environ["DATABASE_URL"] == url
-    assert os.environ["ROOFSPAN_VERSION"] == "0.2.0"
+    # A saved config is NOT authoritative for build identity: the executable's version wins.
+    import build_identity
+    assert os.environ["ROOFSPAN_VERSION"] == build_identity.VERSION != "0.2.0"
 
 
 def test_backend_provisions_db_before_importing_app():

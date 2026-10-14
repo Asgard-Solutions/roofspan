@@ -33,6 +33,8 @@ import threading
 import time
 import traceback
 
+import build_identity
+
 # Backend readiness (migrations + lifespan) can legitimately take a while on first run.
 DEFAULT_READY_TIMEOUT = float(os.environ.get("ROOFSPAN_SERVICE_READY_TIMEOUT", "120"))
 
@@ -82,6 +84,8 @@ def load_runtime_config() -> None:
     cfg_file = config_path()
     if os.path.isfile(cfg_file):
         for k, v in _parse_env_file(cfg_file).items():
+            if k in build_identity.IDENTITY_KEYS:
+                continue  # build identity belongs to the executable, never to a saved config
             os.environ.setdefault(k, v)
 
     os.environ.setdefault("ROOFSPAN_STATIC_DIR", os.path.join(root, "frontend"))
@@ -97,6 +101,7 @@ def load_runtime_config() -> None:
     os.environ.setdefault("ROOFSPAN_LOCAL_API_URL", "http://127.0.0.1:8001")
     os.environ.setdefault("ROOFSPAN_WINDOWS_UPDATE_MANIFEST_URL",
                           "https://downloads.roofspan.io/update/windows/latest.json")
+    build_identity.enforce()
 
 
 def logs_dir() -> str:

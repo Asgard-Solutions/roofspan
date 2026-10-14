@@ -2733,3 +2733,9 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - build.ps1: signs MSI -> Burn engine (detach/reattach) -> bundle; writes build-metadata.json + SHA256SUMS.txt; `releasable` false if unsigned/placeholder update key.
 - New `windows/installer/Test-InstallerArtifact.ps1`; single artifact `roofspan-office-installer` uploaded from clean-machine-full-install after acceptance; new `.github/workflows/release-promote.yml` (draft GitHub Release, no rebuild).
 - Secrets needed: ROOFSPAN_WINDOWS_SIGNING_PFX_BASE64, ROOFSPAN_WINDOWS_SIGNING_PFX_PASSWORD, vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM. Branch protection: MANUAL (no permission from agent).
+
+## 2026-06 P0 Immutable build identity + config ownership (stacked on fix/windows-release-gate; Windows CI PENDING)
+- Reproduced (memory/evidence/build_identity_before.txt): stale roofspan.env ROOFSPAN_VERSION=0.4.5 with a 0.4.8 build -> backend /api/version 0.4.5, licensing 0.4.5, updater 0.4.5 (0.1.0 if key absent); relay correct only by setdefault ordering.
+- Root cause: db_bootstrap._load_env_file_into_process overwrote env from the saved config; updater spec lacked the build-info hook; template shipped ROOFSPAN_VERSION=0.4.5.
+- Fix: windows/winbuild/build_identity.py (+ generated _roofspan_build_identity.py frozen into all 3 exes, same hook in all 3 specs); loaders skip identity keys and enforce(); `--build-info` on all 3 (service, version, build_sha, build_contract=roofspan-build-identity-v1, embedded); licensing uses backend version module; config_reconcile.py (backend start, before bootstrap; atomic/idempotent; key names only logged).
+- Gates: build_exes.ps1/build.ps1/Test-InstallerArtifact.ps1 check all 3; services-install-smoke stale-0.4.5 upgrade step; full-install checks installed --build-info + /api/version.

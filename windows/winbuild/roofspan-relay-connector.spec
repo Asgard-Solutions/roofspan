@@ -16,7 +16,7 @@ a = Analysis(
     pathex=[BACKEND, WINDOWS],
     binaries=[],
     datas=[],
-    hiddenimports=["roofspan_service", "relay.tunnel_client", "relay.protocol",
+    hiddenimports=["roofspan_service", "build_identity", "_roofspan_build_identity", "relay.tunnel_client", "relay.protocol",
                    "licensing.identity", "licensing.reqsig", "httpx", "websockets"] + PYWIN32,
     runtime_hooks=RUNTIME_HOOKS,
     excludes=[],

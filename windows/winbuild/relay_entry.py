@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 
+import build_identity
 from roofspan_service import dispatch, load_runtime_config, make_service_class
 
 SVC_NAME = "RoofSpanRelayConnector"
@@ -24,14 +25,12 @@ INSTALLATION_RELAY_PATH = "/api/relay/installation"
 
 def build_info() -> dict:
     """Machine-readable identity used by build/stage/install release gates."""
-    return {
-        "service": "roofspan-relay-connector",
-        "build_sha": os.environ.get("ROOFSPAN_BUILD_SHA", "development"),
-        "version": os.environ.get("ROOFSPAN_VERSION", "development"),
-        "contract": RELAY_CONNECTOR_CONTRACT,
-        "identity_endpoint": IDENTITY_ENDPOINT_PATH,
-        "installation_relay_path": INSTALLATION_RELAY_PATH,
-    }
+    return build_identity.build_info(
+        "roofspan-relay-connector",
+        contract=RELAY_CONNECTOR_CONTRACT,
+        identity_endpoint=IDENTITY_ENDPOINT_PATH,
+        installation_relay_path=INSTALLATION_RELAY_PATH,
+    )
 
 
 def parse_connector_identity(data: dict) -> tuple[str, str, str]:
@@ -183,7 +182,7 @@ def _worker_factory(logger):
 
 def main():
     if "--build-info" in sys.argv[1:]:
-        print(json.dumps(build_info(), sort_keys=True))
+        print(json.dumps(build_info(), sort_keys=True))  # same shape as build_identity.print_build_info
         return
     load_runtime_config()
     dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))

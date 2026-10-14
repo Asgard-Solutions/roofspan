@@ -30,8 +30,7 @@ def test_relay_entry_exposes_machine_readable_hosted_identity_contract():
         "hosted-installation-identity-v2",
         "/api/relay/connector/identity",
         "/api/relay/installation",
-        "ROOFSPAN_BUILD_SHA",
-        "ROOFSPAN_VERSION",
+        "build_identity.build_info(",
     ):
         assert token in source
     assert "private_key, installation_id = get_or_create_identity" not in source

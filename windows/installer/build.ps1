@@ -112,6 +112,19 @@ foreach ($p in $required) {
   if (-not (Test-Path $p)) { throw "Staging incomplete - missing '$p'. Run installer\stage.ps1 first." }
 }
 Assert-RelayConnectorBuildInfo -ExePath $relayExe -ExpectedSha $gitSha -ExpectedVersion $Version
+# Every staged service executable must carry the immutable build identity of THIS source + version.
+foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan-update-service")) {
+  $svcExe = Join-Path $StageDir "services\$svcName\$svcName.exe"
+  $lines = @(& $svcExe --build-info)
+  if ($LASTEXITCODE -ne 0) { throw "Staged $svcName --build-info failed (exit $LASTEXITCODE). Remove _stage and run stage.ps1 again." }
+  $line = $lines | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+  $bi = if ($line) { $line | ConvertFrom-Json } else { $null }
+  if (-not $bi -or $bi.service -ne $svcName -or $bi.build_sha -ne $gitSha -or $bi.version -ne $Version -or
+      $bi.build_contract -ne "roofspan-build-identity-v1" -or $bi.embedded -ne $true) {
+    throw "Staged $svcName build identity is stale or mismatched (expected SHA=$gitSha version=$Version; found $line). Remove _stage and run stage.ps1 again."
+  }
+  Write-Host "==> Verified staged $svcName build identity: SHA=$($bi.build_sha) version=$($bi.version)"
+}
 
 if (-not (Test-Path $PostgresInstaller)) {
   throw "PostgreSQL prerequisite installer not found at '$PostgresInstaller'."

@@ -61,13 +61,14 @@ jobs:
           python-version: "3.11"
 
       - name: Install validation dependencies
-        run: pip install pytest PyYAML
+        run: pip install pytest PyYAML cryptography
 
       - name: Python regression checks (ASCII, specs, venv, yarn, release contract)
         run: |
           pytest -q windows/tests/test_build_scripts.py
           pytest -q windows/tests/test_relay_connector_release_contract.py
           pytest -q windows/tests/test_release_gate.py
+          pytest -q windows/tests/test_build_identity.py windows/tests/test_config_reconcile.py
 
       - name: Parse inline workflow PowerShell (including the default Windows shell)
         shell: pwsh
@@ -573,6 +574,19 @@ jobs:
           }
           Write-Host "OK: installed Relay connector SHA/version/contract verified"
 
+          # All three INSTALLED executables carry the immutable build identity of this source + version.
+          foreach ($svcName in @("roofspan-backend","roofspan-relay-connector","roofspan-update-service")) {
+            $exe = "C:\Program Files\RoofSpan Office\services\$svcName\$svcName.exe"
+            $line = @(& $exe --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+            if ($LASTEXITCODE -ne 0 -or -not $line) { throw "installed $svcName --build-info failed" }
+            $bi = $line | ConvertFrom-Json
+            if ($bi.service -ne $svcName -or $bi.version -ne $env:RELEASE_VERSION -or $bi.build_sha -ne "${{ github.sha }}" -or
+                $bi.build_contract -ne "roofspan-build-identity-v1" -or $bi.embedded -ne $true) {
+              throw "installed $svcName build identity mismatch: $line"
+            }
+            Write-Host "OK: installed $svcName --build-info $line"
+          }
+
           if ((Get-Service RoofSpanBackend).Status -ne "Running") { Start-Service RoofSpanBackend }
           $deadline = (Get-Date).AddSeconds(120)
           while ((Get-Service RoofSpanBackend).Status -ne "Running" -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
@@ -652,6 +666,95 @@ jobs:
             if ((Get-Service $s).Status -ne "Running") { throw "$s not Running after reinstall" }
           }
           Write-Host "OK: reinstall preserved data and retained the current Relay contract"
+
+      - name: Upgrade from an old roofspan.env (ROOFSPAN_VERSION=0.4.5) keeps secrets and reports the build identity
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "C:\ProgramData\RoofSpan\config\roofspan.env"
+          $installRoot = "C:\Program Files\RoofSpan Office"
+          $logs = "C:\ProgramData\RoofSpan\logs"
+          function Get-KeyHash([string]$Text, [string]$Key) {
+            $l = @(($Text -split "`r?`n") | Where-Object { $_ -match ('^' + [regex]::Escape($Key) + '=') })
+            if ($l.Count -ne 1) { throw "expected exactly one $Key line, found $($l.Count)" }
+            (Get-FileHash -InputStream ([IO.MemoryStream][Text.Encoding]::UTF8.GetBytes($l[0].Trim())) -Algorithm SHA256).Hash
+          }
+          function Wait-Health {
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline) {
+              try { $r = Invoke-WebRequest "http://127.0.0.1:8001/api/health" -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { return } } catch { }
+              Start-Sleep 3
+            }
+            throw "backend did not become healthy"
+          }
+          foreach ($s in @("RoofSpanRelayConnector","RoofSpanUpdateService","RoofSpanBackend")) { Stop-Service $s -Force -ErrorAction SilentlyContinue }
+          Start-Sleep 3
+
+          # 1) Turn the saved config into a 0.4.5-era file: stale build identity, a missing supported default,
+          #    and an installation path that no longer exists. Secrets/DB credential are hashed, never printed.
+          $orig = Get-Content $cfg -Raw
+          $protected = @("DATABASE_URL", "JWT_SECRET", "SECRETS_ENCRYPTION_KEY")
+          $before = @{}; foreach ($k in $protected) { $before[$k] = Get-KeyHash $orig $k }
+          $lines = @(($orig -split "`r?`n") | Where-Object { $_ -ne "" -and $_ -notmatch '^(ROOFSPAN_VERSION|ROOFSPAN_BUILD_SHA|ROOFSPAN_BACKUP_DIR|ROOFSPAN_STATIC_DIR)=' })
+          $lines += "ROOFSPAN_VERSION=0.4.5"
+          $lines += ("ROOFSPAN_BUILD_SHA=" + ("0" * 40))
+          $lines += "ROOFSPAN_STATIC_DIR=C:\Program Files\RoofSpan Office OLD\frontend"
+          Set-Content -Encoding ASCII -Path $cfg -Value $lines
+
+          # 2) Executables ignore the stale config: --build-info and the update service's runtime version.
+          foreach ($svcName in @("roofspan-backend","roofspan-relay-connector","roofspan-update-service")) {
+            $exe = "$installRoot\services\$svcName\$svcName.exe"
+            $bi = (@(& $exe --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1) | ConvertFrom-Json
+            if ($bi.version -ne $env:RELEASE_VERSION -or $bi.build_sha -ne $env:EXPECTED_SHA) { throw "$svcName reports $($bi.version)/$($bi.build_sha) with a stale config present" }
+          }
+          Clear-Content (Join-Path $logs "update-service.log") -ErrorAction SilentlyContinue
+          Start-Service RoofSpanUpdateService
+          Start-Sleep 8
+          $upd = Get-Content (Join-Path $logs "update-service.log") -Raw
+          if ($upd -notmatch ("current_version=" + [regex]::Escape($env:RELEASE_VERSION) + " build_sha=" + $env:EXPECTED_SHA)) {
+            throw "update service did not report the build identity while the stale config was present:`n$upd"
+          }
+          Write-Host "OK: all three executables ignore ROOFSPAN_VERSION=0.4.5 in the saved config"
+
+          # 3) Upgrade path: reinstall the MSI and let the backend reconcile + reuse the saved config.
+          $log = Join-Path $env:RUNNER_TEMP "stale-upgrade.log"
+          $p = Start-Process msiexec -ArgumentList @("/i","`"$env:MSI`"","/qn","REINSTALL=ALL","REINSTALLMODE=vomus","/l*v","`"$log`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 80; throw "MSI upgrade/reinstall failed ($($p.ExitCode))" }
+          if ((Get-Service RoofSpanBackend).Status -ne "Running") { Start-Service RoofSpanBackend }
+          Wait-Health
+
+          # 4) Backend API, health and licensing report the executable's identity.
+          $ver = Invoke-RestMethod "http://127.0.0.1:8001/api/version"
+          if ($ver.version -ne $env:RELEASE_VERSION -or $ver.build_sha -ne $env:EXPECTED_SHA) { throw "/api/version reports $($ver.version)/$($ver.build_sha)" }
+          $health = Invoke-RestMethod "http://127.0.0.1:8001/api/health"
+          if ("$($health.version)" -notmatch ('^' + [regex]::Escape($env:RELEASE_VERSION) + '(-|$)')) { throw "/api/health reports $($health.version)" }
+          $backendLog = Get-Content (Join-Path $logs "backend-service.log") -Raw
+          $idLine = @(($backendLog -split "`r?`n") | Where-Object { $_ -match 'build identity version=' })[-1]
+          if ($idLine -notmatch ("version=" + [regex]::Escape($env:RELEASE_VERSION) + " build_sha=" + $env:EXPECTED_SHA + " licensing_software_version=" + [regex]::Escape($env:RELEASE_VERSION) + '$')) {
+            throw "backend/licensing build identity log is wrong: $idLine"
+          }
+          Write-Host "OK: /api/version, /api/health and licensing report $env:RELEASE_VERSION ($env:EXPECTED_SHA)"
+
+          # 5) Ownership rules applied to the saved config; nothing rotated; key names only in the log.
+          $after = Get-Content $cfg -Raw
+          foreach ($k in $protected) { if ((Get-KeyHash $after $k) -ne $before[$k]) { throw "$k was changed by the upgrade" } }
+          if ($after -match '(?m)^ROOFSPAN_(VERSION|BUILD_SHA)=') { throw "stale build identity remains in roofspan.env" }
+          if (@(($after -split "`r?`n") | Where-Object { $_ -match '^ROOFSPAN_BACKUP_DIR=' }).Count -ne 1) { throw "missing supported default ROOFSPAN_BACKUP_DIR was not added exactly once" }
+          if (-not (($after -split "`r?`n") -contains "ROOFSPAN_STATIC_DIR=$installRoot\frontend")) { throw "moved installation path was not refreshed" }
+          $rec = @(($backendLog -split "`r?`n") | Where-Object { $_ -match 'config reconcile:' })
+          if ($rec.Count -lt 1 -or $rec[-1] -notmatch 'removed=ROOFSPAN_VERSION,ROOFSPAN_BUILD_SHA refreshed=ROOFSPAN_STATIC_DIR added=.*ROOFSPAN_BACKUP_DIR') { throw "unexpected reconcile record: $($rec[-1])" }
+          if ($rec[-1] -match '0\.4\.5|0{40}') { throw "reconcile log contains a value" }
+          Write-Host "OK: secrets + DB credential preserved, stale identity removed, default added, path refreshed"
+
+          # 6) Idempotent: another restart changes nothing.
+          $h1 = (Get-FileHash $cfg -Algorithm SHA256).Hash
+          Restart-Service RoofSpanBackend -Force
+          Wait-Health
+          if ((Get-FileHash $cfg -Algorithm SHA256).Hash -ne $h1) { throw "reconciliation is not idempotent: roofspan.env changed on restart" }
+          foreach ($s in @("RoofSpanRelayConnector","RoofSpanUpdateService")) { if ((Get-Service $s).Status -ne "Running") { Start-Service $s } }
+          Write-Host "OK: reconciliation is idempotent across restarts"
 
       - name: A failed startup surfaces the real exception without leaking a secret
         shell: pwsh
@@ -952,6 +1055,18 @@ jobs:
           if (-not (Test-Path $cfg)) { throw "first-run bootstrap did not create roofspan.env" }
           if ((Get-Content $cfg -Raw) -match "__GENERATED_AT_FIRST_RUN__") { throw "roofspan.env still has the placeholder password" }
           Write-Host "OK: RoofSpan Office backend provisioned + healthy on the freshly installed PostgreSQL"
+
+          # The installed executables + API report the tested artifact's build identity.
+          foreach ($svcName in @("roofspan-backend","roofspan-relay-connector","roofspan-update-service")) {
+            $exe = "C:\Program Files\RoofSpan Office\services\$svcName\$svcName.exe"
+            $bi = (@(& $exe --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1) | ConvertFrom-Json
+            if ($bi.service -ne $svcName -or $bi.version -ne $env:RS_RELEASE_VERSION -or $bi.build_sha -ne $env:BUILT_GIT_SHA -or $bi.embedded -ne $true) {
+              throw "installed $svcName build identity mismatch: $($bi | ConvertTo-Json -Compress)"
+            }
+          }
+          $ver = Invoke-RestMethod "http://127.0.0.1:8001/api/version"
+          if ($ver.version -ne $env:RS_RELEASE_VERSION -or $ver.build_sha -ne $env:BUILT_GIT_SHA) { throw "/api/version reports $($ver.version)/$($ver.build_sha)" }
+          Write-Host "OK: installed executables + /api/version report $env:RS_RELEASE_VERSION ($env:BUILT_GIT_SHA)"
 
       - name: Real legacy upgrade preserves existing data without pg_super.bin
         shell: pwsh

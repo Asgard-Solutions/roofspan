@@ -93,6 +93,14 @@ if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-fA-F]{40}$') {
 $buildWork = Join-Path $PSScriptRoot "build"
 New-Item -ItemType Directory -Force -Path $buildWork | Out-Null
 $buildInfoHook = Join-Path $PSScriptRoot "roofspan_build_info_hook.generated.py"
+# Immutable identity constants frozen into ALL THREE executables (imported by build_identity.py). The
+# runtime hook mirrors them into the environment before any service code runs.
+$identityModule = Join-Path $PSScriptRoot "_roofspan_build_identity.py"
+$identityText = @"
+VERSION = '$releaseVersion'
+BUILD_SHA = '$gitSha'
+"@
+Set-Content -Path $identityModule -Value $identityText -Encoding ASCII
 $hookText = @"
 import os
 os.environ['ROOFSPAN_BUILD_SHA'] = '$gitSha'
@@ -103,6 +111,27 @@ Set-Content -Path $buildInfoHook -Value $hookText -Encoding ASCII
 $env:ROOFSPAN_BUILD_INFO_HOOK = $buildInfoHook
 Write-Host "==> Embedding source Git SHA: $gitSha"
 Write-Host "==> Embedding release version: $releaseVersion"
+
+function Assert-ServiceBuildInfo {
+  param(
+    [Parameter(Mandatory=$true)][string]$ExePath,
+    [Parameter(Mandatory=$true)][string]$Service,
+    [Parameter(Mandatory=$true)][string]$ExpectedSha,
+    [Parameter(Mandatory=$true)][string]$ExpectedVersion
+  )
+  $output = @(& $ExePath --build-info)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) { throw "$Service --build-info failed for '$ExePath' (exit $exitCode). The binary may be stale." }
+  $jsonLine = $output | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+  if (-not $jsonLine) { throw "$Service '$ExePath' did not return build-info JSON. The binary may be stale." }
+  try { $info = $jsonLine | ConvertFrom-Json } catch { throw "$Service '$ExePath' returned invalid build-info JSON: $jsonLine" }
+  if ($info.service -ne $Service) { throw "Service identity mismatch in '$ExePath': expected $Service, found '$($info.service)'." }
+  if ($info.build_sha -ne $ExpectedSha) { throw "$Service source mismatch in '$ExePath': expected $ExpectedSha, found $($info.build_sha)." }
+  if ($info.version -ne $ExpectedVersion) { throw "$Service version mismatch in '$ExePath': expected $ExpectedVersion, found $($info.version)." }
+  if ($info.build_contract -ne "roofspan-build-identity-v1") { throw "$Service build contract mismatch in '$ExePath': '$($info.build_contract)'." }
+  if ($info.embedded -ne $true) { throw "$Service '$ExePath' does not carry an embedded build identity." }
+  Write-Host "==> Verified $Service build identity: SHA=$($info.build_sha) version=$($info.version)"
+}
 
 function Assert-RelayConnectorBuildInfo {
   param(
@@ -187,6 +216,7 @@ try {
       Write-Host "==> Verified business + Control Plane Alembic assets in frozen backend"
     }
 
+    Assert-ServiceBuildInfo -ExePath $exe -Service $name -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     if ($name -eq "roofspan-relay-connector") {
       Assert-RelayConnectorBuildInfo -ExePath $exe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     }
@@ -196,6 +226,7 @@ try {
     Copy-Item $distDir $destDir -Recurse -Force
     $stagedExe = Join-Path $destDir "$name.exe"
     if (-not (Test-Path $stagedExe)) { throw "Staging did not place $name.exe under $destDir" }
+    Assert-ServiceBuildInfo -ExePath $stagedExe -Service $name -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     if ($name -eq "roofspan-relay-connector") {
       Assert-RelayConnectorBuildInfo -ExePath $stagedExe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     }
@@ -203,6 +234,7 @@ try {
 } finally {
   Remove-Item Env:\ROOFSPAN_BUILD_INFO_HOOK -ErrorAction SilentlyContinue
   Remove-Item $buildInfoHook -Force -ErrorAction SilentlyContinue
+  Remove-Item $identityModule -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "==> Service executables (onedir) staged in $OutDir"

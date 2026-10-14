@@ -73,6 +73,9 @@ ACTIVATION_COMPANY_NAME = os.environ.get(
 ACTIVATION_REQUESTED_SEATS = int(
     os.environ.get("LICENSING_ACTIVATION_SEATS", str(MIN_SEATS))
 )
-SOFTWARE_VERSION = os.environ.get("ROOFSPAN_VERSION", "1.0.0")
+# Same build identity as /api/version (on Windows, enforced from the executable after config loading).
+import version as _build_version
+
+SOFTWARE_VERSION = _build_version.ROOFSPAN_VERSION
 
 TRUSTED_KEYS_DIR = os.environ.get("LICENSING_TRUSTED_KEYS_DIR", _default_trusted_keys_dir)

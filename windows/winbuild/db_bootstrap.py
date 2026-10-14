@@ -29,6 +29,8 @@ import time
 import traceback
 from urllib.parse import unquote, urlparse
 
+import build_identity
+
 PLACEHOLDER = "__GENERATED_AT_FIRST_RUN__"
 JWT_PLACEHOLDER = "__GENERATED_JWT_SECRET__"
 SECRETS_KEY_PLACEHOLDER = "__GENERATED_SECRETS_ENCRYPTION_KEY__"
@@ -137,7 +139,10 @@ def _load_env_file_into_process(config_path: str) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
+        if k.strip() in build_identity.IDENTITY_KEYS:
+            continue  # a saved config must never override the executable's version/Git SHA
         os.environ[k.strip()] = v.strip()
+    build_identity.enforce()
 
 
 def decrypt_super_password(pg_super_bin: str) -> str:
