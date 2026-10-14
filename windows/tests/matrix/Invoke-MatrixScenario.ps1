@@ -296,7 +296,9 @@ $Scenarios = @{
         $off = Get-DiagOffset
         Install-N 'stale-no-cluster'
         Assert-True 'prep archived the stale files' ((Get-DiagSince $off) -match 'PREP-RECLAIM-STALE-LEFTOVERS') ''
-        $arch = @(Get-ChildItem $Data -Directory -Filter 'reclaimed-*')[-1]
+        $archives = @(Get-ChildItem $Data -Directory -Filter 'reclaimed-*')
+        Assert-True 'exactly one reclaimed-* archive created' ($archives.Count -eq 1) "count=$($archives.Count)"
+        $arch = $archives[0]
         Assert-Equal 'stale roofspan.env archived byte-identical' $hCfg (Get-Sha256 (Join-Path $arch.FullName 'roofspan.env'))
         Assert-Equal 'stale pg_super.bin archived byte-identical' $hBin (Get-Sha256 (Join-Path $arch.FullName 'pg_super.bin'))
         Assert-True 'fresh configuration replaced the stale one' ((Get-Sha256 $Cfg) -ne $hCfg) ''

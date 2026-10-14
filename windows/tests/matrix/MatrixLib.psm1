@@ -313,7 +313,11 @@ function Install-EdbFixture([string]$ServiceName, [int]$Port, [string]$Prefix, [
     $opt = Join-Path $env:RUNNER_TEMP "edb-$ServiceName.optionfile"
     Set-Content -Encoding ASCII $opt @("mode=unattended", "unattendedmodeui=none", "superpassword=$Password", "serverport=$Port",
         "servicename=$ServiceName", "prefix=$Prefix", "datadir=$DataDir", "disable-components=pgAdmin,stackbuilder")
-    try { $p = Start-Process $edb -ArgumentList @('--optionfile', "`"$opt`"") -Wait -PassThru } finally { Remove-Item $opt -Force -ErrorAction SilentlyContinue }
+    try {
+        $p = Start-Process $edb -ArgumentList @('--optionfile', "`"$opt`"") -PassThru
+        $null = $p.Handle
+        if (-not $p.WaitForExit(30 * 60 * 1000)) { Stop-Process -Id $p.Id -Force; throw 'fixture EDB install timed out' }
+    } finally { Remove-Item $opt -Force -ErrorAction SilentlyContinue }
     Assert-True "fixture EDB $ServiceName installed" ($p.ExitCode -eq 0) "exit=$($p.ExitCode)"
     Wait-Until { Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue } 120 "fixture PostgreSQL listening on $Port" | Out-Null
 }
