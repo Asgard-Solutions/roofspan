@@ -12,8 +12,10 @@ def _read(path: Path) -> str:
 
 def test_windows_backend_preapplies_migrations_before_uvicorn():
     src = _read(WINBUILD / "backend_entry.py")
-    assert "from migrations_runner import run_migrations" in src
-    assert src.index("run_migrations()") < src.index('uvicorn.Config("server:app"')
+    # Service start runs the schema guard (migrates only a brand-new database) before uvicorn.
+    assert "schema_guard.enforce(self.log)" in src
+    assert src.index("schema_guard.enforce(self.log)") < src.index('uvicorn.Config("server:app"')
+    assert "from migrations_runner import run_migrations" not in src.split("def _offline_mode")[0]
     assert 'os.environ["ROOFSPAN_MIGRATIONS_PREAPPLIED"] = "1"' in src
     assert "log_config=None" in src
     assert "use_colors=False" in src

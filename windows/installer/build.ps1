@@ -174,7 +174,9 @@ if (-not (Test-Path $msi)) { throw "MSI build failed: $msi not produced." }
 if ($SignCertThumbprint) { Invoke-Sign $msi "Office MSI" }
 
 # 2) Burn bundle -> customer-facing RoofSpanSetup.exe (WebView2 + PostgreSQL + Office MSI).
-wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" `
+$upgradeExe = Join-Path $StageDir "upgrade\roofspan-upgrade.exe"
+if (-not (Test-Path $upgradeExe)) { throw "Staged upgrade coordinator missing: $upgradeExe. Run stage.ps1 again." }
+wix build .\bundle.wxs -arch x64 -d "Version=$Version" -d "MsiPath=$msi" -d "UpgradeExe=$upgradeExe" `
   -d "PostgresInstaller=$PostgresInstaller" `
   -d "WebView2StandaloneInstaller=$WebView2StandaloneInstaller" `
   -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
@@ -250,6 +252,7 @@ $metadata = [ordered]@{
     postgresql = Get-FileFacts $PostgresInstaller
     webview2 = Get-FileFacts $WebView2StandaloneInstaller
   }
+  upgrade_coordinator = Get-FileFacts $upgradeExe
   update_public_key_sha256 = if (Test-Path $updateKey) { (Get-FileHash $updateKey -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
   update_public_key_placeholder = [bool]$updateKeyPlaceholder
   signed = [bool]$SignCertThumbprint

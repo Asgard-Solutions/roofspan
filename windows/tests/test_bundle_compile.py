@@ -4,6 +4,7 @@ The tests use deterministic throwaway payloads but compile the real bundle.wxs a
 Windows. This catches authoring, cache-identity, payload, harvesting, and icon regressions before a
 customer build is produced.
 """
+import os
 import platform
 import re
 import shutil
@@ -40,6 +41,12 @@ _MINIMAL_ICO = bytes.fromhex(
     "28000000010000000200000001002000000000000400000000000000000000000000000000000000"
     "0000ffff00000000"
 )
+
+
+def _upgrade_payload(outdir):
+    p = outdir / "roofspan-upgrade.exe"
+    p.write_bytes(b"MZ" + os.urandom(65536))
+    return p
 
 
 def _make_payloads(outdir: Path):
@@ -95,6 +102,8 @@ def _run_wix_build(outdir: Path, cwd: Path | None = None):
         f"PostgresInstaller={pg}",
         "-d",
         f"WebView2StandaloneInstaller={wv}",
+        "-d",
+        f"UpgradeExe={_upgrade_payload(outdir)}",
         "-ext",
         "WixToolset.BootstrapperApplications.wixext",
         "-ext",

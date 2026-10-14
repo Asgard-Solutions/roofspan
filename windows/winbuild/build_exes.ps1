@@ -2,7 +2,12 @@
 # HUMAN REQUIRED: run on Windows with `pip install pyinstaller` available in the repo venv or PATH.
 #   .\build_exes.ps1 -OutDir ..\..\_stage\services
 param(
-  [Parameter(Mandatory=$true)][string]$OutDir
+  [Parameter(Mandatory=$true)][string]$OutDir,
+  # Onefile upgrade coordinator; staged OUTSIDE the MSI payload (it is a Burn bundle payload).
+  [string]$UpgradeOutDir = "",
+  # CI-only: embed FAULT_INJECTION=True so the transactional-upgrade job can force failures.
+  # Production builds never pass this; artifact verification rejects fault_injection=true.
+  [switch]$TestFaultInjection
 )
 $ErrorActionPreference = "Stop"
 
@@ -96,9 +101,11 @@ $buildInfoHook = Join-Path $PSScriptRoot "roofspan_build_info_hook.generated.py"
 # Immutable identity constants frozen into ALL THREE executables (imported by build_identity.py). The
 # runtime hook mirrors them into the environment before any service code runs.
 $identityModule = Join-Path $PSScriptRoot "_roofspan_build_identity.py"
+$faultFlag = if ($TestFaultInjection) { "True" } else { "False" }
 $identityText = @"
 VERSION = '$releaseVersion'
 BUILD_SHA = '$gitSha'
+FAULT_INJECTION = $faultFlag
 "@
 Set-Content -Path $identityModule -Value $identityText -Encoding ASCII
 $hookText = @"
@@ -130,6 +137,7 @@ function Assert-ServiceBuildInfo {
   if ($info.version -ne $ExpectedVersion) { throw "$Service version mismatch in '$ExePath': expected $ExpectedVersion, found $($info.version)." }
   if ($info.build_contract -ne "roofspan-build-identity-v1") { throw "$Service build contract mismatch in '$ExePath': '$($info.build_contract)'." }
   if ($info.embedded -ne $true) { throw "$Service '$ExePath' does not carry an embedded build identity." }
+  if ([bool]$info.fault_injection -ne [bool]$TestFaultInjection) { throw "$Service '$ExePath' fault_injection=$($info.fault_injection) does not match this build." }
   Write-Host "==> Verified $Service build identity: SHA=$($info.build_sha) version=$($info.version)"
 }
 
@@ -230,6 +238,18 @@ try {
     if ($name -eq "roofspan-relay-connector") {
       Assert-RelayConnectorBuildInfo -ExePath $stagedExe -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
     }
+  }
+
+  if ($UpgradeOutDir) {
+    Write-Host "==> PyInstaller roofspan-upgrade.spec (onefile coordinator)"
+    & $pyinstaller --clean --noconfirm --distpath (Join-Path $PSScriptRoot "dist") `
+                --workpath (Join-Path $PSScriptRoot "build") (Join-Path $PSScriptRoot "roofspan-upgrade.spec")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for roofspan-upgrade.spec (exit $LASTEXITCODE)." }
+    $upgradeExe = Join-Path $PSScriptRoot "dist\roofspan-upgrade.exe"
+    Assert-ServiceBuildInfo -ExePath $upgradeExe -Service "roofspan-upgrade" -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
+    New-Item -ItemType Directory -Force -Path $UpgradeOutDir | Out-Null
+    Copy-Item $upgradeExe (Join-Path $UpgradeOutDir "roofspan-upgrade.exe") -Force
+    Assert-ServiceBuildInfo -ExePath (Join-Path $UpgradeOutDir "roofspan-upgrade.exe") -Service "roofspan-upgrade" -ExpectedSha $gitSha -ExpectedVersion $releaseVersion
   }
 } finally {
   Remove-Item Env:\ROOFSPAN_BUILD_INFO_HOOK -ErrorAction SilentlyContinue

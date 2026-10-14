@@ -294,9 +294,9 @@ def test_backend_surfaces_and_logs_lifespan_startup_failure(tmp_path, monkeypatc
     # Migrations run BEFORE uvicorn in start(); inject a no-op migrations_runner so this test focuses on
     # the uvicorn started=False lifespan-failure path (real Alembic/DB proven in the clean-install CI job).
     import types
-    _fake_mr = types.ModuleType("migrations_runner")
-    _fake_mr.run_migrations = lambda: None
-    monkeypatch.setitem(sys.modules, "migrations_runner", _fake_mr)
+    _fake_guard = types.ModuleType("schema_guard")
+    _fake_guard.enforce = lambda logger: "current"
+    monkeypatch.setitem(sys.modules, "schema_guard", _fake_guard)
 
     log = __import__("roofspan_service").get_logger("bt-fail", "backend-service.log")
     worker = backend_entry.BackendWorker(log)

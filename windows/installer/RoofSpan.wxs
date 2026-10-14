@@ -85,6 +85,19 @@
                      Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
+    <!-- Services start during a plain (fresh/repair) install only. A coordinated upgrade passes
+         ROOFSPAN_COORDINATED=1: roofspan-upgrade.exe runs migrations as a separate step and then starts the
+         services itself, so no service can touch the database while the MSI transaction is in flight. -->
+    <ComponentGroup Id="ServiceStartOnInstall">
+      <Component Id="Svc_StartOnInstall" Directory="INSTALLFOLDER" Guid="*" Condition="NOT ROOFSPAN_COORDINATED">
+        <RegistryValue Root="HKLM" Key="Software\RoofSpan\Office" Name="ServicesStartOnInstall"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <ServiceControl Id="StartBackend" Name="RoofSpanBackend" Start="install" Wait="yes" />
+        <ServiceControl Id="StartRelay" Name="RoofSpanRelayConnector" Start="install" Wait="yes" />
+        <ServiceControl Id="StartUpdater" Name="RoofSpanUpdateService" Start="install" Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
     <ComponentGroup Id="Services">
       <Component Id="Svc_Backend" Directory="BackendSvcDir" Guid="*">
         <File Id="BackendExe" Source="$(var.StageDir)\services\roofspan-backend\roofspan-backend.exe" KeyPath="yes" />
@@ -96,7 +109,7 @@
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="10" />
         </ServiceInstall>
-        <ServiceControl Id="CtlBackend" Name="RoofSpanBackend" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <ServiceControl Id="CtlBackend" Name="RoofSpanBackend" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
 
       <Component Id="Svc_Relay" Directory="RelaySvcDir" Guid="*">
@@ -109,7 +122,7 @@
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="15" />
         </ServiceInstall>
-        <ServiceControl Id="CtlRelay" Name="RoofSpanRelayConnector" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <ServiceControl Id="CtlRelay" Name="RoofSpanRelayConnector" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
 
       <Component Id="Svc_Updater" Directory="UpdateSvcDir" Guid="*">
@@ -121,7 +134,7 @@
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
                               ThirdFailureActionType="restart" RestartServiceDelayInSeconds="30" />
         </ServiceInstall>
-        <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <ServiceControl Id="CtlUpdater" Name="RoofSpanUpdateService" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </ComponentGroup>
 
@@ -181,6 +194,7 @@
       <ComponentGroupRef Id="ShellFiles" />
       <ComponentRef Id="ShellShortcuts" />
       <ComponentGroupRef Id="Services" />
+      <ComponentGroupRef Id="ServiceStartOnInstall" />
       <ComponentGroupRef Id="ServiceInternals" />
       <ComponentRef Id="DataDirs" />
       <ComponentRef Id="LogsDirAcl" />
@@ -194,7 +208,7 @@
                   ExeCommand="&quot;[ShellDir]RoofSpanOffice.exe&quot;"
                   Execute="deferred" Impersonate="yes" Return="asyncNoWait" />
     <InstallExecuteSequence>
-      <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed" />
+      <Custom Action="LaunchFirstRun" After="StartServices" Condition="NOT Installed AND NOT ROOFSPAN_COORDINATED" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

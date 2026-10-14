@@ -33,6 +33,8 @@ def _source_version() -> str:
 EMBEDDED = _embedded is not None
 VERSION = _embedded.VERSION if EMBEDDED else _source_version()
 BUILD_SHA = _embedded.BUILD_SHA if EMBEDDED else "development"
+# True ONLY in CI test builds (build_exes.ps1 -TestFaultInjection); production builds must report False.
+FAULT_INJECTION = bool(getattr(_embedded, "FAULT_INJECTION", False)) if EMBEDDED else False
 
 
 def enforce() -> None:
@@ -43,7 +45,7 @@ def enforce() -> None:
 
 def build_info(service: str, **extra) -> dict:
     info = {"service": service, "version": VERSION, "build_sha": BUILD_SHA,
-            "build_contract": BUILD_CONTRACT, "embedded": EMBEDDED}
+            "build_contract": BUILD_CONTRACT, "embedded": EMBEDDED, "fault_injection": FAULT_INJECTION}
     info.update(extra)
     return info
 

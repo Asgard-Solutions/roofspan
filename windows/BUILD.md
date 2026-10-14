@@ -114,6 +114,43 @@ removes the disposable runner's superuser secret, rejects an incorrect applicati
 that a successful major upgrade preserves a database sentinel, the configuration bytes, and PostgreSQL
 start time. This fixture is not a release artifact; consult the CI result for the tested commit.
 
+## Transactional upgrade (roofspan-upgrade.exe)
+- **New install:** the bundle installs the MSI as before, and its services start during the install.
+- **Upgrade (an older version is installed):** the Burn chain skips the MSI and runs the onefile
+  coordinator `roofspan-upgrade.exe`, which runs `msiexec` itself with `ROOFSPAN_COORDINATED=1`. With that
+  property the MSI installs files but starts no services and does not launch the shell.
+- **States:** `C:\ProgramData\RoofSpan\upgrade\state.json` is replaced atomically and fsynced on every
+  change; `journal.log` beside it is append-only.
+  - `PREFLIGHT`: checks the PostgreSQL service; takes the `bin` folder from the service image path and
+    host/port from `DATABASE_URL` (so 5442 works); logs in with `pg_super.bin` or the app login; detects
+    whether the Control Plane is a separate database or the legacy schema; checks free disk space; finds
+    and checks the previous full MSI; registers the boot recovery task.
+  - `BACKING_UP`: stops the services first, then copies the previous MSI, `roofspan.env` and the identity
+    files (with their permissions) and runs `pg_dump -Fc` for each database.
+  - `BACKUP_VERIFIED`: checks hashes; replays every archive through `pg_restore` and compares per-table
+    row counts; with superuser rights also restores into a scratch database and compares.
+  - Then `SERVICES_STOPPED`, `INSTALLING`, `MIGRATING` (`roofspan-backend.exe --migrate --log`, its own exit
+    code), `STARTING`, `HEALTH_CHECKING` (PostgreSQL; both migration heads; backend running;
+    `/api/health`; `/api/version`; Office UI; licensing log; relay stays running) and `COMPLETE`.
+- **Failure:**
+  - Before `INSTALLING`: restart the previous services, check they are healthy, end in `ROLLED_BACK`.
+  - At or after `INSTALLING`: `RESTORING` removes the new MSI, then restores the databases. With
+    superuser rights it restores into a new database, verifies it and swaps names, keeping
+    `<db>_failed_<attempt>` (never dropped). Legacy installs (owner only) drop and replay the dumped
+    schemas in a single transaction. It then restores the configuration and identity bytes, reinstalls
+    the previous MSI, checks the previous version is healthy, and ends in `ROLLED_BACK`. If any of that
+    fails, the state is `FAILED` and the verified backup is kept.
+- **Interruption:** the boot task and the next setup run call `resume`, which only ever recovers (never
+  continues forward). Each attempt has its own backup folder in `upgrade-backups\<attempt>`
+  (SYSTEM and Administrators only), and verified backups are never overwritten or auto-deleted. A
+  database is restored only from the verified backup of the same attempt.
+- **Schema guard:** the Windows backend never migrates an existing database at service start. An
+  out-of-date or newer schema refuses to start and points to `RoofSpanSetup.exe`.
+- **Missing previous MSI:** if Burn's package cache no longer holds the previous full MSI, run
+  `RoofSpanSetup.exe PREVIOUSMSI=<path to RoofSpanOffice-<previous>.msi>`.
+- **Fault injection:** exists only in CI test builds (`stage.ps1 -TestFaultInjection`); release
+  artifacts must report `fault_injection: false`.
+
 ## Build identity and configuration ownership
 Each service executable (`roofspan-backend`, `roofspan-relay-connector`, `roofspan-update-service`) embeds
 the release version and full Git SHA. Check any of them with `<exe> --build-info`; the output is JSON with
@@ -143,7 +180,7 @@ A log that says only `relay: outbound tunnel loop started -> .../api/relay/tunne
 connector and must not be accepted as a current customer build.
 
 ## CI release gate (build once, test, promote the same bytes)
-- **Triggers:** every pull request into `main` runs all six Windows jobs (there is no path filter, so
+- **Triggers:** every pull request into `main` runs all seven Windows jobs (there is no path filter, so
   required checks never stay "Expected - waiting"). Pushes run when any packaged input changes:
   `windows/**`, `backend/**`, `frontend/**`, `packages/roof-sketch-core/**`, root `package.json` /
   `package-lock.json`, and the workflow files. `windows/tests/test_release_gate.py` enforces this.
@@ -172,7 +209,7 @@ connector and must not be accepted as a current customer build.
   these, CI still builds and tests, but the artifact is marked `releasable: false` and promotion refuses it.
 - **Promotion (no rebuild):** run the `release-promote` workflow by hand. Its inputs are the
   `windows-build-scripts` **push-to-main** run ID, the SHA-256 from that run's summary, and a tag. It
-  checks that all six jobs succeeded, downloads the artifact, re-verifies the hashes, provenance and
+  checks that all seven jobs succeeded, downloads the artifact, re-verifies the hashes, provenance and
   release eligibility, and attaches the identical files to a **draft** GitHub Release. Uploading to
   S3/CloudFront remains manual.
 
@@ -184,7 +221,7 @@ In GitHub, open **Settings -> Rules -> Rulesets -> New branch ruleset**. A class
    these checks, with source **GitHub Actions**. They are the job IDs of `windows-build-scripts`; the
    jobs deliberately have no display `name:`:
    `bundle-compile`, `validate`, `burn-prep-runtime`, `clean-machine-full-install`,
-   `services-install-smoke`, `db-bootstrap-integration`.
+   `services-install-smoke`, `db-bootstrap-integration`, `transactional-upgrade`.
 3. **Block force pushes** and **Restrict deletions**. Leave the bypass list empty, including
    administrators.
 

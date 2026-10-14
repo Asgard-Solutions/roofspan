@@ -156,9 +156,13 @@ jobs:
           [IO.File]::WriteAllBytes($edb, $edbBuf)
           [IO.File]::WriteAllBytes($wv, $wvBuf)
 
+          $upg = Join-Path $work "roofspan-upgrade.exe"
+          $upgBuf = New-Object byte[] (1MB)
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($upgBuf)
+          [IO.File]::WriteAllBytes($upg, $upgBuf)
           $setup = Join-Path $work "RoofSpanSetup.exe"
           wix build .\windows\installer\bundle.wxs -arch x64 -d "Version=$version" `
-            -d "MsiPath=$msi" -d "PostgresInstaller=$edb" -d "WebView2StandaloneInstaller=$wv" `
+            -d "MsiPath=$msi" -d "PostgresInstaller=$edb" -d "WebView2StandaloneInstaller=$wv" -d "UpgradeExe=$upg" `
             -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
           if (-not (Test-Path $setup)) { throw "RoofSpanSetup.exe did not build" }
 
@@ -973,6 +977,7 @@ jobs:
             -ext WixToolset.Util.wixext -ext WixToolset.Firewall.wixext -o $msi
           if ($LASTEXITCODE -ne 0) { throw "Legacy upgrade MSI fixture did not compile" }
           wix build windows/installer/bundle.wxs -arch x64 -d "Version=$next" -d "MsiPath=$msi" `
+            -d "UpgradeExe=$(Join-Path $stage 'upgrade\roofspan-upgrade.exe')" `
             -d "PostgresInstaller=$env:EDB_INSTALLER" -d "WebView2StandaloneInstaller=$env:WV_INSTALLER" `
             -ext WixToolset.BootstrapperApplications.wixext -ext WixToolset.Util.wixext -o $setup
           if ($LASTEXITCODE -ne 0) { throw "Legacy upgrade Burn fixture did not compile" }
@@ -1179,4 +1184,132 @@ jobs:
         with:
           name: clean-machine-full-install-diagnostics
           path: ${{ runner.temp }}/full-install-diagnostics
+          if-no-files-found: warn
+
+  # Transactional upgrade acceptance on the PRODUCTION installer path: N-1 = production build of this source;
+  # N = FAULT-INJECTION TEST build (version + 1) whose backend carries the CI-only migration
+  # ci_txn_upgrade_probe, so failure scenarios really migrate the schema forward before recovery.
+  transactional-upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend + PyInstaller + pywin32
+        run: pip install -r backend/requirements.txt pyinstaller pywin32 pytest
+
+      - name: Install WiX Toolset 5.0.2 + extensions
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
+
+      - name: Clean machine (no PostgreSQL service, free port 5432, empty ProgramData\RoofSpan)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-Service | Where-Object { $_.Name -match 'postgres' } | ForEach-Object {
+            Stop-Service $_.Name -Force -ErrorAction SilentlyContinue
+            Set-Service $_.Name -StartupType Disabled -ErrorAction SilentlyContinue
+          }
+          Remove-Item -Recurse -Force "C:\ProgramData\RoofSpan" -ErrorAction SilentlyContinue
+          Start-Sleep 3
+          if (Get-NetTCPConnection -LocalPort 5432 -State Listen -ErrorAction SilentlyContinue) { throw "port 5432 in use" }
+
+      - name: Download pinned EDB + WebView2 standalone
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prereq = Join-Path $env:RUNNER_TEMP "prereq"; New-Item -ItemType Directory -Force -Path $prereq | Out-Null
+          $edb = Join-Path $prereq "postgresql-16-windows-x64.exe"; $wv = Join-Path $prereq "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+          Invoke-WebRequest "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64.exe" -OutFile $edb
+          Invoke-WebRequest "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $wv
+          if ((Get-FileHash $edb -Algorithm SHA256).Hash.ToLowerInvariant() -ne "f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc") { throw "EDB hash mismatch" }
+          "EDB_INSTALLER=$edb" | Out-File -Append $env:GITHUB_ENV
+          "WV_INSTALLER=$wv" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Enable yarn (corepack)
+        run: corepack enable
+
+      - name: Build N-1 (production build of this source) and N (fault-injection test build, version + 1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pub = Join-Path $env:RUNNER_TEMP "update_public_key.pem"
+          "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content -Encoding ASCII $pub
+          $prev = (Get-Content windows/VERSION -Raw).Trim()
+          $parts = $prev.Split('.'); $next = "$($parts[0]).$($parts[1]).$([int]$parts[2] + 1)"
+          Push-Location windows/installer
+          try {
+            .\stage.ps1 -StageDir (Join-Path $env:RUNNER_TEMP "stage-prev") -UpdatePublicKey $pub
+            .\build.ps1 -Version $prev -StageDir (Join-Path $env:RUNNER_TEMP "stage-prev") -PostgresInstaller $env:EDB_INSTALLER `
+              -WebView2StandaloneInstaller $env:WV_INSTALLER -OutDir (Join-Path $env:RUNNER_TEMP "dist-prev")
+          } finally { Pop-Location }
+          # N: bump the version and add a CI-only forward migration (never committed, never shipped).
+          Set-Content -Encoding ASCII -NoNewline windows/VERSION $next
+          $head = python -c "import sys; sys.path.insert(0,'backend'); from alembic.config import Config; from alembic.script import ScriptDirectory; c=Config('backend/alembic.ini'); c.set_main_option('script_location','backend/alembic'); print(ScriptDirectory.from_config(c).get_current_head())"
+          if ($LASTEXITCODE -ne 0 -or -not $head) { throw "could not resolve the business Alembic head" }
+          @(
+            '"""CI-only transactional-upgrade probe (created by the transactional-upgrade job; never shipped)."""',
+            'from alembic import op', 'import sqlalchemy as sa', '',
+            'revision = "ci_txn_upgrade_probe"', "down_revision = `"$($head.Trim())`"", 'branch_labels = None', 'depends_on = None', '',
+            'def upgrade():',
+            '    op.create_table("ci_txn_upgrade_probe", sa.Column("id", sa.Integer, primary_key=True))', '',
+            'def downgrade():', '    op.drop_table("ci_txn_upgrade_probe")'
+          ) | Set-Content -Encoding ASCII backend/alembic/versions/ci_txn_upgrade_probe.py
+          git add -N backend/alembic/versions/ci_txn_upgrade_probe.py
+          Push-Location windows/installer
+          try {
+            .\stage.ps1 -StageDir (Join-Path $env:RUNNER_TEMP "stage-next") -UpdatePublicKey $pub -TestFaultInjection
+            .\build.ps1 -Version $next -StageDir (Join-Path $env:RUNNER_TEMP "stage-next") -PostgresInstaller $env:EDB_INSTALLER `
+              -WebView2StandaloneInstaller $env:WV_INSTALLER -OutDir (Join-Path $env:RUNNER_TEMP "dist-next")
+          } finally { Pop-Location }
+          $bi = & (Join-Path $env:RUNNER_TEMP "stage-next\upgrade\roofspan-upgrade.exe") --build-info | ConvertFrom-Json
+          if ($bi.fault_injection -ne $true -or $bi.version -ne $next) { throw "N is not the fault-injection test build" }
+          $pbi = & (Join-Path $env:RUNNER_TEMP "stage-prev\upgrade\roofspan-upgrade.exe") --build-info | ConvertFrom-Json
+          if ($pbi.fault_injection -ne $false) { throw "N-1 production build carries fault injection" }
+          "PREV_VERSION=$prev" | Out-File -Append $env:GITHUB_ENV
+          "NEXT_VERSION=$next" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Install N-1 with its production RoofSpanSetup.exe (fresh-install path)
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "txn-evidence\burn-install-prev.log"
+          New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
+          $p = Start-Process (Join-Path $env:RUNNER_TEMP "dist-prev\RoofSpanSetup.exe") -ArgumentList @('/quiet','/norestart','/log',"`"$log`"") -Wait -PassThru
+          if ($p.ExitCode -notin 0, 3010) { Get-Content $log -Tail 120; throw "N-1 install failed ($($p.ExitCode))" }
+          if ((Get-Content $log -Raw) -match 'Applying execute package: RoofSpanUpgradeCoordinator') { throw "fresh install used the upgrade coordinator" }
+
+      - name: Transactional upgrade acceptance (backup failure, migration failure, health failure, interruption, success)
+        shell: pwsh
+        run: |
+          & windows/tests/Invoke-TransactionalUpgradeAcceptance.ps1 -NextSetup (Join-Path $env:RUNNER_TEMP "dist-next\RoofSpanSetup.exe") `
+            -PrevVersion $env:PREV_VERSION -NextVersion $env:NEXT_VERSION -EvidenceDir (Join-Path $env:RUNNER_TEMP "txn-evidence")
+          if ($LASTEXITCODE -ne 0) { throw "transactional upgrade acceptance failed" }
+
+      - name: Coordinator unit + real-PostgreSQL tests on Windows (disposable databases in the CI cluster)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.Security
+          $pw = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("C:\ProgramData\RoofSpan\identity\pg_super.bin"), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine))
+          foreach ($s in "RoofSpanRelayConnector","RoofSpanUpdateService","RoofSpanBackend") { Stop-Service $s -Force }
+          $svc = Get-CimInstance Win32_Service -Filter "Name='RoofSpanPostgreSQL'"
+          $null = $svc.PathName -match '^"([^"]+)"'; $env:PATH = (Split-Path $Matches[1]) + ";" + $env:PATH
+          $env:ROOFSPAN_UPGRADE_TEST_PG = "127.0.0.1:5432:$pw"
+          python -m pytest -q windows/tests/test_upgrade_coordinator.py windows/tests/test_schema_guard.py
+          if ($LASTEXITCODE -ne 0) { throw "coordinator tests failed" }
+
+      - name: Upload transactional-upgrade evidence (secret-scanned)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transactional-upgrade-evidence
+          path: ${{ runner.temp }}/txn-evidence
           if-no-files-found: warn

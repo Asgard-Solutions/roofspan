@@ -34,7 +34,7 @@ jobs:
       EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
       TAG: ${{ inputs.tag }}
     steps:
-      - name: Verify the source run passed ALL six Windows jobs on a push to main
+      - name: Verify the source run passed ALL seven Windows jobs on a push to main
         run: |
           set -euo pipefail
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric"; exit 1; }
@@ -56,7 +56,7 @@ jobs:
           python3 - <<'PY'
           import json, sys
           required = ["bundle-compile", "validate", "burn-prep-runtime", "clean-machine-full-install",
-                      "services-install-smoke", "db-bootstrap-integration"]
+                      "services-install-smoke", "db-bootstrap-integration", "transactional-upgrade"]
           jobs = json.load(open("jobs.json"))["jobs"]
           bad = []
           for name in required:
@@ -64,7 +64,7 @@ jobs:
               if len(m) != 1 or m[0]["conclusion"] != "success":
                   bad.append(f"{name}={[j['conclusion'] for j in m] or 'missing'}")
           if bad: sys.exit("REFUSING TO PROMOTE: required Windows jobs not successful: " + ", ".join(bad))
-          print("OK: all six required Windows jobs succeeded")
+          print("OK: all seven required Windows jobs succeeded")
           PY
 
       - name: Download the tested installer artifact from that run (no rebuild)

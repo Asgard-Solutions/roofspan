@@ -11,7 +11,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$StageDir,
   [string]$FrontendDir = "..\..\frontend",
-  [string]$UpdatePublicKey = ""
+  [string]$UpdatePublicKey = "",
+  [switch]$TestFaultInjection
 )
 $ErrorActionPreference = "Stop"
 
@@ -44,7 +45,10 @@ if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
 $null = New-Item -ItemType Directory -Force -Path $stageRoot,$services,$frontend,$shell,$runtime,$config
 
 # 1) Windows services.
-& (Join-Path $PSScriptRoot "..\winbuild\build_exes.ps1") -OutDir $services
+$upgradeDir = Join-Path $stageRoot "upgrade"   # Burn bundle payload only (NOT harvested into the MSI)
+$faultArgs = @{}
+if ($TestFaultInjection) { $faultArgs["TestFaultInjection"] = $true }
+& (Join-Path $PSScriptRoot "..\winbuild\build_exes.ps1") -OutDir $services -UpgradeOutDir $upgradeDir @faultArgs
 if ($LASTEXITCODE -ne 0) { throw "RoofSpan service executable build failed." }
 
 # 2) Office frontend production build.

@@ -26,7 +26,7 @@ a = Analysis(
         (os.path.join(BACKEND, "control_plane", "alembic"), os.path.join("control_plane", "alembic")),
     ],
     hiddenimports=[
-        "roofspan_service", "db_bootstrap", "config_reconcile", "build_identity", "_roofspan_build_identity",
+        "roofspan_service", "db_bootstrap", "config_reconcile", "build_identity", "_roofspan_build_identity", "schema_guard",
         "migrations_runner", "win32crypt",
         "server", "uvicorn", "uvicorn.logging", "uvicorn.protocols",
         "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets.auto",

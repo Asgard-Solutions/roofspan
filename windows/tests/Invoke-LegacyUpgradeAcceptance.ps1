@@ -36,10 +36,10 @@ function Invoke-Upgrade([string]$Log, [bool]$ShouldSucceed) {
     if ($burn -match 'Applying execute package: PostgreSQLPrereq,') { throw 'Upgrade tried to reinstall EDB over an existing database.' }
     if ($ShouldSucceed) {
         if ($p.ExitCode -notin @(0, 3010)) { throw "Legacy upgrade failed (exit $($p.ExitCode)); inspect Burn and prerequisite logs." }
-        if ($burn -notmatch 'Applied execute package: RoofSpanOfficeMsi, result: 0x0') { throw 'Office MSI did not execute successfully.' }
+        if ($burn -notmatch 'Applied execute package: RoofSpanUpgradeCoordinator, result: 0x0') { throw 'Transactional upgrade coordinator did not complete successfully.' }
     } else {
         if ($p.ExitCode -in @(0, 3010)) { throw 'Invalid application credential was accepted.' }
-        if ($burn -match 'Applying execute package: RoofSpanOfficeMsi,') { throw 'Office MSI ran before legacy authentication succeeded.' }
+        if ($burn -match 'Applying execute package: (RoofSpanOfficeMsi|RoofSpanUpgradeCoordinator),') { throw 'Office upgrade ran before legacy authentication succeeded.' }
     }
 }
 

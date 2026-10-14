@@ -71,6 +71,16 @@ foreach ($k in @("postgresql", "webview2")) {
   Assert-That ($embedded.ContainsKey($p.sha256)) "the bundle does not embed the $k prerequisite recorded in build-metadata ($($p.name))"
   $prereqs[$k] = [ordered]@{ name = $p.name; size = $p.size; sha256 = $p.sha256; product_version = $p.product_version; signer = $p.signer; signature_status = $p.signature_status }
 }
+# The upgrade coordinator is a bundle payload (not in the MSI): embedded bytes == recorded, identity matches.
+$uc = $meta.upgrade_coordinator
+Assert-That ($null -ne $uc -and $embedded.ContainsKey($uc.sha256)) "the bundle does not embed the recorded roofspan-upgrade.exe"
+$ucPath = (Get-ChildItem $ac -Recurse -File | Where-Object { (Get-Sha $_.FullName) -eq $uc.sha256 } | Select-Object -First 1).FullName
+$ucRun = Join-Path $WorkDir "roofspan-upgrade.exe"; Copy-Item $ucPath $ucRun -Force
+$ucLine = @(& $ucRun --build-info) | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+$ucInfo = $ucLine | ConvertFrom-Json
+Assert-That ($ucInfo.service -eq "roofspan-upgrade" -and $ucInfo.build_sha -eq $ExpectedGitSha -and $ucInfo.version -eq $ExpectedVersion) "embedded roofspan-upgrade.exe identity mismatch: $ucLine"
+Assert-That ($ucInfo.fault_injection -ne $true) "embedded roofspan-upgrade.exe is a fault-injection TEST build"
+Assert-That ($embedded.ContainsKey($msiSha)) "the coordinator's MSI payload is missing"
 $manifestText = (Get-ChildItem $ba -Recurse -Filter *.xml | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 Assert-That ($manifestText -notmatch 'Packaging="external"') "a payload is external (not embedded)"
 
@@ -109,6 +119,7 @@ foreach ($svcName in @("roofspan-backend", "roofspan-relay-connector", "roofspan
   Assert-That ($bi.build_sha -eq $ExpectedGitSha) "packaged $svcName build SHA '$($bi.build_sha)' != '$ExpectedGitSha'"
   Assert-That ($bi.version -eq $ExpectedVersion) "packaged $svcName version '$($bi.version)' != '$ExpectedVersion'"
   Assert-That ($bi.build_contract -eq "roofspan-build-identity-v1" -and $bi.embedded -eq $true) "packaged $svcName lacks the embedded build identity contract"
+  Assert-That ($bi.fault_injection -ne $true) "packaged $svcName is a fault-injection TEST build"
   $serviceIdentity[$svcName] = [ordered]@{ version = $bi.version; build_sha = $bi.build_sha; build_contract = $bi.build_contract }
   if ($svcName -eq "roofspan-relay-connector") { $info = $bi }
 }

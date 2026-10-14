@@ -50,6 +50,15 @@
                          Value="pv" Result="exists" Variable="WebView2Present" />
 
     <!-- Overridable at build/runtime; no default binary is committed. -->
+    <!-- Installed RoofSpan Office MSI (any version) and the version last COMPLETED by the transactional
+         upgrade coordinator. Fresh installs use the plain MsiPackage; upgrades go through the coordinator. -->
+    <util:ProductSearch Id="RoofSpanOfficeInstalled" UpgradeCode="$(var.RoofSpanUpgradeCode)"
+                        Result="version" Variable="RoofSpanOfficeInstalledVersion" />
+    <util:RegistrySearch Id="RoofSpanCoordinatedSearch" Root="HKLM" Key="SOFTWARE\RoofSpan\Office\Upgrade"
+                         Value="CoordinatedVersion" Result="value" Bitness="always64"
+                         Variable="RoofSpanCoordinatedVersion" />
+    <!-- Operator-supplied previous full MSI when Burn's package cache no longer holds it. -->
+    <Variable Name="PREVIOUSMSI" Type="string" Value="" bal:Overridable="yes" />
     <Variable Name="PostgresInstaller" Type="string" Value="$(var.PostgresInstaller)" bal:Overridable="yes" />
     <Variable Name="WebView2StandaloneInstaller" Type="string" Value="$(var.WebView2StandaloneInstaller)" bal:Overridable="yes" />
     <!-- EDB superuser password. NEVER committed and NEVER persisted. WiX 5 requires that a typed
@@ -157,10 +166,26 @@
         <Payload Name="Verify-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Verify-PostgreSQL.ps1" />
       </ExePackage>
 
-      <!-- 3) RoofSpan Office MSI (built by RoofSpan.wxs), EMBEDDED. perMachine (see RoofSpan.wxs Scope). -->
+      <!-- 3a) FRESH install (or same-version repair): the plain MSI, which starts its services itself. -->
       <MsiPackage Id="RoofSpanOfficeMsi"
                   CacheId="RoofSpanOfficeMsi-$(var.Version)"
-                  SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes" />
+                  SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes"
+                  InstallCondition="NOT RoofSpanOfficeInstalledVersion OR RoofSpanOfficeInstalledVersion = WixBundleVersion" />
+
+      <!-- 3b) UPGRADE of an older installed version: roofspan-upgrade.exe owns the whole transaction
+           (preflight, verified backup, msiexec with services held, separate migration, health checks,
+           and restore of the previous databases/configuration/version on any failure). -->
+      <ExePackage Id="RoofSpanUpgradeCoordinator"
+                  CacheId="RoofSpanUpgradeCoordinator-$(var.Version)"
+                  DisplayName="RoofSpan Office transactional upgrade"
+                  SourceFile="$(var.UpgradeExe)"
+                  PerMachine="yes" Vital="yes" Compressed="yes"
+                  DetectCondition="RoofSpanCoordinatedVersion = WixBundleVersion"
+                  InstallCondition="RoofSpanOfficeInstalledVersion AND RoofSpanOfficeInstalledVersion &lt; WixBundleVersion"
+                  InstallArguments="run --msi &quot;[WixBundleExecutePackageCacheFolder]RoofSpanOffice-coordinated.msi&quot; --previous-msi &quot;[PREVIOUSMSI]&quot;"
+                  UninstallArguments="uninstall">
+        <Payload Name="RoofSpanOffice-coordinated.msi" SourceFile="$(var.MsiPath)" />
+      </ExePackage>
     </Chain>
   </Bundle>
 </Wix>

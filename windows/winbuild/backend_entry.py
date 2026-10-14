@@ -70,12 +70,11 @@ class BackendWorker:
         if photo_dir:
             self.log.info("backend: photo storage ready at %s", photo_dir)
 
-        # 3) Run migrations BEFORE uvicorn. This is deliberate: Alembic failures now propagate directly
-        # through the worker/service wrapper with their original traceback instead of being swallowed by
-        # uvicorn's lifespan machinery and reduced to "server.started == False".
-        from migrations_runner import run_migrations
-        self.log.info("backend: applying Alembic migrations before uvicorn startup")
-        run_migrations()
+        # 3) Schema guard BEFORE uvicorn: service start never migrates an existing database (that is the
+        # upgrade coordinator's separate `--migrate` step); only a brand-new empty database migrates here.
+        # An out-of-date or newer-than-supported schema refuses to start with an actionable error.
+        import schema_guard
+        schema_guard.enforce(self.log)
         os.environ["ROOFSPAN_MIGRATIONS_PREAPPLIED"] = "1"
 
         from licensing import config as licensing_config
@@ -139,10 +138,47 @@ def _worker_factory(logger):
     return BackendWorker(logger)
 
 
+def _offline_mode(mode: str) -> int:
+    """--migrate / --schema-status: run as a separate observable process (own log + exit code + JSON)."""
+    import json
+    import logging
+
+    import schema_guard
+    args = sys.argv[1:]
+    log_path = args[args.index("--log") + 1] if "--log" in args else None
+    log = logging.getLogger("roofspan.migrate")
+    log.setLevel(logging.INFO)
+    handler = logging.FileHandler(log_path, encoding="utf-8") if log_path else logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    for name in ("roofspan.migrate", "alembic", "roofspan"):
+        logging.getLogger(name).addHandler(handler)
+    load_runtime_config()
+    template = os.path.join(install_root(), "config-templates", "roofspan.env.template")
+    try:
+        if mode == "--migrate":
+            config_reconcile.reconcile(config_path(), template, install_root(), log)
+        db_bootstrap.bootstrap(log, template_path=template, config_path=config_path(),
+                               identity_dir=os.environ["INSTALLATION_KEYS_DIR"])
+        if mode == "--migrate":
+            result = schema_guard.migrate(log)
+            if build_identity.FAULT_INJECTION and os.environ.get("ROOFSPAN_UPGRADE_FAULT") == "migration":
+                raise RuntimeError("injected migration failure (after schema changes were applied)")
+        else:
+            result = schema_guard.status()
+    except Exception:
+        log.exception("%s failed", mode)
+        return 1
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0
+
+
 def main():
     if "--build-info" in sys.argv[1:]:
         build_identity.print_build_info("roofspan-backend")
         return
+    for mode in ("--migrate", "--schema-status"):
+        if mode in sys.argv[1:]:
+            sys.exit(_offline_mode(mode))
     load_runtime_config()
     dispatch(make_service_class(SVC_NAME, SVC_DISPLAY, _worker_factory, LOG_FILE))
 

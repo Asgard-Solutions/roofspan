@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github/workflows/windows-build-scripts.yml"
 PROMOTE = REPO / ".github/workflows/release-promote.yml"
 REQUIRED_JOBS = ["bundle-compile", "validate", "burn-prep-runtime", "clean-machine-full-install",
-                 "services-install-smoke", "db-bootstrap-integration"]
+                 "services-install-smoke", "db-bootstrap-integration", "transactional-upgrade"]
 
 
 def _load(path):
@@ -96,8 +96,17 @@ def test_full_install_uploads_one_tested_artifact_after_acceptance():
     assert build < verify < install < legacy < up
     assert "Test-InstallerArtifact.ps1" in steps[verify]["run"]
     assert "ARTIFACT_SHA256" in steps[install]["run"]
-    whole = WORKFLOW.read_text(encoding="utf-8")
-    assert whole.count("build.ps1 -Version") == 1, "the release installer must be built exactly once"
+    full = "\n".join(s.get("run", "") for s in steps)
+    assert full.count("build.ps1 -Version") == 1, "the release installer must be built exactly once"
+    jobs = _load(WORKFLOW)["jobs"]
+    for name, job in jobs.items():
+        if name == "clean-machine-full-install":
+            continue
+        for s in job["steps"]:
+            if str(s.get("uses", "")).startswith("actions/upload-artifact"):
+                assert s["with"]["name"] != "roofspan-office-installer", f"{name} must not publish an installer"
+    txn = "\n".join(s.get("run", "") for s in jobs["transactional-upgrade"]["steps"])
+    assert "-TestFaultInjection" in txn and "Invoke-TransactionalUpgradeAcceptance.ps1" in txn
 
 
 def test_promotion_never_rebuilds_and_requires_all_jobs():

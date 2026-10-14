@@ -1,0 +1,12 @@
+ERROR    upgrade-test-279402121872080:coordinator.py:168 upgrade 20261014144848d284 failed in MIGRATING: database migration failed (exit 1); see /tmp/pytest-of-root/pytest-54/test_forced_migration_failure_0/data/upgrade-backups/20261014144848d284/migrate.log
+ERROR    upgrade-test-279402121889232:coordinator.py:168 upgrade 2026101414485036a9 failed in MIGRATING: database migration failed (exit 1); see /tmp/pytest-of-root/pytest-54/test_forced_migration_failure_1/data/upgrade-backups/2026101414485036a9/migrate.log
+__________________ test_failed_health_check_triggers_recovery __________________
+ERROR    upgrade-test-279402121615696:coordinator.py:168 upgrade 202610141448527a98 failed in HEALTH_CHECKING: injected health-check failure
+PASSED windows/tests/test_upgrade_coordinator.py::test_successful_upgrade_preserves_sentinel_data_and_config
+PASSED windows/tests/test_upgrade_coordinator.py::test_forced_migration_failure_restores_schema_data_config_and_version[False]
+PASSED windows/tests/test_upgrade_coordinator.py::test_forced_migration_failure_restores_schema_data_config_and_version[True]
+PASSED windows/tests/test_upgrade_coordinator.py::test_unverifiable_backup_stops_before_install_or_migration
+PASSED windows/tests/test_upgrade_coordinator.py::test_insufficient_disk_space_stops_in_preflight
+PASSED windows/tests/test_upgrade_coordinator.py::test_failed_health_check_triggers_recovery
+PASSED windows/tests/test_upgrade_coordinator.py::test_interrupted_upgrade_resumes_into_recovery_idempotently
+7 passed in 13.04s
