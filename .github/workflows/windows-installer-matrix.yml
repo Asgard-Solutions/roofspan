@@ -1,0 +1,338 @@
+name: windows-installer-matrix
+
+# Failure-injection + compatibility matrix for the Windows installer. ONE production RoofSpanSetup.exe is built,
+# hashed and uploaded once; every scenario job downloads those exact bytes and refuses to run if the SHA-256
+# differs. Each hosted scenario gets its own fresh (disposable) windows-latest runner.
+on:
+  workflow_dispatch:
+    inputs:
+      n1_url: { description: "N-1 RoofSpanSetup.exe https URL (overrides vars.ROOFSPAN_BASELINE_N1_URL)", required: false, default: "" }
+      n1_sha256: { description: "N-1 RoofSpanSetup.exe SHA-256", required: false, default: "" }
+      n1_version: { description: "N-1 version (MAJOR.MINOR.PATCH)", required: false, default: "" }
+      n2_url: { description: "N-2 RoofSpanSetup.exe https URL (overrides vars.ROOFSPAN_BASELINE_N2_URL)", required: false, default: "" }
+      n2_sha256: { description: "N-2 RoofSpanSetup.exe SHA-256", required: false, default: "" }
+      n2_version: { description: "N-2 version (MAJOR.MINOR.PATCH)", required: false, default: "" }
+      release_build: { description: "Release gate: every required scenario must PASS (no PENDING/BLOCKED/SKIP)", type: boolean, default: false }
+  push:
+    branches: [test/windows-upgrade-failure-matrix]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "windows/**"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/windows-installer-matrix.yml"
+
+env:
+  ROOFSPAN_BASELINE_N1_URL: ${{ inputs.n1_url || vars.ROOFSPAN_BASELINE_N1_URL }}
+  ROOFSPAN_BASELINE_N1_SHA256: ${{ inputs.n1_sha256 || vars.ROOFSPAN_BASELINE_N1_SHA256 }}
+  ROOFSPAN_BASELINE_N1_VERSION: ${{ inputs.n1_version || vars.ROOFSPAN_BASELINE_N1_VERSION }}
+  ROOFSPAN_BASELINE_N2_URL: ${{ inputs.n2_url || vars.ROOFSPAN_BASELINE_N2_URL }}
+  ROOFSPAN_BASELINE_N2_SHA256: ${{ inputs.n2_sha256 || vars.ROOFSPAN_BASELINE_N2_SHA256 }}
+  ROOFSPAN_BASELINE_N2_VERSION: ${{ inputs.n2_version || vars.ROOFSPAN_BASELINE_N2_VERSION }}
+  ROOFSPAN_DISPOSABLE_VM_ENABLED: ${{ vars.ROOFSPAN_DISPOSABLE_VM_ENABLED }}
+  ROOFSPAN_RELEASE_BUILD: ${{ (inputs.release_build || startsWith(github.ref, 'refs/tags/v')) && 'true' || 'false' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    outputs:
+      artifact_sha256: ${{ steps.identity.outputs.artifact_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend + PyInstaller + pywin32
+        run: pip install -r backend/requirements.txt pyinstaller pywin32
+
+      - name: Install WiX Toolset 5.0.2 + extensions
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
+
+      - name: Download the REAL prerequisite installers (build machine only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prereq = Join-Path $env:RUNNER_TEMP "prereq"
+          New-Item -ItemType Directory -Force -Path $prereq | Out-Null
+          $edb = Join-Path $prereq "postgresql-16-windows-x64.exe"
+          $wv = Join-Path $prereq "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+          Invoke-WebRequest "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64.exe" -OutFile $edb
+          Invoke-WebRequest "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $wv
+          if ((Get-FileHash $edb -Algorithm SHA256).Hash.ToLowerInvariant() -ne "f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc") { throw "EDB installer SHA-256 mismatch" }
+          if ((Get-Item $wv).Length -lt 100MB) { throw "WebView2 STANDALONE download looks wrong (bootstrapper?)" }
+          foreach ($pair in @(@($edb, "EnterpriseDB"), @($wv, "Microsoft Corporation"))) {
+            $sig = Get-AuthenticodeSignature -FilePath $pair[0]
+            if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch [regex]::Escape($pair[1])) { throw "prerequisite $($pair[0]) is not validly signed by $($pair[1])" }
+          }
+          "EDB_INSTALLER=$edb" | Out-File -Append $env:GITHUB_ENV
+          "WV_INSTALLER=$wv" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Enable yarn (corepack)
+        run: corepack enable
+
+      - name: Configure release signing certificate + real update public key (when configured)
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.ROOFSPAN_WINDOWS_SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.ROOFSPAN_WINDOWS_SIGNING_PFX_PASSWORD }}
+          UPDATE_PUBLIC_KEY_PEM: ${{ vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pub = Join-Path $env:RUNNER_TEMP "update_public_key.pem"
+          if ($env:UPDATE_PUBLIC_KEY_PEM) { Set-Content -Encoding ASCII -NoNewline -Path $pub -Value $env:UPDATE_PUBLIC_KEY_PEM }
+          else {
+            "-----BEGIN PUBLIC KEY-----`nPLACEHOLDER_CI_ONLY`n-----END PUBLIC KEY-----" | Set-Content -Encoding ASCII $pub
+            Write-Warning "NOT RELEASABLE: vars.ROOFSPAN_UPDATE_PUBLIC_KEY_PEM is not configured"
+          }
+          "UPDATE_PUB_PATH=$pub" | Out-File -Append $env:GITHUB_ENV
+          if ($env:SIGNING_PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            try { $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force) }
+            finally { Remove-Item -Force $pfx }
+            $cert = @($cert | Where-Object { $_.HasPrivateKey })[0]
+            if (-not $cert) { throw "the signing PFX has no private key" }
+            "SIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append $env:GITHUB_ENV
+          } else { Write-Warning "NOT RELEASABLE: the installer will be UNSIGNED" }
+
+      - name: Build the ONE production installer (real stage.ps1 + build.ps1, no fault injection)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content windows/VERSION -Raw).Trim()
+          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          $dist = Join-Path $env:RUNNER_TEMP "dist"
+          $signArgs = @{}
+          if ($env:SIGN_THUMBPRINT) { $signArgs["SignCertThumbprint"] = $env:SIGN_THUMBPRINT }
+          Push-Location windows/installer
+          try {
+            .\stage.ps1 -StageDir $stage -UpdatePublicKey $env:UPDATE_PUB_PATH
+            .\build.ps1 -Version $version -StageDir $stage -PostgresInstaller $env:EDB_INSTALLER -WebView2StandaloneInstaller $env:WV_INSTALLER -OutDir $dist @signArgs
+          } finally { Pop-Location }
+          "STAGE_DIR=$stage" | Out-File -Append $env:GITHUB_ENV
+          "DIST_DIR=$dist" | Out-File -Append $env:GITHUB_ENV
+          "RS_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Verify the artifact and record its identity BEFORE any scenario runs
+        id: identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sha = (git rev-parse HEAD).Trim()
+          & windows/installer/Test-InstallerArtifact.ps1 -DistDir $env:DIST_DIR -ExpectedGitSha $sha -ExpectedVersion $env:RS_VERSION -WorkDir (Join-Path $env:RUNNER_TEMP "artifact-verify")
+          $bi = & (Join-Path $env:STAGE_DIR "upgrade\roofspan-upgrade.exe") --build-info | ConvertFrom-Json
+          if ($bi.fault_injection -ne $false) { throw "the production artifact carries fault injection" }
+          $heads = python windows/tests/matrix/matrix.py heads --backend backend | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $heads.business) { throw "could not resolve Alembic heads" }
+          $setup = Join-Path $env:DIST_DIR "RoofSpanSetup.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          $out = Join-Path $env:RUNNER_TEMP "matrix-installer"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item $setup, (Join-Path $env:DIST_DIR "SHA256SUMS.txt"), (Join-Path $env:DIST_DIR "build-metadata.json"), (Join-Path $env:DIST_DIR "artifact-verification.json") $out
+          [ordered]@{ artifact_sha256 = $hash; git_sha = $sha; version = $env:RS_VERSION; fault_injection = $false
+                      heads = $heads; run_id = "${{ github.run_id }}"; signed = [bool]$env:SIGN_THUMBPRINT } |
+            ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $out "matrix-build.json")
+          # The prerequisite source files never leave the build machine.
+          Remove-Item $env:EDB_INSTALLER, $env:WV_INSTALLER -Force
+          "artifact_sha256=$hash" | Out-File -Append $env:GITHUB_OUTPUT
+          "## Tested artifact`nRoofSpanSetup.exe SHA-256 ``$hash`` (version $env:RS_VERSION, git $sha)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload the ONE tested installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-installer
+          path: ${{ runner.temp }}/matrix-installer
+          if-no-files-found: error
+
+      - name: Upload build identity (small, for the summary)
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-build-info
+          path: ${{ runner.temp }}/matrix-installer/matrix-build.json
+          if-no-files-found: error
+
+  plan:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: matrixsuper123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    outputs:
+      hosted: ${{ steps.plan.outputs.hosted }}
+      vm: ${{ steps.plan.outputs.vm }}
+      has_hosted: ${{ steps.plan.outputs.has_hosted }}
+      has_vm: ${{ steps.plan.outputs.has_vm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit-test the matrix controller + prove the migration fault SQL on real PostgreSQL
+        env:
+          ROOFSPAN_UPGRADE_TEST_PG: "127.0.0.1:5432:matrixsuper123"
+        run: |
+          pip install pytest PyYAML "psycopg[binary]"
+          pytest -q -rs windows/tests/test_failure_matrix.py windows/tests/test_failure_matrix_pg.py
+      - name: Plan scenarios (RUN / PENDING_VM / BLOCKED_MISSING_BASELINE)
+        id: plan
+        run: python windows/tests/matrix/matrix.py plan --out matrix-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matrix-plan
+          path: matrix-plan.json
+
+  hosted:
+    needs: [build, plan]
+    if: needs.plan.outputs.has_hosted == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.hosted) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download the ONE tested installer
+        uses: actions/download-artifact@v4
+        with:
+          name: matrix-installer
+          path: ${{ runner.temp }}/artifact
+      - name: Run scenario ${{ matrix.scenario }}
+        shell: pwsh
+        env:
+          ROOFSPAN_MATRIX_DESTRUCTIVE: I-UNDERSTAND-THIS-DESTROYS-ROOFSPAN-DATA
+          EXPECTED_SHA256: ${{ needs.build.outputs.artifact_sha256 }}
+        run: |
+          & windows/tests/matrix/Invoke-MatrixScenario.ps1 -Scenario "${{ matrix.scenario }}" `
+            -Setup (Join-Path $env:RUNNER_TEMP "artifact\RoofSpanSetup.exe") -ExpectedSha256 $env:EXPECTED_SHA256 `
+            -BuildInfo (Join-Path $env:RUNNER_TEMP "artifact\matrix-build.json") -EvidenceDir (Join-Path $env:RUNNER_TEMP "evidence")
+          if ($LASTEXITCODE -ne 0) { throw "${{ matrix.scenario }} did not pass (see result.json)" }
+      - name: Guarantee a result + scrub (even if the runner step crashed)
+        if: always()
+        shell: pwsh
+        run: |
+          $ev = Join-Path $env:RUNNER_TEMP "evidence"
+          New-Item -ItemType Directory -Force $ev | Out-Null
+          python windows/tests/matrix/matrix.py scrub --evidence $ev
+          if (-not (Test-Path (Join-Path $ev "result.json"))) {
+            python windows/tests/matrix/matrix.py finalize --scenario "${{ matrix.scenario }}" --evidence $ev --status FAIL --reason "scenario runner crashed before recording a result"
+          }
+          exit 0
+      - name: Upload evidence (success and failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-result-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+
+  vm:
+    needs: [build, plan]
+    if: needs.plan.outputs.has_vm == 'true'
+    # Single-use disposable VM runners (registered --ephemeral, reverted to a clean snapshot per job, interactive
+    # desktop session, approved marker in C:\ProgramData\RoofSpanDisposableVM\approved.json). See windows/BUILD.md.
+    runs-on: [self-hosted, Windows, roofspan-disposable-vm]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.vm) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download the ONE tested installer
+        uses: actions/download-artifact@v4
+        with:
+          name: matrix-installer
+          path: ${{ runner.temp }}/artifact
+      - name: Run scenario ${{ matrix.scenario }}
+        shell: pwsh
+        env:
+          ROOFSPAN_MATRIX_DESTRUCTIVE: I-UNDERSTAND-THIS-DESTROYS-ROOFSPAN-DATA
+          EXPECTED_SHA256: ${{ needs.build.outputs.artifact_sha256 }}
+          ROOFSPAN_VM_APPROVER_USER: ${{ secrets.ROOFSPAN_VM_APPROVER_USER }}
+          ROOFSPAN_VM_APPROVER_PASSWORD: ${{ secrets.ROOFSPAN_VM_APPROVER_PASSWORD }}
+          ROOFSPAN_MATRIX_DB_GB: ${{ vars.ROOFSPAN_MATRIX_DB_GB }}
+        run: |
+          & windows/tests/matrix/Invoke-MatrixScenario.ps1 -Scenario "${{ matrix.scenario }}" `
+            -Setup (Join-Path $env:RUNNER_TEMP "artifact\RoofSpanSetup.exe") -ExpectedSha256 $env:EXPECTED_SHA256 `
+            -BuildInfo (Join-Path $env:RUNNER_TEMP "artifact\matrix-build.json") -EvidenceDir (Join-Path $env:RUNNER_TEMP "evidence")
+          if ($LASTEXITCODE -ne 0) { throw "${{ matrix.scenario }} did not pass (see result.json)" }
+      - name: Guarantee a result + scrub (even if the runner step crashed)
+        if: always()
+        shell: pwsh
+        run: |
+          $ev = Join-Path $env:RUNNER_TEMP "evidence"
+          New-Item -ItemType Directory -Force $ev | Out-Null
+          python windows/tests/matrix/matrix.py scrub --evidence $ev
+          if (-not (Test-Path (Join-Path $ev "result.json"))) {
+            python windows/tests/matrix/matrix.py finalize --scenario "${{ matrix.scenario }}" --evidence $ev --status FAIL --reason "scenario runner crashed before recording a result"
+          }
+          exit 0
+      - name: Upload evidence (success and failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-result-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+
+  summary:
+    needs: [build, plan, hosted, vm]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: matrix-plan
+          path: summary-in
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: matrix-build-info
+          path: summary-in
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: matrix-result-*
+          path: summary-in/results
+      - name: Matrix summary (fails on any FAIL; on release, on anything that is not PASS)
+        run: |
+          mkdir -p summary-in/results
+          rc=0
+          python windows/tests/matrix/matrix.py summarize --plan summary-in/matrix-plan.json --results summary-in/results \
+            --build summary-in/matrix-build.json --out-json matrix-summary.json --out-md matrix-summary.md || rc=$?
+          cat matrix-summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+      - name: Upload the matrix summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-summary
+          path: |
+            matrix-summary.json
+            matrix-summary.md

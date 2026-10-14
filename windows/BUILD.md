@@ -240,6 +240,34 @@ be cleanly removed): on a fresh Windows VM with BOTH PostgreSQL AND WebView2 ABS
 double-click `RoofSpanSetup.exe` and confirm the UAC prompt appears, WebView2 + PostgreSQL both install
 from the embedded payloads with no internet, `RoofSpanPostgreSQL` starts, and the Office window loads.
 
+## Installer failure-injection matrix (`.github/workflows/windows-installer-matrix.yml`)
+One production `RoofSpanSetup.exe` is built (no fault injection), verified, hashed and uploaded once. Every
+scenario job downloads those bytes and refuses to run if the SHA-256 differs. Hosted scenarios each get a fresh
+`windows-latest` runner. Failures are injected from OUTSIDE the product (ACL-denied PostgreSQL tools, a 64 MB
+VHDX backup volume, port holders, PostgreSQL triggers armed after the verified backup, killed processes), so
+the tested binary is the customer binary. Catalog: `windows/tests/matrix/scenarios.json`; controller:
+`matrix.py`; harness: `MatrixLib.psm1` + `Invoke-MatrixScenario.ps1`.
+
+- **Safety guard**: `matrix.py guard` refuses unless `ROOFSPAN_MATRIX_DESTRUCTIVE=I-UNDERSTAND-THIS-DESTROYS-ROOFSPAN-DATA`
+  AND either a GitHub-hosted Windows runner OR an approved single-use VM (see below). Nothing is touched before it passes.
+- **Baselines** (upgrade + upgrade-failure scenarios): set repository variables `ROOFSPAN_BASELINE_N1_URL`,
+  `ROOFSPAN_BASELINE_N1_SHA256`, `ROOFSPAN_BASELINE_N1_VERSION` (and `_N2_`), or pass them as
+  `workflow_dispatch` inputs. Missing => `BLOCKED_MISSING_BASELINE`. A partial/invalid configuration fails the plan.
+- **Disposable VM** (`webview2-absent-offline`, `uac-different-admin`, `low-resource-large-db`): set
+  `vars.ROOFSPAN_DISPOSABLE_VM_ENABLED=true` and register an `--ephemeral` self-hosted runner with labels
+  `self-hosted, Windows, roofspan-disposable-vm`, running in an interactive desktop session, reverted to a clean
+  snapshot after every job. The image must contain `C:\ProgramData\RoofSpanDisposableVM\approved.json`
+  = `{"purpose":"roofspan-installer-matrix","disposable":true,"machine_guid":"<HKLM\SOFTWARE\Microsoft\Cryptography MachineGuid>"}`,
+  no WebView2 runtime, no PostgreSQL, Python 3.11 + pwsh. `uac-different-admin` also needs secrets
+  `ROOFSPAN_VM_APPROVER_USER`/`_PASSWORD` (a second local administrator) and `ConsentPromptBehaviorAdmin=0`
+  so the approval can be automated. `low-resource-large-db` needs <= 4.5 GB RAM, <= 2 vCPU
+  (`vars.ROOFSPAN_MATRIX_DB_GB`, default 2). Otherwise these scenarios are `PENDING_VM`.
+- **Results**: each job uploads `matrix-result-<scenario>` (assertions, sanitized before/after manifests,
+  Burn/MSI/service/migration/backup logs, Event Log extract, versions, scrub report) with `if: always()`.
+  The `summary` job writes the matrix table to the run summary and fails on any FAIL; on a release build
+  (`release_build` input or a `v*` tag) it also fails on PENDING/BLOCKED/SKIP.
+
+
 ## Guardrails
 All Windows `.ps1` build scripts are ASCII-only and validated by the PowerShell parser in CI
 (`.github/workflows/windows-build-scripts.yml`), plus Python regression checks in
