@@ -1,0 +1,65 @@
+{
+  "summary": "Validated the Windows installer failure-injection matrix (controller + harness + workflow) end-to-end on Linux. All python/pytest + CLI contracts pass; static review of PowerShell harness and GitHub workflow found no vacuous-pass bugs or secret leaks.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "test_failure_matrix.py": "56 passed, 0 skipped (pwsh present at /usr/local/bin/pwsh)",
+    "test_failure_matrix_pg.py (ROOFSPAN_UPGRADE_TEST_PG=127.0.0.1:5432:superpw123)": "3 passed; migration-fault SQL extracted from Invoke-MatrixScenario.ps1 was proven on real PostgreSQL 15.19",
+    "full_suite windows/tests": "289 passed, 15 skipped, 3 PRE-EXISTING unrelated FAILs (test_public_website_download_wired_to_cloudfront, test_existing_config_repairs_missing_auth_secrets_without_rotating_db_password, test_relay_does_not_require_user_shell_env_var) — no regressions",
+    "cli_plan_no_env": "16 RUN_HOSTED + 12 BLOCKED_MISSING_BASELINE + 3 PENDING_VM = 31 ✓",
+    "cli_plan_with_n1_only": "only upgrade-n2-to-n stays BLOCKED_MISSING_BASELINE; uac-different-admin, low-resource-large-db, webview2-absent-offline stay PENDING_VM ✓",
+    "cli_plan_partial_baseline": "ROOFSPAN_BASELINE_N1_URL alone raises ValueError 'baseline n1 is partially configured; missing ...SHA256, ...VERSION' and exits 1 ✓",
+    "cli_guard_linux_destructive_set": "exit 3 with 'GUARD-REFUSED: ROOFSPAN_MATRIX_DESTRUCTIVE is not set to I-UNDERSTAND-...' — guard refuses non-Windows RUNNER_OS even with ack ✓",
+    "cli_summarize_empty_results": "exit 1; every RUN_HOSTED row rendered as FAIL/environment with 'no result recorded' reason ✓",
+    "workflow_yaml_parse": "jobs=[build,plan,hosted,vm,summary]; triggers=[workflow_dispatch,push,pull_request] ✓",
+    "scenario_catalog_vs_impl": "31 catalog scenarios == 31 $Scenarios implementations in Invoke-MatrixScenario.ps1 (no missing, no extras)"
+  },
+  "static_review_findings": {
+    "powershell_harness": [
+      "MatrixLib.psm1:225-227 Start-Setup correctly caches $p.Handle BEFORE WaitForExit so ExitCode is populated — classic PS pitfall is handled.",
+      "MatrixLib.psm1:115-134 Invoke-SQL always clears PGPASSWORD in finally and removes temp -AsFile SQL files; uses -v ON_ERROR_STOP=1.",
+      "MatrixLib.psm1:62-66 Register-Secret emits ::add-mask:: and feeds Protect-Text; MatrixLib.psm1:34-38 also redacts PostgreSQL URL passwords in any Protect-Text output.",
+      "Invoke-MatrixScenario.ps1:593-595 every run asserts (a) artifact SHA matches ExpectedSha256, (b) build record matches artifact, (c) fault_injection=False — so a corrupted or fault-injected EXE cannot vacuously pass. ROOFSPAN_UPGRADE_FAULT is never set anywhere in the harness (grep clean).",
+      "Invoke-MatrixScenario.ps1:589-614 every path ends by calling matrix.py finalize, which (matrix.py:181-187) upgrades a declared PASS to FAIL if (i) any assertion failed, (ii) fewer than MIN_ASSERTIONS=3 assertions were recorded, or (iii) the required outcome:<expect> assertion was never written. No scenario path can PASS vacuously.",
+      "Invoke-MatrixScenario.ps1:605-610 scrub step forcibly downgrades PASS→FAIL if any secret bytes or forbidden file (pg_super.bin, *.optionfile, roofspan.env, *.dump, *.partial, pgpass.conf, *.pfx) ever reach $EvidenceDir; matrix.py:30 also strips any un-redacted postgres://user:password@host URL.",
+      "Invoke-MatrixScenario.ps1:311-317 Install-EdbFixture writes the EDB option file (containing superpassword=) to RUNNER_TEMP, cleans it in finally. The fixture password is Register-Secret'd (line 272) so scrub masks it everywhere.",
+      "Invoke-MatrixScenario.ps1:375-382 Wait-CoordinatorState uses condition-based polling with Wait-Until and aborts if Start-Process exited before the required state — no sleep-and-hope.",
+      "Invoke-MatrixScenario.ps1:143-170 Enable-MigrationFault parameterises role name and head revisions, uses $f$ dollar-quoting; event trigger scoped to session_user='$role' so unrelated DDL (sentinel seeding happens before, superuser SQL happens as postgres) doesn't trip the fault. Fault is armed AFTER BACKUP_VERIFIED (asserted on line 170) so the verified backup is fault-free.",
+      "Invoke-MatrixScenario.ps1:324,342 sc.exe invocations use the correct 'name= value' spacing idiom.",
+      "Invoke-MatrixScenario.ps1:552-559 uac scenario reads the elevated setup exit code via a file dropped by the approver session; this is the only robust way to recover ExitCode from Start-Process -Verb RunAs across sessions.",
+      "No unconditional Write-Assertion calls found: every outcome:* assertion is only reached after prior Assert-* gates for that path."
+    ],
+    "workflow": [
+      "build is the only job that compiles the artifact; it uploads matrix-installer AND exports artifact_sha256 to needs.build.outputs (line 42, 146).",
+      "hosted and vm jobs download matrix-installer (lines 213-217, 264-268) and pass EXPECTED_SHA256 from needs.build.outputs.artifact_sha256 (lines 222, 273). The ps1 then re-hashes the file and asserts equality (Invoke-MatrixScenario.ps1:593) — SHA pinning is enforced on the receiving side.",
+      "Evidence upload steps use if: always() (lines 240, 294) and the pre-upload 'guarantee-a-result + scrub' step is also if: always() (lines 229, 283).",
+      "summary job has if: always() and needs [build, plan, hosted, vm] (lines 301-303); plan outputs has_hosted/has_vm gate the hosted and vm jobs so skipped-but-not-failed matrix slices still let summary run.",
+      "plan job runs on ubuntu-latest with a postgres:16 service that also exercises test_failure_matrix_pg.py BEFORE emitting the matrix plan — the migration-fault SQL is proven on PG16 inside the same workflow.",
+      "No secrets are passed to scenario jobs besides the VM-only approver credentials (lines 274-275, used only inside the uac scenario). Signing PFX secrets live only in the build job (lines 85-86).",
+      "ROOFSPAN_RELEASE_BUILD is true on tag pushes OR explicit workflow_dispatch input (line 35); summarize then treats anything-not-PASS as failing (matrix.py:261)."
+    ],
+    "concerns_minor": [
+      "MatrixLib.psm1:316 Install-EdbFixture uses Start-Process -Wait -PassThru; on some PS 7 builds ExitCode is only reliably populated when Handle is cached before WaitForExit. The pattern works but is less defensive than Start-Setup/Wait-Setup. Not blocking.",
+      "Invoke-MatrixScenario.ps1:300 (stale-config-no-cluster) assumes a single reclaimed-* directory exists after Install-N; if the install path renamed differently the index [-1] on an empty array returns $null and Get-Sha256 would throw -> scenario FAILs loudly, which is acceptable but could be a more explicit Assert-True first.",
+      "matrix.py:335 finalize returns exit 0 for status SKIP; combined with finalize's own 'SKIP without exact ENV: reason' guard (line 188) this is correct, but a Burn step that genuinely wants to skip must emit reason starting with 'ENV: ' and length >= 25. Document this in windows/BUILD.md if not already."
+    ]
+  },
+  "test_report_links": [
+    "/app/windows/tests/test_failure_matrix.py",
+    "/app/windows/tests/test_failure_matrix_pg.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "The three-way kill switch (guard refuses non-Windows + non-destructive-ack + no VM marker; scrub refuses secret bytes/forbidden files; finalize refuses <3 assertions or missing outcome) is coherent — a scenario cannot PASS without producing real evidence.",
+    "The in-product ROOFSPAN_UPGRADE_FAULT flag is NOT referenced anywhere in windows/tests/matrix/** (grep clean); all faults are external (icacls deny, port holder, tiny volume, event trigger raising RS_MATRIX_INJECTED_MIGRATION_FAILURE). This correctly keeps the single production artifact untouched.",
+    "No regressions introduced: 289 unrelated tests still green; the 3 pre-existing failures are confirmed unrelated to this feature."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (within scope of this feature)", "frontend": "n/a"},
+  "test_credentials": "postgres / superpw123 on 127.0.0.1:5432 (local disposable PG15 cluster) - used for test_failure_matrix_pg.py",
+  "seed_data_creation": "test_failure_matrix_pg.py creates and tears down its own throwaway roles/databases per test; no residual data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Everything in the user's checklist for this iteration is green on Linux. The 3 known failing tests are documented as out of scope and should be ignored. If the main agent changes any file under windows/tests/matrix/** or the workflow YAML, re-run: (1) pytest windows/tests/test_failure_matrix.py windows/tests/test_failure_matrix_pg.py and (2) the four CLI probes (plan no-env, plan with N1-only, plan partial-baseline, guard with ROOFSPAN_MATRIX_DESTRUCTIVE on Linux).",
+  "rca of the issue": "n/a - no bugs found in the feature under review."
+}
