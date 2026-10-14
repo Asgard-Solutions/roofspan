@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
-import { apiError } from "@/lib/api";
+import { api, apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +17,16 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Fresh install (empty database) → redirect to the first-run company setup wizard.
+  useEffect(() => {
+    api
+      .get("/setup/status")
+      .then((r) => {
+        if (r.data?.needs_setup) navigate("/setup", { replace: true });
+      })
+      .catch(() => {});
+  }, [navigate]);
 
   const submit = async (e) => {
     e.preventDefault();

@@ -5,6 +5,7 @@ import { ProtectedRoute, RequireSensitive } from "@/components/ProtectedRoute";
 import { Toaster } from "@/components/ui/sonner";
 import AppShell from "@/components/AppShell";
 import Login from "@/pages/Login";
+import Setup from "@/pages/Setup";
 import Dashboard from "@/pages/Dashboard";
 import MapView from "@/pages/MapView";
 import Leads from "@/pages/Leads";
@@ -44,6 +45,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/setup" element={<Setup />} />
           <Route path="/p/:token" element={<PublicProposal />} />
           <Route
             element={
