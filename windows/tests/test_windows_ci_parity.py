@@ -1,4 +1,5 @@
 """Static safeguards for local Office build vs GitHub CI parity and fail-closed checks."""
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -7,6 +8,7 @@ MATRIX = (ROOT / ".github/workflows/windows-installer-matrix.yml").read_text(enc
 STAGE = (ROOT / "windows/installer/stage.ps1").read_text(encoding="utf-8")
 VERIFY = (ROOT / "windows/installer/Test-InstallerArtifact.ps1").read_text(encoding="utf-8")
 EDB = (ROOT / "windows/installer/Get-CIPostgreSQLInstaller.ps1").read_text(encoding="utf-8")
+REFERENCE = json.loads((ROOT / "windows/installer/local-prerequisites-reference.json").read_text(encoding="utf-8"))
 
 
 def test_ci_uses_one_pinned_edb_downloader_for_all_office_builds():
@@ -16,7 +18,7 @@ def test_ci_uses_one_pinned_edb_downloader_for_all_office_builds():
         assert "ROOFSPAN_CI_EDB_URL" in workflow
         assert "ROOFSPAN_CI_EDB_SHA256" in workflow
         assert "Invoke-WebRequest \"https://get.enterprisedb.com" not in workflow
-    assert "f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc" in EDB
+    assert "6d3919bc23cfb45e79c6e391de8b689c32101f2c1b73377aa26e4ce593c0ef28" in EDB
     assert "Configure BOTH ROOFSPAN_CI_EDB_URL and ROOFSPAN_CI_EDB_SHA256" in EDB
     assert "Get-FileHash" in EDB and "Get-AuthenticodeSignature" in EDB
     assert "get.enterprisedb.com" in EDB and "$uri.Scheme -ne 'https'" in EDB
@@ -44,3 +46,15 @@ def test_transactional_upgrade_build_respects_version_file_contract():
     assert "CI-only version bump did not persist before staging N" in BUILD
     assert "Staging N unexpectedly changed windows/VERSION" in BUILD
     assert ".\\build.ps1 -Version $next" in BUILD
+
+
+def test_local_prerequisite_reference_is_unambiguous():
+    pg = REFERENCE["postgresql"]
+    standalone = REFERENCE["webview2_standalone"]
+    bootstrapper = REFERENCE["webview2_bootstrapper"]
+    assert pg["sha256"] in EDB
+    assert pg["filename"] in EDB
+    assert standalone["size_bytes"] > 100 * 1024 * 1024
+    assert len(standalone["sha256"]) == 64
+    assert not bootstrapper["use_in_offline_bundle"]
+    assert bootstrapper["size_bytes"] < 10 * 1024 * 1024
