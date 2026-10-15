@@ -1272,7 +1272,11 @@ jobs:
               -WebView2StandaloneInstaller $env:WV_INSTALLER -OutDir (Join-Path $env:RUNNER_TEMP "dist-prev")
           } finally { Pop-Location }
           # N: bump the version and add a CI-only forward migration (never committed, never shipped).
-          Set-Content -Encoding ASCII -NoNewline windows/VERSION $next
+          $versionFile = (Resolve-Path 'windows/VERSION').Path
+          [System.IO.File]::WriteAllText($versionFile, $next, [System.Text.Encoding]::ASCII)
+          if ((Get-Content -LiteralPath $versionFile -Raw).Trim() -ne $next) {
+            throw "CI-only version bump did not persist before staging N ($versionFile)"
+          }
           $head = python -c "import sys; sys.path.insert(0,'backend'); from alembic.config import Config; from alembic.script import ScriptDirectory; c=Config('backend/alembic.ini'); c.set_main_option('script_location','backend/alembic'); print(ScriptDirectory.from_config(c).get_current_head())"
           if ($LASTEXITCODE -ne 0 -or -not $head) { throw "could not resolve the business Alembic head" }
           @(
@@ -1284,9 +1288,16 @@ jobs:
             'def downgrade():', '    op.drop_table("ci_txn_upgrade_probe")'
           ) | Set-Content -Encoding ASCII backend/alembic/versions/ci_txn_upgrade_probe.py
           git add -N backend/alembic/versions/ci_txn_upgrade_probe.py
+          if ((Get-Content -LiteralPath $versionFile -Raw).Trim() -ne $next) {
+            throw 'CI-only version changed unexpectedly while generating migration probe'
+          }
           Push-Location windows/installer
           try {
             .\stage.ps1 -StageDir (Join-Path $env:RUNNER_TEMP "stage-next") -UpdatePublicKey $pub -TestFaultInjection
+            $stagedVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+            if ($stagedVersion -ne $next) {
+              throw "Staging N unexpectedly changed windows/VERSION to '$stagedVersion', expected '$next'"
+            }
             .\build.ps1 -Version $next -StageDir (Join-Path $env:RUNNER_TEMP "stage-next") -PostgresInstaller $env:EDB_INSTALLER `
               -WebView2StandaloneInstaller $env:WV_INSTALLER -OutDir (Join-Path $env:RUNNER_TEMP "dist-next")
           } finally { Pop-Location }
