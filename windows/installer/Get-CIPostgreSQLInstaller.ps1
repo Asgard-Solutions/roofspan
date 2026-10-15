@@ -1,13 +1,14 @@
 # Download a SHA-256-pinned, Authenticode-verified EnterpriseDB PostgreSQL installer for CI.
-# Default matches the historical CI baseline. To test the installer used on local
-# release builds, set BOTH repository variables ROOFSPAN_CI_EDB_URL and
-# ROOFSPAN_CI_EDB_SHA256. Partial overrides fail closed.
+# Default matches the exact PostgreSQL 16.14-2 installer hash independently
+# measured from the local release-build prerequisite supplied for review.
+# To use another version, set BOTH ROOFSPAN_CI_EDB_URL and ROOFSPAN_CI_EDB_SHA256.
+# Partial/unpinned overrides fail closed. Always verify Authenticode on download.
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Destination)
 $ErrorActionPreference = 'Stop'
 
-$defaultUrl = 'https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64.exe'
-$defaultSha = 'f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc'
+$defaultUrl = 'https://get.enterprisedb.com/postgresql/postgresql-16.14-2-windows-x64.exe'
+$defaultSha = '6d3919bc23cfb45e79c6e391de8b689c32101f2c1b73377aa26e4ce593c0ef28'
 $customUrl = "$env:ROOFSPAN_CI_EDB_URL".Trim()
 $customSha = "$env:ROOFSPAN_CI_EDB_SHA256".Trim()
 if ([bool]$customUrl -ne [bool]$customSha) {
