@@ -35,6 +35,8 @@ permissions:
   contents: read
 
 env:
+  ROOFSPAN_CI_EDB_URL: ${{ vars.ROOFSPAN_CI_EDB_URL }}
+  ROOFSPAN_CI_EDB_SHA256: ${{ vars.ROOFSPAN_CI_EDB_SHA256 }}
   ROOFSPAN_BASELINE_N1_URL: ${{ inputs.n1_url || vars.ROOFSPAN_BASELINE_N1_URL }}
   ROOFSPAN_BASELINE_N1_SHA256: ${{ inputs.n1_sha256 || vars.ROOFSPAN_BASELINE_N1_SHA256 }}
   ROOFSPAN_BASELINE_N1_VERSION: ${{ inputs.n1_version || vars.ROOFSPAN_BASELINE_N1_VERSION }}
@@ -76,9 +78,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $prereq | Out-Null
           $edb = Join-Path $prereq "postgresql-16-windows-x64.exe"
           $wv = Join-Path $prereq "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-          Invoke-WebRequest "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64.exe" -OutFile $edb
+          & windows/installer/Get-CIPostgreSQLInstaller.ps1 -Destination $edb
           Invoke-WebRequest "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile $wv
-          if ((Get-FileHash $edb -Algorithm SHA256).Hash.ToLowerInvariant() -ne "f4bf0ac4b33471f18aad7d1d9cc52613003f3a3a612aae167366bf7f7840b2bc") { throw "EDB installer SHA-256 mismatch" }
           if ((Get-Item $wv).Length -lt 100MB) { throw "WebView2 STANDALONE download looks wrong (bootstrapper?)" }
           foreach ($pair in @(@($edb, "EnterpriseDB"), @($wv, "Microsoft Corporation"))) {
             $sig = Get-AuthenticodeSignature -FilePath $pair[0]
