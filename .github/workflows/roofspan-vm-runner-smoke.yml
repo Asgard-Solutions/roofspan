@@ -1,0 +1,45 @@
+name: RoofSpan VM runner smoke (non-destructive)
+
+# Manual-only test. Deliberately uses a distinct label so it can never be
+# scheduled as part of the destructive installer matrix.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.repository.private == true
+    runs-on: [self-hosted, Windows, X64, roofspan-smoke]
+    timeout-minutes: 10
+    steps:
+      - name: Verify disposable VM tooling without modifying the installation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((whoami).Trim() -ine 'roofspanvm\roofspan-ops') {
+            throw 'Runner must execute in the interactive roofspan-ops session.'
+          }
+          $markerPath = 'C:\ProgramData\RoofSpanDisposableVM\approved.json'
+          if (-not (Test-Path -LiteralPath $markerPath)) { throw 'Approval marker missing.' }
+          $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+          $guid = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
+          if ($marker.purpose -ne 'roofspan-installer-matrix' -or
+              $marker.disposable -ne $true -or
+              $marker.machine_guid -ne $guid) { throw 'Invalid approval marker.' }
+          $previous = @(Get-ChildItem -Path 'C:\ProgramData\RoofSpanDisposableVM' -Filter 'consumed-*' -File -ErrorAction SilentlyContinue)
+          if ($previous.Count -ne 0) { throw 'Unexpected destructive-test history.' }
+          $python = 'C:\Users\Support\AppData\Local\Programs\Python\Python311\python.exe'
+          if (-not (Test-Path -LiteralPath $python)) { throw 'Python executable not found.' }
+          & $python --version
+          if ($LASTEXITCODE -ne 0) { throw 'Python executable failed.' }
+          & $python -m pip --version
+          if ($LASTEXITCODE -ne 0) { throw 'Python pip failed.' }
+          & pwsh --version
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 failed.' }
+          & git --version
+          if ($LASTEXITCODE -ne 0) { throw 'Git failed.' }
+          Write-Host 'PASS: RoofSpanVM smoke checks succeeded. No installer was executed.'
