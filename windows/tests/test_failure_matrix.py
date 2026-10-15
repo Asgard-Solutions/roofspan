@@ -379,7 +379,23 @@ def test_scenario_jobs_test_the_same_bytes_and_always_upload_evidence(job):
 
 def test_vm_job_only_targets_disposable_vm_runners():
     assert JOBS["vm"]["runs-on"] == ["self-hosted", "Windows", "roofspan-disposable-vm"]
-    assert JOBS["vm"]["if"] == "needs.plan.outputs.has_vm == 'true'"
+    guard = " ".join(JOBS["vm"]["if"].split())
+    for requirement in (
+        "github.event_name == 'workflow_dispatch'",
+        "github.ref == 'refs/heads/main'",
+        "github.event.repository.private == true",
+        "needs.plan.outputs.has_vm == 'true'",
+    ):
+        assert requirement in guard
+    enabled = WF["env"]["ROOFSPAN_DISPOSABLE_VM_ENABLED"]
+    for requirement in (
+        "github.event_name == 'workflow_dispatch'",
+        "github.ref == 'refs/heads/main'",
+        "github.event.repository.private == true",
+        "vars.ROOFSPAN_DISPOSABLE_VM_ENABLED == 'true'",
+    ):
+        assert requirement in enabled
+    assert WF["permissions"]["contents"] == "read"
 
 
 def test_summary_always_runs_and_gates():
