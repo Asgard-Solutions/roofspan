@@ -60,7 +60,11 @@ try {
   $installed = $false
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     $yarnLog = Join-Path $stageRoot ("yarn-install-attempt-{0}.log" -f $attempt)
-    & yarn install --frozen-lockfile --network-timeout 180000 --network-concurrency 4 2>&1 |
+    # In Windows PowerShell 5.1, yarn.ps1 emitting a harmless warning to stderr
+    # becomes a terminating NativeCommandError when ErrorActionPreference=Stop.
+    # Use yarn.cmd through cmd.exe and merge stderr in cmd before PowerShell sees it.
+    # A real install failure still returns yarn.cmd's exit code.
+    & $env:ComSpec /d /s /c 'yarn.cmd install --frozen-lockfile --network-timeout 180000 --network-concurrency 4 2>&1' |
         Tee-Object -FilePath $yarnLog
     $yarnRc = $LASTEXITCODE
     if ($yarnRc -eq 0) { $installed = $true; break }
@@ -77,7 +81,8 @@ try {
   # so the frontend must use relative /api URLs. Force an empty backend base to override
   # any stray .env and prevent an "undefined/api" base that renders a blank page.
   $env:REACT_APP_BACKEND_URL = ""
-  yarn build
+  # Apply the same PowerShell 5.1 stderr handling to the production frontend build.
+  & $env:ComSpec /d /s /c 'yarn.cmd build 2>&1'
   if ($LASTEXITCODE -ne 0) { throw "frontend yarn build failed." }
   if (-not (Test-Path ".\build\index.html")) { throw "frontend build did not produce build\index.html" }
   Copy-Item ".\build\*" $frontend -Recurse -Force
