@@ -25,7 +25,10 @@ def test_ci_uses_one_pinned_edb_downloader_for_all_office_builds():
 
 
 def test_yarn_stage_retries_only_transient_network_errors():
-    assert "yarn install --frozen-lockfile" in STAGE
+    assert "yarn.cmd install --frozen-lockfile" in STAGE
+    assert "& $env:ComSpec /d /s /c 'yarn.cmd install" in STAGE
+    assert "& $env:ComSpec /d /s /c 'yarn.cmd build 2>&1'" in STAGE
+    assert "Tee-Object -FilePath $yarnLog" in STAGE
     assert "--network-timeout 180000" in STAGE
     assert "for ($attempt = 1; $attempt -le 3; $attempt++)" in STAGE
     assert "if (-not $transient -or $attempt -eq 3)" in STAGE
