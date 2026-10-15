@@ -33,6 +33,8 @@ def test_yarn_stage_retries_only_transient_network_errors():
 def test_wix_extract_retry_preserves_strict_hash_verification():
     assert "for ($attempt = 1; $attempt -le 2; $attempt++)" in VERIFY
     assert "$extractRc -ne -2147024664" in VERIFY
+    assert "$extractRc -ne -2147024664" in BUILD
+    assert "burn manifest extraction failed (wix exit $extractRc)" in BUILD
     assert 'Assert-That $extractOk "wix burn extract failed' in VERIFY
     assert 'Assert-That ($embedded.ContainsKey($msiSha))' in VERIFY
     assert 'Assert-That ($embedded.ContainsKey($p.sha256))' in VERIFY
