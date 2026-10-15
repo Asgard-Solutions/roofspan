@@ -1053,6 +1053,16 @@ jobs:
             Remove-NetFirewallRule -DisplayName "RoofSpanOfflineTest" -ErrorAction SilentlyContinue
           }
           if ($code -ne 0) { if (Test-Path $log) { Get-Content $log -Tail 200 }; throw "offline RoofSpanSetup.exe failed (exit $code)" }
+          # A zero installer exit code alone is insufficient: prove the *fresh MSI* was
+          # selected, not the transactional coordinator (which requires an existing install).
+          $burn = Get-Content -LiteralPath $log -Raw
+          if ($burn -match 'Applying execute package: RoofSpanUpgradeCoordinator') {
+            throw "CLEAN INSTALL ROUTING REGRESSION: Burn launched the upgrade coordinator on an empty machine"
+          }
+          if ($burn -notmatch 'Applying execute package: RoofSpanOfficeMsi') {
+            throw "CLEAN INSTALL ROUTING REGRESSION: Burn never applied RoofSpanOfficeMsi"
+          }
+          Write-Host "PASS: fresh install applied RoofSpanOfficeMsi, never RoofSpanUpgradeCoordinator"
           Write-Host "OK: complete EXE installed with Internet blocked and the source prerequisites deleted"
           $after = (Get-FileHash $env:SETUP_EXE -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($after -ne $env:ARTIFACT_SHA256) { throw "the installed RoofSpanSetup.exe changed during the test ($after != $env:ARTIFACT_SHA256)" }
