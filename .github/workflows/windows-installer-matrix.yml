@@ -266,7 +266,9 @@ jobs:
       needs.plan.outputs.has_vm == 'true'
     # Single-use disposable VM runners (registered --ephemeral, reverted to a clean snapshot per job, interactive
     # desktop session, approved marker in C:\ProgramData\RoofSpanDisposableVM\approved.json). See windows/BUILD.md.
-    runs-on: [self-hosted, Windows, roofspan-disposable-vm]
+    # Require an exact scenario label so a low-resource or WebView2-free test cannot
+    # be assigned to an incorrectly prepared disposable VM.
+    runs-on: [self-hosted, Windows, roofspan-disposable-vm, "${{ matrix.scenario }}"]
     timeout-minutes: 360
     strategy:
       fail-fast: false

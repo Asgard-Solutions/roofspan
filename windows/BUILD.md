@@ -255,10 +255,13 @@ the tested binary is the customer binary. Catalog: `windows/tests/matrix/scenari
   `workflow_dispatch` inputs. Missing => `BLOCKED_MISSING_BASELINE`. A partial/invalid configuration fails the plan.
 - **Disposable VM** (`webview2-absent-offline`, `uac-different-admin`, `low-resource-large-db`): set
   `vars.ROOFSPAN_DISPOSABLE_VM_ENABLED=true` and register an `--ephemeral` self-hosted runner with labels
-  `self-hosted, Windows, roofspan-disposable-vm`, running in an interactive desktop session, reverted to a clean
-  snapshot after every job. The image must contain `C:\ProgramData\RoofSpanDisposableVM\approved.json`
-  = `{"purpose":"roofspan-installer-matrix","disposable":true,"machine_guid":"<HKLM\SOFTWARE\Microsoft\Cryptography MachineGuid>"}`,
-  no WebView2 runtime, no PostgreSQL, Python 3.11 + pwsh. `uac-different-admin` also needs secrets
+  `self-hosted, Windows, roofspan-disposable-vm, <scenario-id>` (use exactly one of the three scenario IDs).
+  The job requires that exact scenario label; a runner prepared for another scenario must not receive it.
+  Run in an interactive desktop session, and revert to a clean snapshot after every job.
+  The image must contain `C:\ProgramData\RoofSpanDisposableVM\approved.json`
+  = `{"purpose":"roofspan-installer-matrix","disposable":true,"machine_guid":"<HKLM\SOFTWARE\Microsoft\Cryptography MachineGuid>"}`.
+  Every VM baseline needs no PostgreSQL, Python 3.11 and pwsh. The `webview2-absent-offline` baseline additionally
+  must have no WebView2 runtime. `uac-different-admin` also needs secrets
   `ROOFSPAN_VM_APPROVER_USER`/`_PASSWORD` (a second local administrator) and `ConsentPromptBehaviorAdmin=0`
   so the approval can be automated. `low-resource-large-db` needs <= 4.5 GB RAM, <= 2 vCPU
   (`vars.ROOFSPAN_MATRIX_DB_GB`, default 2). Otherwise these scenarios are `PENDING_VM`.

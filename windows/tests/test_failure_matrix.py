@@ -378,7 +378,7 @@ def test_scenario_jobs_test_the_same_bytes_and_always_upload_evidence(job):
 
 
 def test_vm_job_only_targets_disposable_vm_runners():
-    assert JOBS["vm"]["runs-on"] == ["self-hosted", "Windows", "roofspan-disposable-vm"]
+    assert JOBS["vm"]["runs-on"] == ["self-hosted", "Windows", "roofspan-disposable-vm", "${{ matrix.scenario }}"]
     guard = " ".join(JOBS["vm"]["if"].split())
     for requirement in (
         "github.event_name == 'workflow_dispatch'",
