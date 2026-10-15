@@ -54,8 +54,25 @@ if ($LASTEXITCODE -ne 0) { throw "RoofSpan service executable build failed." }
 # 2) Office frontend production build.
 Push-Location $feDirResolved
 try {
-  yarn install --frozen-lockfile
-  if ($LASTEXITCODE -ne 0) { throw "yarn install failed." }
+  # Keep the frozen lockfile contract. A temporary registry 502/503/504 must not
+  # invalidate an otherwise reproducible build, but dependency/lockfile failures
+  # are never retried or treated as success.
+  $installed = $false
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $yarnLog = Join-Path $stageRoot ("yarn-install-attempt-{0}.log" -f $attempt)
+    & yarn install --frozen-lockfile --network-timeout 180000 --network-concurrency 4 2>&1 |
+        Tee-Object -FilePath $yarnLog
+    $yarnRc = $LASTEXITCODE
+    if ($yarnRc -eq 0) { $installed = $true; break }
+    $text = Get-Content -LiteralPath $yarnLog -Raw -ErrorAction SilentlyContinue
+    $transient = $text -match '(?i)\b(502|503|504)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up'
+    if (-not $transient -or $attempt -eq 3) {
+      throw "yarn install failed (exit $yarnRc, attempt $attempt of 3). See $yarnLog"
+    }
+    Write-Warning "Transient Yarn registry/network error; retrying frozen install ($attempt of 3)."
+    Start-Sleep -Seconds (5 * $attempt)
+  }
+  if (-not $installed) { throw "yarn install did not succeed." }
   # Desktop UI is served by its own local backend on the same origin (127.0.0.1:8001),
   # so the frontend must use relative /api URLs. Force an empty backend base to override
   # any stray .env and prevent an "undefined/api" base that renders a blank page.
