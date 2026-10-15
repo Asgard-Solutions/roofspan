@@ -244,12 +244,19 @@ from the embedded payloads with no internet, `RoofSpanPostgreSQL` starts, and th
 
 Both Windows CI pipelines call the same production staging/build scripts as the documented developer workflow: `windows/installer/stage.ps1` and `build.ps1`. The production stage includes FOUR PyInstaller executables (backend, relay connector, update service and update broker), plus frontend, native WebView2 shell, icon, templates and upgrade coordinator.
 
-**The PostgreSQL prerequisite must match the one shipped to customers.** Historically, CI used EDB 16.4-1, whereas the documented local test build uses `postgresql-16.14-2-windows-x64.exe`. CI defaults to the previously verified EDB 16.4-1 SHA-256. To test the exact local/release prerequisite, configure BOTH GitHub repository variables:
+**The PostgreSQL prerequisite must match the one shipped to customers.** CI previously used EDB 16.4-1; the current default is now **EDB 16.14-2**, SHA-256 `6d3919bc23cfb45e79c6e391de8b689c32101f2c1b73377aa26e4ce593c0ef28`, computed from the uploaded local build installer. The CI downloader retrieves the expected official versioned EDB URL and **fails** if the URL cannot be downloaded, the SHA-256 differs, or Windows Authenticode rejects the publisher. An actual CI installation using these bytes is still required before claiming parity.
 
-- `ROOFSPAN_CI_EDB_URL` = `https://get.enterprisedb.com/postgresql/postgresql-16.14-2-windows-x64.exe` (verify the official download actually exists)
-- `ROOFSPAN_CI_EDB_SHA256` = SHA-256 of that SAME trusted local installer, from `Get-FileHash -Algorithm SHA256` (never guess it)
+To intentionally select a different approved prerequisite version in future, configure BOTH GitHub repository variables:
+
+- `ROOFSPAN_CI_EDB_URL` = exact official versioned EnterpriseDB HTTPS installer URL
+- `ROOFSPAN_CI_EDB_SHA256` = SHA-256 of that SAME trusted local installer, from `Get-FileHash -Algorithm SHA256`
 
 Either configure both or neither. The shared `windows/installer/Get-CIPostgreSQLInstaller.ps1` checks the versioned official HTTPS URL, SHA-256 and EnterpriseDB Authenticode signature and rejects partial overrides. Both Windows workflows use it. GitHub CI cannot read the local `D:\AsgardSolutions\Prerequisites` folder.
+
+
+**Source files are NOT checked into Git.** See `windows/installer/local-prerequisites-reference.json` for the exact sizes and SHA-256 hashes calculated from the supplied EDB 16.14-2 installer, full WebView2 standalone installer and WebView2 online bootstrapper. Git tracks code and verification metadata only; keep the 350 MB / 203 MB EXEs in an approved restricted artifact repository or download official, hash-verified copies. To reproduce the *exact* WebView2 Evergreen bits, use an immutable approved artifact in your release pipeline rather than assuming Microsoft's Evergreen download permalink remains byte-identical.
+
+**Critical production command correction:** `build.ps1` has **no** `-WebView2Bootstrapper` parameter. Always pass `-WebView2StandaloneInstaller "D:\\AsgardSolutions\\Prerequisites\\WebView2\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"`. The 1.6 MB `MicrosoftEdgeWebview2Setup.exe` requires network access and is **not** an acceptable offline prerequisite. The production build also needs `-SignCertThumbprint` and optionally `-UpdateSigningPrivateKey`, while the update verification **public** key is passed to `stage.ps1`. Never commit private keys, signing certificates, or passwords.
 
 Use the FULL x64 WebView2 Evergreen Standalone installer, **not** the web bootstrapper. CI verifies its size and publisher and records the embedded version/hash. Evergreen bits may change between builds.
 
