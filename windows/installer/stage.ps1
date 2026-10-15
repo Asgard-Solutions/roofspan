@@ -25,8 +25,8 @@ $stageRoot = Resolve-AbsPath $StageDir
 $feDirResolved = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $FrontendDir))
 $shellProject = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\shell\RoofSpanOfficeShell.csproj"))
 
-if (-not (Get-Command yarn -ErrorAction SilentlyContinue)) {
-  throw "yarn not found. Install Node.js LTS + 'corepack enable' (or npm i -g yarn)."
+if (-not (Get-Command yarn.cmd -ErrorAction SilentlyContinue)) {
+  throw "yarn.cmd not found on PATH. Install Node.js LTS and Yarn Classic, or run corepack enable (or npm i -g yarn)."
 }
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
   throw ".NET SDK not found. RoofSpan's native Windows shell must be built with dotnet publish."
