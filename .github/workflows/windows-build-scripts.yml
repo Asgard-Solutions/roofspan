@@ -202,7 +202,19 @@ jobs:
           Copy-Item $setup (Join-Path $iso "RoofSpanSetup.exe")
           Remove-Item $edb, $wv, $msi -Force
           $ba = Join-Path $work "ba"; $ac = Join-Path $work "ac"
-          wix burn extract (Join-Path $iso "RoofSpanSetup.exe") -out $ac -outba $ba
+          $extracted = $false
+          for ($attempt = 1; $attempt -le 2; $attempt++) {
+            if ($attempt -gt 1) {
+              Remove-Item $ac, $ba -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            wix burn extract (Join-Path $iso "RoofSpanSetup.exe") -out $ac -outba $ba
+            $extractRc = $LASTEXITCODE
+            if ($extractRc -eq 0) { $extracted = $true; break }
+            if ($extractRc -ne -2147024664 -or $attempt -eq 2) { break }
+            Write-Warning 'WiX native extraction pipe closed; retrying once with clean output directories.'
+            Start-Sleep -Seconds 10
+          }
+          if (-not $extracted) { throw "burn manifest extraction failed (wix exit $extractRc)" }
           $manifest = Get-ChildItem $ba -Recurse -Filter *.xml | Select-Object -First 1
           if (-not $manifest) { throw "burn manifest not found after extract" }
           $m = Get-Content $manifest.FullName -Raw
