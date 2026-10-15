@@ -30,6 +30,10 @@ on:
       - "frontend/**"
       - ".github/workflows/windows-installer-matrix.yml"
 
+# Restrict the workflow token to the minimum privileges required for checkout and artifacts.
+permissions:
+  contents: read
+
 env:
   ROOFSPAN_BASELINE_N1_URL: ${{ inputs.n1_url || vars.ROOFSPAN_BASELINE_N1_URL }}
   ROOFSPAN_BASELINE_N1_SHA256: ${{ inputs.n1_sha256 || vars.ROOFSPAN_BASELINE_N1_SHA256 }}
@@ -37,7 +41,8 @@ env:
   ROOFSPAN_BASELINE_N2_URL: ${{ inputs.n2_url || vars.ROOFSPAN_BASELINE_N2_URL }}
   ROOFSPAN_BASELINE_N2_SHA256: ${{ inputs.n2_sha256 || vars.ROOFSPAN_BASELINE_N2_SHA256 }}
   ROOFSPAN_BASELINE_N2_VERSION: ${{ inputs.n2_version || vars.ROOFSPAN_BASELINE_N2_VERSION }}
-  ROOFSPAN_DISPOSABLE_VM_ENABLED: ${{ vars.ROOFSPAN_DISPOSABLE_VM_ENABLED }}
+  # VM scenarios are planned only for a trusted manual run from private main.
+  ROOFSPAN_DISPOSABLE_VM_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.repository.private == true && vars.ROOFSPAN_DISPOSABLE_VM_ENABLED == 'true') && 'true' || 'false' }}
   ROOFSPAN_RELEASE_BUILD: ${{ (inputs.release_build || startsWith(github.ref, 'refs/tags/v')) && 'true' || 'false' }}
 
 jobs:
@@ -252,7 +257,13 @@ jobs:
 
   vm:
     needs: [build, plan]
-    if: needs.plan.outputs.has_vm == 'true'
+    # Do not dispatch self-hosted hardware for PRs, automatic pushes/tags, or public repositories.
+    # Public-repo workflow edits can bypass YAML guards; attach runners only after moving to private scope.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.repository.private == true &&
+      needs.plan.outputs.has_vm == 'true'
     # Single-use disposable VM runners (registered --ephemeral, reverted to a clean snapshot per job, interactive
     # desktop session, approved marker in C:\ProgramData\RoofSpanDisposableVM\approved.json). See windows/BUILD.md.
     runs-on: [self-hosted, Windows, roofspan-disposable-vm]
