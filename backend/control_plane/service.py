@@ -599,6 +599,42 @@ async def stripe_create_checkout(db: AsyncSession, *, company_id: str, seats: in
     return {"url": url, "company_id": company_id, "seats": provider._clamp(want)}
 
 
+def installation_billing_return_url() -> str:
+    """Hosted page Stripe sends the browser back to after an Office-initiated session. It lives on the Control
+    Plane (HTTPS), because live-mode Stripe refuses redirects to an Office PC's http://localhost."""
+    from urllib.parse import urlparse
+    base = config.APP_BASE_URL.rstrip("/")
+    u = urlparse(base)
+    if u.scheme != "https" and (u.hostname or "") not in ("localhost", "127.0.0.1"):
+        raise CPError(503, "Control Plane APP_BASE_URL must be an https URL for Stripe billing redirects")
+    return f"{base}/api/control-plane/billing/return"
+
+
+async def installation_billing_session(db: AsyncSession, *, company_id: str) -> dict:
+    """Billing link for a signed Office installation: the Stripe customer portal once the company has a Stripe
+    customer, otherwise Stripe Checkout to start the subscription. Never a mock."""
+    from control_plane import billing as cp_billing
+    if config.BILLING_MODE != "stripe":
+        raise CPError(503, "Billing is not enabled on the RoofSpan Control Plane")
+    sub = await _get_sub(db, company_id)
+    provider = cp_billing.get_stripe_provider()
+    ret = installation_billing_return_url()
+    try:
+        if sub.provider_customer_id:
+            kind = "portal"
+            url = provider.create_portal_session(sub.provider_customer_id, return_to=f"{ret}?result=portal")
+        else:
+            kind = "checkout"
+            url = provider.create_checkout_session(
+                company_id, max(config.MIN_SEATS, sub.seats),
+                success_url=f"{ret}?result=success&session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"{ret}?result=cancel")
+    except cp_billing.BillingAuthError as e:
+        raise CPError(400, str(e))
+    await audit(db, actor="installation", action=f"billing.stripe.{kind}", entity_type="company", entity_id=company_id)
+    return {"url": url, "kind": kind, "company_id": company_id}
+
+
 async def stripe_update_seats(db: AsyncSession, *, company_id: str, seats: int) -> dict:
     from control_plane import billing as cp_billing
     sub = await _get_sub(db, company_id)

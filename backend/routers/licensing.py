@@ -96,55 +96,56 @@ async def refresh_subscription(request: Request, user: User = Depends(require_ro
                             state=result.get("state"), error=result.get("error"))
 
 
-@router.get("/billing/portal-url", response_model=BillingLinkOut)
-async def billing_portal(user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def _stripe_billing_link(db: AsyncSession, company_id: str, origin: str | None) -> BillingLinkOut:
+    """Stripe customer portal when the company has a Stripe customer, otherwise Checkout to subscribe.
+
+    A server that holds the Stripe keys IS the Control Plane and talks to Stripe directly. Every other
+    installation (RoofSpan Office on Windows) asks the hosted Control Plane over a signed request."""
+    from control_plane import config as cp_config
+    if not cp_config.STRIPE_SECRET_KEY:
+        from licensing import pairing_client
+        try:
+            r = await pairing_client.billing_session(db)
+        except pairing_client.ControlPlaneError as e:
+            return BillingLinkOut(configured=False, provider="stripe", url=None, message=str(e))
+        return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message=r.get("kind") or "ok")
+    from control_plane.db import SessionLocal as CPSession
+    from control_plane import service as cp_service
+    try:
+        async with CPSession() as cpdb:
+            sub = await cp_service._get_sub(cpdb, company_id)
+            if sub.provider_customer_id:
+                r = await cp_service.stripe_portal(cpdb, company_id=company_id, return_url=origin or cp_config.APP_BASE_URL)
+                return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="portal")
+            r = await cp_service.stripe_create_checkout(cpdb, company_id=company_id, seats=None, origin_url=origin)
+            return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="checkout")
+    except cp_service.CPError as e:
+        return BillingLinkOut(configured=False, provider="stripe", url=None, message=e.detail)
+
+
+async def _billing_link(request: Request, db: AsyncSession, kind: str) -> BillingLinkOut:
     from control_plane import billing as cp_billing, config as cp_config
     _, company_id = await service.get_installation(db)
-    if cp_config.BILLING_MODE == "stripe":
-        from control_plane.db import SessionLocal as CPSession
-        from control_plane import service as cp_service
-        try:
-            async with CPSession() as cpdb:
-                r = await cp_service.stripe_portal(cpdb, company_id=company_id, return_url=cp_config.APP_BASE_URL)
-            return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="ok")
-        except cp_service.CPError as e:
-            return BillingLinkOut(configured=False, provider="stripe", url=None, message=e.detail)
-    provider = cp_billing.get_provider()
+    if cp_config.BILLING_MODE not in ("mock", "stub", "revenuecat"):
+        return await _stripe_billing_link(db, company_id, request.headers.get("origin") or None)
+    provider = cp_billing.get_provider()  # explicitly configured non-Stripe modes (tests / legacy)
     if provider.name == "stub":
         return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
     try:
-        url = await provider.portal_url(company_id)
+        url = provider.checkout_url(company_id) if kind == "checkout" else await provider.portal_url(company_id)
         return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
     except cp_billing.BillingAuthError as e:
         return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
+
+
+@router.get("/billing/portal-url", response_model=BillingLinkOut)
+async def billing_portal(request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return await _billing_link(request, db, "portal")
 
 
 @router.post("/billing/checkout", response_model=BillingLinkOut)
 async def billing_checkout(request: Request, user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
-    from control_plane import billing as cp_billing, config as cp_config
-    _, company_id = await service.get_installation(db)
-    if cp_config.BILLING_MODE == "stripe":
-        from control_plane.db import SessionLocal as CPSession
-        from control_plane import service as cp_service
-        origin = None
-        try:
-            origin = str(request.headers.get("origin") or "") or None
-        except Exception:
-            origin = None
-        try:
-            async with CPSession() as cpdb:
-                r = await cp_service.stripe_create_checkout(cpdb, company_id=company_id, seats=None, origin_url=origin)
-            return BillingLinkOut(configured=True, provider="stripe", url=r["url"], message="ok")
-        except cp_service.CPError as e:
-            return BillingLinkOut(configured=False, provider="stripe", url=None, message=e.detail)
-    provider = cp_billing.get_provider()
-    if provider.name == "stub":
-        return BillingLinkOut(configured=False, provider=None, url=None, message="Billing provider not configured")
-    try:
-        url = provider.checkout_url(company_id)
-        return BillingLinkOut(configured=True, provider=provider.name, url=url, message="ok")
-    except cp_billing.BillingAuthError as e:
-        return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
+    return await _billing_link(request, db, "checkout")
 
 
 @router.post("/billing/add-seats", response_model=BillingLinkOut)

@@ -4,7 +4,7 @@ RevenueCat + Stripe is the first provider. Provider-specific strings never leak 
 everything is normalized to RoofSpan states (ACTIVE/GRACE/SUSPENDED/CANCELLED) here. Helcim can be
 added later by implementing the same interface. No raw card data is ever handled or stored.
 
-DEV: `mock` provider (default) makes the webhook/checkout/portal flow testable with no external
+DEV: `mock` provider (only when BILLING_MODE=mock is set explicitly) makes the webhook/checkout/portal flow testable with no external
 account. `revenuecat` provider requires HUMAN REQUIRED credentials (see config).
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from urllib.parse import quote
 # RoofSpan normalized states
 ACTIVE, GRACE, SUSPENDED, CANCELLED = "ACTIVE", "GRACE", "SUSPENDED", "CANCELLED"
 
-BILLING_MODE = os.environ.get("BILLING_MODE", "mock").strip().lower()  # mock | revenuecat | stub
+BILLING_MODE = os.environ.get("BILLING_MODE", "stripe").strip().lower()  # stripe | mock | revenuecat | stub
 
 # ---- HUMAN REQUIRED (RevenueCat) — dev placeholders; never commit real secrets ----
 REVENUECAT_API_BASE = os.environ.get("REVENUECAT_API_BASE", "https://api.revenuecat.com/v1")
@@ -220,7 +220,8 @@ class StripeBillingProvider(BillingProvider):
         }
 
     # -- checkout / lifecycle --
-    def create_checkout_session(self, company_id: str, seats: int, origin_url: str | None = None) -> str:
+    def create_checkout_session(self, company_id: str, seats: int, origin_url: str | None = None, *,
+                                success_url: str | None = None, cancel_url: str | None = None) -> str:
         seats = self._clamp(seats)
         origin = (origin_url or _cpc.APP_BASE_URL).rstrip("/")
         session = self.stripe.checkout.Session.create(
@@ -232,8 +233,8 @@ class StripeBillingProvider(BillingProvider):
             automatic_tax={"enabled": True},                 # Stripe Tax calculates sales tax by location
             billing_address_collection="required",           # required for Stripe Tax
             tax_id_collection={"enabled": True},             # B2B tax id capture
-            success_url=f"{origin}/admin/subscription?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{origin}/admin/subscription?checkout=cancel",
+            success_url=success_url or f"{origin}/admin/subscription?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=cancel_url or f"{origin}/admin/subscription?checkout=cancel",
         )
         return session.url
 
@@ -280,10 +281,10 @@ class StripeBillingProvider(BillingProvider):
         # Portal requires a Stripe customer id; resolved at the service layer by the CP subscription row.
         raise BillingAuthError("use create_portal_session(customer_id) for Stripe")
 
-    def create_portal_session(self, customer_id: str, return_url: str | None = None) -> str:
+    def create_portal_session(self, customer_id: str, return_url: str | None = None, *, return_to: str | None = None) -> str:
         origin = (return_url or _cpc.APP_BASE_URL).rstrip("/")
         s = self.stripe.billing_portal.Session.create(
-            customer=customer_id, return_url=f"{origin}/admin/subscription")
+            customer=customer_id, return_url=return_to or f"{origin}/admin/subscription")
         return s.url
 
     def verify_and_parse_webhook(self, headers, body, payload):
@@ -347,7 +348,9 @@ def get_provider() -> BillingProvider:
         return RevenueCatStripeProvider()
     if mode == "stub":
         return StubBillingProvider()
-    return MockBillingProvider()
+    if mode == "mock":  # explicit opt-in for local tests only
+        return MockBillingProvider()
+    return StripeBillingProvider()
 
 
 def get_stripe_provider() -> "StripeBillingProvider":

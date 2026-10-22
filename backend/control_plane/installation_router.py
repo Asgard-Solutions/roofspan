@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -230,3 +231,37 @@ async def revoke_own_device(
         )
 
     return {"ok": True, "device_id": str(device.id), "status": "REVOKED"}
+
+
+@router.post("/installation/billing/session")
+async def installation_billing_session(
+    request: Request,
+    db: AsyncSession = Depends(get_cp_db),
+):
+    """Signed Office installation -> Stripe customer portal (or Checkout when it has never subscribed)."""
+    installation = await _authed_installation(request, db)
+    try:
+        return await service.installation_billing_session(db, company_id=str(installation.company_id))
+    except service.CPError as exc:
+        raise _cp_error(exc) from exc
+
+
+_RETURN_MESSAGES = {
+    "success": ("Subscription started", "Thanks! Your RoofSpan subscription is active."),
+    "cancel": ("Checkout cancelled", "No charge was made."),
+    "portal": ("Billing updated", "Your billing changes have been saved."),
+}
+
+
+@router.get("/billing/return", response_class=HTMLResponse)
+async def billing_return(result: str = "portal"):
+    """Static landing page after Stripe; the result is looked up, never echoed."""
+    title, msg = _RETURN_MESSAGES.get(result, _RETURN_MESSAGES["portal"])
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset='utf-8'><title>RoofSpan billing</title>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+        "<body style='font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#0f172a'>"
+        f"<h1 data-testid='billing-return-title' style='font-size:1.5rem'>{title}</h1>"
+        f"<p data-testid='billing-return-message'>{msg}</p>"
+        "<p>You can close this tab and return to RoofSpan Office. Your subscription status updates there "
+        "automatically, or select <b>Refresh</b> on the Subscription page.</p></body></html>")

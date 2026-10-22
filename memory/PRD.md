@@ -2770,3 +2770,10 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - validate job: pip install -r backend/requirements.txt (uvicorn etc.) + setup-node; website test evaluates committed src/config.js in Node with injected NEXT_PUBLIC_* (no .env).
 - Installer matrix: push to main (path-filtered) + PRs into main + v* tags + manual (+ test branch kept).
 - Full Linux suite: 367 passed, 24 skipped (9 Windows-only broker tests).
+
+## 2026-06 — Windows "Manage billing" opened a mock URL (FIXED in code)
+- Root cause: BILLING_MODE defaulted to "mock" and APP_BASE_URL to http://localhost:3000; Windows installs set neither, so the Office backend built `localhost:3000/mock-portal`.
+- Fix: BILLING_MODE default is now "stripe" (mock only when explicitly set). Office backends without Stripe keys (Windows) call the hosted Control Plane via signed `POST /api/control-plane/installation/billing/session` → Stripe customer portal if the company has a Stripe customer, else Stripe Checkout. Stripe redirects return to the HTTPS CP page `/api/control-plane/billing/return` (live Stripe rejects http://localhost). Office verifies the link is https checkout/billing.stripe.com.
+- Tests: backend/tests/test_office_billing_link.py (8) + existing billing/licensing/pairing suites (58) pass. Real Stripe test-mode checkout session created with the CP return URL.
+- Deployment requirement: hosted CP must run BILLING_MODE=stripe with live Stripe keys (claim the managed Stripe account) and an https APP_BASE_URL.
+- Not yet routed through the CP for Windows: Add seats / Cancel buttons (still require local Stripe mode).
