@@ -166,11 +166,14 @@
         <Payload Name="Verify-PostgreSQL.ps1" SourceFile="$(sys.SOURCEFILEDIR)scripts\Verify-PostgreSQL.ps1" />
       </ExePackage>
 
-      <!-- 3a) FRESH install (or same-version repair): the plain MSI, which starts its services itself. -->
+      <!-- util:ProductSearch Result=version reports 0.0.0.0 when no prior MSI exists.
+         Treat that sentinel as ABSENT; otherwise a clean install is routed into the
+         upgrade coordinator, which correctly refuses missing roofspan.env. -->
+    <!-- 3a) FRESH install (or same-version repair): the plain MSI, which starts its services itself. -->
       <MsiPackage Id="RoofSpanOfficeMsi"
                   CacheId="RoofSpanOfficeMsi-$(var.Version)"
                   SourceFile="$(var.MsiPath)" Vital="yes" Compressed="yes"
-                  InstallCondition="NOT RoofSpanOfficeInstalledVersion OR RoofSpanOfficeInstalledVersion = WixBundleVersion" />
+                  InstallCondition="NOT RoofSpanOfficeInstalledVersion OR RoofSpanOfficeInstalledVersion = v0.0.0.0 OR RoofSpanOfficeInstalledVersion = WixBundleVersion" />
 
       <!-- 3b) UPGRADE of an older installed version: roofspan-upgrade.exe owns the whole transaction
            (preflight, verified backup, msiexec with services held, separate migration, health checks,
@@ -181,7 +184,7 @@
                   SourceFile="$(var.UpgradeExe)"
                   PerMachine="yes" Vital="yes" Compressed="yes"
                   DetectCondition="RoofSpanCoordinatedVersion = WixBundleVersion"
-                  InstallCondition="RoofSpanOfficeInstalledVersion AND RoofSpanOfficeInstalledVersion &lt; WixBundleVersion"
+                  InstallCondition="RoofSpanOfficeInstalledVersion AND RoofSpanOfficeInstalledVersion &gt; v0.0.0.0 AND RoofSpanOfficeInstalledVersion &lt; WixBundleVersion"
                   InstallArguments="run --msi &quot;[WixBundleExecutePackageCacheFolder]RoofSpanOffice-coordinated.msi&quot; --previous-msi &quot;[PREVIOUSMSI]&quot;"
                   UninstallArguments="uninstall">
         <Payload Name="RoofSpanOffice-coordinated.msi" SourceFile="$(var.MsiPath)" />

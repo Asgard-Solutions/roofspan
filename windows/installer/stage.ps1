@@ -25,8 +25,8 @@ $stageRoot = Resolve-AbsPath $StageDir
 $feDirResolved = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $FrontendDir))
 $shellProject = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\shell\RoofSpanOfficeShell.csproj"))
 
-if (-not (Get-Command yarn -ErrorAction SilentlyContinue)) {
-  throw "yarn not found. Install Node.js LTS + 'corepack enable' (or npm i -g yarn)."
+if (-not (Get-Command yarn.cmd -ErrorAction SilentlyContinue)) {
+  throw "yarn.cmd not found on PATH. Install Node.js LTS and Yarn Classic, or run corepack enable (or npm i -g yarn)."
 }
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
   throw ".NET SDK not found. RoofSpan's native Windows shell must be built with dotnet publish."
@@ -54,13 +54,35 @@ if ($LASTEXITCODE -ne 0) { throw "RoofSpan service executable build failed." }
 # 2) Office frontend production build.
 Push-Location $feDirResolved
 try {
-  yarn install --frozen-lockfile
-  if ($LASTEXITCODE -ne 0) { throw "yarn install failed." }
+  # Keep the frozen lockfile contract. A temporary registry 502/503/504 must not
+  # invalidate an otherwise reproducible build, but dependency/lockfile failures
+  # are never retried or treated as success.
+  $installed = $false
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $yarnLog = Join-Path $stageRoot ("yarn-install-attempt-{0}.log" -f $attempt)
+    # In Windows PowerShell 5.1, yarn.ps1 emitting a harmless warning to stderr
+    # becomes a terminating NativeCommandError when ErrorActionPreference=Stop.
+    # Use yarn.cmd through cmd.exe and merge stderr in cmd before PowerShell sees it.
+    # A real install failure still returns yarn.cmd's exit code.
+    & $env:ComSpec /d /s /c 'yarn.cmd install --frozen-lockfile --network-timeout 180000 --network-concurrency 4 2>&1' |
+        Tee-Object -FilePath $yarnLog
+    $yarnRc = $LASTEXITCODE
+    if ($yarnRc -eq 0) { $installed = $true; break }
+    $text = Get-Content -LiteralPath $yarnLog -Raw -ErrorAction SilentlyContinue
+    $transient = $text -match '(?i)\b(502|503|504)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up'
+    if (-not $transient -or $attempt -eq 3) {
+      throw "yarn install failed (exit $yarnRc, attempt $attempt of 3). See $yarnLog"
+    }
+    Write-Warning "Transient Yarn registry/network error; retrying frozen install ($attempt of 3)."
+    Start-Sleep -Seconds (5 * $attempt)
+  }
+  if (-not $installed) { throw "yarn install did not succeed." }
   # Desktop UI is served by its own local backend on the same origin (127.0.0.1:8001),
   # so the frontend must use relative /api URLs. Force an empty backend base to override
   # any stray .env and prevent an "undefined/api" base that renders a blank page.
   $env:REACT_APP_BACKEND_URL = ""
-  yarn build
+  # Apply the same PowerShell 5.1 stderr handling to the production frontend build.
+  & $env:ComSpec /d /s /c 'yarn.cmd build 2>&1'
   if ($LASTEXITCODE -ne 0) { throw "frontend yarn build failed." }
   if (-not (Test-Path ".\build\index.html")) { throw "frontend build did not produce build\index.html" }
   Copy-Item ".\build\*" $frontend -Recurse -Force
