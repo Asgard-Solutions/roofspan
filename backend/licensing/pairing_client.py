@@ -324,3 +324,20 @@ async def revoke_device(db: AsyncSession, device_id: str) -> dict:
     )
     _raise_for_cp(response, "Revoke device")
     return response.json()
+
+
+_STRIPE_HOSTS = ("checkout.stripe.com", "billing.stripe.com")
+
+
+async def billing_session(db: AsyncSession) -> dict:
+    """Ask the hosted Control Plane (which alone holds the Stripe keys) for this company's billing link."""
+    installation_id, private_key, base = await ensure_registered(db)
+    response = await _request_signed(
+        "POST", base, "/installation/billing/session", installation_id, private_key
+    )
+    _raise_for_cp(response, "Open billing")
+    data = response.json()
+    url = urlparse(str(data.get("url") or ""))
+    if url.scheme != "https" or (url.hostname or "").lower() not in _STRIPE_HOSTS:
+        raise ControlPlaneError("Control Plane returned a billing link that is not a Stripe page.")
+    return {"url": data["url"], "kind": data.get("kind")}

@@ -67,7 +67,7 @@ RELAY_ENDPOINT = (
 ).strip().rstrip("/")
 PROTOCOL_VERSION = os.environ.get("ROOFSPAN_PROTOCOL_VERSION", "1")
 PAIRING_TTL_SECONDS = int(os.environ.get("PAIRING_TTL_SECONDS", "300"))
-BILLING_MODE = os.environ.get("BILLING_MODE", "mock").strip().lower()
+BILLING_MODE = os.environ.get("BILLING_MODE", "stripe").strip().lower()
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_SEAT_LOOKUP_KEY = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat_monthly")
