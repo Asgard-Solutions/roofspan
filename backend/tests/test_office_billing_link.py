@@ -146,3 +146,21 @@ def test_billing_return_page_never_echoes_input():
     html = asyncio.run(billing_return("<script>alert(1)</script>")).body.decode()
     assert "<script>" not in html and "Billing updated" in html
     assert "Subscription started" in asyncio.run(billing_return("success")).body.decode()
+
+
+def test_stripe_checkout_allows_promotion_codes(monkeypatch):
+    captured = {}
+
+    class _Sessions:
+        @staticmethod
+        def create(**kw):
+            captured.update(kw)
+            return SimpleNamespace(url="https://checkout.stripe.com/c/pay/cs_test_promo")
+
+    p = cp_billing.StripeBillingProvider.__new__(cp_billing.StripeBillingProvider)
+    p.stripe = SimpleNamespace(checkout=SimpleNamespace(Session=_Sessions))
+    monkeypatch.setattr(p, "_seat_price_id", lambda: "price_seat", raising=False)
+    monkeypatch.setattr(p, "_clamp", lambda s: s, raising=False)
+    assert p.create_checkout_session(CID, 5, "https://app.roofspan.io").startswith("https://checkout.stripe.com/")
+    assert captured["allow_promotion_codes"] is True and captured["mode"] == "subscription"
+    assert "discounts" not in captured  # Stripe rejects discounts together with allow_promotion_codes
