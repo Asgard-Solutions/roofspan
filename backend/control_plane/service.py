@@ -599,18 +599,20 @@ async def stripe_create_checkout(db: AsyncSession, *, company_id: str, seats: in
     return {"url": url, "company_id": company_id, "seats": provider._clamp(want)}
 
 
-def installation_billing_return_url() -> str:
-    """Hosted page Stripe sends the browser back to after an Office-initiated session. It lives on the Control
-    Plane (HTTPS), because live-mode Stripe refuses redirects to an Office PC's http://localhost."""
+def installation_billing_return_url(public_origin: str) -> str:
+    """Page Stripe sends the browser back to after an Office-initiated session: served by THIS Control Plane at
+    the origin the installation reached it on (e.g. https://cp.roofspan.io). APP_BASE_URL is the public website,
+    which does not serve /api/control-plane. Live-mode Stripe also refuses http redirects."""
     from urllib.parse import urlparse
-    base = config.APP_BASE_URL.rstrip("/")
-    u = urlparse(base)
-    if u.scheme != "https" and (u.hostname or "") not in ("localhost", "127.0.0.1"):
-        raise CPError(503, "Control Plane APP_BASE_URL must be an https URL for Stripe billing redirects")
-    return f"{base}/api/control-plane/billing/return"
+    u = urlparse(public_origin)
+    host = (u.hostname or "").lower()
+    local = host in ("localhost", "127.0.0.1")
+    if (u.scheme != "https" and not local) or not host or u.path not in ("", "/") or u.query or u.username:
+        raise CPError(503, "The Control Plane must be reached over https for Stripe billing redirects")
+    return f"{u.scheme}://{u.netloc}/api/control-plane/billing/return"
 
 
-async def installation_billing_session(db: AsyncSession, *, company_id: str) -> dict:
+async def installation_billing_session(db: AsyncSession, *, company_id: str, public_origin: str) -> dict:
     """Billing link for a signed Office installation: the Stripe customer portal once the company has a Stripe
     customer, otherwise Stripe Checkout to start the subscription. Never a mock."""
     from control_plane import billing as cp_billing
@@ -618,7 +620,7 @@ async def installation_billing_session(db: AsyncSession, *, company_id: str) -> 
         raise CPError(503, "Billing is not enabled on the RoofSpan Control Plane")
     sub = await _get_sub(db, company_id)
     provider = cp_billing.get_stripe_provider()
-    ret = installation_billing_return_url()
+    ret = installation_billing_return_url(public_origin)
     try:
         if sub.provider_customer_id:
             kind = "portal"
