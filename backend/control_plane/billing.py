@@ -233,6 +233,7 @@ class StripeBillingProvider(BillingProvider):
             automatic_tax={"enabled": True},                 # Stripe Tax calculates sales tax by location
             billing_address_collection="required",           # required for Stripe Tax
             tax_id_collection={"enabled": True},             # B2B tax id capture
+            allow_promotion_codes=True,                      # customer-entered codes; discount carries to the subscription
             success_url=success_url or f"{origin}/admin/subscription?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=cancel_url or f"{origin}/admin/subscription?checkout=cancel",
         )
