@@ -2778,3 +2778,4 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Deployment requirement: hosted CP must run BILLING_MODE=stripe with live Stripe keys (claim the managed Stripe account) and an https APP_BASE_URL.
 - Not yet routed through the CP for Windows: Add seats / Cancel buttons (still require local Stripe mode).
 - 2026-06: Stripe Checkout now sets allow_promotion_codes=True (codes created in the Stripe dashboard; discount applies to the subscription). Verified on a real test-mode session. Live deploy still pending user confirmation (free deployment offer).
+- 2026-06: Post-checkout 404 fixed: live APP_BASE_URL is the Next.js website (www.roofspan.io), which has no /api/control-plane. Return URL now uses the origin the installation reached the CP on (X-Forwarded-Proto/Host, https required), e.g. https://cp.roofspan.io/api/control-plane/billing/return; trailing-slash variant served directly. Needs a deploy to take effect.

@@ -33,7 +33,7 @@ class FakeStripe:
         return "https://checkout.stripe.com/c/pay/cs_test_123"
 
 
-def _cp(monkeypatch, sub, base="https://cp.roofspan.io", mode="stripe"):
+def _cp(monkeypatch, sub, base="https://www.roofspan.io", mode="stripe"):
     fake = FakeStripe()
     monkeypatch.setattr(cp_config, "BILLING_MODE", mode)
     monkeypatch.setattr(cp_config, "APP_BASE_URL", base)
@@ -51,18 +51,19 @@ def _cp(monkeypatch, sub, base="https://cp.roofspan.io", mode="stripe"):
 
 
 CID = "a7d0738a-e1f7-4f98-a16c-00975895dbb4"
+ORIGIN = "https://cp.roofspan.io"
 
 
 def test_subscribed_company_gets_stripe_customer_portal(monkeypatch):
     fake = _cp(monkeypatch, SimpleNamespace(provider_customer_id="cus_1", seats=7))
-    r = asyncio.run(cp_service.installation_billing_session(None, company_id=CID))
+    r = asyncio.run(cp_service.installation_billing_session(None, company_id=CID, public_origin=ORIGIN))
     assert r["kind"] == "portal" and r["url"].startswith("https://billing.stripe.com/")
     assert fake.calls[0] == ("portal", "cus_1", "https://cp.roofspan.io/api/control-plane/billing/return?result=portal")
 
 
 def test_never_subscribed_company_is_sent_to_stripe_checkout(monkeypatch):
     fake = _cp(monkeypatch, SimpleNamespace(provider_customer_id=None, seats=2))
-    r = asyncio.run(cp_service.installation_billing_session(None, company_id=CID))
+    r = asyncio.run(cp_service.installation_billing_session(None, company_id=CID, public_origin=ORIGIN))
     assert r["kind"] == "checkout" and r["url"].startswith("https://checkout.stripe.com/")
     _, company, seats, success, cancel = fake.calls[0]
     assert company == CID and seats == cp_config.MIN_SEATS
@@ -73,12 +74,27 @@ def test_never_subscribed_company_is_sent_to_stripe_checkout(monkeypatch):
 def test_control_plane_refuses_mock_mode_and_plain_http_redirects(monkeypatch):
     _cp(monkeypatch, SimpleNamespace(provider_customer_id="cus_1", seats=5), mode="mock")
     with pytest.raises(cp_service.CPError) as e:
-        asyncio.run(cp_service.installation_billing_session(None, company_id=CID))
+        asyncio.run(cp_service.installation_billing_session(None, company_id=CID, public_origin=ORIGIN))
     assert e.value.status == 503
-    _cp(monkeypatch, SimpleNamespace(provider_customer_id="cus_1", seats=5), base="http://cp.example.com")
-    with pytest.raises(cp_service.CPError) as e:
-        asyncio.run(cp_service.installation_billing_session(None, company_id=CID))
-    assert "https" in e.value.detail
+    _cp(monkeypatch, SimpleNamespace(provider_customer_id="cus_1", seats=5))
+    for bad in ("http://cp.example.com", "https://cp.roofspan.io/x?y=1", "https://"):
+        with pytest.raises(cp_service.CPError) as e:
+            asyncio.run(cp_service.installation_billing_session(None, company_id=CID, public_origin=bad))
+        assert "https" in e.value.detail
+
+
+def test_return_url_uses_control_plane_host_not_the_public_website(monkeypatch):
+    """Regression: live APP_BASE_URL is www.roofspan.io (Next.js site) -> /api/control-plane 404'd there."""
+    from control_plane.installation_router import _public_origin
+    fake = _cp(monkeypatch, SimpleNamespace(provider_customer_id=None, seats=5), base="https://www.roofspan.io")
+    req = SimpleNamespace(headers={"x-forwarded-proto": "https", "x-forwarded-host": "cp.roofspan.io",
+                                   "host": "10.0.0.5:8001"}, url=SimpleNamespace(scheme="http", netloc="10.0.0.5:8001"))
+    origin = _public_origin(req)
+    assert origin == "https://cp.roofspan.io"
+    asyncio.run(cp_service.installation_billing_session(None, company_id=CID, public_origin=origin))
+    success = fake.calls[0][3]
+    assert success.startswith("https://cp.roofspan.io/api/control-plane/billing/return?result=success")
+    assert "www.roofspan.io" not in success
 
 
 def test_unset_billing_mode_uses_stripe_not_mock(monkeypatch):

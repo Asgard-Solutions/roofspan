@@ -241,9 +241,17 @@ async def installation_billing_session(
     """Signed Office installation -> Stripe customer portal (or Checkout when it has never subscribed)."""
     installation = await _authed_installation(request, db)
     try:
-        return await service.installation_billing_session(db, company_id=str(installation.company_id))
+        return await service.installation_billing_session(
+            db, company_id=str(installation.company_id), public_origin=_public_origin(request))
     except service.CPError as exc:
         raise _cp_error(exc) from exc
+
+
+def _public_origin(request: Request) -> str:
+    """Origin the caller used to reach this Control Plane (behind the ingress: X-Forwarded-Proto/Host)."""
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    return f"{proto}://{host}"
 
 
 _RETURN_MESSAGES = {
@@ -254,6 +262,7 @@ _RETURN_MESSAGES = {
 
 
 @router.get("/billing/return", response_class=HTMLResponse)
+@router.get("/billing/return/", response_class=HTMLResponse, include_in_schema=False)  # no http:// slash-redirect
 async def billing_return(result: str = "portal"):
     """Static landing page after Stripe; the result is looked up, never echoed."""
     title, msg = _RETURN_MESSAGES.get(result, _RETURN_MESSAGES["portal"])
