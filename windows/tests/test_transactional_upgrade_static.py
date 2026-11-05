@@ -23,3 +23,14 @@ def test_bundle_routes_fresh_installs_to_msi_and_upgrades_to_coordinator():
     assert 'run --msi' in coord and '[PREVIOUSMSI]' in coord and 'UninstallArguments="uninstall"' in coord
     assert BUNDLE.index('Id="PostgreSQLVerify"') < BUNDLE.index('Id="RoofSpanUpgradeCoordinator"')
     assert '<Variable Name="PREVIOUSMSI"' in BUNDLE
+
+
+
+def test_upgrade_coordinator_build_info_does_not_request_uac():
+    """Build-info is read by a PowerShell subprocess, so it must keep stdout redirectable."""
+    spec = (INSTALLER.parent / "winbuild" / "roofspan-upgrade.spec").read_text(encoding="utf-8")
+    entry = (INSTALLER.parent / "winbuild" / "upgrade_entry.py").read_text(encoding="utf-8")
+    assert "uac_admin=False" in spec
+    assert 'if "--build-info" in argv:' in entry
+    assert 'args.cmd in ("run", "resume", "uninstall") and not _is_elevated()' in entry
+    assert 'return 3' in entry
