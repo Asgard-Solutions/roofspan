@@ -66,18 +66,12 @@ async def cp_ready():
 
 @router.post("/activate", response_model=ActivateOut)
 async def activate(payload: ActivateIn, db: AsyncSession = Depends(get_cp_db)):
+    """Legacy alias of /installation/register: same per-identity dedupe, so a company is created only once."""
+    from control_plane.installation_router import register_installation
     try:
-        result = await service.activate(
-            db,
-            company_name=payload.company_name,
-            requested_seats=payload.requested_seats,
-            public_key_pem=payload.installation_public_key,
-            software_version=payload.software_version,
-            bootstrap_credential=payload.bootstrap_credential,
-        )
-        return ActivateOut(**result)
-    except service.CPError as e:
-        raise _cp_error(e)
+        return await register_installation(payload, db)
+    except HTTPException:
+        raise
     except Exception as e:
         # Full traceback is server-side only. Never leak raw SQLAlchemy/PostgreSQL details to Office.
         log.error("Control Plane activation failed: %s\n%s", e, traceback.format_exc())
