@@ -1,0 +1,42 @@
+{
+  "summary": "Company recovery / same-company detection (C6). Backend: the existing test_company_recovery.py and test_company_created_once.py pass 10/10. I added test_company_recovery_extra.py with 11 tests: 10 pass and 1 fails, and the failure is a real race condition. Verified working: recovery-code format XXXXX-XXXXX-XXXXX-XXXXX (no 0/O/1/I); same name+phone+address with a new key returns 409 company_exists; a different address creates a new company; precheck returns true/false, and 401 with a bad credential; recover returns 404 for a wrong code, 200 for the right code typed in lower case with spaces, keeps the same company_id with a new installation_id, the old PC gets 403 and retries are idempotent; recover returns 401 for a bad credential and 422 for a too-short code; using a key that belongs to another active company returns 409; signed recovery-code and company endpoints work and return 401 unsigned; a blank company name returns 422; admin lookup works by name and by id, and returns 401 with no header or a wrong one; legacy /activate and /installation/register give the same company_id, also concurrently; setup recover verify/backups/restore-folder return 409. Office GET /api/recovery-code returns 403 for sales and 503 'Read recovery code failed: Not Found' for the owner, which is expected because the production CP is not deployed yet. Frontend: the owner sees the recovery-code card on Settings > Company Profile in the expected error state, and Try again shows loading then the error again. A sales user does not see the card.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/control-plane/installation/register", "issue": "Race condition creates duplicate companies. When 6 NEW keys register the same name+phone+address at the same time, 2 companies are created ([409,200,409,200,409,409]); this happened in 2 of 3 runs. The advisory lock is keyed on the public key, so different keys never wait for each other, and companies.match_key has only a non-unique index. The user explicitly asked for a DB rule preventing duplicates.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/control-plane/installation/recover", "issue": "Bypasses an admin revoke. After POST /installations/{id}/revoke, recovering with the company's code on a new key returns 200 with a new ACTIVE installation and entitlement. The code also forces license_row.status='ACTIVE', so a suspended or revoked license is silently reactivated. Only Company.status is checked."},
+      {"endpoint": "POST /api/control-plane/installation/precheck, /recover", "issue": "No rate limiting. The bootstrap credential ships inside Office, so anyone can check whether a company exists by name+phone+address, and can guess recovery codes without limit. The codes carry 100 bits of entropy, so guessing is low risk, but throttling or audit is advisable."},
+      {"endpoint": "GET /api/recovery-code (Office)", "issue": "The raw CP error reaches the user: 'Read recovery code failed: Not Found.' The card then says 'You can also view it later in Admin → Settings → Company' even when the user is already on that page."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Settings > Company Profile", "issues": ["The recovery card error text is a technical message ('Read recovery code failed: Not Found'). Show a friendly message instead, such as 'Couldn't reach RoofSpan right now'.", "The text 'view it later in Admin → Settings → Company' is redundant on the Settings page itself. Hide it there, for example via a prop."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_company_recovery.py", "/app/backend/tests/test_company_created_once.py", "/app/backend/tests/test_company_recovery_extra.py", "/app/test_reports/pytest/pytest_results_116.xml"],
+  "action_items": [
+    "Make company dedupe race-safe. Add a partial UNIQUE index on companies(match_key) WHERE status='ACTIVE' AND match_key IS NOT NULL, plus an Alembic migration that handles existing duplicates. Also take an advisory lock on match_key in register, and catch the IntegrityError and turn it into 409 company_exists.",
+    "In /installation/recover: refuse (403) when the company's license or installations were admin-REVOKED or the subscription is SUSPENDED, rather than force-setting license status to ACTIVE. At minimum, only change the license's installation_id.",
+    "Consider rate limiting or audit logging on /installation/precheck and /installation/recover.",
+    "Make the RecoveryCodeCard error text friendly, and hide the 'view it later in Settings' hint when the card is shown inside Settings.",
+    "Update /app/memory/test_credentials.md: sales@example.com / SalesRS#2026 does NOT exist in the users table (it is missing from the DB, probably because a backup was restored). sales_bk@example.com / SalesBk#2026 works."
+  ],
+  "critical_code_review_comments": [
+    "installation_router.register_installation: the match_key check and the company insert are not protected against concurrent first registrations with different keys. There is no DB unique constraint on match_key.",
+    "installation_router.recover_installation sets license_row.status='ACTIVE' unconditionally. That reactivates licenses an operator disabled.",
+    "installation_company / installation_recovery_code rely on service.audit() to commit. That works, but the commit is implicit and fragile: if the audit call moves, the change silently isn't saved.",
+    "admin_company_lookup generates and persists a recovery code as a side effect of a GET for pre-C6 companies. This is acceptable but worth documenting."
+  ],
+  "updated_files": ["/app/backend/tests/test_company_recovery_extra.py"],
+  "success_rate": {"backend": "95% (20/21; 1 real race-condition failure)", "frontend": "100%"},
+  "test_credentials": "Owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026 works. sales@example.com / SalesRS#2026 does NOT exist (401); sales_bk@example.com / SalesBk#2026 was used instead.",
+  "seed_data_creation": "The tests created many TEST 'Acme Roofing <hex>' companies and installations in the Control Plane Postgres DB (no delete API exists). One was admin-revoked during the revoke test. No Office data was changed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && REACT_APP_BACKEND_URL=... python -m pytest tests/test_company_recovery*.py tests/test_company_created_once.py -p no:cacheprovider. test_concurrent_same_company_different_keys_creates_one is flaky until match_key becomes unique; it fails about 2 times in 3. The Setup restore UI can't be tested because users exist. The Office talks to production cp.roofspan.io, so the owner card shows the error state.",
+  "rca of the issue": "Duplicate companies: register serializes on pg_advisory_xact_lock(hash(public_key)). Two different new PCs hold different locks, both SELECT match_key and find nothing, and both INSERT a Company. ix_companies_match_key is non-unique, so the DB accepts both rows. Fix: add a unique partial index on match_key plus a match_key advisory lock, and map the IntegrityError to 409."
+}

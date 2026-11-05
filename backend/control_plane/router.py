@@ -66,18 +66,12 @@ async def cp_ready():
 
 @router.post("/activate", response_model=ActivateOut)
 async def activate(payload: ActivateIn, db: AsyncSession = Depends(get_cp_db)):
+    """Legacy alias of /installation/register: same per-identity dedupe, so a company is created only once."""
+    from control_plane.installation_router import register_installation
     try:
-        result = await service.activate(
-            db,
-            company_name=payload.company_name,
-            requested_seats=payload.requested_seats,
-            public_key_pem=payload.installation_public_key,
-            software_version=payload.software_version,
-            bootstrap_credential=payload.bootstrap_credential,
-        )
-        return ActivateOut(**result)
-    except service.CPError as e:
-        raise _cp_error(e)
+        return await register_installation(payload, db)
+    except HTTPException:
+        raise
     except Exception as e:
         # Full traceback is server-side only. Never leak raw SQLAlchemy/PostgreSQL details to Office.
         log.error("Control Plane activation failed: %s\n%s", e, traceback.format_exc())
@@ -138,6 +132,35 @@ async def version_policy(db: AsyncSession = Depends(get_cp_db)):
 
 
 # ---------------- admin/dev ----------------
+
+@router.get("/admin/companies/lookup")
+async def admin_company_lookup(
+    q: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
+    """RoofSpan staff: find a company by (part of) its name, phone or address, with its recovery code."""
+    import uuid as _uuid
+    from sqlalchemy import or_, select
+    from control_plane import recovery
+    from control_plane.models import Company
+    term = f"%{q.strip()}%"
+    conds = [Company.name.ilike(term), Company.phone.ilike(term), Company.address.ilike(term)]
+    try:
+        conds.append(Company.id == _uuid.UUID(q.strip()))
+    except ValueError:
+        pass
+    rows = (await db.execute(select(Company).where(or_(*conds)).order_by(Company.created_at.desc()).limit(25))).scalars().all()
+    out = []
+    for c in rows:
+        code = recovery.reveal_code(c) or recovery.assign_code(c)
+        out.append({"company_id": str(c.id), "name": c.name, "phone": c.phone, "address": c.address,
+                    "status": c.status, "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "recovery_code": code})
+    await service.audit(db, actor="admin", action="company.recovery_code.view", entity_type="company",
+                        entity_id=None, detail={"query": q, "results": [o["company_id"] for o in out]})
+    return {"companies": out}
+
 
 @router.post("/installations/{installation_id}/revoke")
 async def revoke(

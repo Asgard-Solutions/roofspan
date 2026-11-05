@@ -43,6 +43,7 @@ REQUIRED_COLUMNS = {
     }),
     "mobile_devices": frozenset({"credential_hash", "expected_user_id", "expected_user_label"}),
     "pairing_tokens": frozenset({"expected_user_id", "expected_user_label"}),
+    "companies": frozenset({"phone", "address", "match_key", "recovery_code_hash", "recovery_code_enc"}),
 }
 REV_BASELINE = "5263a6bf173f"
 REV_BILLING_EVENTS = "c716e38cdfa3"
@@ -51,6 +52,7 @@ REV_PAIRING_TABLES = "8d6a0d7b8949"
 REV_PROVIDER_SUBSCRIPTION = "a1c4f9d2e7b3"
 REV_DEVICE_CREDENTIAL = "b2d7e1f4a9c6"
 REV_USER_BINDING = "e1f2a3b4c5d6"
+REV_COMPANY_RECOVERY = "f3a9c1d2b7e4"
 BASELINE_TABLES = frozenset({
     "companies", "cp_audit_logs", "entitlement_issuances", "request_nonces", "signing_keys",
     "version_policy", "installations", "licenses", "subscriptions",
@@ -283,6 +285,12 @@ def _exact_known_revision(state: dict) -> str | None:
     binding_columns = {"expected_user_id", "expected_user_label"}
     mobile_bindings = binding_columns & columns.get("mobile_devices", set())
     token_bindings = binding_columns & columns.get("pairing_tokens", set())
+    recovery_columns = REQUIRED_COLUMNS["companies"] & columns.get("companies", set())
+    if recovery_columns:
+        if (recovery_columns != REQUIRED_COLUMNS["companies"]
+                or not (mobile_bindings == binding_columns and token_bindings == binding_columns)):
+            return None
+        return REV_COMPANY_RECOVERY
 
     if "billing_events" not in tables:
         if (present_subscription_fields or present_pairing_tables or provider_present

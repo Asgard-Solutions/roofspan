@@ -4,7 +4,9 @@ Public (unauthenticated) by necessity: on a fresh database nobody can sign in ye
 guarded by a strict "zero users" check and FAILS CLOSED the moment any user exists, so it can never
 be used to create a second privileged account or overwrite an existing install.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+import os
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,9 +41,17 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/initialize", response_model=TokenResponse)
-async def initialize(payload: SetupInitializeRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def initialize(payload: SetupInitializeRequest, request: Request, background: BackgroundTasks,
+                     db: AsyncSession = Depends(get_db)):
     if (await _user_count(db)) > 0:
         raise HTTPException(status_code=409, detail="Setup has already been completed on this installation.")
+    from licensing import pairing_client
+    if await pairing_client.company_already_registered(
+            {"name": payload.company.name, "phone": payload.company.phone, "address": payload.company.address}):
+        raise HTTPException(status_code=409, detail={
+            "code": "company_exists",
+            "message": "This company is already registered with RoofSpan. Choose 'Restore my company' and "
+                       "enter your company recovery code."})
 
     email = payload.owner_email.lower().strip()
     owner = User(
@@ -70,6 +80,7 @@ async def initialize(payload: SetupInitializeRequest, request: Request, db: Asyn
 
     await log_action(db, user=owner, action="setup.initialize", entity_type="user", entity_id=owner.id, request=request)
     await db.commit()
+    background.add_task(pairing_client.sync_company_profile_in_background, True)  # register with the details just entered
 
     return TokenResponse(
         access_token=token,
@@ -79,3 +90,119 @@ async def initialize(payload: SetupInitializeRequest, request: Request, db: Asyn
             role=owner.role, is_active=owner.is_active, created_at=owner.created_at,
         ),
     )
+
+
+# ---------------- Restore an existing company on a new / reinstalled PC ----------------
+# Same zero-users guard as /initialize. The recovery code proves the company; the Control Plane moves the
+# company to THIS PC (its previous PC is disconnected) and the owner then imports their last backup.
+from pydantic import BaseModel, Field  # noqa: E402
+from fastapi import File, UploadFile  # noqa: E402
+
+RECOVERY_KEY = "setup_recovery"
+
+
+class RecoverVerifyIn(BaseModel):
+    recovery_code: str = Field(min_length=8, max_length=64)
+
+
+class RecoverFolderIn(BaseModel):
+    folder: str = Field(min_length=1, max_length=1024)
+
+
+class RecoverRestoreIn(RecoverFolderIn):
+    filename: str = Field(min_length=1, max_length=255)
+
+
+async def _require_fresh(db: AsyncSession) -> None:
+    if (await _user_count(db)) > 0:
+        raise HTTPException(status_code=409, detail="Setup has already been completed on this installation.")
+
+
+async def _verified_recovery() -> dict:
+    from db import SessionLocal
+    async with SessionLocal() as db:
+        await _require_fresh(db)
+        row = (await db.execute(select(AppConfig).where(AppConfig.key == RECOVERY_KEY))).scalar_one_or_none()
+        if not (row and isinstance(row.value, dict) and row.value.get("installation_id")):
+            raise HTTPException(status_code=403, detail="Enter your company recovery code first.")
+        return dict(row.value)
+
+
+@router.post("/recover/verify")
+async def recover_verify(payload: RecoverVerifyIn, db: AsyncSession = Depends(get_db)):
+    from licensing import pairing_client
+    await _require_fresh(db)
+    try:
+        data = await pairing_client.recover_company(db, payload.recovery_code)
+    except pairing_client.ControlPlaneError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    keep = {k: data.get(k) for k in ("installation_id", "company_id", "company_name", "company_phone", "company_address")}
+    keep["base"] = pairing_client.control_plane_base()
+    row = (await db.execute(select(AppConfig).where(AppConfig.key == RECOVERY_KEY))).scalar_one_or_none()
+    if row:
+        row.value = keep
+    else:
+        db.add(AppConfig(key=RECOVERY_KEY, value=keep))
+    await db.commit()
+    return {"company_name": keep["company_name"], "company_phone": keep["company_phone"],
+            "company_address": keep["company_address"]}
+
+
+@router.post("/recover/backups")
+async def recover_list_backups(payload: RecoverFolderIn):
+    from services import backup as backup_svc
+    await _verified_recovery()
+    listing = backup_svc.list_offsite_backups(payload.folder.strip())
+    if not listing["available"]:
+        raise HTTPException(status_code=400, detail="That folder could not be opened from this computer.")
+    return listing
+
+
+async def _restore_and_reconnect(path: str, rec: dict) -> dict:
+    import logging
+    import traceback
+    from db import SessionLocal, engine
+    from licensing import pairing_client
+    from services import backup as backup_svc
+    try:
+        await engine.dispose()
+        try:
+            await backup_svc.restore_backup(path)
+        finally:
+            await engine.dispose()
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("roofspan").error("setup restore failed: %s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Restore failed: {type(e).__name__}: {e}")
+    async with SessionLocal() as db:  # the backup carries the OLD PC's Control Plane ids: re-point to this PC
+        await pairing_client.save_registration(db, rec, rec["base"])
+        if (await _user_count(db)) == 0:
+            raise HTTPException(status_code=422, detail="That backup has no user accounts, so it cannot be signed in to.")
+        await log_action(db, user=None, action="setup.restore_company", entity_type="company",
+                         entity_id=rec.get("company_id"), detail={"backup": os.path.basename(path)})
+    return {"ok": True, "company_name": rec.get("company_name"),
+            "message": "Your company has been restored. Sign in with your usual RoofSpan email and password."}
+
+
+@router.post("/recover/restore-folder")
+async def recover_restore_folder(payload: RecoverRestoreIn):
+    from services import backup as backup_svc
+    rec = await _verified_recovery()
+    try:
+        path = await backup_svc.stage_offsite_for_restore(payload.filename, payload.folder.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _restore_and_reconnect(path, rec)
+
+
+@router.post("/recover/restore-upload")
+async def recover_restore_upload(file: UploadFile = File(...)):
+    from services import backup as backup_svc
+    rec = await _verified_recovery()
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    try:
+        info = backup_svc.save_upload(file.filename or "upload.dump", data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _restore_and_reconnect(backup_svc.resolve_path(info["filename"]), rec)

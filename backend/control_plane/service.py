@@ -137,12 +137,16 @@ async def _issue_entitlement(db: AsyncSession, *, installation: Installation, li
 # ---------------- activation ----------------
 
 async def activate(db: AsyncSession, *, company_name: str, requested_seats: int, public_key_pem: str,
-                   software_version: str, bootstrap_credential: str) -> dict:
+                   software_version: str, bootstrap_credential: str, company_phone: str = "",
+                   company_address: str = "") -> dict:
+    from control_plane import recovery
     if bootstrap_credential != config.DEV_BOOTSTRAP_SECRET:
         raise CPError(401, "Invalid activation credential")
     seats = max(config.MIN_SEATS, min(config.MAX_SEATS, int(requested_seats)))
 
-    company = Company(name=company_name or "")
+    company = Company(name=company_name or "", phone=company_phone or "", address=company_address or "",
+                      match_key=recovery.match_key(company_name, company_phone, company_address))
+    code = recovery.assign_code(company)
     db.add(company)
     await db.flush()
     installation = Installation(company_id=company.id, public_key_pem=public_key_pem,
@@ -171,6 +175,8 @@ async def activate(db: AsyncSession, *, company_name: str, requested_seats: int,
         "license_id": str(license_row.id),
         "entitlement_jws": token,
         "signing_public_keys": await cp_keys.public_keys(db),
+        "recovery_code": code,
+        "company_name": company_name or "",
     }
 
 

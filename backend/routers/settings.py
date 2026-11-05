@@ -1,7 +1,7 @@
 import math
 
 import httpx
-from fastapi import APIRouter, Depends, Request, HTTPException, Response, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, HTTPException, Response, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -340,9 +340,11 @@ async def get_company(user: User = Depends(get_current_user), db: AsyncSession =
 
 
 @router.put("/company", response_model=CompanyProfile)
-async def update_company(payload: CompanyProfile, request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def update_company(payload: CompanyProfile, request: Request, background: BackgroundTasks, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     await _set_config(db, "company_profile", payload.model_dump())
     await log_action(db, user=user, action="company.update", entity_type="config", entity_id="company_profile", request=request)
+    from licensing import pairing_client
+    background.add_task(pairing_client.sync_company_profile_in_background)  # keep the Control Plane name in sync
     return payload
 
 

@@ -2779,3 +2779,18 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Not yet routed through the CP for Windows: Add seats / Cancel buttons (still require local Stripe mode).
 - 2026-06: Stripe Checkout now sets allow_promotion_codes=True (codes created in the Stripe dashboard; discount applies to the subscription). Verified on a real test-mode session. Live deploy still pending user confirmation (free deployment offer).
 - 2026-06: Post-checkout 404 fixed: live APP_BASE_URL is the Next.js website (www.roofspan.io), which has no /api/control-plane. Return URL now uses the origin the installation reached the CP on (X-Forwarded-Proto/Host, https required), e.g. https://cp.roofspan.io/api/control-plane/billing/return; trailing-slash variant served directly. Needs a deploy to take effect.
+
+## 2026-06 — Control Plane company name = Office setup name (FIXED, preview-verified)
+- Root cause: Office registered with the CP using constant LICENSING_ACTIVATION_COMPANY ("RoofSpan Roofing Co."), and the Relay connector triggers registration at service start — before first-run setup.
+- Fix: ensure_registered refuses until company_profile.name exists and sends it exactly; new signed CP endpoint POST /api/control-plane/installation/company sets the company name; Office syncs on every connection when the name differs (heals placeholder records) and in the background after Settings → Company saves. Legacy HttpControlPlaneClient.activate also uses the setup name.
+- Verified: signed register + rename against preview CP Postgres (exact name stored; blank 422; unsigned 401). Backend tests: pairing/billing/setup/licensing 43 + updated pairing tests pass. Script: /app/memory/scripts/cp_company_check.py
+- Needs: deploy of the CP + rebuilt Windows installer.
+- 2026-06: One company per Office identity: legacy CP POST /activate now aliases /installation/register (advisory lock per public key + reuse), so retries, concurrent calls and either endpoint never create a second company. tests/test_company_created_once.py (live). No DB unique index added (would need migration + Windows schema-fallback changes).
+
+## 2026-06 — Company recovery + duplicate rules (C6) (DONE in preview; needs deploy + new Windows build)
+- CP migration f3a9c1d2b7e4: companies.phone/address/match_key/recovery_code_hash/recovery_code_enc; partial UNIQUE indexes: one ACTIVE installation per identity key (older duplicates -> REPLACED), one ACTIVE company per match_key (name+phone+address normalized).
+- Register: same name+phone+address on a new key -> 409 company_exists (advisory lock per match_key + DB rule). POST /installation/precheck used by Office setup before creating anything.
+- Recovery code (XXXXX-XXXXX-XXXXX-XXXXX) created per company; Office owner sees it after setup and in Settings > Company; staff: GET /api/control-plane/admin/companies/lookup?q=. Stored as sha256 hash + AES-GCM copy (SECRETS_ENCRYPTION_KEY).
+- POST /installation/recover: code -> same company on the new PC's key, previous PCs REPLACED (403 on next check-in); refused if company was admin-REVOKED or license inactive; 10 wrong codes / 15 min per client -> 429; failures audited.
+- Office first-run "Restore my company": /api/setup/recover/verify -> /backups (folder) -> /restore-folder or /restore-upload; after restore the backup's old CP ids are re-pointed to this PC. Only while zero users exist.
+- Tests: tests/test_company_recovery.py (+testing agent's test_company_recovery_extra.py), migrations live tests (CP_RUN_INTEGRATION=1) pass. iteration_116 issues all fixed. Restore wizard UI not e2e-tested (preview has users).
