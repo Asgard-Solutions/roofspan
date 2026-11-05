@@ -22,12 +22,13 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import config, service
 from control_plane.db import get_cp_db
-from control_plane.models import Installation, License, MobileDevice, Subscription
+from control_plane.models import Company, Installation, License, MobileDevice, Subscription
 from control_plane.schemas import ActivateIn, ActivateOut
 from licensing import reqsig
 
@@ -231,6 +232,31 @@ async def revoke_own_device(
         )
 
     return {"ok": True, "device_id": str(device.id), "status": "REVOKED"}
+
+
+class CompanyNameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+@router.post("/installation/company")
+async def installation_company_name(
+    payload: CompanyNameIn,
+    request: Request,
+    db: AsyncSession = Depends(get_cp_db),
+):
+    """Signed Office installation sets ITS company's name, exactly as entered in Office setup/Settings."""
+    installation = await _authed_installation(request, db)
+    if not payload.name.strip():
+        raise HTTPException(status_code=422, detail="Company name must not be blank")
+    company = await db.get(Company, installation.company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if company.name != payload.name:
+        old = company.name
+        company.name = payload.name
+        await service.audit(db, actor="installation", action="company.rename", entity_type="company",
+                            entity_id=str(company.id), detail={"from": old, "to": payload.name})
+    return {"company_id": str(company.id), "name": company.name}
 
 
 @router.post("/installation/billing/session")

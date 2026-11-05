@@ -2779,3 +2779,9 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Not yet routed through the CP for Windows: Add seats / Cancel buttons (still require local Stripe mode).
 - 2026-06: Stripe Checkout now sets allow_promotion_codes=True (codes created in the Stripe dashboard; discount applies to the subscription). Verified on a real test-mode session. Live deploy still pending user confirmation (free deployment offer).
 - 2026-06: Post-checkout 404 fixed: live APP_BASE_URL is the Next.js website (www.roofspan.io), which has no /api/control-plane. Return URL now uses the origin the installation reached the CP on (X-Forwarded-Proto/Host, https required), e.g. https://cp.roofspan.io/api/control-plane/billing/return; trailing-slash variant served directly. Needs a deploy to take effect.
+
+## 2026-06 — Control Plane company name = Office setup name (FIXED, preview-verified)
+- Root cause: Office registered with the CP using constant LICENSING_ACTIVATION_COMPANY ("RoofSpan Roofing Co."), and the Relay connector triggers registration at service start — before first-run setup.
+- Fix: ensure_registered refuses until company_profile.name exists and sends it exactly; new signed CP endpoint POST /api/control-plane/installation/company sets the company name; Office syncs on every connection when the name differs (heals placeholder records) and in the background after Settings → Company saves. Legacy HttpControlPlaneClient.activate also uses the setup name.
+- Verified: signed register + rename against preview CP Postgres (exact name stored; blank 422; unsigned 401). Backend tests: pairing/billing/setup/licensing 43 + updated pairing tests pass. Script: /app/memory/scripts/cp_company_check.py
+- Needs: deploy of the CP + rebuilt Windows installer.

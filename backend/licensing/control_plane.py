@@ -91,9 +91,11 @@ class HttpControlPlaneClient:
         from sqlalchemy import select as _select
         from licensing import identity, keys as lkeys
 
+        from licensing.pairing_client import _require_company_name
+        company_name = await _require_company_name(db)
         _priv, pub_pem = identity.get_or_create_identity()
         payload = {
-            "company_name": config.ACTIVATION_COMPANY_NAME,
+            "company_name": company_name,
             "requested_seats": config.ACTIVATION_REQUESTED_SEATS,
             "installation_public_key": pub_pem,
             "software_version": config.SOFTWARE_VERSION,

@@ -214,12 +214,39 @@ async def _request_signed(
     return await _send(method, f"{base}{path}", body=body, headers=headers)
 
 
-async def _register_installation(base: str, public_key_pem: str) -> dict:
+async def local_company_name(db: AsyncSession) -> str | None:
+    """The company name exactly as entered in first-run setup / Settings (None until setup has saved it)."""
+    row = (
+        await db.execute(select(AppConfig).where(AppConfig.key == "company_profile"))
+    ).scalar_one_or_none()
+    name = row.value.get("name") if (row and isinstance(row.value, dict)) else None
+    return name if isinstance(name, str) and name.strip() else None
+
+
+async def _require_company_name(db: AsyncSession) -> str:
+    name = await local_company_name(db)
+    if name is None:
+        raise ControlPlaneError("Finish RoofSpan Office setup (company name) before connecting to the Control Plane.")
+    return name
+
+
+async def _sync_company_name(db, row, value: dict, base: str, installation_id: str, private_key, name: str) -> None:
+    """Make the Control Plane company name equal the local one (heals placeholder names from older builds)."""
+    if value.get("cp_company_name") == name:
+        return
+    body = json.dumps({"name": name}).encode("utf-8")
+    response = await _request_signed("POST", base, "/installation/company", installation_id, private_key, body)
+    _raise_for_cp(response, "Update company name")
+    value["cp_company_name"] = name
+    await _save_installation_value(db, row, value)
+
+
+async def _register_installation(base: str, public_key_pem: str, company_name: str) -> dict:
     response = await _send(
         "POST",
         f"{base}/installation/register",
         json_body={
-            "company_name": lic_config.ACTIVATION_COMPANY_NAME,
+            "company_name": company_name,
             "requested_seats": lic_config.ACTIVATION_REQUESTED_SEATS,
             "installation_public_key": public_key_pem,
             "software_version": lic_config.SOFTWARE_VERSION,
@@ -237,6 +264,7 @@ async def _register_installation(base: str, public_key_pem: str) -> dict:
 async def ensure_registered(db: AsyncSession) -> tuple[str, object, str]:
     """Verify/migrate this Office registration on the configured hosted Control Plane."""
     base = control_plane_base()
+    company_name = await _require_company_name(db)  # never register before setup: no placeholder companies
     private_key, public_key_pem = identity.get_or_create_identity()
     row = await _get_installation_row(db)
     value = dict(row.value) if (row and isinstance(row.value, dict)) else {}
@@ -257,6 +285,11 @@ async def ensure_registered(db: AsyncSession) -> tuple[str, object, str]:
                 changed = True
             if changed:
                 await _save_installation_value(db, row, value)
+                row = await _get_installation_row(db)
+            try:
+                await _sync_company_name(db, row, value, base, current_id, private_key, company_name)
+            except ControlPlaneError as exc:  # retried on the next connection; never blocks Relay/pairing
+                log.warning("Company name sync to Control Plane failed: %s", exc)
             return current_id, private_key, base
         if status.status_code != 404:
             _raise_for_cp(status, "Verify Office registration")
@@ -267,7 +300,7 @@ async def ensure_registered(db: AsyncSession) -> tuple[str, object, str]:
             urlparse(base).netloc,
         )
 
-    registration = await _register_installation(base, public_key_pem)
+    registration = await _register_installation(base, public_key_pem, company_name)
     new_id = registration["installation_id"]
     if current_id and current_id != new_id:
         value["cp_previous_installation_id"] = current_id
@@ -275,8 +308,27 @@ async def ensure_registered(db: AsyncSession) -> tuple[str, object, str]:
     value["cp_company_id"] = registration["company_id"]
     value["cp_base_url"] = base
     value["cp_registered_at"] = int(time.time())
+    value.pop("cp_company_name", None)
     await _save_installation_value(db, row, value)
+    try:  # a re-registered existing identity keeps its old company row, so always confirm the name
+        await _sync_company_name(db, await _get_installation_row(db), value, base, new_id, private_key, company_name)
+    except ControlPlaneError as exc:
+        log.warning("Company name sync to Control Plane failed: %s", exc)
     return new_id, private_key, base
+
+
+async def sync_company_profile_in_background() -> None:
+    """After setup / a Settings rename: push the name to the Control Plane this Office is registered with.
+    First registration stays with the Relay connector (it calls ensure_registered once setup exists)."""
+    from db import SessionLocal
+    try:
+        async with SessionLocal() as db:
+            row = await _get_installation_row(db)
+            if not (row and isinstance(row.value, dict) and row.value.get("cp_installation_id")):
+                return
+            await ensure_registered(db)
+    except Exception as exc:  # noqa: BLE001 - logged; the Relay connector retries ensure_registered anyway
+        log.warning("Control Plane company sync deferred: %s", exc)
 
 
 async def create_pairing(

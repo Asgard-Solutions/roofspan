@@ -4,7 +4,7 @@ Public (unauthenticated) by necessity: on a fresh database nobody can sign in ye
 guarded by a strict "zero users" check and FAILS CLOSED the moment any user exists, so it can never
 be used to create a second privileged account or overwrite an existing install.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +39,8 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/initialize", response_model=TokenResponse)
-async def initialize(payload: SetupInitializeRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def initialize(payload: SetupInitializeRequest, request: Request, background: BackgroundTasks,
+                     db: AsyncSession = Depends(get_db)):
     if (await _user_count(db)) > 0:
         raise HTTPException(status_code=409, detail="Setup has already been completed on this installation.")
 
@@ -70,6 +71,8 @@ async def initialize(payload: SetupInitializeRequest, request: Request, db: Asyn
 
     await log_action(db, user=owner, action="setup.initialize", entity_type="user", entity_id=owner.id, request=request)
     await db.commit()
+    from licensing import pairing_client
+    background.add_task(pairing_client.sync_company_profile_in_background)  # registers with the name just entered
 
     return TokenResponse(
         access_token=token,
