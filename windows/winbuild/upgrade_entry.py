@@ -11,6 +11,7 @@ Exit codes: 0 = COMPLETE (or nothing to recover), 1 = ROLLED_BACK (previous vers
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import logging
 import os
@@ -33,6 +34,21 @@ def _logger(data_root: str) -> logging.Logger:
     return log
 
 
+
+def _is_elevated() -> bool:
+    """Check Windows admin elevation for machine-changing operations.
+
+    The Burn ExePackage is PerMachine=yes, and boot recovery runs under an
+    elevated task. Introspection (--build-info/status) needs no UAC prompt.
+    """
+    if os.name != "nt":
+        return True  # Windows-specific gate; keep cross-platform test commands usable
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "--build-info" in argv:
@@ -47,6 +63,13 @@ def main(argv=None) -> int:
     sub.add_parser("uninstall")
     sub.add_parser("status")
     args = ap.parse_args(argv)
+
+    # Keep the EXE asInvoker for redirectable --build-info; reject privileged
+    # operations explicitly rather than requiring elevation for every invocation.
+    if args.cmd in ("run", "resume", "uninstall") and not _is_elevated():
+        print("roofspan-upgrade: Administrator privileges required for run, resume, or uninstall. "
+              "Launch via RoofSpanSetup.exe or an elevated command prompt.", file=sys.stderr)
+        return 3
 
     data_root = os.environ.get("ROOFSPAN_DATA_ROOT", r"C:\ProgramData\RoofSpan")
     install_root = os.environ.get("ROOFSPAN_INSTALL_ROOT", r"C:\Program Files\RoofSpan Office")
