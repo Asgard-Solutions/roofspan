@@ -23,5 +23,8 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+# The build-time --build-info JSON probe must be callable from an unprivileged shell
+# with redirected stdout. Burn runs this coordinator elevated (PerMachine=yes) for
+# upgrades; upgrade_entry.py rejects privileged commands when not elevated.
 exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="roofspan-upgrade",
-          debug=False, strip=False, upx=False, console=True, uac_admin=True)
+          debug=False, strip=False, upx=False, console=True, uac_admin=False)
