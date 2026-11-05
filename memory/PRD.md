@@ -2786,3 +2786,11 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - Verified: signed register + rename against preview CP Postgres (exact name stored; blank 422; unsigned 401). Backend tests: pairing/billing/setup/licensing 43 + updated pairing tests pass. Script: /app/memory/scripts/cp_company_check.py
 - Needs: deploy of the CP + rebuilt Windows installer.
 - 2026-06: One company per Office identity: legacy CP POST /activate now aliases /installation/register (advisory lock per public key + reuse), so retries, concurrent calls and either endpoint never create a second company. tests/test_company_created_once.py (live). No DB unique index added (would need migration + Windows schema-fallback changes).
+
+## 2026-06 — Company recovery + duplicate rules (C6) (DONE in preview; needs deploy + new Windows build)
+- CP migration f3a9c1d2b7e4: companies.phone/address/match_key/recovery_code_hash/recovery_code_enc; partial UNIQUE indexes: one ACTIVE installation per identity key (older duplicates -> REPLACED), one ACTIVE company per match_key (name+phone+address normalized).
+- Register: same name+phone+address on a new key -> 409 company_exists (advisory lock per match_key + DB rule). POST /installation/precheck used by Office setup before creating anything.
+- Recovery code (XXXXX-XXXXX-XXXXX-XXXXX) created per company; Office owner sees it after setup and in Settings > Company; staff: GET /api/control-plane/admin/companies/lookup?q=. Stored as sha256 hash + AES-GCM copy (SECRETS_ENCRYPTION_KEY).
+- POST /installation/recover: code -> same company on the new PC's key, previous PCs REPLACED (403 on next check-in); refused if company was admin-REVOKED or license inactive; 10 wrong codes / 15 min per client -> 429; failures audited.
+- Office first-run "Restore my company": /api/setup/recover/verify -> /backups (folder) -> /restore-folder or /restore-upload; after restore the backup's old CP ids are re-pointed to this PC. Only while zero users exist.
+- Tests: tests/test_company_recovery.py (+testing agent's test_company_recovery_extra.py), migrations live tests (CP_RUN_INTEGRATION=1) pass. iteration_116 issues all fixed. Restore wizard UI not e2e-tested (preview has users).

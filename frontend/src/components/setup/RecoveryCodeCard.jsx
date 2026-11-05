@@ -4,7 +4,7 @@ import { api, apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Copy, KeyRound, Loader2, RefreshCw } from "lucide-react";
 
-export const RecoveryCodeCard = ({ intro }) => {
+export const RecoveryCodeCard = ({ intro, inSettings = false }) => {
   const [code, setCode] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -49,7 +49,10 @@ export const RecoveryCodeCard = ({ intro }) => {
         </div>
       ) : (
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-600" data-testid="recovery-code-error">
-          <span>{error ? `${error.replace(/\.$/, "")}.` : "Not available yet."} You can also view it later in Admin → Settings → Company.</span>
+          <span>
+            {error ? "Couldn't reach RoofSpan right now, so the code can't be shown yet." : "Not available yet."}
+            {inSettings ? "" : " You can also view it later in Admin → Settings → Company."}
+          </span>
           <Button type="button" variant="outline" size="sm" onClick={load} data-testid="recovery-code-retry">
             <RefreshCw className="mr-1 h-4 w-4" /> Try again
           </Button>

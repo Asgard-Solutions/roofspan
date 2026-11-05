@@ -272,7 +272,7 @@ export default function Settings() {
           <TabsContent value="map" className="mt-6"><MapSettings /></TabsContent>
           <TabsContent value="company" className="mt-6 space-y-6">
             <CompanySettings />
-            {user?.role === "owner" && <div className="max-w-xl"><RecoveryCodeCard /></div>}
+            {user?.role === "owner" && <div className="max-w-xl"><RecoveryCodeCard inSettings /></div>}
           </TabsContent>
         </Tabs>
       </div>

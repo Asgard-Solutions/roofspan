@@ -135,3 +135,29 @@ def test_setup_restore_endpoints_are_closed_once_the_office_has_users():
     assert requests.post(f"{base}/backups", json={"folder": "/tmp"}, timeout=30).status_code == 409
     assert requests.post(f"{base}/restore-folder", json={"folder": "/tmp", "filename": "roofspan_x.dump"},
                          timeout=30).status_code == 409
+
+
+def test_concurrent_new_pcs_with_the_same_company_create_it_once():
+    from concurrent.futures import ThreadPoolExecutor
+    company = _company()
+    with ThreadPoolExecutor(6) as ex:
+        codes = sorted(r.status_code for r in ex.map(lambda _: _register(_key()[1], company), range(6)))
+    assert codes == [200, 409, 409, 409, 409, 409]
+
+
+def test_recovery_refused_after_roofspan_revoked_the_company(office):
+    _, _, _, reg = office
+    r = requests.post(f"{CP}/installations/{reg['installation_id']}/revoke", headers=ADMIN, timeout=30)
+    assert r.status_code == 200
+    assert _recover(_key()[1], reg["recovery_code"]).status_code == 403
+
+
+def test_recover_throttle_blocks_after_repeated_wrong_codes():
+    from fastapi import HTTPException
+    from control_plane import installation_router as ir
+    ir._RECOVER_FAILURES.pop("t-client", None)
+    for _ in range(ir._RECOVER_MAX_FAILURES):
+        ir._recover_throttle("t-client", failed=True)
+    with pytest.raises(HTTPException) as e:
+        ir._recover_throttle("t-client")
+    assert e.value.status_code == 429

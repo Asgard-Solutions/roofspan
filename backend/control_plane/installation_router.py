@@ -26,6 +26,7 @@ from control_plane import recovery
 from control_plane.schemas import RecoverIn
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import config, service
@@ -69,6 +70,14 @@ async def _authed_installation(request: Request, db: AsyncSession) -> Installati
         raise _cp_error(exc) from exc
 
 
+def _company_exists() -> HTTPException:
+    return HTTPException(status_code=409, detail={
+        "code": "company_exists",
+        "message": "This company is already registered with RoofSpan. Use 'Restore my company' "
+                   "and enter your company recovery code.",
+    })
+
+
 async def _installation_for_key(db: AsyncSession, public_key_pem: str):
     """The identity's installation: the ACTIVE row if any (there is at most one), else the newest."""
     return (
@@ -104,14 +113,12 @@ async def register_installation(
 
     if existing is None:
         mk = recovery.match_key(payload.company_name, payload.company_phone, payload.company_address)
+        if mk:  # different PCs registering the same company at once wait here, then see each other
+            await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _activation_lock_key("company:" + mk)})
         if mk and (await db.execute(
                 select(Company.id).where(Company.match_key == mk, Company.status == "ACTIVE").limit(1)
         )).first():
-            raise HTTPException(status_code=409, detail={
-                "code": "company_exists",
-                "message": "This company is already registered with RoofSpan. Use 'Restore my company' "
-                           "and enter your company recovery code.",
-            })
+            raise _company_exists()
         try:
             result = await service.activate(
                 db,
@@ -126,6 +133,9 @@ async def register_installation(
             return ActivateOut(**result)
         except service.CPError as exc:
             raise _cp_error(exc) from exc
+        except IntegrityError as exc:  # the DB rule (uq_companies_active_match_key) is the last line of defence
+            await db.rollback()
+            raise _company_exists() from exc
 
     if existing.status != "ACTIVE":
         raise HTTPException(status_code=403, detail="Installation identity is revoked")
@@ -277,9 +287,13 @@ async def installation_company_name(
     old = {"name": company.name, "phone": company.phone, "address": company.address}
     if new != old:
         company.name, company.phone, company.address = new["name"], new["phone"], new["address"]
-        company.match_key = recovery.match_key(*new.values())
+        mk = recovery.match_key(*new.values())
+        clash = mk and (await db.execute(select(Company.id).where(
+            Company.match_key == mk, Company.status == "ACTIVE", Company.id != company.id).limit(1))).first()
+        company.match_key = None if clash else mk  # never let an edit collide with another company
+        await db.commit()
         await service.audit(db, actor="installation", action="company.update", entity_type="company",
-                            entity_id=str(company.id), detail={"from": old, "to": new})
+                            entity_id=str(company.id), detail={"from": old, "to": new, "match_conflict": bool(clash)})
     return {"company_id": str(company.id), **new}
 
 
@@ -291,6 +305,7 @@ async def installation_recovery_code(request: Request, db: AsyncSession = Depend
     code = recovery.reveal_code(company)
     if code is None:  # companies created before recovery codes existed
         code = recovery.assign_code(company)
+        await db.commit()
         await service.audit(db, actor="installation", action="company.recovery_code.create",
                             entity_type="company", entity_id=str(company.id))
     return {"company_id": str(company.id), "recovery_code": code}
@@ -314,18 +329,42 @@ async def precheck_company(payload: PrecheckIn, db: AsyncSession = Depends(get_c
     return {"exists": exists}
 
 
+_RECOVER_FAILURES: dict[str, list[float]] = {}
+_RECOVER_MAX_FAILURES, _RECOVER_WINDOW = 10, 900.0
+
+
+def _recover_throttle(client: str, failed: bool = False) -> None:
+    import time as _t
+    now = _t.monotonic()
+    hits = [t for t in _RECOVER_FAILURES.get(client, []) if now - t < _RECOVER_WINDOW]
+    if failed:
+        hits.append(now)
+    _RECOVER_FAILURES[client] = hits
+    if not failed and len(hits) >= _RECOVER_MAX_FAILURES:
+        raise HTTPException(status_code=429, detail="Too many incorrect recovery codes. Try again in 15 minutes.")
+
+
 @router.post("/installation/recover", response_model=ActivateOut)
-async def recover_installation(payload: RecoverIn, db: AsyncSession = Depends(get_cp_db)):
+async def recover_installation(payload: RecoverIn, request: Request, db: AsyncSession = Depends(get_cp_db)):
     """New/reinstalled PC + company recovery code -> same company. Older PCs of that company are disconnected."""
     if payload.bootstrap_credential != config.DEV_BOOTSTRAP_SECRET:
         raise HTTPException(status_code=401, detail="Invalid activation credential")
+    client = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+    _recover_throttle(client)
     await db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
                      {"k": _activation_lock_key(payload.installation_public_key)})
     company = (await db.execute(select(Company).where(
         Company.recovery_code_hash == recovery.code_hash(payload.recovery_code), Company.status == "ACTIVE"
     ))).scalar_one_or_none()
     if company is None:
+        _recover_throttle(client, failed=True)
+        await service.audit(db, actor="anonymous", action="company.recover.failed", entity_type="company",
+                            entity_id=None, detail={"client": client})
         raise HTTPException(status_code=404, detail="Recovery code not recognised")
+    latest = (await db.execute(select(Installation).where(Installation.company_id == company.id)
+                               .order_by(Installation.created_at.desc()))).scalars().first()
+    if latest is not None and latest.status == "REVOKED":
+        raise HTTPException(status_code=403, detail="This company was disconnected by RoofSpan. Contact RoofSpan support.")
     existing = await _installation_for_key(db, payload.installation_public_key)
     if existing is not None and existing.status == "ACTIVE" and existing.company_id != company.id:
         raise HTTPException(status_code=409, detail="This computer is already connected to a different company")
@@ -340,11 +379,14 @@ async def recover_installation(payload: RecoverIn, db: AsyncSession = Depends(ge
         await db.flush()
     license_row = (await db.execute(select(License).where(License.company_id == company.id)
                                     .order_by(License.created_at.asc()))).scalars().first()
+    if license_row is not None and license_row.status != "ACTIVE":
+        await db.rollback()
+        raise HTTPException(status_code=403, detail="This company's license is inactive. Contact RoofSpan support.")
     if license_row is None:
         license_row = License(company_id=company.id, installation_id=existing.id, product=config.PRODUCT)
         db.add(license_row)
     else:
-        license_row.installation_id, license_row.status = existing.id, "ACTIVE"
+        license_row.installation_id = existing.id
     await db.flush()
     subscription = (await db.execute(select(Subscription).where(Subscription.company_id == company.id))).scalar_one_or_none()
     if subscription is None:

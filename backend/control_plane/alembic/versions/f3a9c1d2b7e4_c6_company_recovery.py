@@ -23,7 +23,9 @@ def upgrade() -> None:
     op.add_column("companies", sa.Column("match_key", sa.String(length=64), nullable=True))
     op.add_column("companies", sa.Column("recovery_code_hash", sa.String(length=64), nullable=True))
     op.add_column("companies", sa.Column("recovery_code_enc", sa.Text(), nullable=True))
-    op.create_index("ix_companies_match_key", "companies", ["match_key"])
+    # match_key is new (NULL for every existing company), so this cannot collide with existing data.
+    op.execute("CREATE UNIQUE INDEX uq_companies_active_match_key ON companies (match_key) "
+               "WHERE status = 'ACTIVE' AND match_key IS NOT NULL")
     op.create_index("uq_companies_recovery_code_hash", "companies", ["recovery_code_hash"], unique=True)
 
     op.execute("""
@@ -42,6 +44,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS uq_installations_active_public_key")
     op.drop_index("uq_companies_recovery_code_hash", table_name="companies")
-    op.drop_index("ix_companies_match_key", table_name="companies")
+    op.execute("DROP INDEX IF EXISTS uq_companies_active_match_key")
     for col in ("recovery_code_enc", "recovery_code_hash", "match_key", "address", "phone"):
         op.drop_column("companies", col)

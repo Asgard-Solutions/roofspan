@@ -25,7 +25,7 @@ class Company(CPBase):
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     phone: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     address: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
-    match_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    match_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # partial unique index (migration C6)
     recovery_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     recovery_code_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")

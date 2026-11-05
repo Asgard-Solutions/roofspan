@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="11" time="4.906" timestamp="2026-11-05T02:34:09.910094+00:00" hostname="agent-env-d369043a-4c42-4a07-a196-655569fac324"><testcase classname="tests.test_company_recovery_extra" name="test_recovery_code_format" time="0.258" /><testcase classname="tests.test_company_recovery_extra" name="test_reregister_same_key_no_new_company" time="0.343" /><testcase classname="tests.test_company_recovery_extra" name="test_precheck_variants" time="0.567" /><testcase classname="tests.test_company_recovery_extra" name="test_recover_auth_and_validation" time="0.297" /><testcase classname="tests.test_company_recovery_extra" name="test_signed_endpoints_require_signature" time="0.304" /><testcase classname="tests.test_company_recovery_extra" name="test_admin_lookup_auth_and_id" time="0.631" /><testcase classname="tests.test_company_recovery_extra" name="test_company_update_persists_and_validates" time="0.597" /><testcase classname="tests.test_company_recovery_extra" name="test_recover_key_of_other_company_409" time="0.444" /><testcase classname="tests.test_company_recovery_extra" name="test_concurrent_same_company_different_keys_creates_one" time="0.509" /><testcase classname="tests.test_company_recovery_extra" name="test_recover_after_admin_revoke_behaviour" time="0.454" /><testcase classname="tests.test_company_recovery_extra" name="test_office_recovery_code_rbac" time="0.128"><failure message="AssertionError: {&quot;detail&quot;:&quot;Invalid email or password&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code">def test_office_recovery_code_rbac():
+&gt;       sales = _login("sales@example.com", "SalesRS#2026")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_company_recovery_extra.py:130: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+email = 'sales@example.com', pw = 'SalesRS#2026'
+
+    def _login(email, pw):
+        s = requests.Session()
+        r = s.post(f"{BASE}/api/auth/login", json={"email": email, "password": pw}, timeout=30)
+&gt;       assert r.status_code == 200, r.text
+E       AssertionError: {"detail":"Invalid email or password"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+tests/test_company_recovery_extra.py:122: AssertionError</failure></testcase></testsuite></testsuites>
