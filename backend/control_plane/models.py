@@ -23,6 +23,11 @@ class Company(CPBase):
     __tablename__ = "companies"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    phone: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    address: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    match_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    recovery_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    recovery_code_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

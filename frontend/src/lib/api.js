@@ -36,5 +36,6 @@ export function apiError(e) {
   if (Array.isArray(detail))
     return detail.map((d) => (d && typeof d.msg === "string" ? d.msg : JSON.stringify(d))).join(" ");
   if (detail && typeof detail.msg === "string") return detail.msg;
+  if (detail && typeof detail.message === "string") return detail.message;
   return String(detail);
 }

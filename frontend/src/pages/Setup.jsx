@@ -6,7 +6,9 @@ import { api, apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Building2, UserCog, Eye, EyeOff, Loader2, ArrowRight, ArrowLeft, CheckCircle2 } from "lucide-react";
+import { Building2, UserCog, Eye, EyeOff, Loader2, ArrowRight, ArrowLeft, CheckCircle2, LifeBuoy } from "lucide-react";
+import { RestoreCompany } from "@/components/setup/RestoreCompany";
+import { RecoveryCodeCard } from "@/components/setup/RecoveryCodeCard";
 
 const BG_IMAGE = "/brand/roofspan-login-bg.png";
 
@@ -17,6 +19,7 @@ export default function Setup() {
   const [step, setStep] = useState(1);
   const [show, setShow] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState("new"); // new | restore | code (show recovery code after setup)
 
   const [company, setCompany] = useState({ name: "", phone: "", email: "", address: "", license_number: "" });
   const [owner, setOwner] = useState({ owner_full_name: "", owner_email: "", owner_password: "" });
@@ -63,9 +66,10 @@ export default function Setup() {
       });
       completeSetup(data);
       toast.success("Welcome to RoofSpan — your company is ready");
-      navigate("/", { replace: true });
+      setMode("code");
     } catch (err) {
       toast.error(apiError(err));
+      if (err?.response?.data?.detail?.code === "company_exists") setMode("restore");
     } finally {
       setSubmitting(false);
     }
@@ -88,6 +92,25 @@ export default function Setup() {
         <img src="/brand/roofspan-wordmark-dark.webp" alt="RoofSpan" className="mx-auto mb-6 h-16 w-auto" />
 
         <div className="rounded-lg border border-white/10 bg-white p-8 shadow-xl">
+          {mode === "restore" ? (
+            <RestoreCompany
+              onBack={() => setMode("new")}
+              onDone={(d) => {
+                toast.success(d.message);
+                navigate("/login", { replace: true });
+              }}
+            />
+          ) : mode === "code" ? (
+            <div data-testid="setup-recovery-step">
+              <h1 className="font-heading text-2xl font-bold tracking-tight text-slate-900">Save your recovery code</h1>
+              <p className="mt-1 mb-5 text-sm text-slate-500">Write it down or store it in your password manager.</p>
+              <RecoveryCodeCard />
+              <Button className="mt-6 w-full" onClick={() => navigate("/", { replace: true })} data-testid="setup-recovery-continue">
+                I saved it — continue <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+          <>
           <div className="mb-6 flex items-center gap-3" data-testid="setup-stepper">
             <StepPill active={step === 1} done={step > 1} index={1} icon={Building2} label="Company" />
             <div className="h-px flex-1 bg-slate-200" />
@@ -220,6 +243,13 @@ export default function Setup() {
                 </Button>
               </div>
             </form>
+          )}
+          <button type="button" onClick={() => setMode("restore")}
+            className="mt-6 flex w-full items-center justify-center gap-2 border-t pt-4 text-sm font-medium text-slate-600 hover:text-slate-900"
+            data-testid="setup-restore-link">
+            <LifeBuoy className="h-4 w-4" /> Already use RoofSpan on another computer? Restore my company
+          </button>
+          </>
           )}
         </div>
       </div>

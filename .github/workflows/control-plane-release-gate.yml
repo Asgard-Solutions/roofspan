@@ -233,7 +233,7 @@ jobs:
               "CONTROL_PLANE_BASE_URL=https://cp.roofspan.io"
             ) | Set-Content -Encoding ASCII "$root\config\roofspan.env"
             $env:PGPASSWORD = "LegacyGatePw123456789"
-            psql -h 127.0.0.1 -U roofspan -d roofspan -v ON_ERROR_STOP=1 -c "CREATE SCHEMA roofspan_control_plane AUTHORIZATION roofspan; CREATE TABLE roofspan_control_plane.alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO roofspan_control_plane.alembic_version VALUES ('e1f2a3b4c5d6');"
+            psql -h 127.0.0.1 -U roofspan -d roofspan -v ON_ERROR_STOP=1 -c "CREATE SCHEMA roofspan_control_plane AUTHORIZATION roofspan; CREATE TABLE roofspan_control_plane.alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO roofspan_control_plane.alembic_version VALUES ('f3a9c1d2b7e4');"
           }
       - name: Install MSI and wait for readiness
         shell: pwsh

@@ -133,6 +133,35 @@ async def version_policy(db: AsyncSession = Depends(get_cp_db)):
 
 # ---------------- admin/dev ----------------
 
+@router.get("/admin/companies/lookup")
+async def admin_company_lookup(
+    q: str,
+    _: bool = Depends(_require_admin),
+    db: AsyncSession = Depends(get_cp_db),
+):
+    """RoofSpan staff: find a company by (part of) its name, phone or address, with its recovery code."""
+    import uuid as _uuid
+    from sqlalchemy import or_, select
+    from control_plane import recovery
+    from control_plane.models import Company
+    term = f"%{q.strip()}%"
+    conds = [Company.name.ilike(term), Company.phone.ilike(term), Company.address.ilike(term)]
+    try:
+        conds.append(Company.id == _uuid.UUID(q.strip()))
+    except ValueError:
+        pass
+    rows = (await db.execute(select(Company).where(or_(*conds)).order_by(Company.created_at.desc()).limit(25))).scalars().all()
+    out = []
+    for c in rows:
+        code = recovery.reveal_code(c) or recovery.assign_code(c)
+        out.append({"company_id": str(c.id), "name": c.name, "phone": c.phone, "address": c.address,
+                    "status": c.status, "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "recovery_code": code})
+    await service.audit(db, actor="admin", action="company.recovery_code.view", entity_type="company",
+                        entity_id=None, detail={"query": q, "results": [o["company_id"] for o in out]})
+    return {"companies": out}
+
+
 @router.post("/installations/{installation_id}/revoke")
 async def revoke(
     installation_id: str,

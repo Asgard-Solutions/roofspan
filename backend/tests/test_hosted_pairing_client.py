@@ -76,10 +76,14 @@ def test_qr_data_url_is_a_real_png():
 ACME = "Acme Roofing Company"
 
 
-def _company(monkeypatch, name=ACME):
+def _company(monkeypatch, name=ACME, phone="(555) 010-2000", address="1 Main St, Austin TX"):
     async def fake(_db):
-        return name
-    monkeypatch.setattr(pairing_client, "local_company_name", fake)
+        return None if name is None else {"name": name, "phone": phone, "address": address}
+    monkeypatch.setattr(pairing_client, "local_company_profile", fake)
+
+
+def _details(name=ACME):
+    return {"name": name, "phone": "(555) 010-2000", "address": "1 Main St, Austin TX"}
 
 
 def test_legacy_local_registration_is_replaced_by_hosted_registration(monkeypatch):
@@ -97,16 +101,16 @@ def test_legacy_local_registration_is_replaced_by_hosted_registration(monkeypatc
         assert base == "https://cp.roofspan.io/api/control-plane"
         assert key is private_key
         if path == "/installation/company":
-            assert installation_id == new_id and json.loads(body) == {"name": ACME}
+            assert installation_id == new_id and json.loads(body) == _details()
             return FakeResponse(200, {"name": ACME})
         assert path == "/installation/status"
         assert installation_id == old_id
         return FakeResponse(404, {"detail": "Unknown installation"})
 
-    async def fake_register(base, public_key, company_name):
+    async def fake_register(base, public_key, profile):
         assert base == "https://cp.roofspan.io/api/control-plane"
         assert public_key == "PUBLIC PEM"
-        assert company_name == ACME
+        assert profile == _details()
         return {"installation_id": new_id, "company_id": "hosted-company"}
 
     monkeypatch.setattr(pairing_client, "control_plane_base", lambda: "https://cp.roofspan.io/api/control-plane")
@@ -161,14 +165,14 @@ def test_existing_hosted_registration_is_verified_and_tagged(monkeypatch):
     assert row.value["cp_base_url"] == "https://cp.roofspan.io/api/control-plane"
     assert row.value["cp_company_id"] == "hosted-company"
     # an Office registered by an older build (placeholder name on the CP) is healed on its next connection
-    assert sent[-1] == ("/installation/company", json.dumps({"name": ACME}).encode())
+    assert sent[-1] == ("/installation/company", json.dumps(_details()).encode())
     assert row.value["cp_company_name"] == ACME
     asyncio.run(pairing_client.ensure_registered(db))
     assert [p for p, _ in sent].count("/installation/company") == 1, "an unchanged name is not re-sent"
 
     _company(monkeypatch, "Acme Roofing Company, LLC")  # renamed in Settings
     asyncio.run(pairing_client.ensure_registered(db))
-    assert sent[-1] == ("/installation/company", json.dumps({"name": "Acme Roofing Company, LLC"}).encode())
+    assert sent[-1] == ("/installation/company", json.dumps(_details("Acme Roofing Company, LLC")).encode())
 
 
 def test_no_registration_before_setup_has_saved_the_company_name(monkeypatch):
@@ -191,8 +195,9 @@ def test_registration_sends_the_setup_name_exactly(monkeypatch):
         return FakeResponse(200, {"installation_id": "i", "company_id": "c"})
 
     monkeypatch.setattr(pairing_client, "_send", fake_send)
-    asyncio.run(pairing_client._register_installation("https://cp", "PEM", "  Acme Roofing Company  "))
+    asyncio.run(pairing_client._register_installation("https://cp", "PEM", {**_details("  Acme Roofing Company  ")}))
     assert sent["company_name"] == "  Acme Roofing Company  "
+    assert sent["company_phone"] == "(555) 010-2000" and sent["company_address"] == "1 Main St, Austin TX"
     assert "RoofSpan Roofing" not in json.dumps(sent)
 
 

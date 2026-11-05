@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
+import { useAuth } from "@/context/AuthContext";
+import { RecoveryCodeCard } from "@/components/setup/RecoveryCodeCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -242,6 +244,7 @@ function AboutCard() {
 }
 
 export default function Settings() {
+  const { user } = useAuth();
   return (
     <div>
       <PageHeader title="Settings" description="Manage integrations, maps, and company details." testid="page-settings" />
@@ -267,7 +270,10 @@ export default function Settings() {
             <IntegrationCard provider="maptiler" label="MapTiler" keyLabel="MapTiler API key" help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin placement is handled separately by Mapbox Permanent Geocoding." />
           </TabsContent>
           <TabsContent value="map" className="mt-6"><MapSettings /></TabsContent>
-          <TabsContent value="company" className="mt-6"><CompanySettings /></TabsContent>
+          <TabsContent value="company" className="mt-6 space-y-6">
+            <CompanySettings />
+            {user?.role === "owner" && <div className="max-w-xl"><RecoveryCodeCard /></div>}
+          </TabsContent>
         </Tabs>
       </div>
     </div>

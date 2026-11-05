@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
 
 BACKEND = Path(__file__).resolve().parents[1]
 ADMIN_DSN = os.environ.get("ROOFSPAN_TEST_PG_DSN", "")
-HEAD = "e1f2a3b4c5d6"
+HEAD = "f3a9c1d2b7e4"
 REQUIRED_TABLES = {
     "companies", "cp_audit_logs", "entitlement_issuances", "request_nonces", "signing_keys",
     "version_policy", "installations", "licenses", "subscriptions", "billing_events",

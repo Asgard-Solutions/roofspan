@@ -381,9 +381,9 @@ def prune_local(keep: int) -> list[str]:
     return removed
 
 
-def list_offsite_backups() -> dict:
-    """List RoofSpan backups available at the configured copy location (for Restore From Copy)."""
-    dest = get_offsite_dir()
+def list_offsite_backups(folder: str | None = None) -> dict:
+    """List RoofSpan backups at the configured copy location (or `folder`, e.g. on a new PC's first run)."""
+    dest = folder or get_offsite_dir()
     if not dest:
         return {"offsite_dir": "", "available": False, "backups": []}
     try:
@@ -402,12 +402,12 @@ def list_offsite_backups() -> dict:
     return {"offsite_dir": dest, "available": True, "backups": out}
 
 
-async def stage_offsite_for_restore(filename: str) -> str:
-    """Copy a backup FROM the configured copy location back into BACKUP_DIR so it can be restored.
-    The source is restricted to the configured copy directory and RoofSpan-named files only."""
+async def stage_offsite_for_restore(filename: str, folder: str | None = None) -> str:
+    """Copy a backup FROM the copy location (configured, or `folder`) back into BACKUP_DIR so it can be
+    restored. The source is restricted to that directory and RoofSpan-named files only."""
     if not filename or not SAFE_NAME.match(filename):
         raise ValueError("Invalid backup filename.")
-    dest = get_offsite_dir()
+    dest = folder or get_offsite_dir()
     if not dest:
         raise ValueError("No secondary backup location is configured.")
     src = os.path.realpath(os.path.join(dest, filename))

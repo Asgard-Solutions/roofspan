@@ -138,6 +138,16 @@ async def _billing_link(request: Request, db: AsyncSession, kind: str) -> Billin
         return BillingLinkOut(configured=False, provider=provider.name, url=None, message=str(e))
 
 
+@router.get("/recovery-code")
+async def recovery_code(user: User = Depends(require_roles("owner")), db: AsyncSession = Depends(get_db)):
+    """Owner-only: the company recovery code used to restore this company on a new computer."""
+    from licensing import pairing_client
+    try:
+        return {"recovery_code": await pairing_client.fetch_recovery_code(db)}
+    except pairing_client.ControlPlaneError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @router.get("/billing/portal-url", response_model=BillingLinkOut)
 async def billing_portal(request: Request, user: User = Depends(require_roles(*SENSITIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     return await _billing_link(request, db, "portal")
