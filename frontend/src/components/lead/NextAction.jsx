@@ -21,6 +21,7 @@ export function nextAction(wf, isManage) {
       return { text: "Job is underway. Track it on the job page.", stage: "production", jobId: f.first_job_id };
     default:
       if (!f.invoices) return { text: isManage ? "Create the invoice." : "Work complete. The office handles invoicing.", stage: "billing" };
+      if (f.invoices_draft) return { text: isManage ? "Send the invoice to the customer." : "The office is preparing the invoice.", stage: "billing" };
       if (f.invoices_paid < f.invoices) return { text: "Collect the balance due.", stage: "billing" };
       return { text: "Paid in full. Nothing left to do.", stage: "billing", done: true };
   }

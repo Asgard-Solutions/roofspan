@@ -114,13 +114,12 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
         o.assigned_to = j.assigned_to
         o.customer_name = cmap.get(j.customer_id)
         o.property_address = pmap.get(j.property_id)
-        o.material_status = "none" if j.id not in short else ("short" if short[j.id] > 0 and j.status not in ("completed", "cancelled") else "ready")
+        if j.id not in short or j.status == "cancelled":
+            o.material_status = "none"
+        else:
+            o.material_status = "short" if short[j.id] > 0 and j.status != "completed" else "ready"
         out.append(o)
     return out
-    for jm in jms:
-        if (await jp.rollup(db, jm)).get("shortage", 0) > 0:
-            return "short"
-    return "ready"
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)

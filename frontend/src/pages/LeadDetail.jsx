@@ -52,6 +52,7 @@ export default function LeadDetail() {
   const [insp, setInsp] = useState({ inspector: "", roof_condition: "", findings: "", recommended_work: "", measurements: "", notes: "" });
   const [wf, setWf] = useState(null);
   const [view, setView] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [acceptOpen, setAcceptOpen] = useState(false);
   const [acceptTarget, setAcceptTarget] = useState(null);
   const [acceptName, setAcceptName] = useState("");
@@ -71,12 +72,12 @@ export default function LeadDetail() {
         l.customer_id ? api.get(`/jobs?customer_id=${l.customer_id}`) : Promise.resolve({ data: [] }),
       ]);
       setInspections(insR.data); setEstimates(estR.data); setQuotes(quoR.data); setJobs(jobR.data);
-      api.get(`/leads/${id}/workflow`).then((r) => setWf(r.data)).catch(() => {});
+      api.get(`/leads/${id}/workflow`).then((r) => setWf(r.data)).catch((e) => setLoadError(apiError(e)));
       if (isManage && l.customer_id) {
         try { setInvoices((await api.get(`/invoices?customer_id=${l.customer_id}`)).data); } catch (e) { /* noop */ }
       }
     } catch (e) {
-      toast.error(apiError(e));
+      setLoadError(apiError(e));
     }
   }, [id, isManage]);
 
@@ -160,6 +161,15 @@ export default function LeadDetail() {
     catch (e) { toast.error(apiError(e)); }
   };
 
+  if (loadError && (!lead || !wf)) return (
+    <div className="p-8" data-testid="lead-load-error">
+      <div className="max-w-md rounded-md border border-border bg-white p-6">
+        <h3 className="font-heading text-lg font-semibold text-slate-900">Can't open this lead</h3>
+        <p className="mt-1 text-sm text-slate-500">{loadError}</p>
+        <Link to="/leads" className="mt-3 inline-block text-sm font-medium text-orange-700 hover:underline" data-testid="lead-load-error-back">Back to leads</Link>
+      </div>
+    </div>
+  );
   if (!lead || !wf) return <div className="flex h-64 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
 
   const viewing = view || wf.stage;
@@ -167,7 +177,7 @@ export default function LeadDetail() {
   const leadJobs = jobs.filter((j) => quoteIds.includes(j.quote_id));
   const jobIds = leadJobs.map((j) => j.id);
   const leadInvoices = invoices.filter((i) => quoteIds.includes(i.quote_id) || jobIds.includes(i.job_id));
-  const invoicedQuoteIds = leadInvoices.map((i) => i.quote_id);
+  const invoicedQuoteIds = leadInvoices.filter((i) => i.status !== "void").map((i) => i.quote_id);
   const action = nextAction(wf, isManage);
   const f = wf.facts;
 

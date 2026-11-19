@@ -12,6 +12,10 @@ export const STAGE_LABELS = {
 export function StageBar({ stages, current, viewing, onSelect }) {
   const ci = stages.indexOf(current);
   return (
+    <div>
+    <div className="mb-2 text-sm font-semibold text-slate-800 sm:hidden" data-testid="stage-mobile-label">
+      {STAGE_LABELS[viewing]}{viewing === current ? " · current stage" : ` · current: ${STAGE_LABELS[current]}`}
+    </div>
     <ol className="grid grid-cols-5 gap-1.5" data-testid="lead-stage-bar">
       {stages.map((s, i) => {
         const state = i < ci ? "done" : i === ci ? "current" : "upcoming";
@@ -43,5 +47,6 @@ export function StageBar({ stages, current, viewing, onSelect }) {
         );
       })}
     </ol>
+    </div>
   );
 }

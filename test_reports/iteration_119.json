@@ -1,0 +1,43 @@
+{
+  "summary": "Round 2 (quote authz + calculated lead stage workspace + materials perf) tested end-to-end. Backend: new suite test_lead_workflow_quote_authz.py (31 tests) + regression test_ux_round1_nav.py (13) = 44/44 pass. Quote authz: sales_bk gets 403 on every /api/quotes/{id} route (GET, document, pdf, proposal, proposal.pdf, share-link, site-plan, site-plan.pdf, PUT, DELETE, accept, decline, send) for a quote on a lead not assigned to them; 200 on own-lead quote GET/proposal/pdf/share-link/document/proposal.pdf/PUT (persisted); owner 200 on all (site-plan.pdf 404 only because no saved site plan). POST /api/quotes as sales with unassigned estimate_id / lead_id / no lead -> 403, own estimate -> 201. GET /api/quotes for sales lists only own-lead quotes. Workflow: overview->inspection->estimate->production->billing verified via API and UI on a fresh lead; deterministic; sales 403 on unassigned. Materials: /api/jobs 784 jobs in ~0.2-0.24s (was ~1.5s); dashboard jobs_needing_materials=436 == 406 created+30 scheduled 'short' from /api/jobs (no cap); 80 jobs checked against /material-plan shortage sum, 0 mismatches. UI: stage bar data-state done/current/upcoming correct, single 'Current stage' label, default panel = calculated stage, clicking stages / progress rows changes panel only (data-state and lead-current-stage unchanged). Next-step texts correct at each step; Go there opens right stage; production shows 'Open job' -> /jobs/{id}. Inspection dialog (Measurement notes (optional)), photos, measurement worksheet, estimate New->Estimate Editor, Proposal, Accept dialog->Job, Create invoice all work and stage bar updates after each action. Sales: /quotes/{otherId}/proposal shows 'Proposal unavailable.' + 403 toast, no data; own lead billing shows 'handled by the office'. Regression: /, /jobs (header '436 active jobs short on material'), /billing load with no page errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/jobs", "issue": "Cancelled jobs with material rows report material_status 'ready' (27 rows). Harmless but misleading; 'none'/'n/a' would be clearer for closed jobs."},
+      {"endpoint": "POST /api/invoices", "issue": "Allows a $0.00 invoice from a $0 quote (E2E created INV-0033 for $0). Consider blocking zero-total invoices."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LeadDetail billing panel", "issue": "leadInvoices/invoicedQuoteIds include VOID invoices. After the only invoice on an accepted quote is voided, the backend stage correctly goes back to production, but the Billing panel hides the 'Create invoice' button for that quote, so there is no way to re-invoice from Lead Detail. Filter out status 'void' when building invoicedQuoteIds.", "selector": "[data-testid^='create-invoice-']", "priority": "MEDIUM"},
+      {"component": "LeadDetail load", "issue": "When /leads/{id} returns 403 (sales on an unassigned lead) or /workflow fails, the page spins forever (only a toast shows). The workflow call's .catch(() => {}) also hides errors. Show an error/empty state instead.", "selector": "[data-testid='page-lead-detail']", "priority": "LOW"},
+      {"component": "ProposalPreview", "issue": "The 'Email to Customer' button shows for sales, but POST /quotes/{id}/send is MANAGE-only, so sales always get 403. Hide it for sales.", "selector": "[data-testid='proposal-email-customer']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Lead Detail mobile (390px)", "issues": ["Stage names, the 'Current stage' label and the header lead-current-stage are all hidden below sm. The user sees only the numbers 1-5 with no stage name. Show at least the current/open stage name on mobile."]},
+      {"screen": "Lead Detail billing", "issues": ["Next step says 'Collect the balance due.' while the invoice is still a draft and has not been sent. Consider 'Send the invoice.' when invoices are draft."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_lead_workflow_quote_authz.py", "/app/backend/tests/test_ux_round1_nav.py", "/app/test_reports/pytest/pytest_round2.xml"],
+  "action_items": [
+    "LeadDetail.jsx: leave void invoices out of invoicedQuoteIds (and optionally leadInvoices display) so a voided quote can be invoiced again",
+    "LeadDetail.jsx: add an error state when the lead or workflow fetch fails (403/500) instead of an endless spinner",
+    "ProposalPreview.jsx: hide 'Email to Customer' for the sales role",
+    "StageBar/LeadDetail: show the current stage name on mobile",
+    "Optional: material_status for cancelled/completed jobs; block $0 invoices; draft-invoice next-step text"
+  ],
+  "critical_code_review_comments": [
+    "lead_workflow counts jobs only via Job.quote_id in the lead's quotes. Jobs linked to the lead some other way (manual jobs) are ignored. The UI uses the same quote-based filter, so the two agree.",
+    "LeadDetail fetches jobs by customer_id, and the sales /jobs list is filtered by Job.assigned_user_id. A salesperson whose lead's job is assigned to a crew/other user sees 'No job yet' in Production while the workflow facts say jobs=1.",
+    "The dashboard counts status 'active' as well as created/scheduled/in_progress (a superset). Counts match today.",
+    "shortages_by_job and rollup agree: 80/80 sampled jobs matched."
+  ],
+  "updated_files": ["/app/backend/tests/test_lead_workflow_quote_authz.py"],
+  "success_rate": {"backend": "100% (44/44)", "frontend": "~95% (all requested flows pass; minor void-invoice/error-state/mobile issues)"},
+  "seed_data_creation": "Created TEST_ leads via POST /api/mobile/leads (no lead delete endpoint exists): TEST_other_*, TEST_mine_* (assigned to sales_bk), TEST_wf_* (x2, accepted quote + job, invoice voided), TEST_E2E_ac237 (c5db0382-e2a7-489a-8e10-9664af695f2e, job JOB-0745, invoice INV-0033 voided), TEST_SalesView_* (e6824a04-ba92-4c00-86a1-9de094907ef6, assigned to sales_bk). Draft TEST quotes/estimates were deleted. Accepted quotes, jobs and voided invoices remain because no delete endpoint exists for them.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_lead_workflow_quote_authz.py tests/test_ux_round1_nav.py -n 0. Leads are created with POST /api/mobile/leads (auto-assigned to the caller), then PUT /api/leads/{id}/assign. The token key is access_token. The example production lead e7b41ad7 shows 3 jobs, and 'Open job' goes to /jobs/648416df-....",
+  "test_credentials": "owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; sales sales_bk@example.com / SalesBk#2026 (both worked)"
+}

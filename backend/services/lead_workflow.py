@@ -58,6 +58,7 @@ async def lead_workflow(db: AsyncSession, lead: Lead) -> dict:
         "jobs_completed": sum(1 for j in jobs if j[1] == "completed"),
         "invoices": len(inv_rows),
         "invoices_paid": sum(1 for s in inv_rows if s == "paid"),
+        "invoices_draft": sum(1 for s in inv_rows if s == "draft"),
         "first_job_id": str(jids[0]) if jids else None,
     }
     stage = derive_stage(f)

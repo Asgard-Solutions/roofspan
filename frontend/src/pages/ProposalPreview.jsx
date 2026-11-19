@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { money } from "@/lib/format";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,8 @@ function Items({ lines, subtotal, tax, total, testid }) {
 export default function ProposalPreview() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canEmail = ["owner", "administrator", "office"].includes(user?.role);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sitePlan, setSitePlan] = useState(null);
@@ -102,7 +105,7 @@ export default function ProposalPreview() {
         <div className="flex items-center gap-2">
           {sitePlan?.available && <Button variant="outline" size="sm" onClick={downloadSitePlan} data-testid="proposal-site-plan-pdf"><Map className="h-4 w-4" /> Site Plan PDF</Button>}
           <Button variant="outline" size="sm" onClick={shareLink} data-testid="proposal-share-link"><Share2 className="h-4 w-4" /> Share Link</Button>
-          <Button variant="outline" size="sm" onClick={emailToCustomer} disabled={emailing} data-testid="proposal-email-customer">{emailing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />} Email to Customer</Button>
+          {canEmail && <Button variant="outline" size="sm" onClick={emailToCustomer} disabled={emailing} data-testid="proposal-email-customer">{emailing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />} Email to Customer</Button>}
           <Button size="sm" onClick={download} data-testid="proposal-download-pdf"><Download className="h-4 w-4" /> Download PDF</Button>
         </div>
       </div>
