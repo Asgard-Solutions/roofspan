@@ -160,3 +160,28 @@ async def shortage_proposal(db: AsyncSession, job) -> dict:
                       "shortage": roll["shortage"], "suggested_quantity": roll["shortage"],
                       "preferred": pref, "best_known": best, "suppliers": opts})
     return {"job_id": str(job.id), "job_number": job.number, "lines": lines}
+
+
+async def shortages_by_job(db: AsyncSession, job_ids) -> dict:
+    """Batched Σ Shortage per job (same formula as rollup) — a fixed number of queries for any job count.
+    Jobs with no JobMaterial rows are absent from the result."""
+    job_ids = list(job_ids)
+    if not job_ids:
+        return {}
+    jms = (await db.execute(select(JobMaterial.job_id, JobMaterial.material_id, JobMaterial.planned_quantity)
+                            .where(JobMaterial.job_id.in_(job_ids)))).all()
+    reserved = {(r[0], r[1]): abs(float(r[2] or 0)) for r in (await db.execute(
+        select(InventoryTxn.job_id, InventoryTxn.material_id, func.coalesce(func.sum(InventoryTxn.delta), 0))
+        .where(InventoryTxn.job_id.in_(job_ids), InventoryTxn.reason == "job_reservation")
+        .group_by(InventoryTxn.job_id, InventoryTxn.material_id))).all()}
+    incoming = {}
+    for job_id, mat_id, qty, rec in (await db.execute(
+            select(PurchaseOrder.job_id, POLineItem.material_id, POLineItem.quantity, POLineItem.received_quantity)
+            .join(PurchaseOrder, PurchaseOrder.id == POLineItem.po_id)
+            .where(PurchaseOrder.job_id.in_(job_ids), PurchaseOrder.status.in_(_OPEN)))).all():
+        incoming[(job_id, mat_id)] = incoming.get((job_id, mat_id), 0.0) + max((qty or 0) - (rec or 0), 0)
+    out = {}
+    for job_id, mat_id, planned in jms:
+        k = (job_id, mat_id)
+        out[job_id] = out.get(job_id, 0.0) + max(_r3(planned) - _r3(reserved.get(k, 0)) - _r3(incoming.get(k, 0)), 0)
+    return {j: _r3(v) for j, v in out.items()}
