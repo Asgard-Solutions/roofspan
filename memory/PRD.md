@@ -1,5 +1,18 @@
 # RoofSpan — Product Requirements & Status
 
+## UX Simplification Round 1 — Menu, Home, Jobs, wording (2026-06) — IMPLEMENTED & TESTED (iteration_117/118)
+- Rule: UX/navigation only, no capability removed. User decisions: round 1 = menu/Home/Jobs/wording; Quotes moved into Sales (not duplicated in Billing); ABC + map technical fields go under Advanced.
+- Nav: Home | Sales | Map | Jobs | Materials | Billing (manage roles) | Reports, with Settings at the bottom (manage roles). Sales subnav: Leads / Customers / Quotes & Proposals (/sales/quotes). Materials subnav: Inventory & Purchasing / Suppliers. /finance redirects to /billing.
+- Settings hub /settings: Company, Team & Access, Estimating Setup (takeoff/assemblies/price books), Integrations, Backup & Plan, System (audit, advanced). /admin/settings tabs: Company (default) / Integrations (status only) / Maps / Advanced (API keys, cadastre, version). ABC page: Connection + Account visible; config, go-live, scopes and redirect help sit in a collapsed Advanced section.
+- Home: GET /api/dashboard/attention (follow-ups, inspections in the next 7 days, proposals waiting, jobs scheduled or in progress, money due for manage roles; sales-scoped). Material problems come from /dashboard/purchasing (sales-scoped, no PO actions for sales). The purchasing snapshot is collapsible. The backup alert shows only when health is not ok.
+- Jobs: install date, customer/property, crew/assigned, material readiness (Ready/Short/Not planned), filters. /api/jobs adds scheduled_start, assigned_to, customer_name, property_address, material_status.
+- Billing: balance due / overdue / paid cards plus filters; invoices only.
+- Wording: MWAC -> Average Cost; Phase messages removed; "Property Acquisition" -> "Territories & Canvassing".
+- /api/quotes list is now scoped to assigned leads for the sales role.
+- Known minor items (existing before this round): quote GET/PUT/DELETE by id is not sales-scoped; the purchasing card counts only the first 200 jobs; /api/jobs takes ~1.5s with 782 jobs.
+- NEXT ROUNDS (P0): Lead Detail staged workspace; simpler Estimate/Takeoff; split Materials daily view from admin. P1: Job Detail single assignment model, customer column in Billing/Quotes, Leads search/filters/next follow-up, reports for pipeline/AR.
+
+
 ## Feature — First-Run "New Company Setup" wizard (fresh install onboarding) — IMPLEMENTED & VERIFIED (2026-06)
 - PROBLEM: On a clean install the Windows installer provisions PostgreSQL but NO owner account (ADMIN_EMAIL/ADMIN_PASSWORD were never written to roofspan.env), so nobody could sign in. User decisions: 1a (built-in first-run wizard, single exe), 2a (owner only), 3b (replace env seeding entirely).
 - BACKEND: new `backend/routers/setup.py` (prefix `/api/setup`, public):
