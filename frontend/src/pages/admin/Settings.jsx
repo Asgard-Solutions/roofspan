@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -116,8 +116,6 @@ function IntegrationCard({ provider, label, help, keyLabel }) {
 
 function MapSettings() {
   const [cfg, setCfg] = useState(null);
-  const [cadastre, setCadastre] = useState(null);
-  const [checkingCadastre, setCheckingCadastre] = useState(false);
   const load = () => api.get("/map-config").then((r) => setCfg(r.data));
   useEffect(() => { load(); }, []);
 
@@ -127,14 +125,6 @@ function MapSettings() {
       setCfg(data);
       toast.success("Map configuration updated");
     } catch (e) { toast.error(apiError(e)); }
-  };
-
-  const checkCadastre = async () => {
-    setCheckingCadastre(true);
-    setCadastre(null);
-    try { const { data } = await api.get("/map/cadastre-capability"); setCadastre(data); }
-    catch (e) { setCadastre({ configured: true, tileset_accessible: false, reason: apiError(e) }); }
-    finally { setCheckingCadastre(false); }
   };
 
   if (!cfg) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
@@ -150,12 +140,32 @@ function MapSettings() {
         <div className="flex items-start justify-between">
           <div>
             <h3 className="font-heading text-lg font-semibold text-slate-900">Satellite imagery (MapTiler)</h3>
-            <p className="mt-0.5 text-sm text-slate-500">{cfg.maptiler_configured ? "MapTiler key is configured. Satellite imagery can be enabled." : "Add and enable a MapTiler key under the Integrations tab to use satellite imagery."}</p>
+            <p className="mt-0.5 text-sm text-slate-500">{cfg.maptiler_configured ? "MapTiler key is configured. Satellite imagery can be enabled." : "Satellite imagery needs a MapTiler key. Ask RoofSpan support, or add it under Advanced."}</p>
           </div>
           <Switch checked={cfg.satellite_enabled} disabled={!cfg.maptiler_configured} onCheckedChange={setSatellite} data-testid="toggle-satellite" />
         </div>
       </div>
-      <div className="border-t border-border pt-5" data-testid="cadastre-capability">
+    </div>
+  );
+}
+
+function CadastreCheck() {
+  const [cfg, setCfg] = useState(null);
+  const [cadastre, setCadastre] = useState(null);
+  const [checkingCadastre, setCheckingCadastre] = useState(false);
+  useEffect(() => { api.get("/map-config").then((r) => setCfg(r.data)).catch(() => {}); }, []);
+  const checkCadastre = async () => {
+    setCheckingCadastre(true);
+    setCadastre(null);
+    try { const { data } = await api.get("/map/cadastre-capability"); setCadastre(data); }
+    catch (e) { setCadastre({ configured: true, tileset_accessible: false, reason: apiError(e) }); }
+    finally { setCheckingCadastre(false); }
+  };
+
+  if (!cfg) return null;
+  return (
+    <div className="max-w-2xl rounded-md border border-border bg-white p-6">
+      <div data-testid="cadastre-capability">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="font-heading text-lg font-semibold text-slate-900">Parcel / Cadastre access</h3>
@@ -173,6 +183,47 @@ function MapSettings() {
         )}
       </div>
     </div>
+  );
+}
+
+const PROVIDERS = [
+  { provider: "maptiler", label: "Satellite imagery & parcels", help: "Aerial view of roofs and property lines on the map" },
+  { provider: "mapbox", label: "Address lookup", help: "Places property pins accurately from an address" },
+  { provider: "rentcast", label: "Property data import", help: "Bulk-load homes into a canvassing territory" },
+];
+
+function ProviderStatus({ provider, label, help }) {
+  const [d, setD] = useState(null);
+  useEffect(() => { api.get(`/integrations/${provider}`).then((r) => setD(r.data)).catch(() => {}); }, [provider]);
+  const on = d?.enabled && d?.has_secret;
+  return (
+    <div className="flex items-center justify-between gap-3 px-5 py-3" data-testid={`provider-status-${provider}`}>
+      <div><div className="text-sm font-medium text-slate-900">{label}</div><div className="text-xs text-slate-500">{help}</div></div>
+      <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${on ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`} data-testid={`provider-status-${provider}-label`}>{d ? (on ? "Connected" : "Not set up") : "…"}</span>
+    </div>
+  );
+}
+
+function AbcStatusCard() {
+  const [st, setSt] = useState(null);
+  useEffect(() => { api.get("/integrations/abc/status").then((r) => setSt(r.data)).catch(() => {}); }, []);
+  const connected = st?.status === "connected";
+  return (
+    <Link to="/admin/settings/abc" className="block max-w-2xl" data-testid="abc-supply-link">
+      <div className="flex items-center justify-between rounded-md border border-border bg-white p-6 transition-colors hover:border-orange-300 hover:bg-orange-50/40">
+        <div className="flex items-start gap-3">
+          <PackageSearch className="mt-0.5 h-6 w-6 text-orange-600" />
+          <div>
+            <h3 className="font-heading text-lg font-semibold text-slate-900">ABC Supply</h3>
+            <p className="mt-0.5 text-sm text-slate-500">Your ABC pricing and ordering inside RoofSpan.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${connected ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`} data-testid="abc-status-summary">{st ? (connected ? "Connected" : "Not connected") : "…"}</span>
+          <ChevronRight className="h-5 w-5 text-slate-400" />
+        </div>
+      </div>
+    </Link>
   );
 }
 
@@ -243,36 +294,43 @@ function AboutCard() {
   );
 }
 
+const TABS = ["company", "integrations", "map", "advanced"];
+
 export default function Settings() {
   const { user } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.includes(params.get("tab")) ? params.get("tab") : "company";
   return (
     <div>
-      <PageHeader title="Settings" description="Manage integrations, maps, and company details." testid="page-settings" />
+      <PageHeader title="Company & Integrations" description="Business settings first. Technical details live under Advanced." testid="page-settings"
+        actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
       <div className="p-6 sm:p-8">
-        <AboutCard />
-        <Tabs defaultValue="integrations">
-          <TabsList data-testid="settings-tabs"><TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger><TabsTrigger value="map" data-testid="tab-map">Map Configuration</TabsTrigger><TabsTrigger value="company" data-testid="tab-company">Company Profile</TabsTrigger></TabsList>
-          <TabsContent value="integrations" className="mt-6 space-y-6">
-            <Link to="/admin/settings/abc" className="block max-w-2xl" data-testid="abc-supply-link">
-              <div className="flex items-center justify-between rounded-md border border-border bg-white p-6 transition-colors hover:border-orange-300 hover:bg-orange-50/40">
-                <div className="flex items-start gap-3">
-                  <PackageSearch className="mt-0.5 h-6 w-6 text-orange-600" />
-                  <div>
-                    <h3 className="font-heading text-lg font-semibold text-slate-900">ABC Supply</h3>
-                    <p className="mt-0.5 text-sm text-slate-500">Connect your myABCSupply account for products, real-time pricing, and ordering.</p>
-                  </div>
-                </div>
-                <ChevronRight className="h-5 w-5 text-slate-400" />
-              </div>
-            </Link>
-            <IntegrationCard provider="rentcast" label="RentCast" keyLabel="RentCast API key" help="Server-side property data import. The key is encrypted and never returned to the browser." />
-            <IntegrationCard provider="mapbox" label="Mapbox Permanent Geocoding" keyLabel="Mapbox access token" help="Bring your own Mapbox token for permanent address-to-coordinate lookup. RoofSpan requests permanent geocodes and caches completed results in the local database so normal map use does not geocode the same address again." />
-            <IntegrationCard provider="maptiler" label="MapTiler" keyLabel="MapTiler API key" help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin placement is handled separately by Mapbox Permanent Geocoding." />
-          </TabsContent>
-          <TabsContent value="map" className="mt-6"><MapSettings /></TabsContent>
+        <Tabs value={tab} onValueChange={(v) => setParams({ tab: v }, { replace: true })}>
+          <TabsList data-testid="settings-tabs">
+            <TabsTrigger value="company" data-testid="tab-company">Company</TabsTrigger>
+            <TabsTrigger value="integrations" data-testid="tab-integrations">Integrations</TabsTrigger>
+            <TabsTrigger value="map" data-testid="tab-map">Maps</TabsTrigger>
+            <TabsTrigger value="advanced" data-testid="tab-advanced">Advanced</TabsTrigger>
+          </TabsList>
           <TabsContent value="company" className="mt-6 space-y-6">
             <CompanySettings />
             {user?.role === "owner" && <div className="max-w-xl"><RecoveryCodeCard inSettings /></div>}
+          </TabsContent>
+          <TabsContent value="integrations" className="mt-6 space-y-6">
+            <AbcStatusCard />
+            <div className="max-w-2xl divide-y divide-border rounded-md border border-border bg-white" data-testid="provider-status-list">
+              {PROVIDERS.map((p) => <ProviderStatus key={p.provider} {...p} />)}
+            </div>
+            <p className="max-w-2xl text-xs text-slate-500">Need to change a key or connection detail? Use the <button type="button" className="font-medium text-orange-700 hover:underline" onClick={() => setParams({ tab: "advanced" })} data-testid="open-advanced-link">Advanced</button> tab, or contact RoofSpan support.</p>
+          </TabsContent>
+          <TabsContent value="map" className="mt-6"><MapSettings /></TabsContent>
+          <TabsContent value="advanced" className="mt-6 space-y-6" data-testid="settings-advanced-panel">
+            <div className="max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">For support and troubleshooting. Changing these can stop maps or data imports from working.</div>
+            <AboutCard />
+            <IntegrationCard provider="rentcast" label="RentCast" keyLabel="RentCast API key" help="Server-side property data import. The key is encrypted and never returned to the browser." />
+            <IntegrationCard provider="mapbox" label="Mapbox Permanent Geocoding" keyLabel="Mapbox access token" help="Bring your own Mapbox token for permanent address-to-coordinate lookup. RoofSpan requests permanent geocodes and caches completed results in the local database so normal map use does not geocode the same address again." />
+            <IntegrationCard provider="maptiler" label="MapTiler" keyLabel="MapTiler API key" help="Server-side key for satellite imagery, building visualization, and parcel/cadastre capability checks. Property pin placement is handled separately by Mapbox Permanent Geocoding." />
+            <CadastreCheck />
           </TabsContent>
         </Tabs>
       </div>

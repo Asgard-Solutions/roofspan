@@ -140,7 +140,7 @@ export default function JobDetail() {
             </div>
             <div className="space-y-1.5"><Label>Scheduling notes</Label><Textarea value={sched.schedule_notes} onChange={(e) => setSched({ ...sched, schedule_notes: e.target.value })} disabled={!canManage} data-testid="job-schednotes" /></div>
             {canManage && <Button onClick={saveSchedule} disabled={busy} data-testid="save-schedule">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save schedule</>}</Button>}
-            {job.quote_id && <p className="text-xs text-slate-400">From accepted quote · <Link to="/finance" className="hover:underline">view in Finance</Link></p>}
+            {job.quote_id && <p className="text-xs text-slate-400">From accepted quote · <Link to="/sales/quotes" className="hover:underline" data-testid="job-view-quote-link">view in Quotes</Link></p>}
           </div>
         </Section>
 

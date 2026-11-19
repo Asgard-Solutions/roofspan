@@ -24,7 +24,10 @@ import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
 import Takeoff from "@/pages/Takeoff";
 import Suppliers from "@/pages/Suppliers";
-import Finance from "@/pages/Finance";
+import Billing from "@/pages/Billing";
+import SalesQuotes from "@/pages/SalesQuotes";
+import SettingsHub from "@/pages/SettingsHub";
+import { SalesLayout, MaterialsLayout } from "@/components/SubNav";
 import Reports from "@/pages/Reports";
 import ProposalPreview from "@/pages/ProposalPreview";
 import PublicProposal from "@/pages/PublicProposal";
@@ -56,12 +59,17 @@ function App() {
           >
             <Route path="/" element={<Dashboard />} />
             <Route path="/map" element={<MapView />} />
-            <Route path="/leads" element={<Leads />} />
+            <Route element={<SalesLayout />}>
+              <Route path="/leads" element={<Leads />} />
+              <Route path="/customers" element={<Customers />} />
+              <Route path="/sales/quotes" element={<SalesQuotes />} />
+            </Route>
             <Route path="/leads/:id" element={<LeadDetail />} />
-            <Route path="/customers" element={<Customers />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/jobs/:id" element={<JobDetail />} />
-            <Route path="/inventory" element={<Inventory />} />
+            <Route element={<MaterialsLayout />}>
+              <Route path="/inventory" element={<Inventory />} />
+              </Route>
             <Route path="/inventory/catalog" element={<ProductCatalog />} />
             <Route path="/inventory/locations" element={<InventoryLocations />} />
             <Route path="/inventory/transactions" element={<InventoryTransactions />} />
@@ -74,7 +82,9 @@ function App() {
             <Route path="/estimating/takeoff" element={<Takeoff />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
-            <Route path="/finance" element={<Finance />} />
+            <Route path="/billing" element={<Billing />} />
+            <Route path="/finance" element={<Navigate to="/billing" replace />} />
+            <Route path="/settings" element={<SettingsHub />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />

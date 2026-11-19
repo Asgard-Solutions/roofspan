@@ -251,6 +251,11 @@ class JobOut(BaseModel):
     created_at: datetime
     assigned_user_id: Optional[str] = None
     assigned_user_name: Optional[str] = None
+    scheduled_start: Optional[datetime] = None
+    assigned_to: Optional[str] = None
+    customer_name: Optional[str] = None
+    property_address: Optional[str] = None
+    material_status: Optional[str] = None  # none | ready | short
 
 
 # ---- Invoices ----

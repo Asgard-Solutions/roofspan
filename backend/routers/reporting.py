@@ -26,6 +26,12 @@ async def purchasing_dashboard(user: User = Depends(get_current_user), db: Async
     return await dash.purchasing_dashboard(db, include_cost)
 
 
+@dashboard_router.get("/attention")
+async def attention_dashboard(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Home screen: today's work and exceptions. Sales see only their own leads/jobs; money only for management.
+    return await dash.attention(db, user, include_money=user.role in MANAGE_ROLES)
+
+
 inv_report_router = APIRouter(prefix="/api/reports/inventory", tags=["reports-inventory"])
 
 
