@@ -20,7 +20,7 @@ export default function SalesQuotes() {
 
   return (
     <div>
-      <PageHeader title="Quotes & Proposals" description={waiting ? `${waiting} proposal${waiting === 1 ? "" : "s"} waiting on the customer` : "Every quote sent to a customer"} testid="page-sales-quotes" />
+      <PageHeader title="Quotes & Proposals" description={waiting ? `${waiting} proposal${waiting === 1 ? "" : "s"} waiting on the customer` : "All quotes, from draft to accepted"} testid="page-sales-quotes" />
       <div className="p-6 sm:p-8">
         <div className="overflow-x-auto rounded-md border border-border bg-white">
           <Table data-testid="quotes-table">

@@ -17,6 +17,13 @@ export function ProtectedRoute({ children }) {
   return children;
 }
 
+export function RequireManage({ children }) {
+  const { user } = useAuth();
+  if (user === undefined) return <Loading />;
+  if (!["owner", "administrator", "office"].includes(user?.role)) return <Navigate to="/" replace />;
+  return children;
+}
+
 export function RequireSensitive({ children }) {
   const { user, isSensitive } = useAuth();
   if (user === undefined) return <Loading />;

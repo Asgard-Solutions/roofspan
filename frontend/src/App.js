@@ -1,7 +1,7 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
-import { ProtectedRoute, RequireSensitive } from "@/components/ProtectedRoute";
+import { ProtectedRoute, RequireSensitive, RequireManage } from "@/components/ProtectedRoute";
 import { Toaster } from "@/components/ui/sonner";
 import AppShell from "@/components/AppShell";
 import Login from "@/pages/Login";
@@ -69,22 +69,22 @@ function App() {
             <Route path="/jobs/:id" element={<JobDetail />} />
             <Route element={<MaterialsLayout />}>
               <Route path="/inventory" element={<Inventory />} />
-              </Route>
+              <Route path="/suppliers" element={<Suppliers />} />
+            </Route>
             <Route path="/inventory/catalog" element={<ProductCatalog />} />
             <Route path="/inventory/locations" element={<InventoryLocations />} />
             <Route path="/inventory/transactions" element={<InventoryTransactions />} />
             <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
-            <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
             <Route path="/quotes/:id/proposal" element={<ProposalPreview />} />
             <Route path="/estimating/takeoff" element={<Takeoff />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
-            <Route path="/billing" element={<Billing />} />
+            <Route path="/billing" element={<RequireManage><Billing /></RequireManage>} />
             <Route path="/finance" element={<Navigate to="/billing" replace />} />
-            <Route path="/settings" element={<SettingsHub />} />
+            <Route path="/settings" element={<RequireManage><SettingsHub /></RequireManage>} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />

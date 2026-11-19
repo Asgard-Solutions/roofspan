@@ -208,6 +208,8 @@ function AbcStatusCard() {
   const [st, setSt] = useState(null);
   useEffect(() => { api.get("/integrations/abc/status").then((r) => setSt(r.data)).catch(() => {}); }, []);
   const connected = st?.status === "connected";
+  const reconnect = st && !connected && st.status !== "not_connected";
+  const badge = !st ? ["bg-slate-100 text-slate-500", "…"] : connected ? ["bg-green-50 text-green-700", "Connected"] : reconnect ? ["bg-amber-50 text-amber-700", "Needs reconnect"] : ["bg-slate-100 text-slate-500", "Not connected"];
   return (
     <Link to="/admin/settings/abc" className="block max-w-2xl" data-testid="abc-supply-link">
       <div className="flex items-center justify-between rounded-md border border-border bg-white p-6 transition-colors hover:border-orange-300 hover:bg-orange-50/40">
@@ -219,7 +221,7 @@ function AbcStatusCard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${connected ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`} data-testid="abc-status-summary">{st ? (connected ? "Connected" : "Not connected") : "…"}</span>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badge[0]}`} data-testid="abc-status-summary">{badge[1]}</span>
           <ChevronRight className="h-5 w-5 text-slate-400" />
         </div>
       </div>

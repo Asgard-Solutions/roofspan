@@ -224,6 +224,9 @@ async def list_quotes(lead_id: str | None = Query(None), customer_id: str | None
         stmt = stmt.where(Quote.customer_id == customer_id)
     if status:
         stmt = stmt.where(Quote.status == status)
+    if user.role == "sales":  # strict: sales see only quotes on leads assigned to them
+        from models import Lead
+        stmt = stmt.join(Lead, Lead.id == Quote.lead_id).where(Lead.assigned_user_id == user.id)
     return [await _out(db, q) for q in (await db.execute(stmt)).scalars().all()]
 
 

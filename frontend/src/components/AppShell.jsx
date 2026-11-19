@@ -55,9 +55,11 @@ function SettingsLink({ onNavigate, isManage }) {
   const { pathname } = useLocation();
   if (!isManage) return null;
   return (
-    <Link to="/settings" className={cn(linkClass(isOn(pathname, SETTINGS_MATCH)), "border-t border-border")} onClick={onNavigate} data-testid="nav-settings">
-      <Settings2 className="h-4 w-4" /> Settings
-    </Link>
+    <div className="border-t border-border">
+      <Link to="/settings" className={linkClass(isOn(pathname, SETTINGS_MATCH))} onClick={onNavigate} data-testid="nav-settings">
+        <Settings2 className="h-4 w-4" /> Settings
+      </Link>
+    </div>
   );
 }
 

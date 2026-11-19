@@ -23,7 +23,7 @@ dashboard_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 async def purchasing_dashboard(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # Operational counts visible to all internal roles; cost/value figures only for management roles.
     include_cost = user.role in MANAGE_ROLES
-    return await dash.purchasing_dashboard(db, include_cost)
+    return await dash.purchasing_dashboard(db, include_cost, only_user_id=user.id if user.role == "sales" else None)
 
 
 @dashboard_router.get("/attention")

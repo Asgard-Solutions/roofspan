@@ -19,7 +19,7 @@ def _d(v):
     return v if isinstance(v, Decimal) else Decimal(str(v or 0))
 
 
-async def purchasing_dashboard(db: AsyncSession, include_cost: bool) -> dict:
+async def purchasing_dashboard(db: AsyncSession, include_cost: bool, only_user_id=None) -> dict:
     mats = (await db.execute(select(Material).where(Material.active.is_(True)))).scalars().all()
 
     inv_value = Z
@@ -52,7 +52,10 @@ async def purchasing_dashboard(db: AsyncSession, include_cost: bool) -> dict:
             backordered += 1
 
     # Jobs needing materials (real shortage via job_planning readiness).
-    active_jobs = (await db.execute(select(Job).where(Job.status.in_(("scheduled", "in_progress", "active", "created"))))).scalars().all()
+    jstmt = select(Job).where(Job.status.in_(("scheduled", "in_progress", "active", "created")))
+    if only_user_id is not None:
+        jstmt = jstmt.where(Job.assigned_user_id == only_user_id)
+    active_jobs = (await db.execute(jstmt)).scalars().all()
     jobs_short = 0
     actions = []
     for j in active_jobs[:200]:
@@ -69,8 +72,8 @@ async def purchasing_dashboard(db: AsyncSession, include_cost: bool) -> dict:
                                 "message": f"{j.number} needs {round(shortfall, 2)} unit(s) of material",
                                 "link": f"/jobs/{j.id}"})
 
-    # PO-derived actions
-    for po in pos:
+    # PO-derived actions (company purchasing; not shown to sales-scoped views)
+    for po in (pos if only_user_id is None else []):
         if po.status == "partially_received" and len(actions) < 40:
             actions.append({"type": "po_partial", "severity": "info",
                             "message": f"{po.number} partially received", "link": f"/purchase-orders/{po.id}"})
