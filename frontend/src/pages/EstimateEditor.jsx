@@ -63,7 +63,7 @@ export default function EstimateEditor() {
       setEst(data); setTaxRate(data.tax_rate || 0); setVersion(data.version);
       setPriceBookId(data.price_book_id || "");
       const mapped = (data.items || []).map((i) => ({
-        description: i.description, unit: i.unit || "EA", measured_quantity: i.measured_quantity ?? i.quantity,
+        id: i.id, description: i.description, unit: i.unit || "EA", measured_quantity: i.measured_quantity ?? i.quantity,
         waste_percent: i.waste_percent || 0, material_cost: i.material_cost || 0, labor_cost: i.labor_cost || 0,
         equipment_cost: i.equipment_cost || 0, subcontract_cost: i.subcontract_cost || 0,
         markup_percent: i.markup_percent || 0, selling_unit_price: i.selling_unit_price || i.unit_price || 0,
@@ -115,7 +115,8 @@ export default function EstimateEditor() {
   }, [lines, taxRate]);
 
   const dirty = !!saved && snap(lines, taxRate, priceBookId) !== saved;
-  const editable = est ? est.status === "draft" || est.status === "sent" : false;
+  const lockedByAcceptance = proposals.some((q) => q.status === "accepted");
+  const editable = est ? (est.status === "draft" || est.status === "sent") && !lockedByAcceptance : false;
 
   const save = async () => {
     setBusy(true);
@@ -212,6 +213,7 @@ export default function EstimateEditor() {
           </div>
         </div>
 
+        {lockedByAcceptance && <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-600" data-testid="estimate-locked-note">A proposal from this estimate was accepted, so it can no longer be changed. Duplicate it from the lead to price a change.</div>}
         <RoofTakeoffPanel est={est} canCalculate={seeCost && editable} dirty={dirty} onApplied={load} />
 
         <section className="rounded-md border border-border bg-white" data-testid="estimate-scope-section">
@@ -244,7 +246,7 @@ export default function EstimateEditor() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Item</TableHead>
-                  {details && <><TableHead className="w-20">Measured</TableHead><TableHead className="w-16">Waste %</TableHead></>}
+                  {details && <><TableHead className="w-24">Measured</TableHead><TableHead className="w-24">Waste %</TableHead></>}
                   <TableHead className="w-24 text-right">Quantity</TableHead><TableHead className="w-20">Unit</TableHead>
                   {details && seeCost && <><TableHead className="w-24 text-right">Unit Cost</TableHead><TableHead className="w-20 text-right">Markup %</TableHead></>}
                   <TableHead className="w-28 text-right">Price</TableHead>

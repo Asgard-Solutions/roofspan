@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
@@ -123,12 +124,22 @@ async def _snapshot_cost(db: AsyncSession, d: dict):
         d["purchase_unit"] = sm.supplier_uom
 
 
-async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None) -> list[dict]:
+async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None, keep_ids=frozenset(), old_lines=()) -> list[dict]:
     """Snapshot cost, apply Price Book rule (deterministic priority, respecting explicit user pricing),
-    compute authoritative fields, persist. Returns computed line dicts (for totals)."""
+    compute authoritative fields, persist. Returns computed line dicts (for totals).
+    keep_ids: ids of this estimate's previous lines that may be reused (so takeoff links survive a save)."""
     computed = []
+    used = set()
     for idx, it in enumerate(items):
         d = it.model_dump() if hasattr(it, "model_dump") else dict(it)
+        reuse = d.pop("id", None)
+        if not reuse and idx < len(old_lines):  # clients that don't send ids: same position + same item = same line
+            o = old_lines[idx]
+            if (o[1] or "") == (d.get("description") or "") and str(o[2] or "") == str(d.get("material_id") or "") and str(o[3] or "") == str(d.get("assembly_id") or ""):
+                reuse = str(o[0])
+        reuse = reuse if reuse in keep_ids and reuse not in used else None
+        if reuse:
+            used.add(reuse)
         if d.get("material_id") or d.get("supplier_material_id"):
             await _snapshot_cost(db, d)
         # Price Book auto-application (only when the user hasn't explicitly priced the line).
@@ -152,6 +163,7 @@ async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None)
         calc.compute_line(d)
         computed.append(d)
         db.add(EstimateLineItem(
+            **({"id": uuid.UUID(reuse)} if reuse else {}),
             estimate_id=estimate_id, description=d.get("description") or "", quantity=d["quantity"],
             unit=d.get("unit") or "ea", unit_price=d["unit_price"], line_total=d["line_total"], sort=idx,
             material_id=d.get("material_id") or None, supplier_material_id=d.get("supplier_material_id") or None,
@@ -227,8 +239,19 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
     enforce_version(e, if_match, "Estimate")
     if getattr(payload, "price_book_id", None) is not None:
         e.price_book_id = payload.price_book_id
+    from takeoff_models import EstimateTakeoffLine
+    old_lines = (await db.execute(select(EstimateLineItem.id, EstimateLineItem.description, EstimateLineItem.material_id, EstimateLineItem.assembly_id)
+                                  .where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).all()
+    old_ids = [str(x[0]) for x in old_lines]
+    links = (await db.execute(select(EstimateTakeoffLine.id, EstimateTakeoffLine.estimate_line_item_id)
+                              .where(EstimateTakeoffLine.estimate_line_item_id.in_(old_ids)))).all() if old_ids else []
     await db.execute(EstimateLineItem.__table__.delete().where(EstimateLineItem.estimate_id == e.id))
-    computed = await _apply_items(db, e.id, payload.items, price_book_id=e.price_book_id)
+    computed = await _apply_items(db, e.id, payload.items, price_book_id=e.price_book_id, keep_ids=frozenset(old_ids), old_lines=old_lines)
+    await db.flush()
+    kept = {str(x) for x in (await db.execute(select(EstimateLineItem.id).where(EstimateLineItem.estimate_id == e.id))).scalars().all()}
+    for link_id, line_id in links:  # FK is ON DELETE SET NULL; restore links for lines that survived the save
+        if str(line_id) in kept:
+            await db.execute(EstimateTakeoffLine.__table__.update().where(EstimateTakeoffLine.id == link_id).values(estimate_line_item_id=line_id))
     s = calc.summarize(computed, payload.tax_rate)
     e.tax_rate = payload.tax_rate
     e.subtotal, e.tax, e.total = s["subtotal"], s["tax"], s["total"]

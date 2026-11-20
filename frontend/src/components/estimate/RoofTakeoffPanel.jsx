@@ -73,7 +73,7 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
     if (usedTemplate && !opts.find((o) => o.id === usedTemplate.id)) opts.push({ id: usedTemplate.id, label: `${usedTemplate.template_name} (version used last time)`, version: usedTemplate.revision_number });
     return opts;
   }, [templates, usedTemplate]);
-  const latestChangedVerified = status?.measurements_changed && verified.find((r) => r.id === status.latest_measurement_revision_id);
+  const newerVerified = status?.has_takeoff && newestVerified && newestVerified.revision_number > (status.measurement_revision_number || 0) ? newestVerified : null;
 
   const payload = (replace) => ({
     measurement_revision_id: measurementId, template_revision_id: templateRevisionId,
@@ -124,15 +124,17 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
             <span className="text-slate-600">{n2(chosen.total_squares)} squares{measurement && scopedSquares !== Number(chosen.total_squares) ? ` · ${n2(scopedSquares)} in this job` : ""}</span>
             {chosen.id === newestVerified?.id ? <Badge variant="secondary" className="bg-green-50 text-green-700">Latest</Badge> : <Badge variant="secondary" className="bg-amber-50 text-amber-700">Older measurements</Badge>}
             {pending && <span className="text-xs text-amber-700" data-testid="takeoff-pending-note">Newer measurements are waiting for office verification.</span>}
-            {status?.has_takeoff && <span className="text-xs text-slate-500" data-testid="takeoff-applied-note">Materials on this estimate already come from these measurements.</span>}
+            {status?.has_takeoff && chosen.id === status.measurement_revision_id && <span className="text-xs text-slate-500" data-testid="takeoff-applied-note">Materials on this estimate already come from these measurements.</span>}
           </div>
         )}
 
-        {status?.measurements_changed && (
+        {(status?.measurements_changed || newerVerified) && (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="measurements-changed-warning">
             <div className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4" /> The roof was re-measured after this estimate was calculated.</div>
-            {latestChangedVerified
-              ? <div className="mt-1">Nothing changes until you choose. <button type="button" className="font-semibold underline" onClick={() => setMeasurementId(latestChangedVerified.id)} data-testid="takeoff-use-latest">Use the new measurements</button>, then calculate and update.</div>
+            {newerVerified
+              ? (measurementId === newerVerified.id
+                ? <div className="mt-1" data-testid="takeoff-using-new">Now using the new measurements. Calculate materials, then update the estimate.</div>
+                : <div className="mt-1">Nothing changes until you choose. <button type="button" className="font-semibold underline" onClick={() => setMeasurementId(newerVerified.id)} data-testid="takeoff-use-latest">Use the new measurements</button>, then calculate and update.</div>)
               : <div className="mt-1">The new measurements are waiting for office verification. This estimate keeps the previous ones.</div>}
           </div>
         )}
@@ -204,7 +206,7 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
                   </div>
                 )}
                 {status?.has_takeoff && <div className="text-xs text-slate-500" data-testid="takeoff-used-versions">Last calculated with measurement revision {status.measurement_revision_number} and template v{status.template_revision_number}.</div>}
-                {!!status?.changed_metrics?.length && <div className="max-h-36 overflow-auto rounded bg-slate-50 p-2 text-xs" data-testid="takeoff-changed-metrics">{status.changed_metrics.map((c) => <div key={c.metric}><b>{c.metric}</b>: {JSON.stringify(c.from)} → {JSON.stringify(c.to)}</div>)}</div>}
+                {!!status?.changed_metrics?.length && <div className="max-h-36 overflow-auto rounded bg-slate-50 p-2 text-xs" data-testid="takeoff-changed-metrics">{status.changed_metrics.map((c) => <div key={c.metric}><b>{c.metric.replace(/_/g, " ")}</b>: {typeof c.from === "object" ? "changed" : `${c.from ?? "—"} → ${c.to ?? "—"}`}</div>)}</div>}
                 {preview && (
                   <Table data-testid="takeoff-preview-details">
                     <TableHeader><TableRow><TableHead>Description</TableHead><TableHead>Assembly</TableHead><TableHead>Measured</TableHead><TableHead>Waste</TableHead><TableHead>Calculated Qty</TableHead><TableHead>Packaging source</TableHead></TableRow></TableHeader>

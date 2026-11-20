@@ -119,6 +119,9 @@ async def preview_takeoff(estimate_id: str, payload: TakeoffApplyIn,
 @router.post("/estimates/{estimate_id}/apply")
 async def apply_takeoff(estimate_id: str, payload: TakeoffApplyIn, request: Request,
                         user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    from routers.estimates import _has_accepted_quote
+    if await _has_accepted_quote(db, estimate_id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     result = await svc.apply(db, estimate_id, payload, user)
     is_recalc = bool(result.get("generated_line_ids_to_replace"))
     await log_action(db, user=user, action="takeoff.recalculate" if is_recalc else "takeoff.apply",
