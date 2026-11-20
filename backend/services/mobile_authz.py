@@ -26,6 +26,15 @@ async def assert_job_access(db: AsyncSession, job: Job, user) -> None:
         raise HTTPException(status_code=403, detail="You no longer have access to this Job.")
 
 
+async def assert_quote_access(db: AsyncSession, quote, user) -> None:
+    """Sales may only reach quotes/proposals on leads assigned to them; management roles keep broad access."""
+    if not is_sales(user):
+        return
+    lead = await db.get(Lead, quote.lead_id) if quote.lead_id else None
+    if not lead or lead.assigned_user_id != user.id:
+        raise HTTPException(status_code=403, detail="This quote belongs to a lead that is not assigned to you.")
+
+
 async def property_accessible(db: AsyncSession, property_id, user) -> bool:
     """A salesperson may reach a Property only via (a) an active canvass section assigned to them,
     (b) a Lead assigned to them, or (c) a Job assigned to them."""

@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Pre-Round-2 fixes + UX Round 2: Lead Detail staged workspace (2026-06) — IMPLEMENTED & TESTED (iteration_119)
+- QUOTE AUTHZ (user: block completely): `mobile_authz.assert_quote_access` and `quotes._get_quote` apply to all 13 `/api/quotes/{id}*` routes (view, document, pdf, proposal, proposal.pdf, share-link, site-plan(.pdf), PUT, DELETE, accept, decline, send). Sales get 403 unless the quote's lead is assigned to them. POST /api/quotes from sales requires an assigned lead. The list was already scoped. Owner/admin/office unchanged. ProposalPreview hides "Email to Customer" for sales.
+- SHORTAGE COUNT: `job_planning.shortages_by_job` runs a batched aggregate (same formula as rollup, verified against 269 jobs with 0 mismatches). The dashboard counts ALL active jobs (the 200 cap is gone).
+- JOBS PERF: /api/jobs went from ~1.5s to ~0.4s using the batched shortages. Cancelled jobs show material_status "none".
+- LEAD STAGE: `services/lead_workflow.py` + GET /api/leads/{id}/workflow derive the stage from completed work, with no stored field. Rules: billing = a non-void invoice on the lead's quotes/jobs OR a completed job; production = an accepted quote or a job; estimate = an estimate or quote; inspection = a customer exists; otherwise overview. Returns facts used for the next step.
+- LEAD DETAIL UI: StageBar (components/lead/StageBar.jsx) shows done/current/upcoming; clicking opens a panel without changing the calculated stage. Includes a mobile label. A NextAction banner suggests the next step. Panels: Overview (customer, assignment, progress), Inspection & Measurements (inspections, photos, worksheet), Estimate & Proposal, Production (only this lead's jobs), Billing (create invoice ignores void invoices). An error state replaces the infinite spinner. The dead old estimate modal was removed. The inspection free-text field is relabelled "Measurement notes (optional)".
+- Open/minor: POST /api/invoices allows $0 invoices (not changed).
+- NEXT: Round 3 = simpler Estimate/Takeoff; Round 4 = Materials daily view vs admin; Job Detail single assignment model.
+
+
 ## UX Simplification Round 1 — Menu, Home, Jobs, wording (2026-06) — IMPLEMENTED & TESTED (iteration_117/118)
 - Rule: UX/navigation only, no capability removed. User decisions: round 1 = menu/Home/Jobs/wording; Quotes moved into Sales (not duplicated in Billing); ABC + map technical fields go under Advanced.
 - Nav: Home | Sales | Map | Jobs | Materials | Billing (manage roles) | Reports, with Settings at the bottom (manage roles). Sales subnav: Leads / Customers / Quotes & Proposals (/sales/quotes). Materials subnav: Inventory & Purchasing / Suppliers. /finance redirects to /billing.

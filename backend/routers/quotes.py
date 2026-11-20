@@ -215,6 +215,15 @@ async def _apply_packages(db, q: Quote, packages, tax_rate):
     return first_totals or (0, 0, 0)
 
 
+async def _get_quote(db: AsyncSession, quote_id: str, user: User) -> Quote:
+    from services import mobile_authz as mauthz
+    q = await db.get(Quote, quote_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    await mauthz.assert_quote_access(db, q, user)
+    return q
+
+
 @router.get("", response_model=list[QuoteOut])
 async def list_quotes(lead_id: str | None = Query(None), customer_id: str | None = Query(None), status: str | None = Query(None), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Quote).order_by(Quote.created_at.desc())
@@ -260,6 +269,11 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
         lead_id = lead_id or (str(est.lead_id) if est.lead_id else None)
         customer_id = customer_id or (str(est.customer_id) if est.customer_id else None)
         property_id = property_id or (str(est.property_id) if est.property_id else None)
+    if user.role == "sales":
+        from models import Lead
+        lead = await db.get(Lead, lead_id) if lead_id else None
+        if not lead or lead.assigned_user_id != user.id:
+            raise HTTPException(status_code=403, detail="You can only create quotes for leads assigned to you.")
     number = await next_number(db, "quote", "QUO")
     issue_dt = payload.issue_date or datetime.now(timezone.utc)
     exp_dt = payload.expiration_date
@@ -288,9 +302,7 @@ async def create_quote(payload: QuoteIn, request: Request, user: User = Depends(
 @router.get("/{quote_id}/site-plan")
 async def quote_site_plan_meta(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Whether a saved combined site-plan PDF is attachable to this quote (via its lead)."""
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     from routers.measurements import _latest_site_plan_rev
     rev = await _latest_site_plan_rev(db, q.lead_id)
     if not rev:
@@ -303,9 +315,7 @@ async def quote_site_plan_meta(quote_id: str, user: User = Depends(get_current_u
 async def quote_site_plan_pdf(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Stream the lead's latest saved combined site-plan PDF as a standalone attachment."""
     from services import object_storage
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     from routers.measurements import _latest_site_plan_rev
     rev = await _latest_site_plan_rev(db, q.lead_id)
     key = (rev.site_plan or {}).get("pdf_key") if rev else None
@@ -323,9 +333,7 @@ async def send_quote(quote_id: str, request: Request, user: User = Depends(requi
     from services import object_storage
     from services.email_sender import send_quote_email, EmailNotConfigured
     from routers.measurements import _latest_site_plan_rev
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     cust = await db.get(Customer, q.customer_id) if q.customer_id else None
     to_email = getattr(cust, "email", None) if cust else None
     if not to_email:
@@ -360,17 +368,13 @@ async def send_quote(quote_id: str, request: Request, user: User = Depends(requi
 
 @router.get("/{quote_id}/document")
 async def quote_document(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     return await _quote_document_data(db, q)
 
 
 @router.get("/{quote_id}/pdf")
 async def quote_pdf(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     data = await _quote_document_data(db, q)
     site_plan_png = await _lead_site_plan_png(db, q.lead_id)
     pdf = build_quote_pdf(quote=data["quote"], company=data["company"],
@@ -382,17 +386,13 @@ async def quote_pdf(quote_id: str, user: User = Depends(get_current_user), db: A
 
 @router.get("/{quote_id}", response_model=QuoteOut)
 async def get_quote(quote_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     return await _out(db, q)
 
 
 @router.put("/{quote_id}", response_model=QuoteOut)
 async def update_quote(quote_id: str, payload: QuoteUpdate, request: Request, if_match: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     if q.status == "accepted":
         raise HTTPException(status_code=400, detail="An accepted quote cannot be edited")
     enforce_version(q, if_match, "Quote")
@@ -428,9 +428,7 @@ async def update_quote(quote_id: str, payload: QuoteUpdate, request: Request, if
 async def delete_quote(quote_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     """Delete a quote unless it has been accepted (an accepted quote is contractually locked and may
     have created a Job/Invoice). Packages and line items cascade."""
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     if q.status == "accepted":
         raise HTTPException(status_code=409, detail="An accepted quote cannot be deleted.")
     await db.delete(q)
@@ -441,9 +439,7 @@ async def delete_quote(quote_id: str, request: Request, user: User = Depends(req
 
 @router.post("/{quote_id}/accept", response_model=QuoteAcceptResult)
 async def accept_quote(quote_id: str, payload: QuoteAccept, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     q, job = await perform_quote_acceptance(db, q, acceptance_name=payload.acceptance_name, package_id=payload.package_id,
                                             accepted_by=user.email, notes=payload.notes, request=request, user=user)
     return QuoteAcceptResult(quote=await _out(db, q), job_id=str(job.id))
@@ -453,18 +449,14 @@ async def accept_quote(quote_id: str, payload: QuoteAccept, request: Request, us
 async def quote_share_link(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     """Mint a customer-facing 'accept online' share link (signed, quote-scoped token)."""
     from core import create_proposal_share_token
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     token = create_proposal_share_token(str(q.id))
     return {"token": token, "path": f"/p/{token}"}
 
 
 @router.post("/{quote_id}/decline", response_model=QuoteOut)
 async def decline_quote(quote_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     q.status = "declined"
     await db.commit()
     await db.refresh(q)
@@ -480,17 +472,13 @@ from services import proposal as _proposal
 
 @router.get("/{quote_id}/proposal")
 async def quote_proposal(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     return await _proposal.proposal_data(db, q)
 
 
 @router.get("/{quote_id}/proposal.pdf")
 async def quote_proposal_pdf(quote_id: str, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    q = await db.get(Quote, quote_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    q = await _get_quote(db, quote_id, user)
     data = await _proposal.proposal_data(db, q)
     data["site_plan_png"] = await _lead_site_plan_png(db, q.lead_id)
     pdf = _proposal.build_pdf(data)

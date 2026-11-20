@@ -106,10 +106,7 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
     pids = {j.property_id for j in rows if j.property_id}
     cmap = {c.id: c.name for c in (await db.execute(select(Customer).where(Customer.id.in_(cids)))).scalars().all()} if cids else {}
     pmap = {p.id: p.formatted_address for p in (await db.execute(select(Property).where(Property.id.in_(pids)))).scalars().all()} if pids else {}
-    by_job = {}
-    if rows:
-        for jm in (await db.execute(select(JobMaterial).where(JobMaterial.job_id.in_([j.id for j in rows])))).scalars().all():
-            by_job.setdefault(jm.job_id, []).append(jm)
+    short = await jp.shortages_by_job(db, [j.id for j in rows])
     out = []
     for j in rows:
         o = _out(j, user_name=umap.get(j.assigned_user_id))
@@ -117,20 +114,12 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
         o.assigned_to = j.assigned_to
         o.customer_name = cmap.get(j.customer_id)
         o.property_address = pmap.get(j.property_id)
-        o.material_status = await _material_status(db, j, by_job.get(j.id, []))
+        if j.id not in short or j.status == "cancelled":
+            o.material_status = "none"
+        else:
+            o.material_status = "short" if short[j.id] > 0 and j.status != "completed" else "ready"
         out.append(o)
     return out
-
-
-async def _material_status(db: AsyncSession, job: Job, jms: list) -> str:
-    if not jms:
-        return "none"
-    if job.status in ("completed", "cancelled"):
-        return "ready"
-    for jm in jms:
-        if (await jp.rollup(db, jm)).get("shortage", 0) > 0:
-            return "short"
-    return "ready"
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)

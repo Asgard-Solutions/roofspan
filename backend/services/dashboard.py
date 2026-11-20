@@ -56,15 +56,11 @@ async def purchasing_dashboard(db: AsyncSession, include_cost: bool, only_user_i
     if only_user_id is not None:
         jstmt = jstmt.where(Job.assigned_user_id == only_user_id)
     active_jobs = (await db.execute(jstmt)).scalars().all()
+    short = await jp.shortages_by_job(db, [j.id for j in active_jobs])
     jobs_short = 0
     actions = []
-    for j in active_jobs[:200]:
-        jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == j.id))).scalars().all()
-        shortfall = 0.0
-        for jm in jms:
-            r = await jp.rollup(db, jm)
-            if r.get("shortage", 0) > 0:
-                shortfall += r["shortage"]
+    for j in active_jobs:
+        shortfall = short.get(j.id, 0)
         if shortfall > 0:
             jobs_short += 1
             if len(actions) < 25:
