@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## UX Round 4: Materials daily workspace (2026-06) — IMPLEMENTED & TESTED (iteration_125-126)
+- User choices: quick filters + slim table; one Manage menu; Purchase Orders tab opens on open orders, with ABC history inside it and ABC templates under Manage.
+- Backend: services/materials_quick.py (single definition): short_for_jobs (active-job JobMaterial row shortage>0, the job_planning.shortage_rows formula), needs_ordering (short ∪ reorder rule threshold>0 & on_hand+on_order-required<threshold), on_order, arriving_week (open PO outstanding, expected<=now+7d). GET /api/materials/quick-counts (counts + short/needs_ordering ids); GET /api/materials?quick=<key>.
+- Inventory.jsx: page "Materials". Shows 4 quick cards, search + supplier filter, More filters (category/manufacturer/active/low stock/saved filters), More columns switch (SKU, category, on hand, cost, price) and a row "…" menu (Edit/Adjust/Delete). Manage menu: catalog, locations (transfers/counts), transactions, CSV import, bulk edit mode, ABC templates dialog, create custom material. The PO tab adds Open/Received/Cancelled/All filters, Received x/y, Outstanding, late expected dates, row → PO detail, and the ABC order history toggle. Debounced search, stale-response guard, refresh overlay, and POs loaded lazily.
+- MaterialDetail.jsx: the first screen shows quantities + status (same id sets) + preferred supplier + cost/price. Tabs: supplier pricing / open POs / jobs / by location / history / details. Deactivate/Delete sit in the "…" menu.
+- Catalog: plainer labels and a single back link ("Materials").
+- Defects/notes: the existing `low_stock` flag = available <= threshold (threshold 0 marks every zero-available material as low); left unchanged and used only by the "Low stock" filter. Pre-existing slow /api/materials (~5s for 1184) and /api/purchase-orders (~2.3s, 3.3MB).
+- NEXT: Job Detail single assignment; follow-up reminders; performance of materials/PO lists.
+
+
 ## Estimate/Takeoff closeout (2026-06) — IMPLEMENTED & TESTED (iteration_123-124, 100%)
 - Sales estimate authorization (server-side, same rule as quotes): `_get_estimate` / `_assert_lead_for_sales` cover all /api/estimates/{id}* routes plus /api/takeoff/estimates/{id}/status. The list is scoped to assigned leads; create requires an assigned lead. Owner/admin/office unchanged. The editor shows "Can't open this estimate".
 - Line-identity contract: the editor sends line ids + `line_ids: true`. Legacy saves (no ids) on estimates WITH takeoff-linked lines get an atomic 409 ESTIMATE_LINE_IDS_REQUIRED ("This estimate contains items calculated from roof measurements. Update the app or edit this estimate in RoofSpan Office."). Without takeoff lines, legacy saves work. The position/content fallback was removed.

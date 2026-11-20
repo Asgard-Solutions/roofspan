@@ -163,3 +163,35 @@ class TestQuickLifecycle:
         assert mid not in need
         r = owner.delete(f"{BASE_URL}/api/materials/{mid}", timeout=30)
         print("delete material", r.status_code, r.text[:200])
+
+
+# Iteration 126: needs_ordering_ids returned by quick-counts and agreement with list
+class TestNeedsOrderingIds:
+    def test_ids_present_and_match_count(self, owner):
+        d = _counts(owner)
+        assert isinstance(d.get("needs_ordering_ids"), list)
+        assert len(d["needs_ordering_ids"]) == d["counts"]["needs_ordering"]
+        assert len(set(d["needs_ordering_ids"])) == len(d["needs_ordering_ids"])
+
+    def test_ids_match_filtered_list(self, owner):
+        d = _counts(owner)
+        r = owner.get(f"{BASE_URL}/api/materials", params={"quick": "needs_ordering"}, timeout=120)
+        assert r.status_code == 200
+        assert {m["id"] for m in r.json()} == set(d["needs_ordering_ids"])
+
+    def test_short_ids_subset_of_order_ids(self, owner):
+        d = _counts(owner)
+        assert set(d["short_for_jobs_ids"]) <= set(d["needs_ordering_ids"])
+
+    def test_zero_threshold_zero_available_not_needs_ordering(self, owner):
+        mid = "a9d6453c-497a-41c8-928c-8d0cfead2c4e"
+        d = _counts(owner)
+        r = owner.get(f"{BASE_URL}/api/materials/{mid}", timeout=60)
+        if r.status_code == 404:
+            pytest.skip("reference material missing")
+        assert mid not in d["needs_ordering_ids"]
+        assert mid not in d["short_for_jobs_ids"]
+
+    def test_sales_gets_ids(self, sales):
+        d = _counts(sales)
+        assert "needs_ordering_ids" in d and "short_for_jobs_ids" in d

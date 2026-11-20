@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
-const sc = { draft: "bg-slate-100 text-slate-600", ordered: "bg-blue-50 text-blue-700", partially_received: "bg-amber-50 text-amber-700", received: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
+const sc = { draft: "bg-slate-100 text-slate-600", ready_for_review: "bg-slate-100 text-slate-700", submitted: "bg-blue-50 text-blue-700", ordered: "bg-blue-50 text-blue-700", confirmed: "bg-blue-50 text-blue-700", acknowledged: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", picking: "bg-indigo-50 text-indigo-700", shipped: "bg-indigo-50 text-indigo-700", partially_received: "bg-amber-50 text-amber-700", received: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
 const OPEN_PO = ["draft", "ready_for_review", "submitted", "ordered", "confirmed", "acknowledged", "scheduled", "partially_received", "picking", "shipped"];
 const PO_FILTERS = [["open", "Open"], ["received", "Received"], ["cancelled", "Cancelled"], ["all", "All"]];
