@@ -195,3 +195,17 @@ def test_remeasure_baseline_ignores_unverified_draft(owner):
     assert st["measurements_changed"] is False and st["changed_metrics"] == []
     assert st["pending_unverified_revision_number"] == draft["revision_number"]
     owner.delete(f"{BASE_URL}/api/estimates/{eid}")
+
+
+def test_accepted_estimate_blocks_price_book_and_cost_refresh(owner):
+    lid, cust = _lead(owner)
+    e = owner.post(f"{BASE_URL}/api/estimates", json={"lead_id": lid, "customer_id": cust, "tax_rate": 0,
+                   "items": [{"description": "A", "unit": "EA", "measured_quantity": 1, "selling_unit_price": 5}]}).json()
+    q = owner.post(f"{BASE_URL}/api/quotes", json={"estimate_id": e["id"]}).json()
+    assert owner.post(f"{BASE_URL}/api/quotes/{q['id']}/accept", json={"acceptance_name": "T"}).status_code == 200
+    before = _get(owner, e["id"])
+    assert before["locked"] is True
+    pb = next(b["id"] for b in owner.get(f"{BASE_URL}/api/estimating/price-books").json() if b["is_default"])
+    assert owner.post(f"{BASE_URL}/api/estimates/{e['id']}/price-book/apply", json={"price_book_id": pb}).status_code == 409
+    assert owner.post(f"{BASE_URL}/api/estimates/{e['id']}/cost-refresh/apply", json={"line_ids": [], "recalc_selling_price": False}).status_code == 409
+    assert _get(owner, e["id"])["version"] == before["version"]

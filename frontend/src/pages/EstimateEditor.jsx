@@ -213,10 +213,10 @@ export default function EstimateEditor() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" data-testid="estimate-more"><MoreHorizontal className="h-4 w-4" /> More</Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {seeCost && priceBooks.length > 0 && <DropdownMenuItem onClick={() => setPbOpen(true)} data-testid="estimate-price-book-open"><BookOpen className="mr-2 h-4 w-4" /> Change price book</DropdownMenuItem>}
-                {seeCost && <DropdownMenuItem onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="mr-2 h-4 w-4" /> Refresh current costs</DropdownMenuItem>}
+                {seeCost && editable && priceBooks.length > 0 && <DropdownMenuItem onClick={() => setPbOpen(true)} data-testid="estimate-price-book-open"><BookOpen className="mr-2 h-4 w-4" /> Change price book</DropdownMenuItem>}
+                {seeCost && editable && <DropdownMenuItem onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="mr-2 h-4 w-4" /> Refresh current costs</DropdownMenuItem>}
                 {sitePlan?.available && <DropdownMenuItem onClick={downloadSitePlan} data-testid="estimate-site-plan-pdf"><Map className="mr-2 h-4 w-4" /> Site plan PDF</DropdownMenuItem>}
-                {!seeCost && !sitePlan?.available && <DropdownMenuItem disabled>No extra options</DropdownMenuItem>}
+                {!(seeCost && editable) && !sitePlan?.available && <DropdownMenuItem disabled>No extra options</DropdownMenuItem>}
               </DropdownMenuContent>
             </DropdownMenu>
             <Button variant="outline" size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>

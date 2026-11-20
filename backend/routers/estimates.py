@@ -362,6 +362,8 @@ async def cost_refresh_preview(estimate_id: str, user: User = Depends(require_ro
 @router.post("/{estimate_id}/cost-refresh/apply", response_model=EstimateOut)
 async def cost_refresh_apply(estimate_id: str, payload: CostRefreshApplyIn, request: Request, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
     e = await _get_estimate(db, estimate_id, user)
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     ids = set(payload.line_ids)
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     computed = []
@@ -430,6 +432,8 @@ async def price_book_preview(estimate_id: str, payload: PriceBookApplyIn, user: 
 @router.post("/{estimate_id}/price-book/apply", response_model=EstimateOut)
 async def price_book_apply(estimate_id: str, payload: PriceBookApplyIn, request: Request, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
     e = await _get_estimate(db, estimate_id, user)
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     e.price_book_id = payload.price_book_id
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     computed = []

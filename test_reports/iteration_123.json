@@ -1,0 +1,33 @@
+{
+  "summary": "Round 3 Estimate/Takeoff closeout retest. Requested backend suites: 89/89 passed. The conftest purge removed 12 test price books, and the list is still only 'Standard' (is_default=true) before and after. New file tests/test_round3_closeout_iter123.py: 4 of 5 pass, and the failure is a real defect. Verified: (1) Locked EST-1041 as owner, with real mouse clicks: el-unit-0 is now disabled and does not open. Desc, qty, price, remove, tax, Save and Add item are disabled, and Calculate is not shown. The note 'This estimate is locked because its proposal was accepted' shows. No 'Unsaved changes' appears after trying to edit. Totals are $3,500 / $3,788.75, unchanged. (2) Sales authz: on an unassigned estimate, GET/PUT/DELETE, duplicate, price-book preview and apply, cost-refresh preview and apply, and takeoff status all return 403, and the estimate version does not change. List and ?lead_id= exclude it. POST on an unassigned lead returns 403. On an assigned lead, sales can create, view and save. Owner is unaffected. In the UI, sales sees estimate-load-error 'Can't open this estimate', with no spinner. (3) Older-client 409 ESTIMATE_LINE_IDS_REQUIRED: the exact message for all 3 payloads, nothing changes, and the estimate still saves with ids. Saving without ids on an estimate with no takeoff lines works. These are covered by test_estimate_line_identity, which passes. (4) Current client in the UI: the PUT sends line_ids:true and ids. I changed a manual price, removed a manual line, added a custom line, saved, then Calculate and Update estimate: no duplicates and the generated line is still linked. After a hand edit of the generated line, Save then Calculate shows takeoff-review-required and the 'Replace edited items' button. (5) Re-measure: with only a newer draft, measurements_changed=false, changed_metrics=[] and pending is set. The UI shows takeoff-pending-note with no warning. With a newer verified rev 2 plus an even newer draft rev 3, changed=true, latest is rev 2, the metrics compare 2000 to 2600 (not 3200), and pending=3. The UI shows measurements-changed-warning and takeoff-use-latest. (6) EST-1041, EST-1078, EST-1055 and EST-0042 open, and their totals match their line sums. A new estimate gets the Standard price book. DEFECT: the accepted-quote lock can be bypassed through POST /price-book/apply and POST /cost-refresh/apply.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/estimates/{id}/price-book/apply and POST /api/estimates/{id}/cost-refresh/apply", "issue": "There is no accepted-quote lock check. On a TEST estimate with an accepted quote (locked=true), the owner got 200 from both calls and the version went from 1 to 3. Lines, prices and totals of an accepted estimate can be changed, unlike PUT, takeoff apply and delete, which return 409. The UI also still offers 'Change price book' and 'Refresh current costs' under More on locked EST-1041.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EstimateEditor More menu (locked estimate)", "issue": "'Change price book' and 'Refresh current costs' are enabled on locked or accepted estimates. Hide or disable them when !editable.", "selector": "[data-testid='estimate-price-book-open'], [data-testid='estimate-cost-refresh']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_round3_closeout_iter123.py", "/app/backend/tests/test_estimate_line_identity.py", "/app/test_reports/pytest/pytest_iter123.xml", "/app/test_reports/pytest/pytest_iter123_extra.xml"],
+  "action_items": [
+    "Add `if await _has_accepted_quote(db, e.id): raise 409` to price_book_apply and cost_refresh_apply in routers/estimates.py",
+    "Hide or disable the estimate-price-book-open and estimate-cost-refresh menu items when the estimate is not editable"
+  ],
+  "critical_code_review_comments": [
+    "estimates.py: the lock rule is checked separately in each mutating endpoint. A shared _get_editable_estimate() helper would stop endpoints like price-book/cost-refresh apply from being missed.",
+    "EST-1078 and EST-1055 now have price_book_id=null. Their totals are unchanged, but the price book they referenced (presumably a test-named book) was removed by the purge (FK SET NULL). Confirm this is acceptable.",
+    "The line-identity guard passes if any single item has an id, even when line_ids is absent. That is fine for the current client, but a partially-id'd legacy payload is not refused.",
+    "The tests create TEST_ leads that are never deleted, which is the existing pattern."
+  ],
+  "updated_files": ["/app/backend/tests/test_round3_closeout_iter123.py"],
+  "success_rate": {"backend": "98% (93/94; 1 real defect)", "frontend": "95% (all requested flows pass; locked-estimate More menu exposes reprice actions)"},
+  "seed_data_creation": "Created TEST_I123_* leads and estimates and deleted the estimates. One TEST estimate with an accepted quote (from test_locked_estimate_apply_endpoints) cannot be deleted (409 by design) and remains. No price books were created.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run tests/test_round3_closeout_iter123.py with -n 0. test_locked_estimate_apply_endpoints should pass once the lock check is added to price-book/cost-refresh apply. The price book list must stay exactly ['Standard']. EST-1041 is 61cd2edb-3ca3-4020-9098-b69d3509d664, $3,788.75, locked."
+}
