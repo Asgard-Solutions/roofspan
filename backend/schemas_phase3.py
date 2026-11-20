@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class LineItemIn(BaseModel):
+    id: Optional[str] = None  # existing estimate line id; kept on save so takeoff links survive
     description: str = ""
     quantity: float = 1
     unit: str = "ea"
@@ -154,6 +155,7 @@ class EstimateOut(BaseModel):
     cost_summary: Optional[dict] = None
     can_see_cost: bool = False
     margin_warnings: Optional[dict] = None
+    locked: bool = False  # a quote from this estimate was accepted; edits are refused
 
 
 # ---- Quotes ----

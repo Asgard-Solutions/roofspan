@@ -1,0 +1,44 @@
+{
+  "summary": "Retest of iteration_120 fixes. Backend: 62 passed + 1 xfail (new tests/test_round3_fixes_iter121.py plus regression files test_takeoff_reapply_after_save, test_takeoff_core, test_quote_from_estimate, test_crud_estimates_quotes_delete, test_lead_workflow_quote_authz, test_invoice_document). All requested fixes verified. HIGH fix: the editor sends line ids and PUT reuses them (same ids after save). Takeoff links survive. Apply -> edit price -> Save -> Calculate shows takeoff-review-required + takeoff-replace-apply. Without replace the API returns 409, and replacing does NOT duplicate. Apply -> Save with no edits -> 'Update estimate' replaces with no duplicates. Hand-added custom lines are kept (UI and API). An id from another estimate is not reused, and a duplicated id in one payload creates 2 distinct lines. Takeoff apply returns 409 'accepted quote' when a proposal is accepted, and PUT also returns 409. Editor lock as owner on EST-1041 and on a TEST estimate after accept: estimate-locked-note shown, Save and Add item disabled, Calculate hidden. Re-measure (verified rev2 + newer draft rev3): warning + takeoff-use-latest + pending note + applied-note on rev1. Clicking switches to rev2, then takeoff-using-new shows and applied-note is hidden. Applying rev2 gives the same line count. changed-metrics is readable text ('roof squares: 22 → 27', 'area by pitch: changed'). Waste % input shows '125' unclipped (details on). Toasts are bottom-right (data-x/y-position=right/bottom) and no longer cover the proposal toolbar. Regression: Create proposal (unsaved price saved first) -> /quotes/{id}/proposal QUO-0951 -> Share link, PDF download, Email stub toast -> accept -> JOB-0761 created. Invoice from the accepted quote is created with the right total. A manual quote with item ids is OK. EST-1078/EST-1055 ($209) and EST-0042 ($4,233.60) open with the same totals as the API and no unsaved flag. The setup page is config-only. Sales: read-only takeoff (takeoff-office-only), no cost/markup/GP with details on.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/estimates/{id}", "issue": "Clients that send no ids are matched only by position. If a line is inserted above the takeoff lines, the links are lost and the next apply duplicates the generated lines (xfail test_probe_no_ids_insert_at_front_reapply). The web editor sends ids, so it is not affected. This only matters for other or legacy clients."},
+      {"endpoint": "GET /api/takeoff/estimates/{id}/status", "issue": "changed_metrics compares against the latest revision, even when it is an unverified draft (rev3 27 sq), not against the newest verified one. After switching to and applying rev2, Advanced shows 'roof squares: 26 → 27' (the draft). This may be intended, but it is not obvious."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EstimateEditor lock (sales role)", "issue": "Sales opening EST-1041 (accepted QUO-0883, lead not assigned to them) sees NO estimate-locked-note. Save and Add item are enabled and the proposal section says 'Ready when you are'. Cause: the lock is worked out from GET /quotes?lead_id, which returns [] for sales on unassigned leads. The backend still blocks the save (PUT 409), so no data is at risk. Fix: have the backend include a locked/has_accepted_quote flag in the estimate GET and use that in the editor.", "selector": "[data-testid='estimate-locked-note']", "priority": "MEDIUM"},
+      {"component": "EstimateEditor locked state", "issue": "When locked, the line inputs (description, qty, unit, price, remove) are still editable. Editing them changes the totals and shows 'Unsaved changes', but Save is disabled. They should be read-only. The roof section also shows 'The office turns the roof measurements into estimate materials.' to the owner, which is misleading; it should say the estimate is locked.", "selector": "[data-testid^='el-sell-'], [data-testid='takeoff-office-only']", "priority": "LOW"},
+      {"component": "RoofTakeoffPanel changed-metrics", "issue": "`typeof c.from === 'object'` is also true for null, so a metric with from=null shows 'changed' instead of '— → x'.", "selector": "[data-testid='takeoff-changed-metrics']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Estimate Editor details on", "issues": ["Measured input still clips 6+ character values such as 1234.56 while focused (scrollWidth 91 > clientWidth 78) because of the number spinner. Typical values fit."]},
+      {"screen": "Takeoff preview", "issues": ["'Waste changed from 10.00% to 10.00% (+0.40 squares of material)' reads oddly when the percent is unchanged and only the area grew."]},
+      {"screen": "Estimate Editor", "issues": ["After replacing generated lines, the hand-added custom line moves above the takeoff lines (order changes). Minor."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_round3_fixes_iter121.py", "/app/backend/tests/test_takeoff_reapply_after_save.py", "/app/test_reports/pytest/pytest_iter121.xml"],
+  "action_items": [
+    "MEDIUM: Base the editor lock on a server field (e.g. add has_accepted_quote/locked to the EstimateOut GET) instead of the /quotes list, which is filtered for sales.",
+    "LOW: Make line inputs read-only when the estimate is locked, and show a lock message instead of 'The office turns...' to managers.",
+    "LOW: In changed-metrics, handle from/to = null (use `c.from !== null && typeof c.from === 'object'`).",
+    "Optional: widen el-measured a little more, or hide the number spinners.",
+    "Optional: fall back to stable matching (description + material + assembly, ignoring position) for id-less PUT clients."
+  ],
+  "critical_code_review_comments": [
+    "estimates.py update_estimate reuses PKs after a core DELETE in the same transaction. This works (tests pass) because old lines are selected as columns, not ORM objects. Keep it that way, or the identity map will conflict.",
+    "_apply_items only trusts ids that are in this estimate's previous lines (keep_ids) and dedupes them. Good guard against cross-estimate id injection (verified).",
+    "LineItemIn.id is ignored by quotes (_persist_line uses explicit fields) and invoices (explicit fields). No regression.",
+    "EstimateEditor `editable` depends on proposals that are only loaded when est.lead_id is set. Estimates without a lead never show the UI lock (the backend still blocks)."
+  ],
+  "updated_files": ["/app/backend/tests/test_round3_fixes_iter121.py"],
+  "success_rate": {"backend": "100% (62/62, 1 expected xfail probe)", "frontend": "~93% (all requested fixes pass; the sales-role lock UI gap is the only functional miss)"},
+  "seed_data_creation": "TEST_R3_ba404d lead 2085595a-6546-49ae-9ad3-d2c6542fe587 (3 measurement revisions, estimate EST-1136 9ca48698..., ACCEPTED QUO-0951 4caa4301..., JOB-0761). Accepted quote/job cannot be deleted through the API, so they were left in place (TEST_ prefixed). The pytest file deletes its own estimates; the locked one stays. No seeded or user data was modified (EST-1041 PUT attempts returned 409).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the backend tests with -n 0. Fixture builder: backend/tests/_setup_round3_e2e.py (writes /tmp/r3.json). The sales_bk user can GET EST-1041 but /quotes?lead_id returns [] (lead not assigned), so the lock UI is missing for sales. Toasts are bottom-right. The only template is 'test' v1 (Underlayment, $0 price).",
+  "rca of the issue": "Sales lock gap: EstimateEditor.jsx works out lockedByAcceptance from api.get('/quotes', {lead_id}). quotes.list_quotes filters sales to Lead.assigned_user_id == user.id, while GET /estimates/{id} is not filtered the same way, so the list comes back empty and editable stays true."
+}

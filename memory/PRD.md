@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## UX Round 3: Estimate & Proposal (Measurement -> Scope -> Price -> Proposal) (2026-06) — IMPLEMENTED & TESTED (iteration_120-122)
+- User decisions: takeoff USAGE moved into the Estimate Editor (no estimate picker left in Settings); simple line view by default (Item/Quantity/Unit/Price/Total) with a "Show cost & waste details" switch; Create proposal = save, create, open the preview.
+- Estimate Editor sections: 1 Roof measurements (components/estimate/RoofTakeoffPanel.jsx), 2 Scope & price, 3 Proposal (Open proposal / Create (new) proposal). The More menu holds price book, refresh costs and site plan PDF. Shows unsaved changes; Calculate is disabled until saved. The editor is read-only when a proposal from the estimate is accepted (EstimateOut.locked).
+- Takeoff panel: plain measurement summary (looked up by lead_id first, then property, then inspection); "Roof system" + Waste % + Calculate materials -> Add/Update estimate. Advanced holds measurement and template versions, drip override, per-structure waste, versions used, changed metrics, and the full details/packaging table. Sales see a read-only summary.
+- /estimating/takeoff is now "Roof Takeoff Setup": default waste + templates (versions) only, with plain labels.
+- DEFECTS FIXED: (1) PUT /api/estimates deleted and reinserted lines, which broke takeoff links (FK SET NULL). Takeoff re-apply duplicated lines and the hand-edit review never triggered. Line ids are now reused (editor sends id; fallback match by position + same item) and links are restored. (2) Takeoff apply now returns 409 on estimates with an accepted quote. (3) The old Takeoff page ignored lead-primary measurements (lookup only by property/inspection). (4) The "use latest" re-measure prompt now targets the newest VERIFIED revision.
+- Known/accepted: no-id clients inserting lines at the front lose takeoff links; takeoff status changed_metrics compares against the latest draft; sales can GET estimates on unassigned leads (existing behaviour, permissions not changed this round); proposal email still MOCKED (stub).
+- NEXT: Round 4 Materials daily vs admin; Job Detail single assignment; follow-up reminders.
+
+
 ## Pre-Round-2 fixes + UX Round 2: Lead Detail staged workspace (2026-06) — IMPLEMENTED & TESTED (iteration_119)
 - QUOTE AUTHZ (user: block completely): `mobile_authz.assert_quote_access` and `quotes._get_quote` apply to all 13 `/api/quotes/{id}*` routes (view, document, pdf, proposal, proposal.pdf, share-link, site-plan(.pdf), PUT, DELETE, accept, decline, send). Sales get 403 unless the quote's lead is assigned to them. POST /api/quotes from sales requires an assigned lead. The list was already scoped. Owner/admin/office unchanged. ProposalPreview hides "Email to Customer" for sales.
 - SHORTAGE COUNT: `job_planning.shortages_by_job` runs a batched aggregate (same formula as rollup, verified against 269 jobs with 0 mismatches). The dashboard counts ALL active jobs (the 200 cap is gone).
