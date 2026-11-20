@@ -384,7 +384,8 @@ class POLineIn(BaseModel):
 
 class POLineOut(POLineIn):
     id: str
-    line_total: float
+    unit_cost: Optional[float] = None
+    line_total: Optional[float] = None
     received_quantity: float
     abc_price_timestamp: Optional[datetime] = None
 
@@ -460,7 +461,7 @@ class POOut(BaseModel):
     status: str
     order_date: Optional[datetime] = None
     expected_date: Optional[datetime] = None
-    total: float
+    total: Optional[float] = None
     notes: Optional[str] = None
     created_at: datetime
     integration_provider: Optional[str] = None

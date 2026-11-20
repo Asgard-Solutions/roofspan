@@ -175,7 +175,7 @@ def test_job_schedule_no_datetime_serialization_error(owner_headers, job_id, sta
 def test_job_schedule_repeat_no_error(owner_headers, job_id):
     """Repeat multiple PATCHes to ensure clean audit writes with datetimes."""
     for i in range(3):
-        payload = {"schedule_notes": f"note-{i}", "scheduled_start": f"2026-09-0{i+2}T08:00:00Z"}
+        payload = {"schedule_notes": f"note-{i}", "scheduled_start": f"2026-09-0{i+2}T08:00:00Z", "scheduled_end": f"2026-09-0{i+2}T17:00:00Z"}
         r = requests.patch(f"{API}/jobs/{job_id}", json=payload, headers=owner_headers, timeout=15)
         assert r.status_code == 200, f"iter {i}: {r.text}"
 

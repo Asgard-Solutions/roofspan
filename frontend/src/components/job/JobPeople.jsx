@@ -3,25 +3,24 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { Label } from "@/components/ui/label";
+import { UserSearchPicker } from "@/components/UserSearchPicker";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const NONE = "__none__";
 
 export function JobPeople({ job, canManage, onChange }) {
-  const [users, setUsers] = useState([]);
   const [crews, setCrews] = useState([]);
   const [busy, setBusy] = useState(null);
 
   useEffect(() => {
     if (!canManage) return;
-    api.get("/users/assignable").then((r) => setUsers(r.data)).catch(() => {});
     api.get("/crews", { params: { active: true } }).then((r) => setCrews(r.data)).catch(() => {});
   }, [canManage]);
 
   const save = async (kind, value) => {
     setBusy(kind);
     try {
-      const id = value === NONE ? null : value;
+      const id = !value || value === NONE ? null : value;
       const { data } = kind === "manager"
         ? await api.put(`/jobs/${job.id}/assign`, { user_id: id })
         : await api.patch(`/jobs/${job.id}`, { crew_id: id });
@@ -47,13 +46,8 @@ export function JobPeople({ job, canManage, onChange }) {
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div className="space-y-1.5">
         <Label>Job manager</Label>
-        <Select value={job.assigned_user_id || NONE} onValueChange={(v) => save("manager", v)} disabled={busy === "manager"}>
-          <SelectTrigger data-testid="job-manager-select"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NONE} data-testid="job-manager-none">Unassigned</SelectItem>
-            {users.map((u) => <SelectItem key={u.id} value={u.id} data-testid={`job-manager-${u.id}`}>{u.full_name || u.email} · {u.role}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <UserSearchPicker valueId={job.assigned_user_id} valueLabel={job.assigned_user_name} onSelect={(id) => save("manager", id)}
+          disabled={busy === "manager"} testid="job-manager-picker" />
         <p className="text-xs text-slate-400">Owns the job. A salesperson manager can see it in Office and the Field app.</p>
       </div>
       <div className="space-y-1.5">

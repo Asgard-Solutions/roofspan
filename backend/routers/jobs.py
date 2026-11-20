@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User, ActualCostEntry, JobCostSnapshot, Crew
+from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User, ActualCostEntry, JobCostSnapshot, Crew, Supplier
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase3 import JobOut
 from schemas_phase4 import JobPatch, JobMaterialIn, JobMaterialOut, JobDetailOut
@@ -164,6 +164,8 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
         assigned_user_name = (au.full_name or au.email) if au else None
     crew = await db.get(Crew, j.crew_id) if j.crew_id else None
     ready = (await jr.readiness_by_job(db, [j]))[j.id]
+    sids = {p.supplier_id for p in pos if p.supplier_id}
+    snames = {s.id: s.name for s in (await db.execute(select(Supplier).where(Supplier.id.in_(sids)))).scalars().all()} if sids else {}
     return JobDetailOut(
         id=str(j.id), number=j.number, quote_id=str(j.quote_id) if j.quote_id else None,
         customer_id=str(j.customer_id) if j.customer_id else None, customer_name=cust.name if cust else None,
@@ -175,7 +177,9 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
         crew_active=crew.active if crew else None, readiness=ready,
         created_at=j.created_at,
         materials=[await _job_material_out(db, jm) for jm in jms],
-        purchase_orders=[{"id": str(p.id), "number": p.number, "status": p.status, "total": p.total} for p in pos],
+        purchase_orders=[{"id": str(p.id), "number": p.number, "status": p.status, "supplier_name": snames.get(p.supplier_id),
+                          "expected_date": p.expected_date.isoformat() if p.expected_date else None,
+                          **({} if user.role == "sales" else {"total": p.total})} for p in pos],
     )
 
 

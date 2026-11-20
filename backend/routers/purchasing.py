@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory, AbcCatalogItem
+from models import PurchaseOrder, POLineItem, Supplier, Material, InventoryTxn, IdempotencyKey, User, AbcOrderSubmission, PurchaseOrderStatusHistory, AbcCatalogItem, Job
 
 
 async def record_status(db: AsyncSession, po: PurchaseOrder, normalized: str, *, provider: str | None = None,
@@ -63,6 +63,22 @@ async def abc_branch_delivery_services(branch: str, request: Request,
     return {"branch": branch, "services": services, "default": default}
 
 
+
+
+def _redact_costs(out: POOut) -> POOut:
+    # Sales never receive purchasing dollar values.
+    out.total = None
+    for i in out.items:
+        i.unit_cost = i.line_total = i.abc_price = None
+    return out
+
+
+async def _sales_po_guard(db: AsyncSession, po: PurchaseOrder, user: User) -> None:
+    if user.role != "sales":
+        return
+    job = await db.get(Job, po.job_id) if po.job_id else None
+    if not job or job.assigned_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
 
 
 async def _find_or_create_supplier(db: AsyncSession, name: str | None):
@@ -131,6 +147,8 @@ async def list_pos(job_id: str | None = Query(None), status: str | None = Query(
         stmt = stmt.where(PurchaseOrder.job_id == job_id)
     if status:
         stmt = stmt.where(PurchaseOrder.status == status)
+    if user.role == "sales":  # only POs on jobs they manage
+        stmt = stmt.where(PurchaseOrder.job_id.in_(select(Job.id).where(Job.assigned_user_id == user.id)))
     pos = (await db.execute(stmt)).scalars().all()
     ids = [po.id for po in pos]
     pre = {"items": {}, "suppliers": {}, "subs": {}}
@@ -146,7 +164,8 @@ async def list_pos(job_id: str | None = Query(None), status: str | None = Query(
                     AbcOrderSubmission.purchase_order_id.in_(abc_ids), AbcOrderSubmission.status.in_(["confirmed", "unknown"]))
                     .order_by(AbcOrderSubmission.attempted_at.desc()))).scalars().all():
                 pre["subs"].setdefault(sub.purchase_order_id, sub)  # first = latest attempt (same as .first())
-    return [await _out(db, po, pre) for po in pos]
+    outs = [await _out(db, po, pre) for po in pos]
+    return [_redact_costs(o) for o in outs] if user.role == "sales" else outs
 
 
 @router.post("", response_model=POOut, status_code=201)
@@ -384,7 +403,9 @@ async def get_po(po_id: str, user: User = Depends(get_current_user), db: AsyncSe
     po = await db.get(PurchaseOrder, po_id)
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
-    return await _out(db, po)
+    await _sales_po_guard(db, po, user)
+    out = await _out(db, po)
+    return _redact_costs(out) if user.role == "sales" else out
 
 
 # ============================ ABC Supply Ordering (Phase 3) ============================
@@ -1111,6 +1132,7 @@ async def status_history(po_id: str, user: User = Depends(get_current_user), db:
     po = await db.get(PurchaseOrder, po_id)
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
+    await _sales_po_guard(db, po, user)
     rows = (await db.execute(select(PurchaseOrderStatusHistory).where(
         PurchaseOrderStatusHistory.purchase_order_id == po.id)
         .order_by(PurchaseOrderStatusHistory.created_at.asc()))).scalars().all()
