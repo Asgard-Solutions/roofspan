@@ -633,7 +633,10 @@ async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(requ
 
 @router.post("/jobs/{job_id}/assign")
 async def assign_job(job_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    try:
+        j = await db.get(Job, uuid.UUID(job_id))
+    except ValueError:
+        j = None
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     if payload.user_id:

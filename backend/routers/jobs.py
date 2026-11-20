@@ -181,7 +181,7 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
 
 @router.patch("/{job_id}", response_model=JobDetailOut)
 async def update_job(job_id: str, payload: JobPatch, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     valid = ["created", "pending", "scheduled", "in_progress", "completed", "cancelled"]
@@ -245,7 +245,7 @@ async def _apply_crew_name(db: AsyncSession, j: Job, name: str | None) -> None:
 
 @router.put("/{job_id}/assign", response_model=JobDetailOut)
 async def assign_job(job_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     if payload.user_id:
@@ -270,7 +270,7 @@ async def list_job_materials(job_id: str, user: User = Depends(get_current_user)
 
 @router.post("/{job_id}/materials", response_model=JobMaterialOut, status_code=201)
 async def add_job_material(job_id: str, payload: JobMaterialIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     m = await db.get(Material, payload.material_id)
@@ -311,7 +311,7 @@ async def job_material_plan(job_id: str, user: User = Depends(get_current_user),
 
 @router.post("/{job_id}/materials/generate")
 async def generate_job_materials(job_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     result = await jp.generate_from_quote(db, j, user.email)
@@ -344,7 +344,7 @@ async def release_job_material(job_id: str, jm_id: str, request: Request, user: 
 
 @router.get("/{job_id}/purchase-proposal")
 async def job_purchase_proposal(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     return await jp.shortage_proposal(db, j)
@@ -353,7 +353,7 @@ async def job_purchase_proposal(job_id: str, user: User = Depends(require_roles(
 # --- Actual Job Costing (cost/profitability data — Sales role is NEVER granted access) ---
 @router.get("/{job_id}/costing")
 async def job_costing(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     return await jc.costing(db, j)
@@ -361,7 +361,7 @@ async def job_costing(job_id: str, user: User = Depends(require_roles(*MANAGE_RO
 
 @router.get("/{job_id}/actual-costs")
 async def list_actual_costs(job_id: str, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     return await jc.manual_actual_costs(db, j)
@@ -370,7 +370,7 @@ async def list_actual_costs(job_id: str, user: User = Depends(require_roles(*MAN
 @router.post("/{job_id}/actual-costs", status_code=201)
 async def add_actual_cost(job_id: str, payload: ActualCostIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
     from datetime import datetime as _dt
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     cat = (payload.category or "").strip().lower()
@@ -438,7 +438,7 @@ async def get_cost_snapshot(job_id: str, snap_id: str, user: User = Depends(requ
 
 @router.post("/{job_id}/cost-snapshots", status_code=201)
 async def create_cost_snapshot(job_id: str, payload: SnapshotIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     snap = await jc.build_snapshot(db, j, payload.trigger or "manual", user.email)
