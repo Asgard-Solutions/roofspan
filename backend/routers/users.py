@@ -35,8 +35,9 @@ async def list_assignable(q: str | None = Query(None, max_length=100), limit: in
     """Active users available for lead/job assignment (owner/admin/office/sales). Optional name/email search."""
     stmt = select(User).where(User.is_active == True, User.role.in_(ROLES)).order_by(User.full_name, User.email)
     if q and q.strip():
-        like = f"%{q.strip().lower()}%"
-        stmt = stmt.where(or_(func.lower(User.full_name).like(like), func.lower(User.email).like(like)))
+        term = q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{term}%"
+        stmt = stmt.where(or_(func.lower(User.full_name).like(like, escape="\\"), func.lower(User.email).like(like, escape="\\")))
     if limit:
         stmt = stmt.limit(limit)
     return [_out(u) for u in (await db.execute(stmt)).scalars().all()]

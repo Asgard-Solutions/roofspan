@@ -7,7 +7,6 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 OWNER = ("pjacobsen@asgardsolution.io", "RoofSpan#Owner2026")
 SALES_BK = ("sales_bk@example.com", "SalesBk#2026")
-JOB_0257 = "3f92f045-28ca-4df1-90b5-379dc01597c6"
 
 
 def _login(email, pw):
@@ -35,8 +34,11 @@ def sales_id(sales):
 def jobs_pair(owner, sales_id):
     """Pick a job with materials, assign it to sales_bk; another job not assigned to sales_bk. Restore after."""
     jobs = requests.get(f"{API}/jobs", headers=owner, timeout=60).json()
-    mine = {"id": JOB_0257}
-    other = next((j for j in jobs if j["id"] != JOB_0257 and j.get("assigned_user_id") != sales_id), None)
+    mine = next((j for j in jobs if j["status"] not in ("completed", "cancelled")
+                 and requests.get(f"{API}/jobs/{j['id']}/material-plan", headers=owner, timeout=30).json().get("materials")), None)
+    if not mine:
+        pytest.skip("need a job with materials")
+    other = next((j for j in jobs if j["id"] != mine["id"] and j.get("assigned_user_id") != sales_id), None)
     if not other:
         pytest.skip("need another job")
     orig = requests.get(f"{API}/jobs/{mine['id']}", headers=owner, timeout=20).json().get("assigned_user_id")

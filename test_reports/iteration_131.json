@@ -1,0 +1,35 @@
+{
+  "summary": "Job closeout verification. Cleanup verified via Postgres, read only: jobs=837, 0 jobs with scheduled_end<scheduled_start, INV-0029 gone, purchase_orders=2248, inventory_txns 1561 / sum(delta) 13131.5, sum(materials.quantity_on_hand) 16031.5, users = exactly the 4 kept accounts. No orphan rows found in purchase_orders, job_materials, job_cost_snapshots, actual_cost_entries, inventory_txns or invoices. 11 TEST_P4_Lead jobs with valid dates remain, as intended. New backend suite tests/test_iter131_closeout.py: 14/14 passed. It covers the assignable type-ahead (search by name/email ignoring case, active users only, deactivated user never returned, no-q lists all active users, limit works, sales 403, office allowed), assigning an inactive or unknown user (422 on office and mobile assign), the sales PO list/detail/status-history (own job only, total and unit_cost/line_total/abc_price null, other PO 404), Job Detail purchase_orders (no total key for sales, total for owner), another sales user 403/404, and Crew A jobs (mobile shows assigned_to, crew_id and crew_name). Regression: test_assignments, test_job_crews_readiness_iter129, test_iter130_retest and phase4 test_job_schedule_repeat_no_error gave 21 passed, 2 failed, 6 errors. Every failure and error is caused by the deleted JOB-0257 (an end<start test job) still being hardcoded in iter129/iter130 tests, not by an app bug. Quote accept making the rep the Job Manager (and another sales user getting 403), crew assignment and install-date validation all passed. Test cleanup works: after both runs the users count was back to 4 (the hook printed 'removed 3 automated-test user(s)'). Frontend (Playwright, desktop): as owner, the Job Manager picker searches through the server (debounced /users/assignable?q=...&limit=25 calls), shows the empty state, saves a pick with the toast 'Job manager: Sales Backup Test', and updates job-fact-manager and the trigger. Unassigning with job-manager-picker-none shows 'Job manager cleared'. The crew select still works. Owner sees job-po-total and the PO card opens /purchase-orders/:id. As sales_bk on that job: status badge and supplier (job-po-meta) shown, no job-po-total, card does nothing when clicked, read-only manager/crew, no Costing section, and /purchase-orders/:id redirects to /. The test job (JOB-0692) was assigned to sales_bk and then put back to unassigned.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/users/assignable?q=", "issue": "LIKE wildcards are not escaped: q='%' or '_' matches every user (q=% returned all 6). It can't leak anything because results are still active-only and manage-only, but searching a literal underscore (e.g. 'sales_') matches too broadly. Escape % _ \\ and use .like(..., escape='\\\\')."},
+      {"endpoint": "POST /api/mobile/leads/{id}/assign", "issue": "Unlike mobile job assign, the mobile lead assign does not check that the user exists and is active, and uuid.UUID() on bad input gives a 500. Not in this scope, but it doesn't match the 'validate assignee' rule."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "UserSearchPicker", "issue": "No guard against out-of-order responses. Overlapping requests (typing slower than the 200ms debounce on a slow network) can show results for an older query. Ignore stale responses with a request counter or AbortController.", "selector": "[data-testid=job-manager-picker-search]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter131_closeout.py", "/app/test_reports/pytest/iter131.xml"],
+  "action_items": [
+    "Update tests/test_job_crews_readiness_iter129.py (test_job_0257_materials_short, test_legacy_inverted_status_only_ok) and tests/test_iter130_retest.py (jobs_pair fixture) to stop using the deleted JOB_0257 (3f92f045-...). Pick a job dynamically or build one in setup.",
+    "Existing regression tests (test_assignments.py, iter129 quote-accept, phase4) create leads/quotes/customers/jobs and never delete them. Only users and price books are purged at session end, so jobs still pile up; this run created 3 and I deleted them by id. Add teardown, or extend the session cleanup to these records using the strict test pattern.",
+    "Optional: escape LIKE wildcards in list_assignable; add a stale-response guard in UserSearchPicker."
+  ],
+  "critical_code_review_comments": [
+    "routers/purchasing.py: sales cost redaction is applied after building the response in list_pos, get_po and status_history, and _sales_po_guard returns 404 for POs not on the user's jobs. Correct. status_history has no cost fields.",
+    "routers/jobs.py get_job: the total key is left out for sales; purchase_orders is an untyped list in JobDetailOut, so the key really is absent (verified).",
+    "routers/users.py list_assignable: filters is_active and role in ROLES; q is length-capped at 100 and limit must be 1-100. Wildcards are not escaped (minor).",
+    "tests/_test_data_cleanup.py: TEST_USER_RE plus KEEP_USERS protects the kept accounts; the owner's domain doesn't match. Note the last branch '[a-z]+_test|test_[a-z0-9_]+' + hex@example.com is broad, but it only acts on users created after the session snapshot (only_new_since), so pre-existing users are safe."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter131_closeout.py"],
+  "success_rate": {"backend": "100% of new closeout tests (14/14); legacy regression 21/29 with all 8 failures due to stale JOB_0257 test data", "frontend": "100%"},
+  "seed_data_creation": "Created test_office_/test_admin_/test_inactive_<hex>@example.com users; the session hook purged them (users back to 4). JOB-0692 was temporarily assigned to sales_bk and restored to unassigned. Jobs JOB-0828/0829/0830 created by legacy regression tests had no dependents and were deleted by id (jobs back to 837). The leads/quotes/customers those legacy tests created were left in place.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Baseline: jobs 837, POs 2248, inventory_txns 1561 / sum 13131.5, sum qoh 16031.5, users = 4 kept. JOB-0692 (029ef2bf-ec9a-4625-a6b5-12e39ba2495e) with PO-1294 (f1f721a7-49ea-4215-9b72-0ef3a38589cf, $450) works well for sales PO views when temporarily assigned to sales_bk (0e2d2662-9388-4e9c-b012-4768b4acac33). Crew A job: JOB-0626. Users have no DELETE endpoint; rely on the conftest purge_users hook with test_<kind>_<hex>@example.com emails."
+}

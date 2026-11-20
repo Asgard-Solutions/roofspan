@@ -14,12 +14,15 @@ export function UserSearchPicker({ valueId, valueLabel, onSelect, disabled, test
 
   useEffect(() => {
     if (!open) return undefined;
+    let stale = false;
     setLoading(true);
     const t = setTimeout(() => {
       api.get("/users/assignable", { params: { q: q || undefined, limit: 25 } })
-        .then((r) => setUsers(r.data)).catch(() => setUsers([])).finally(() => setLoading(false));
+        .then((r) => { if (!stale) setUsers(r.data); })
+        .catch(() => { if (!stale) setUsers([]); })
+        .finally(() => { if (!stale) setLoading(false); });
     }, 200);
-    return () => clearTimeout(t);
+    return () => { stale = true; clearTimeout(t); };
   }, [q, open]);
 
   const pick = (id) => { setOpen(false); setQ(""); onSelect(id); };

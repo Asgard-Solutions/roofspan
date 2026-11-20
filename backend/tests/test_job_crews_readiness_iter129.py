@@ -11,7 +11,14 @@ SALES1 = ("sales1_38f545f9@example.com", "Sales1#2026")
 SALES1_ID = "d47710df-133f-4436-9ffd-b61a05a0060f"
 SALES_BK = ("sales_bk@example.com", "SalesBk#2026")
 CREW_A = "76dc5342-12e3-4809-bd5b-156ed4f99171"
-JOB_0257 = "3f92f045-28ca-4df1-90b5-379dc01597c6"
+
+
+def _short_job(owner):
+    """An active job whose readiness reports a material shortage (picked dynamically)."""
+    for j in requests.get(f"{API}/jobs", headers=owner, timeout=60).json():
+        if any(x["code"] == "materials" for x in (j.get("readiness") or {}).get("reasons", [])):
+            return j["id"]
+    pytest.skip("no job with a material shortage")
 
 
 def _login(email, pw):
@@ -52,7 +59,7 @@ def cleanup(owner, created):
 def _any_job(owner, status_in=("created", "pending", "scheduled")):
     jobs = requests.get(f"{API}/jobs", headers=owner, timeout=30).json()
     for j in jobs:
-        if j["status"] in status_in and j["id"] != JOB_0257:
+        if j["status"] in status_in:
             return j
     pytest.skip("no job available")
 
@@ -129,7 +136,7 @@ class TestJobCrew:
         assert requests.patch(f"{API}/jobs/{j['id']}", json={"crew_id": cid}, headers=owner, timeout=20).status_code == 200
         # other job can't newly get an inactive crew
         other = next(x for x in requests.get(f"{API}/jobs", headers=owner, timeout=30).json()
-                     if x["id"] not in (j["id"], JOB_0257) and x["status"] in ("created", "pending", "scheduled"))
+                     if x["id"] != j["id"] and x["status"] in ("created", "pending", "scheduled"))
         created["jobs_restore"].setdefault(other["id"], _snapshot(other))
         r = requests.patch(f"{API}/jobs/{other['id']}", json={"crew_id": cid}, headers=owner, timeout=20)
         assert r.status_code == 422
@@ -175,8 +182,8 @@ class TestJobCrew:
         row = next(x for x in lst if x["id"] == j["id"])
         assert row["readiness"] == d["readiness"] and row["crew_name"] == "Crew A" and "scheduled_end" in row
 
-    def test_job_0257_materials_short(self, owner):
-        d = requests.get(f"{API}/jobs/{JOB_0257}", headers=owner, timeout=20).json()
+    def test_short_job_materials_reason(self, owner):
+        d = requests.get(f"{API}/jobs/{_short_job(owner)}", headers=owner, timeout=20).json()
         codes = {x["code"] for x in d["readiness"]["reasons"]}
         assert "materials" in codes, d["readiness"]
 
@@ -208,12 +215,11 @@ class TestSchedule:
         r = requests.patch(f"{API}/mobile/jobs/{j['id']}", json={"scheduled_start": "2026-05-10T12:00:00Z", "scheduled_end": "2026-05-01T12:00:00Z"}, headers=owner, timeout=20)
         assert r.status_code == 422, r.text
 
-    def test_legacy_inverted_status_only_ok(self, owner):
-        d = requests.get(f"{API}/jobs/{JOB_0257}", headers=owner, timeout=20).json()
-        st = d["status"]
-        r = requests.patch(f"{API}/jobs/{JOB_0257}", json={"status": st}, headers=owner, timeout=20)
+    def test_status_only_patch_skips_date_validation(self, owner):
+        j = _any_job(owner)
+        r = requests.patch(f"{API}/jobs/{j['id']}", json={"status": j["status"]}, headers=owner, timeout=20)
         assert r.status_code == 200, r.text
-        r = requests.patch(f"{API}/mobile/jobs/{JOB_0257}", json={"status": st}, headers=owner, timeout=20)
+        r = requests.patch(f"{API}/mobile/jobs/{j['id']}", json={"status": j["status"]}, headers=owner, timeout=20)
         assert r.status_code == 200, r.text
 
 
