@@ -145,6 +145,8 @@ async def apply_takeoff(estimate_id: str, payload: TakeoffApplyIn, request: Requ
 
 @router.get("/estimates/{estimate_id}/status")
 async def takeoff_status(estimate_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from routers.estimates import _get_estimate
+    await _get_estimate(db, estimate_id, user)  # 404 / sales lead-assignment check
     return await svc.status(db, estimate_id)
 
 

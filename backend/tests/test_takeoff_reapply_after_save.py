@@ -1,5 +1,5 @@
 # Round 3 regression: takeoff re-apply after an Estimate Editor save must REPLACE generated lines (not duplicate).
-# Currently FAILS: PUT /api/estimates/{id} deletes+reinserts line items, breaking EstimateTakeoffLine.estimate_line_item_id links.
+# Current clients send line ids (line_ids: true); legacy no-id saves are covered in test_estimate_line_identity.py.
 import os, uuid, pytest, requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
@@ -49,10 +49,10 @@ def test_reapply_after_editor_save_does_not_duplicate(owner, setup):
     eid, body = setup["eid"], setup["body"]
     e = owner.get(f"{BASE_URL}/api/estimates/{eid}").json()
     n1 = len(e["items"])
-    items = [{k: i.get(k) for k in ("description", "unit", "measured_quantity", "waste_percent", "material_cost", "markup_percent", "selling_unit_price", "line_kind", "material_id", "assembly_id", "assembly_version", "assembly_name")} for i in e["items"]]
+    items = [{k: i.get(k) for k in ("id", "description", "unit", "measured_quantity", "waste_percent", "material_cost", "markup_percent", "selling_unit_price", "line_kind", "material_id", "assembly_id", "assembly_version", "assembly_name")} for i in e["items"]]
     for i in items:
         i["selling_unit_price"] = 99  # user adjusts a price, then Saves (same payload shape as EstimateEditor)
-    r = owner.put(f"{BASE_URL}/api/estimates/{eid}", json={"lead_id": e["lead_id"], "customer_id": e["customer_id"], "tax_rate": 0, "items": items}, headers={"If-Match": str(e["version"])})
+    r = owner.put(f"{BASE_URL}/api/estimates/{eid}", json={"lead_id": e["lead_id"], "customer_id": e["customer_id"], "tax_rate": 0, "line_ids": True, "items": items}, headers={"If-Match": str(e["version"])})
     assert r.status_code == 200, r.text
     p = owner.post(f"{BASE_URL}/api/takeoff/estimates/{eid}/preview", json=body).json()
     # Either the generated lines are still tracked (replace or 409 review), or apply must not append duplicates.

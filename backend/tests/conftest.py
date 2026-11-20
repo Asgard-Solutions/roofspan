@@ -23,3 +23,36 @@ if _backend_env.exists():
         k = k.strip()
         v = v.strip().strip('"').strip("'")
         os.environ.setdefault(k, v)
+
+
+def _cleanup_module():
+    try:
+        from tests import _test_data_cleanup as c
+    except ImportError:
+        import _test_data_cleanup as c
+    return c
+
+
+def pytest_configure(config):
+    # Controller process only (xdist workers have `workerinput`): snapshot price books before any test runs.
+    if hasattr(config, "workerinput"):
+        return
+    try:
+        config._pb_snapshot = _cleanup_module().snapshot()
+    except Exception as exc:
+        config._pb_snapshot = None
+        print(f"[test cleanup] price book snapshot skipped: {exc}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # After ALL workers finish: delete price books this run created (strict test-name pattern only), restore default.
+    config = session.config
+    snap = getattr(config, "_pb_snapshot", None)
+    if hasattr(config, "workerinput") or not snap:
+        return
+    try:
+        n = _cleanup_module().purge(only_new_since=snap[0], restore_default=snap[1])
+        if n:
+            print(f"[test cleanup] removed {n} automated-test price book(s)")
+    except Exception as exc:
+        print(f"[test cleanup] price book purge skipped: {exc}")
