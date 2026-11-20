@@ -599,7 +599,8 @@ def _lead_row(l: Lead) -> dict:
 def _job_row(j: Job) -> dict:
     return {"id": str(j.id), "number": j.number, "scope": j.scope, "status": j.status,
             "scheduled_start": j.scheduled_start.isoformat() if j.scheduled_start else None,
-            "assigned_to": j.assigned_to, "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}
+            "assigned_to": j.assigned_to, "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None,
+            "crew_id": str(j.crew_id) if j.crew_id else None, "crew_name": j.assigned_to if j.crew_id else None}
 
 
 @router.get("/leads")
@@ -631,12 +632,26 @@ async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(requ
 
 
 @router.post("/jobs/{job_id}/assign")
-async def assign_job(job_id: str, payload: AssignIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+async def assign_job(job_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    try:
+        j = await db.get(Job, uuid.UUID(job_id))
+    except ValueError:
+        j = None
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
-    j.assigned_user_id = uuid.UUID(payload.user_id) if payload.user_id else None
+    if payload.user_id:
+        try:
+            target = await db.get(User, uuid.UUID(payload.user_id))
+        except ValueError:
+            target = None
+        if not target or not target.is_active:
+            raise HTTPException(status_code=422, detail="Assignee must be an active user")
+        j.assigned_user_id = target.id
+    else:
+        j.assigned_user_id = None
     await db.commit()
+    await log_action(db, user=user, action="job.assign", entity_type="job", entity_id=j.id,
+                     detail={"assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None, "via": "mobile"}, request=request)
     return {"id": str(j.id), "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None}
 
 
@@ -1088,6 +1103,7 @@ async def _job_detail(db: AsyncSession, j: Job) -> dict:
         "scheduled_end": j.scheduled_end.isoformat() if j.scheduled_end else None,
         "schedule_notes": j.schedule_notes, "assigned_to": j.assigned_to,
         "assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None,
+        "crew_id": str(j.crew_id) if j.crew_id else None, "crew_name": j.assigned_to if j.crew_id else None,
         "customer_name": cust.name if cust else None,
         "property_id": str(j.property_id) if j.property_id else None,
         "property_address": prop.formatted_address if prop else None,
@@ -1118,6 +1134,8 @@ async def update_job(job_id: str, payload: MobileJobPatch, request: Request, if_
     data = payload.model_dump(exclude_unset=True)
     if "status" in data and data["status"] not in _JOB_STATUSES:
         raise HTTPException(status_code=422, detail=f"Status must be one of {_JOB_STATUSES}")
+    from routers.jobs import validate_schedule
+    validate_schedule(j, data)
     for k, v in data.items():
         setattr(j, k, v)
     # Preserve Office business rules on status transitions (idempotent).

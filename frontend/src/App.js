@@ -27,6 +27,7 @@ import Suppliers from "@/pages/Suppliers";
 import Billing from "@/pages/Billing";
 import SalesQuotes from "@/pages/SalesQuotes";
 import SettingsHub from "@/pages/SettingsHub";
+import Crews from "@/pages/Crews";
 import { SalesLayout, MaterialsLayout } from "@/components/SubNav";
 import Reports from "@/pages/Reports";
 import ProposalPreview from "@/pages/ProposalPreview";
@@ -85,6 +86,7 @@ function App() {
             <Route path="/billing" element={<RequireManage><Billing /></RequireManage>} />
             <Route path="/finance" element={<Navigate to="/billing" replace />} />
             <Route path="/settings" element={<RequireManage><SettingsHub /></RequireManage>} />
+            <Route path="/settings/crews" element={<RequireManage><Crews /></RequireManage>} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />

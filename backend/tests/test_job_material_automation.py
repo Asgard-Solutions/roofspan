@@ -86,7 +86,7 @@ def test_reorder_suggestions_endpoint():
     r = requests.get(f"{API}/inventory/reorder-suggestions", headers=h, timeout=20)
     assert r.status_code == 200
     for s in r.json()["suggestions"]:
-        assert s["projected"] < s["reorder_threshold"]     # only below-threshold
+        assert s["projected"] <= s["reorder_threshold"]    # at or below threshold (approved Materials rule)
         assert s["recommended_quantity"] >= 0
 
 

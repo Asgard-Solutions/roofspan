@@ -1,0 +1,43 @@
+{
+  "summary": "Tested the job assignments & scheduling round end to end. Backend: new pytest suite with 16 tests, 13 pass. The 3 failures are all the same bug: a malformed (non-UUID) id returns 500. Frontend (Playwright at 1366, 1920 and 390): the Ready panel, the Job manager and Crew selects (save immediately, toast, panel updates), the Manage crews link, the two-month calendar at 1366 / one month at 390, day count, clear, done, save, and reload with no day shift, the full-width materials table (columns, expand details, reserve/release/actions don't toggle expansion, no page overflow at 1366/1920), the add-material dialog (updates without reload), the Jobs list (manager/crew/ready columns, ready/not_ready filters, date ranges), Settings > Crews (add, duplicate 409 toast, rename, toggle active, delete only for unused crews), office access OK, sales blocked, and the sales read-only Job Detail. One cost-gating leak and a mobile overflow were found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT/DELETE /api/crews/{crew_id}", "issue": "A crew_id that is not a UUID (e.g. 'not-a-uuid') returns 500 (asyncpg DataError) instead of 404/422."},
+      {"endpoint": "PATCH /api/jobs/{id} {crew_id:'garbage'}", "issue": "A crew_id that is not a UUID returns 500 instead of 422 'Crew not found'. _apply_crew calls db.get(Crew, crew_id) without parsing the UUID first."},
+      {"endpoint": "PUT /api/jobs/{id}/assign {user_id:'not-a-uuid'}", "issue": "Returns 500. The Office assign endpoint did not get the uuid.UUID try/except fix that was applied to POST /api/mobile/jobs/{id}/assign (the mobile one now correctly returns 422)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "JobMaterialPlan expanded details (sales role)", "issue": "A sales user who manages a job sees 'Best known cost' in the expanded material row (plan-bestcost-{id}). GET /api/jobs/{id}/material-plan also returns best_known_cost (and preferred_supplier) to sales with no role check. This goes against the 'no costing for sales' rule. Hide this field when canManage is false, and drop best_known_cost from the material-plan response for the sales role.", "selector": "[data-testid^='plan-bestcost-']", "priority": "HIGH"},
+      {"component": "AppShell <main> at 390px", "issue": "Horizontal page overflow on mobile: /jobs/:id scrollWidth is 884 and /jobs is 918 (viewport 390). <main className='flex-1 ...'> has no min-w-0, so the min-w-[800px] plan table (and the Jobs table) stretches main instead of scrolling inside its overflow-x-auto wrapper. The selects and cards get cut off on the right. Fix: add min-w-0 to main in AppShell.jsx:141.", "selector": "main.flex-1", "priority": "MEDIUM"},
+      {"component": "JobPeople crew select", "issue": "While /crews is still loading after a reload, the current active crew briefly shows as 'Crew A (inactive)' and the manager select is blank. It is correct once the data loads. Only append '(inactive)' when the crew is actually inactive (use job.crew_active) or after crews have loaded.", "selector": "[data-testid='job-crew-select']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "DateRangePicker", "issues": ["If a range is already saved, clicking a new day moves the end of that range (standard react-day-picker range mode) instead of starting a new range. To start over, users have to press Clear first. Consider starting a new range on the first click after opening."]},
+      {"screen": "Jobs list", "issues": ["Install dates use the numeric locale format (11/10/2026 – 11/14/2026) while Job Detail uses 'Nov 10, 2026'. This is a minor inconsistency."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_job_crews_readiness_iter129.py", "/app/test_reports/pytest/iter129.xml"],
+  "action_items": [
+    "Hide 'Best known cost' (and supplier, if treated as cost data) in JobMaterialPlan details for sales, and strip best_known_cost from GET /api/jobs/{id}/material-plan for the sales role",
+    "Add min-w-0 to <main> in AppShell.jsx so wide tables scroll inside their containers on mobile",
+    "Parse UUIDs (try uuid.UUID -> 422/404) in crews.update_crew/delete_crew, jobs._apply_crew, and jobs.assign_job (Office PUT /assign)",
+    "Optional: don't label the current crew '(inactive)' before the crews list loads"
+  ],
+  "critical_code_review_comments": [
+    "routers/jobs.py assign_job (Office): db.get(User, payload.user_id) with a raw string returns 500 on bad input. The mobile version was fixed; this one was not.",
+    "routers/jobs.py _plan_row exposes best_known_cost and preferred_supplier to every authenticated role (get_current_user).",
+    "crews.py: the name uniqueness check is good and is backed by a unique lower(name) index, but a concurrent create would raise IntegrityError -> 500 instead of 409 (edge case).",
+    "mobile._job_row/_job_detail use crew_name = j.assigned_to. This is fine while the sync holds, but it can drift if assigned_to is ever written directly."
+  ],
+  "updated_files": ["/app/backend/tests/test_job_crews_readiness_iter129.py"],
+  "success_rate": {"backend": "81% (13/16; 3 failures are malformed-UUID 500s)", "frontend": "~92% (all requested flows work; 1 HIGH cost leak to sales, 1 mobile overflow)"},
+  "seed_data_creation": "Created through the quote-accept test: TEST_CrewLead lead/customer/estimate/quote plus job JOB-0808 (id 77a25b2f-6f3e-4534-aba2-9db935dcafe0, manager Sales User 1, dates Nov 10-14 2026, crew cleared, material removed). There is no job delete endpoint, so it remains. Created TEST office user test_office_crews129@example.com (id 5e0e09b8-...), now deactivated. All TEST_ crews were deleted. Crew A is unchanged (active, 31 jobs). Jobs touched by the pytest suite were restored to their original crew/dates.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && pytest tests/test_job_crews_readiness_iter129.py -n 0. Do NOT use -p no:xdist. The suite restores the jobs it touches and deletes its crews. Each run creates a new TEST quote-job assigned to sales1. JOB-0257 still has legacy inverted dates (Sep 4 -> Sep 1) and a shortage of 30. Re-verify: the 3 UUID 500s, sales best-cost hiding, and scrollWidth at 390 on /jobs/:id and /jobs.",
+  "rca of the issue": "Cost leak: JobMaterialPlan.jsx line ~80 renders the Best known cost Detail with no canManage check, and the backend _plan_row includes best_known_cost for every role. Mobile overflow: the flex child <main> defaults to min-width:auto, so it expands to the table's min-w-[800px]. 500s: asyncpg rejects non-UUID strings that are passed to db.get()."
+}

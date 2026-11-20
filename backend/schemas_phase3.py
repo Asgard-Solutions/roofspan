@@ -259,6 +259,10 @@ class JobOut(BaseModel):
     customer_name: Optional[str] = None
     property_address: Optional[str] = None
     material_status: Optional[str] = None  # none | ready | short
+    scheduled_end: Optional[datetime] = None
+    crew_id: Optional[str] = None
+    crew_name: Optional[str] = None
+    readiness: Optional[dict] = None
 
 
 # ---- Invoices ----

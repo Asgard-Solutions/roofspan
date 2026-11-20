@@ -1,0 +1,33 @@
+{
+  "summary": "Retested the iteration_129 fixes. All 7 requested items pass. Backend: the iter129 suite passes 16/16, and the new retest suite passes 8 of 9 tests. The one failure is an extra check outside the requested scope: PUT /api/jobs/not-a-uuid/assign and PATCH /api/jobs/not-a-uuid still return 500. Frontend (Playwright at 1920 and 390): (1) Sales: Best known cost is hidden. A sales_bk user managing JOB-0257 sees no plan-bestcost element in the expanded row, the material-plan response has no best_known_cost key, and the sales user gets 403 on another job's /material-plan and /materials. The owner still sees plan-bestcost. (2) No page overflow at 390: scrollWidth equals clientWidth (390) on /jobs, /jobs/JOB-0257 and /jobs/JOB-0824, and the plan table (800 wide) and jobs table (949 wide) scroll inside their own overflow-x:auto containers. (3) Non-UUID ids as requested: crew PUT/DELETE -> 404, PATCH crew_id 'garbage' -> 422, assign user_id 'not-a-uuid' -> 422, GET job -> 404. (4) JobPeople: with /api/crews delayed 4s, the active crew shows 'Crew A' both while loading and after, never '(inactive)'. An inactive TEST crew is shown as 'TEST_Inactive_130 (inactive)'. (5) DateRangePicker: picked the 10th to the 12th (3 days), saved, reloaded and the same days showed. Reopened, clicked the 20th: a new 1-day range started on the 20th. Clicked the 23rd: 20th to 23rd, 4 days. Saved and reloaded: the same days showed. Clicking the 5th and then the 3rd gave the 3rd to the 5th. Clear works, and the cleared value persisted after Save and reload. (6) Dates use the 'Mon D, YYYY' format on the Jobs list, the Dashboard 'Jobs scheduled' list and the Lead Detail production panel ('Install Sep 4, 2026'). (7) Regression checks pass: Ready panel, manager and crew selects, materials expand, and Settings > Crews add, rename, deactivate and delete.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/jobs/{job_id}/assign and PATCH /api/jobs/{job_id} (and the other db.get(Job, job_id) calls in routers/jobs.py at lines 184, 248, 273, 314, 347, 356, 364, 373, 441, plus mobile.py:636)", "issue": "A non-UUID job_id in the path returns 500 (asyncpg DataError: invalid UUID). The fix wrapped only the body ids (user_id, crew_id) and get_job/_assert_sales_job, not the path job_id in these handlers."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Job Detail > Job manager select", "issues": ["The list has 868 options (mostly TEST users) and no search. Consider a searchable combobox."]},
+      {"screen": "Jobs list at 390px", "issues": ["Rows are very tall because cells wrap inside the scrolling table. Consider whitespace-nowrap on the short columns. Cosmetic only."]},
+      {"screen": "Job Detail (sales role)", "issues": ["The Purchase orders card shows the PO total ($1,080.00) to sales. If PO amounts count as cost data under the cost-gating rules, hide them for sales. Product decision."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter130_retest.py", "/app/backend/tests/test_job_crews_readiness_iter129.py", "/app/test_reports/pytest/pytest_iter130.xml"],
+  "action_items": [
+    "Optional hardening: use _uuid(job_id, 'Job not found', 404) for every path job_id in routers/jobs.py (assign_job, update_job and the others listed) and mobile.py:636, so malformed ids return 404 instead of 500",
+    "Optional: decide whether to hide PO totals from sales on Job Detail"
+  ],
+  "critical_code_review_comments": [
+    "routers/jobs.py: _uuid is applied in only a few places. Many handlers still call db.get(Job, job_id) with the raw path string. A FastAPI path type of uuid.UUID, or a shared dependency, would fix all of them at once.",
+    "DateRangePicker 'fresh' logic is correct with react-day-picker 8.10.1, because onSelect passes the clicked day as its 2nd argument."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter130_retest.py"],
+  "success_rate": {"backend": "100% of requested checks (8/9 in the new suite; the 1 failure is an extra out-of-scope check); iter129 suite 16/16", "frontend": "100%"},
+  "seed_data_creation": "None kept. Temporary changes, all reverted: JOB-0257 assigned_user_id was set to sales_bk and restored to null. JOB-0824 dates were set and cleared, and its crew was set to TEST_Inactive_130 and restored to null; status stays 'created'. Crews TEST_Inactive_130 and TEST_UI_Crew_130 were deleted, so the crews list is back to ['Crew A'].",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && pytest tests/test_iter130_retest.py tests/test_job_crews_readiness_iter129.py -n 0. The iter130 fixture assigns JOB-0257 (3f92f045-...) to sales_bk (id 0e2d2662-9388-4e9c-b012-4768b4acac33) and resets it to the original value. test_bad_job_id_other_endpoints fails until path job_id parsing is hardened. JOB-0824 (a7d0b5fb-...) is a handy unscheduled job with no crew for UI picker tests."
+}

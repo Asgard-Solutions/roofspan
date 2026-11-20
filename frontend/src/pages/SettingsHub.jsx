@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
-import { Building2, Users2, ShieldCheck, Calculator, Layers, BookOpen, PackageSearch, Map, DatabaseBackup, CreditCard, ScrollText, Wrench, ChevronRight } from "lucide-react";
+import { Building2, Users2, ShieldCheck, Calculator, Layers, BookOpen, PackageSearch, Map, DatabaseBackup, CreditCard, ScrollText, Wrench, ChevronRight, HardHat } from "lucide-react";
 
 const GROUPS = [
   { title: "Company", need: "sensitive", items: [
@@ -15,6 +15,9 @@ const GROUPS = [
     { to: "/estimating/takeoff", label: "Roof takeoff setup", hint: "Roof systems, rules, versions and default waste", icon: Calculator, testid: "settings-takeoff" },
     { to: "/estimating/assemblies", label: "Assemblies", hint: "Reusable bundles of materials and labor", icon: Layers, testid: "settings-assemblies" },
     { to: "/estimating/price-books", label: "Price books", hint: "Your default selling prices", icon: BookOpen, testid: "settings-price-books" },
+  ] },
+  { title: "Production", need: "manage", items: [
+    { to: "/settings/crews", label: "Crews", hint: "The install crews you assign to jobs", icon: HardHat, testid: "settings-crews" },
   ] },
   { title: "Integrations", need: "sensitive", items: [
     { to: "/admin/settings/abc", label: "ABC Supply", hint: "Pricing and ordering from your ABC account", icon: PackageSearch, testid: "settings-abc" },

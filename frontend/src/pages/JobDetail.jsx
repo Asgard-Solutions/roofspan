@@ -3,24 +3,24 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { money, shortDate } from "@/lib/format";
+import { money } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import PODialog from "@/components/PODialog";
 import JobMaterialPlan from "@/components/JobMaterialPlan";
 import JobCosting from "@/components/JobCosting";
 import PhotoGallery from "@/components/PhotoGallery";
-import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, AlertTriangle, Save, Loader2, UserCheck, Camera, DollarSign } from "lucide-react";
+import { CalendarClock, Boxes, ShoppingCart, User, Home, Plus, Loader2, Users, Camera, DollarSign } from "lucide-react";
+import { ReadyPanel } from "@/components/job/ReadyPanel";
+import { JobPeople } from "@/components/job/JobPeople";
+import { JobSchedule } from "@/components/job/JobSchedule";
 
 const MANAGE = ["owner", "administrator", "office"];
-const UNASSIGNED = "__unassigned__";
-const STATUSES = ["created", "pending", "scheduled", "in_progress", "completed", "cancelled"];
 const sc = { created: "bg-slate-100 text-slate-600", pending: "bg-slate-100 text-slate-600", scheduled: "bg-blue-50 text-blue-700", in_progress: "bg-amber-50 text-amber-700", completed: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
 
 function Section({ icon: Icon, title, action, children, testid }) {
@@ -42,60 +42,24 @@ export default function JobDetail() {
   const canManage = MANAGE.includes(user?.role);
   const [job, setJob] = useState(null);
   const [materials, setMaterials] = useState([]);
-  const [sched, setSched] = useState({ status: "created", scheduled_start: "", scheduled_end: "", schedule_notes: "", assigned_to: "" });
   const [addOpen, setAddOpen] = useState(false);
   const [pick, setPick] = useState({ material_id: "", planned_quantity: 1 });
   const [poOpen, setPoOpen] = useState(false);
-  const [assignable, setAssignable] = useState([]);
-  const [assigning, setAssigning] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [planKey, setPlanKey] = useState(0);
 
   const load = useCallback(async () => {
-    try {
-      const j = (await api.get(`/jobs/${id}`)).data;
-      setJob(j);
-      setSched({
-        status: j.status || "created",
-        scheduled_start: j.scheduled_start ? j.scheduled_start.slice(0, 10) : "",
-        scheduled_end: j.scheduled_end ? j.scheduled_end.slice(0, 10) : "",
-        schedule_notes: j.schedule_notes || "", assigned_to: j.assigned_to || "",
-      });
-    } catch (e) { toast.error(apiError(e)); }
+    try { setJob((await api.get(`/jobs/${id}`)).data); } catch (e) { toast.error(apiError(e)); }
   }, [id]);
 
-  useEffect(() => { load(); api.get("/materials").then((r) => setMaterials(r.data)).catch(() => {}); }, [load]);
-
-  useEffect(() => {
-    if (canManage) api.get("/users/assignable").then((r) => setAssignable(r.data)).catch(() => {});
-  }, [canManage]);
-
-  const assignJob = async (value) => {
-    setAssigning(true);
-    try {
-      const user_id = value === UNASSIGNED ? null : value;
-      const { data } = await api.put(`/jobs/${id}/assign`, { user_id });
-      setJob(data);
-      toast.success(user_id ? `Assigned to ${data.assigned_user_name}` : "Assignment cleared");
-    } catch (e) { toast.error(apiError(e)); } finally { setAssigning(false); }
-  };
-
-  const saveSchedule = async () => {
-    setBusy(true);
-    try {
-      await api.patch(`/jobs/${id}`, {
-        status: sched.status,
-        scheduled_start: sched.scheduled_start ? new Date(sched.scheduled_start).toISOString() : null,
-        scheduled_end: sched.scheduled_end ? new Date(sched.scheduled_end).toISOString() : null,
-        schedule_notes: sched.schedule_notes, assigned_to: sched.assigned_to,
-      });
-      toast.success("Schedule saved"); load();
-    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
-  };
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (canManage) api.get("/materials").then((r) => setMaterials(r.data)).catch(() => {}); }, [canManage]);
 
   const addMaterial = async () => {
     if (!pick.material_id) { toast.error("Select a material"); return; }
-    try { await api.post(`/jobs/${id}/materials`, { material_id: pick.material_id, planned_quantity: Number(pick.planned_quantity) || 1 }); toast.success("Material added to job"); setAddOpen(false); setPick({ material_id: "", planned_quantity: 1 }); load(); }
-    catch (e) { toast.error(apiError(e)); }
+    try {
+      await api.post(`/jobs/${id}/materials`, { material_id: pick.material_id, planned_quantity: Number(pick.planned_quantity) || 1 });
+      toast.success("Material added to job"); setAddOpen(false); setPick({ material_id: "", planned_quantity: 1 }); setPlanKey((k) => k + 1); load();
+    } catch (e) { toast.error(apiError(e)); }
   };
 
   if (!job) return <div className="flex h-64 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
@@ -106,76 +70,48 @@ export default function JobDetail() {
         description={<span className="flex flex-wrap items-center gap-3"><span className="flex items-center gap-1"><User className="h-3.5 w-3.5" />{job.customer_name || "—"}</span><span className="flex items-center gap-1"><Home className="h-3.5 w-3.5" />{job.property_address || "—"}</span></span>}
         testid="page-job-detail"
         actions={<div className="flex items-center gap-2"><Badge className={sc[job.status] || ""} variant="secondary" data-testid="job-status-badge">{job.status.replace("_", " ")}</Badge><span className="font-heading font-bold text-slate-900">{money(job.total)}</span></div>} />
-      <div className="grid grid-cols-1 gap-5 p-6 sm:p-8 lg:grid-cols-2">
-        {/* Schedule */}
-        <Section icon={CalendarClock} title="Schedule & status" testid="section-schedule">
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Status</Label>
-                <Select value={sched.status} onValueChange={(v) => setSched({ ...sched, status: v })} disabled={!canManage}>
-                  <SelectTrigger data-testid="job-status-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5"><Label>Assigned to (crew)</Label><Input value={sched.assigned_to} onChange={(e) => setSched({ ...sched, assigned_to: e.target.value })} disabled={!canManage} data-testid="job-assigned" /></div>
-            </div>
-            <div className="space-y-1.5"><Label>Assigned field user</Label>
-              {canManage ? (
-                <Select value={job.assigned_user_id || UNASSIGNED} onValueChange={assignJob} disabled={assigning}>
-                  <SelectTrigger data-testid="job-assign-select"><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={UNASSIGNED} data-testid="job-assign-unassigned">Unassigned</SelectItem>
-                    {assignable.map((u) => (
-                      <SelectItem key={u.id} value={u.id} data-testid={`job-assign-${u.id}`}>{u.full_name || u.email} · {u.role}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <p className="text-sm text-slate-600" data-testid="job-assigned-readonly">{job.assigned_user_name ? `Assigned to ${job.assigned_user_name}` : "Unassigned"}</p>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Start date</Label><Input type="date" value={sched.scheduled_start} onChange={(e) => setSched({ ...sched, scheduled_start: e.target.value })} disabled={!canManage} data-testid="job-start" /></div>
-              <div className="space-y-1.5"><Label>End date</Label><Input type="date" value={sched.scheduled_end} onChange={(e) => setSched({ ...sched, scheduled_end: e.target.value })} disabled={!canManage} data-testid="job-end" /></div>
-            </div>
-            <div className="space-y-1.5"><Label>Scheduling notes</Label><Textarea value={sched.schedule_notes} onChange={(e) => setSched({ ...sched, schedule_notes: e.target.value })} disabled={!canManage} data-testid="job-schednotes" /></div>
-            {canManage && <Button onClick={saveSchedule} disabled={busy} data-testid="save-schedule">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save schedule</>}</Button>}
-            {job.quote_id && <p className="text-xs text-slate-400">From accepted quote · <Link to="/sales/quotes" className="hover:underline" data-testid="job-view-quote-link">view in Quotes</Link></p>}
-          </div>
-        </Section>
+      <div className="space-y-5 p-6 sm:p-8">
+        <ReadyPanel job={job} />
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Section icon={Users} title="Who's on this job" testid="section-people">
+            <JobPeople job={job} canManage={canManage} onChange={setJob} />
+          </Section>
+          <Section icon={CalendarClock} title="Schedule & status" testid="section-schedule">
+            <JobSchedule job={job} canManage={canManage} onSaved={setJob} />
+            {job.quote_id && <p className="mt-3 text-xs text-slate-400">From accepted quote · <Link to="/sales/quotes" className="hover:underline" data-testid="job-view-quote-link">view in Quotes</Link></p>}
+          </Section>
+        </div>
 
-        {/* Materials — operational plan */}
         <Section icon={Boxes} title="Job materials" testid="section-job-materials"
           action={canManage && <Button size="sm" variant="outline" onClick={() => setAddOpen(true)} data-testid="add-job-material"><Plus className="h-4 w-4" /> Add</Button>}>
-          <JobMaterialPlan jobId={id} canManage={canManage} />
+          <JobMaterialPlan jobId={id} canManage={canManage} refreshKey={planKey} onChanged={load} />
         </Section>
 
-        {/* Purchase orders */}
-        <Section icon={ShoppingCart} title="Purchase orders" testid="section-job-pos"
-          action={canManage && <Button size="sm" variant="outline" onClick={() => setPoOpen(true)} data-testid="job-create-po"><Plus className="h-4 w-4" /> New PO</Button>}>
-          {job.purchase_orders.length === 0 ? <p className="text-sm text-slate-500">No purchase orders for this job.</p> : (
-            <div className="space-y-2">
-              {job.purchase_orders.map((po) => (
-                <div key={po.id} className="flex items-center justify-between rounded border border-border p-2 text-sm hover:border-orange-300 cursor-pointer" onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`job-po-${po.id}`}>
-                  <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary">{po.status.replace(/_/g, " ")}</Badge></div>
-                  <span className="tabular-nums">{money(po.total)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        {/* Actual Job Costing — cost & profitability (owner/administrator/office only) */}
-        {canManage && (
-          <Section icon={DollarSign} title="Costing" testid="section-job-costing">
-            <JobCosting jobId={id} canManage={canManage} />
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Section icon={ShoppingCart} title="Purchase orders" testid="section-job-pos"
+            action={canManage && <Button size="sm" variant="outline" onClick={() => setPoOpen(true)} data-testid="job-create-po"><Plus className="h-4 w-4" /> New PO</Button>}>
+            {job.purchase_orders.length === 0 ? <p className="text-sm text-slate-500">No purchase orders for this job.</p> : (
+              <div className="space-y-2">
+                {job.purchase_orders.map((po) => (
+                  <div key={po.id} className="flex cursor-pointer items-center justify-between rounded border border-border p-2 text-sm hover:border-orange-300" onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`job-po-${po.id}`}>
+                    <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary">{po.status.replace(/_/g, " ")}</Badge></div>
+                    <span className="tabular-nums">{money(po.total)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </Section>
-        )}
 
-        {/* Field Photos */}
-        <Section icon={Camera} title="Field photos" testid="section-job-photos">
-          <PhotoGallery recordType="job" recordId={id} testid="job-photos" />
-        </Section>
+          {canManage && (
+            <Section icon={DollarSign} title="Costing" testid="section-job-costing">
+              <JobCosting jobId={id} canManage={canManage} />
+            </Section>
+          )}
+
+          <Section icon={Camera} title="Field photos" testid="section-job-photos">
+            <PhotoGallery recordType="job" recordId={id} testid="job-photos" />
+          </Section>
+        </div>
       </div>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
