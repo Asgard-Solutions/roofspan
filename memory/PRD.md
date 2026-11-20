@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Estimate/Takeoff closeout (2026-06) — IMPLEMENTED & TESTED (iteration_123-124, 100%)
+- Sales estimate authorization (server-side, same rule as quotes): `_get_estimate` / `_assert_lead_for_sales` cover all /api/estimates/{id}* routes plus /api/takeoff/estimates/{id}/status. The list is scoped to assigned leads; create requires an assigned lead. Owner/admin/office unchanged. The editor shows "Can't open this estimate".
+- Line-identity contract: the editor sends line ids + `line_ids: true`. Legacy saves (no ids) on estimates WITH takeoff-linked lines get an atomic 409 ESTIMATE_LINE_IDS_REQUIRED ("This estimate contains items calculated from roof measurements. Update the app or edit this estimate in RoofSpan Office."). Without takeoff lines, legacy saves work. The position/content fallback was removed.
+- Accepted-estimate lock now also covers price-book/apply and cost-refresh/apply (409). In the UI these actions are hidden and every field (including Unit) is disabled.
+- Re-measure baseline: takeoff status compares against the newest VERIFIED revision; newer drafts are reported only as `pending_unverified_revision_number`.
+- Test-data pollution: tests ran against the shared DB with no teardown, and test_material_pricing took over the company default price book. Added tests/_test_data_cleanup.py (strict regex TEST_PRICE_BOOK_RE) + conftest pytest_configure/pytest_sessionfinish (controller only, xdist-safe) to purge the run's test books and restore the default. Removed 178 test price books (166 + 12 from runs earlier that day). Re-set the migration-seeded "Standard" as the default.
+- Tests: backend/tests/test_estimate_line_identity.py (8). test_purchasing_pricing_output sales-proposal test now expects 403 under the approved quote rule.
+- NEXT: Round 4 Materials (daily view vs admin).
+
+
 ## UX Round 3: Estimate & Proposal (Measurement -> Scope -> Price -> Proposal) (2026-06) — IMPLEMENTED & TESTED (iteration_120-122)
 - User decisions: takeoff USAGE moved into the Estimate Editor (no estimate picker left in Settings); simple line view by default (Item/Quantity/Unit/Price/Total) with a "Show cost & waste details" switch; Create proposal = save, create, open the preview.
 - Estimate Editor sections: 1 Roof measurements (components/estimate/RoofTakeoffPanel.jsx), 2 Scope & price, 3 Proposal (Open proposal / Create (new) proposal). The More menu holds price book, refresh costs and site plan PDF. Shows unsaved changes; Calculate is disabled until saved. The editor is read-only when a proposal from the estimate is accepted (EstimateOut.locked).
