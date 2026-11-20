@@ -324,6 +324,7 @@ function MaterialsSource({ supplierId, canManage, onAddToPo }) {
               </TableCell></TableRow>
             )}
             {!loading && rows.length === 0 && (
+              <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-slate-400" data-testid="catalog-materials-empty">
                 <PackageSearch className="mx-auto mb-2 h-6 w-6 text-slate-300" /> No materials found.
               </TableCell></TableRow>
             )}

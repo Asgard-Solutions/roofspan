@@ -1,0 +1,50 @@
+{
+  "summary": "Closeout of the RoofSpan Materials round (Job assignments not tested), backend and UI, as owner and sales. At the start the frontend did not compile: the main agent's last edit to ProductCatalog.jsx (line 326-327) dropped the <TableRow><TableCell data-testid='catalog-materials-empty'> opening line, so every page showed 'Compiled with problems'. I restored that line, the app compiled, and testing continued. Threshold rules pass end to end. (a) RP0/OH0: OK, not low, not in needs or suggestions. (b) RP10/OH10: Needs ordering, in suggestions and the Low filter. (c) RP10/OH11: OK. (d) RP10/OH5: Needs ordering and Low. (e) RP0 planned on an active job with 0 stock: short_for_jobs + needs_ordering, row badge 'Short for jobs', job-material low_stock false, not in suggestions. The Material Detail badges (detail-status-ok/reorder/short) match the list row for all 5. The global Low stock filter equals RP>0 && available<=RP over all 1282 rows. The dashboard low_stock_items (6) equals the active-row count. needs_ordering_ids == short ∪ (RP>0 && projected<=RP). All 4 quick-card counts equal the API and UI filtered rows (319/327/57/0). Performance: GET /materials takes 0.2-0.3s gzip (1.37MB raw) and GET /purchase-orders 0.45s gzip. The Materials page shows the first rows in 2.8s and all 1282 rows in 3.0s. Search, the supplier filter (ABC Supply -> 8) and the Low stock toggle work. Proposal PDF (%PDF), costing CSV and on-hand CSV download fine through gzip. Product Catalog shows 'Loading products…' at 0.5s and then 1272 rows at 2.8s. Search, the new empty state, the supplier source and the ABC mock live catalog (2 results for 'shingle') work. PO filters work (open 1584 / received 640 / cancelled 16 / all 2240). Receive 3/8 updated the row to '3 / 8', outstanding 5, via a single-PO patch. Home 'Material problems & deliveries' card, Jobs material status (801 cells, our test job 'Short') and Job Detail materials load. Sales gets gzip lists, cost fields are hidden and POST /materials returns 403. Backend 97/97 pass: 59 requested, 25 inventory, 6 hardening with -n 0, and 7 new. Main remaining issue: the PO tab is slow in the browser, but the API is not the cause.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/measurements/{revision_id}/site-plan.pdf and /api/measurements/lead/{lead_id}/site-plan.pdf", "issue": "Returns 500 'Internal Server Error' (object_storage.get_object raises requests HTTPError 404: the objstore has no object site-plans/<id>-v3.pdf, probably lost in the DB/backup restore). This is not caused by gzip. It should return 404/409 'Site plan file missing - regenerate' instead of a 500. Because of it I could not check a site-plan PDF through gzip. GET /api/quotes/{id}/site-plan.pdf returned 404 for the first 80 quotes."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProductCatalog.jsx materials table", "issue": "Build was broken: a JSX syntax error at line 327 because the empty-state <TableRow><TableCell> line was missing. Fixed by testing agent (restored the line with data-testid='catalog-materials-empty').", "selector": "[data-testid='catalog-materials-empty']", "priority": "CRITICAL (fixed)"}
+    ],
+    "integration_issues": [
+      {"flow": "Inventory PO tab render / Receive", "issue": "The API is fast, but the browser main thread is blocked. GET /purchase-orders answered at 1.2s after the tab click, yet rows only appeared at 7.5s. Opening the Receive dialog took 3.9s. After Receive submit, POST took 0.1s, but the single-PO GET response was only processed at 2.6s and the row updated at 5.1s. Root cause: every state change in Inventory re-renders all ~1584-2240 PO rows, and each row has a Radix Select (status) plus Buttons. Nothing is memoized or paginated. Fix: paginate or virtualize visiblePos (e.g. the first 100 plus 'Show more'), wrap the row in React.memo, and keep the dialog state from re-rendering the table (or render the Select only on demand).", "affected_selectors": ["[data-testid='tab-pos']", "[data-testid^='po-row-']", "[data-testid^='receive-']", "[data-testid='receive-dialog']"]}
+    ],
+    "design_issues": [
+      {"screen": "Job Detail > Job materials", "issues": ["The table overflows horizontally on 1920px, so the Status column is cut off ('Wai on Mat')."]},
+      {"screen": "Job Detail > Schedule", "issues": ["Start/End dates use the native browser date picker (mm/dd/yyyy) instead of the shadcn Calendar (pre-existing)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter127_thresholds_perf_gzip.py",
+    "/app/backend/tests/test_materials_threshold_rules.py",
+    "/app/test_reports/pytest/pytest_results_iter127a.xml",
+    "/app/test_reports/pytest/pytest_results_iter127b.xml",
+    "/app/test_reports/pytest/pytest_results_iter127c.xml",
+    "/app/test_reports/pytest/pytest_results_iter127d.xml"
+  ],
+  "action_items": [
+    "Check the ProductCatalog.jsx edit. The testing agent restored the missing empty-state TableRow/TableCell line so the app compiles again.",
+    "PO tab: paginate or virtualize the rows and memoize them so opening the tab (~7.5s), opening the Receive dialog (~3.9s) and the post-receive row update (~5s) feel instant. The API is already ~0.45s.",
+    "Site-plan PDF endpoints: handle a missing storage object with a 404/409 and a clear message instead of a 500.",
+    "Optional: let the Job Detail materials table wrap or scroll so the Status column is fully visible."
+  ],
+  "critical_code_review_comments": [
+    "batch_supplier_maps picks the 'preferred' mapping as the first is_preferred row in unordered query results. The old preferred_supplier_material used .first() without order_by, so both are arbitrary if a material has two preferred rows. If there can be more than one, add an order_by so the list and the detail always agree. The same applies to equal-cost ties for 'best'.",
+    "reorder_suggestions still runs preferred_supplier_material + db.get(Supplier) + best_known_cost for each suggested row (N+1). It could reuse batch_supplier_maps.",
+    "_mat_out (POST/PATCH response) computes low_stock from quantity_on_hand, not available (the comment says there is no reservation data). The create/patch response can disagree with the list for materials that have reservations.",
+    "Inventory.jsx PO table: there is no React.memo or pagination around 2k rows with a Radix Select in each, which is the main UI performance bottleneck."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/ProductCatalog.jsx (restored missing JSX line - build fix)",
+    "/app/backend/tests/test_iter127_thresholds_perf_gzip.py (new)"
+  ],
+  "success_rate": {"backend": "100% (97/97)", "frontend": "~93% (all flows functional; PO tab render perf issue)"},
+  "seed_data_creation": "Test data created: TEST_UI127_c50e9b_a..e and TEST_I127_*, one job-material on test job JOB-0806 (TEST_LID_501399) and PO-2240 (TEST_UI127). Cleanup: the job-material was removed and PO-2240 cancelled. Materials b/c/d/a and one TEST_I127 return 409 on delete because they have transaction history, so they are deactivated instead. TEST_UI127_e was deleted.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Token key access_token; frontend localStorage roofspan_token. Test job 56ddbcf2 (JOB-0806) is an active TEST job, useful for job-shortage cases. Quick counts at the end: short 319 / needs 327 / on_order 57 / arriving 0, POs: 2240. Retest: the PO tab render time after pagination/memo (measure from the tab-pos click to the first po-row, and from receive-submit to the po-received update), and site-plan PDF error handling. Run test_inventory_core_hardening.py with -n 0."
+}

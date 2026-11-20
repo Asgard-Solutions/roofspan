@@ -28,6 +28,7 @@ const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancel
 const sc = { draft: "bg-slate-100 text-slate-600", ready_for_review: "bg-slate-100 text-slate-700", submitted: "bg-blue-50 text-blue-700", ordered: "bg-blue-50 text-blue-700", confirmed: "bg-blue-50 text-blue-700", acknowledged: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", picking: "bg-indigo-50 text-indigo-700", shipped: "bg-indigo-50 text-indigo-700", partially_received: "bg-amber-50 text-amber-700", received: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
 const OPEN_PO = ["draft", "ready_for_review", "submitted", "ordered", "confirmed", "acknowledged", "scheduled", "partially_received", "picking", "shipped"];
+const PAGE = 100;  // rows rendered at a time; "Show more" reveals the rest (all data stays loaded)
 const PO_FILTERS = [["open", "Open"], ["received", "Received"], ["cancelled", "Cancelled"], ["all", "All"]];
 const txnLabel = (t) => t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -73,6 +74,10 @@ export default function Inventory() {
   const [bulkMode, setBulkMode] = useState(false);
   const [tplOpen, setTplOpen] = useState(false);
   const [poFilter, setPoFilter] = useState("open");
+  const [poLimit, setPoLimit] = useState(PAGE);
+  const [matLimit, setMatLimit] = useState(PAGE);
+  useEffect(() => { setPoLimit(PAGE); }, [poFilter]);
+  useEffect(() => { setMatLimit(PAGE); }, [materials]);
   const [abcHistOpen, setAbcHistOpen] = useState(false);
 
   const loadMaterials = useCallback(() => {
@@ -219,7 +224,9 @@ export default function Inventory() {
   };
 
   const sumQty = (po, f) => (po.items || []).reduce((t, l) => t + (Number(l[f]) || 0), 0);
-  const visiblePos = pos.filter((po) => poFilter === "all" || (poFilter === "open" ? OPEN_PO.includes(po.status) : po.status === poFilter));
+  const filteredPos = pos.filter((po) => poFilter === "all" || (poFilter === "open" ? OPEN_PO.includes(po.status) : po.status === poFilter));
+  const visiblePos = filteredPos.slice(0, poLimit);
+  const visibleMats = materials.slice(0, matLimit);
   const shortIds = new Set(quickCounts?.short_for_jobs_ids || []);
   const orderIds = new Set(quickCounts?.needs_ordering_ids || []);
   const label = (st) => st.replace(/_/g, " ");
@@ -314,7 +321,7 @@ export default function Inventory() {
               {matLoading && materials.length > 0 && <div className="absolute inset-x-0 top-0 z-10 flex justify-center pt-2" data-testid="materials-refreshing"><span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…</span></div>}
               <Table data-testid="materials-table">
                 <TableHeader><TableRow>
-                  {canManage && bulkMode && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={materials.length > 0 && materials.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(materials.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}
+                  {canManage && bulkMode && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={visibleMats.length > 0 && visibleMats.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(visibleMats.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}
                   <TableHead>Material</TableHead>
                   {moreCols && <><TableHead>SKU</TableHead><TableHead>Category</TableHead></>}
                   <TableHead className="text-right">Available</TableHead><TableHead className="text-right">Reserved</TableHead><TableHead className="text-right">On order</TableHead>
@@ -324,7 +331,7 @@ export default function Inventory() {
                   {canManage && <TableHead className="w-10" />}
                 </TableRow></TableHeader>
                 <TableBody>
-                  {materials.map((m) => (
+                  {visibleMats.map((m) => (
                     <TableRow key={m.id} data-testid={`material-row-${m.id}`} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/inventory/materials/${m.id}`)}>
                       {canManage && bulkMode && <TableCell onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} data-testid={`bulk-select-${m.id}`} /></TableCell>}
                       <TableCell className="font-medium text-slate-900">{m.name}<ChevronRight className="ml-1 inline h-3.5 w-3.5 text-slate-300" /></TableCell>
@@ -359,6 +366,13 @@ export default function Inventory() {
                 </TableBody>
               </Table>
             </div>
+            {materials.length > matLimit && (
+              <div className="flex items-center justify-center gap-3 text-sm text-slate-500" data-testid="materials-show-more-row">
+                Showing {matLimit} of {materials.length}
+                <Button size="sm" variant="outline" onClick={() => setMatLimit((n) => n + 200)} data-testid="materials-show-more">Show more</Button>
+                <Button size="sm" variant="ghost" onClick={() => setMatLimit(materials.length)} data-testid="materials-show-all">Show all</Button>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="pos" className="mt-6 space-y-4">
@@ -401,10 +415,17 @@ export default function Inventory() {
                       </TableRow>
                     );
                   })}
-                  {visiblePos.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-slate-400">{posLoading ? <span className="inline-flex items-center gap-2" data-testid="pos-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading purchase orders…</span> : poFilter === "open" ? "No open purchase orders." : "No purchase orders here."}</TableCell></TableRow>}
+                  {filteredPos.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-slate-400">{posLoading ? <span className="inline-flex items-center gap-2" data-testid="pos-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading purchase orders…</span> : poFilter === "open" ? "No open purchase orders." : "No purchase orders here."}</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
+            {filteredPos.length > poLimit && (
+              <div className="flex items-center justify-center gap-3 text-sm text-slate-500" data-testid="pos-show-more-row">
+                Showing {poLimit} of {filteredPos.length}
+                <Button size="sm" variant="outline" onClick={() => setPoLimit((n) => n + 200)} data-testid="pos-show-more">Show more</Button>
+                <Button size="sm" variant="ghost" onClick={() => setPoLimit(filteredPos.length)} data-testid="pos-show-all">Show all</Button>
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>

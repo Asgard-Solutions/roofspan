@@ -206,6 +206,19 @@ async def _latest_site_plan_rev(db: AsyncSession, lead_id) -> MeasurementRevisio
     return None
 
 
+
+def _load_saved_file(object_storage, key: str) -> bytes:
+    """Saved site-plan files can be missing from storage (e.g. after a restore): answer 404, never 500."""
+    import requests as _rq
+    try:
+        return object_storage.get_object(key)
+    except FileNotFoundError:
+        pass
+    except _rq.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) != 404:
+            raise
+    raise HTTPException(status_code=404, detail="The saved site plan file is missing. Regenerate the site plan.")
+
 @router.get("/{revision_id}/site-plan.pdf")
 async def get_site_plan_pdf(revision_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from fastapi.responses import StreamingResponse
@@ -214,7 +227,7 @@ async def get_site_plan_pdf(revision_id: str, user: User = Depends(get_current_u
     key = (rev.site_plan or {}).get("pdf_key")
     if not key:
         raise HTTPException(status_code=404, detail="No saved site plan for this revision")
-    data = object_storage.get_object(key)
+    data = _load_saved_file(object_storage, key)
     return StreamingResponse(iter([data]), media_type="application/pdf",
                              headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
 
@@ -234,7 +247,7 @@ async def get_site_plan_pdf_version(revision_id: str, version: int, user: User =
     key = entry.get("pdf_key") if entry else None
     if not key:
         raise HTTPException(status_code=404, detail="No saved site plan for that version")
-    data = object_storage.get_object(key)
+    data = _load_saved_file(object_storage, key)
     return StreamingResponse(iter([data]), media_type="application/pdf",
                              headers={"Content-Disposition": f'inline; filename="site-plan-v{version}.pdf"'})
 
@@ -249,7 +262,7 @@ async def get_site_plan_image_version(revision_id: str, version: int, user: User
     key = entry.get("image_key") if entry else None
     if not key:
         raise HTTPException(status_code=404, detail="No saved site-plan image for that version")
-    data = object_storage.get_object(key)
+    data = _load_saved_file(object_storage, key)
     return StreamingResponse(iter([data]), media_type="image/jpeg",
                              headers={"Cache-Control": "private, max-age=3600"})
 
@@ -385,6 +398,6 @@ async def lead_site_plan_pdf(lead_id: str, user: User = Depends(get_current_user
     key = (rev.site_plan or {}).get("pdf_key") if rev else None
     if not key:
         raise HTTPException(status_code=404, detail="No saved site plan for this lead")
-    data = object_storage.get_object(key)
+    data = _load_saved_file(object_storage, key)
     return StreamingResponse(iter([data]), media_type="application/pdf",
                              headers={"Content-Disposition": 'inline; filename="site-plan.pdf"'})
