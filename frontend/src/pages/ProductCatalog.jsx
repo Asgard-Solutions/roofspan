@@ -271,7 +271,7 @@ function MaterialsSource({ supplierId, canManage, onAddToPo }) {
             <TableRow>
               <TableHead>Product</TableHead><TableHead>Manufacturer</TableHead><TableHead>Category</TableHead>
               <TableHead className="text-right">Available</TableHead>
-              <TableHead>Preferred Supplier</TableHead><TableHead>Best Known Cost</TableHead>
+              <TableHead>Preferred supplier &amp; your price</TableHead><TableHead>Lowest supplier cost</TableHead>
               <TableHead></TableHead>
             </TableRow>
           </TableHeader>
@@ -357,11 +357,11 @@ export default function ProductCatalog() {
 
   return (
     <div>
-      <PageHeader title="Product Catalog" description="Browse RoofSpan materials and supplier catalogs, compare pricing, and source products." testid="page-product-catalog" />
+      <PageHeader title="Product Catalog" description="Find supplier products, compare pricing and add them to your materials." testid="page-product-catalog" />
 
       <div className="p-6 sm:p-8">
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="catalog-back"><ArrowLeft className="h-4 w-4" /> Inventory</Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="catalog-back"><ArrowLeft className="h-4 w-4" /> Materials</Button>
           <div className="w-64">
             <Select value={sourceId} onValueChange={setSourceId}>
               <SelectTrigger data-testid="catalog-source-select"><SelectValue placeholder="Source" /></SelectTrigger>

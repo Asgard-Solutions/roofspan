@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -19,12 +19,16 @@ import ReorderSuggestions from "@/components/ReorderSuggestions";
 import AbcOrderPanel from "@/components/AbcOrderPanel";
 import AbcOrderHistory from "@/components/AbcOrderHistory";
 import AbcTemplatesPanel from "@/components/AbcTemplatesPanel";
-import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, Search, History, Trash2, X } from "lucide-react";
+import { Boxes, Plus, AlertTriangle, PackageCheck, Loader2, Send, PackageSearch, Upload, ChevronRight, ChevronDown, Search, History, Trash2, X, Hammer, ShoppingCart, PackageOpen, Truck, Settings2, ListChecks, FileStack, SlidersHorizontal, MoreHorizontal } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
 
 const MANAGE = ["owner", "administrator", "office"];
 const PO_STATUS = ["draft", "ordered", "partially_received", "received", "cancelled"];
-const sc = { draft: "bg-slate-100 text-slate-600", ordered: "bg-blue-50 text-blue-700", partially_received: "bg-amber-50 text-amber-700", received: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
+const sc = { draft: "bg-slate-100 text-slate-600", ready_for_review: "bg-slate-100 text-slate-700", submitted: "bg-blue-50 text-blue-700", ordered: "bg-blue-50 text-blue-700", confirmed: "bg-blue-50 text-blue-700", acknowledged: "bg-blue-50 text-blue-700", scheduled: "bg-indigo-50 text-indigo-700", picking: "bg-indigo-50 text-indigo-700", shipped: "bg-indigo-50 text-indigo-700", partially_received: "bg-amber-50 text-amber-700", received: "bg-green-50 text-green-700", cancelled: "bg-red-50 text-red-500" };
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
+const OPEN_PO = ["draft", "ready_for_review", "submitted", "ordered", "confirmed", "acknowledged", "scheduled", "partially_received", "picking", "shipped"];
+const PO_FILTERS = [["open", "Open"], ["received", "Received"], ["cancelled", "Cancelled"], ["all", "All"]];
 const txnLabel = (t) => t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function Inventory() {
@@ -56,8 +60,22 @@ export default function Inventory() {
   const [abcOpen, setAbcOpen] = useState(false);
   const [abcPo, setAbcPo] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "pos" ? "pos" : "materials";
+  const setTab = (t) => setParams(t === "pos" ? { tab: "pos" } : {}, { replace: true });
+  const [quick, setQuick] = useState(null);
+  const [matLoading, setMatLoading] = useState(true);
+  const [posLoading, setPosLoading] = useState(false);
+  const reqSeq = useRef(0);
+  const [quickCounts, setQuickCounts] = useState(null);
+  const [moreCols, setMoreCols] = useState(false);
+  const [moreFilters, setMoreFilters] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [tplOpen, setTplOpen] = useState(false);
+  const [poFilter, setPoFilter] = useState("open");
+  const [abcHistOpen, setAbcHistOpen] = useState(false);
 
-  const load = useCallback(() => {
+  const loadMaterials = useCallback(() => {
     const p = {};
     if (filters.q) p.q = filters.q;
     if (filters.category !== "all") p.category = filters.category;
@@ -65,13 +83,22 @@ export default function Inventory() {
     if (filters.supplier_id !== "all") p.supplier_id = filters.supplier_id;
     if (filters.active !== "all") p.active = filters.active === "active";
     if (filters.low_stock) p.low_stock = true;
-    api.get("/materials", { params: p }).then((r) => setMaterials(r.data)).catch((e) => toast.error(apiError(e)));
-    api.get("/purchase-orders").then((r) => setPos(r.data)).catch(() => {});
-  }, [filters]);
-  useEffect(() => { load(); }, [load]);
+    if (quick) p.quick = quick;
+    setMatLoading(true);
+    const req = ++reqSeq.current;  // ignore slower, stale responses (e.g. full list finishing after a quick filter)
+    api.get("/materials", { params: p })
+      .then((r) => { if (req === reqSeq.current) setMaterials(r.data); })
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => { if (req === reqSeq.current) setMatLoading(false); });
+  }, [filters, quick]);
+  const loadCounts = useCallback(() => { api.get("/materials/quick-counts").then((r) => setQuickCounts(r.data)).catch(() => {}); }, []);
+  const loadPos = useCallback(() => { setPosLoading(true); api.get("/purchase-orders").then((r) => setPos(r.data)).catch(() => {}).finally(() => setPosLoading(false)); }, []);
+  const load = useCallback(() => { loadMaterials(); loadCounts(); loadPos(); }, [loadMaterials, loadCounts, loadPos]);
+  useEffect(() => { const t = setTimeout(loadMaterials, filters.q ? 350 : 0); return () => clearTimeout(t); }, [loadMaterials]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadCounts(); }, [loadCounts]);
+  useEffect(() => { if (tab === "pos" && !pos.length) loadPos(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api.get("/materials/facets").then((r) => setFacets(r.data)).catch(() => {}); }, []);
 
-  const lowCount = materials.filter((m) => m.low_stock).length;
 
   const createMaterial = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
@@ -191,127 +218,203 @@ export default function Inventory() {
     catch (e) { toast.error(apiError(e)); }
   };
 
+  const sumQty = (po, f) => (po.items || []).reduce((t, l) => t + (Number(l[f]) || 0), 0);
+  const visiblePos = pos.filter((po) => poFilter === "all" || (poFilter === "open" ? OPEN_PO.includes(po.status) : po.status === poFilter));
+  const shortIds = new Set(quickCounts?.short_for_jobs_ids || []);
+  const orderIds = new Set(quickCounts?.needs_ordering_ids || []);
+  const label = (st) => st.replace(/_/g, " ");
+  const QUICK = [
+    ["short_for_jobs", "Short for jobs", Hammer, "text-red-600"],
+    ["needs_ordering", "Needs ordering", ShoppingCart, "text-amber-600"],
+    ["on_order", "On order", PackageOpen, "text-blue-600"],
+    ["arriving_week", "Arriving this week", Truck, "text-emerald-600"],
+  ];
+  const openCsv = () => { setCsvPreview(null); setCsvRows([]); setCsvOpen(true); };
+
   return (
     <div>
-      <PageHeader title="Inventory" description={lowCount > 0 ? `${lowCount} material${lowCount === 1 ? "" : "s"} low on stock` : "Materials, stock levels & purchasing"} testid="page-inventory"
-        actions={lowCount > 0 && <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid="low-stock-count"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> {lowCount} low</Badge>} />
+      <PageHeader title="Materials" description={quickCounts ? `${quickCounts.counts.short_for_jobs} short for jobs · ${quickCounts.counts.needs_ordering} need ordering` : "What you have, what's short, what's coming"} testid="page-inventory"
+        actions={canManage && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button variant="outline" data-testid="materials-manage-menu"><Settings2 className="h-4 w-4" /> Manage <ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem onClick={() => navigate("/inventory/catalog")} data-testid="abc-catalog-button"><PackageSearch className="mr-2 h-4 w-4" /> Product catalog</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate("/inventory/locations")} data-testid="locations-button"><Boxes className="mr-2 h-4 w-4" /> Locations, transfers &amp; counts</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate("/inventory/transactions")} data-testid="transactions-button"><History className="mr-2 h-4 w-4" /> Transactions</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={openCsv} data-testid="import-csv-button"><Upload className="mr-2 h-4 w-4" /> Import CSV</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { setTab("materials"); setBulkMode((v) => !v); setSelected(new Set()); }} data-testid="bulk-mode-toggle"><ListChecks className="mr-2 h-4 w-4" /> {bulkMode ? "Exit bulk edit" : "Bulk edit"}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setTplOpen(true)} data-testid="tab-abc-templates"><FileStack className="mr-2 h-4 w-4" /> ABC Supply templates</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="mr-2 h-4 w-4" /> Create custom material</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )} />
       <div className="p-6 sm:p-8">
-        <Tabs defaultValue="materials">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList data-testid="inventory-tabs">
             <TabsTrigger value="materials" data-testid="tab-materials">Materials</TabsTrigger>
-            <TabsTrigger value="pos" data-testid="tab-pos">Purchase Orders</TabsTrigger>
-            <TabsTrigger value="abc-orders" data-testid="tab-abc-orders">ABC Supply Orders</TabsTrigger>
-            <TabsTrigger value="abc-templates" data-testid="tab-abc-templates">ABC Templates</TabsTrigger>
+            <TabsTrigger value="pos" data-testid="tab-pos">Purchase orders</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="materials" className="mt-6">
-            {canManage && <div className="mb-4 flex flex-wrap items-center gap-2">
-              <Button onClick={() => setMatOpen(true)} data-testid="add-material-button"><Plus className="h-4 w-4" /> Create custom</Button>
-              <Button variant="outline" onClick={() => navigate("/inventory/catalog")} data-testid="abc-catalog-button"><PackageSearch className="h-4 w-4" /> Product Catalog</Button>
-              <Button variant="outline" onClick={() => navigate("/inventory/locations")} data-testid="locations-button"><Boxes className="h-4 w-4" /> Locations</Button>
-              <Button variant="outline" onClick={() => navigate("/inventory/transactions")} data-testid="transactions-button"><History className="h-4 w-4" /> Transactions</Button>
-              <Button variant="outline" onClick={() => { setCsvPreview(null); setCsvRows([]); setCsvOpen(true); }} data-testid="import-csv-button"><Upload className="h-4 w-4" /> Import CSV</Button>
-              <ReorderSuggestions onCreated={load} />
-            </div>}
-            <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="material-filters">
+          <TabsContent value="materials" className="mt-6 space-y-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="materials-quick-filters">
+              {QUICK.map(([k, label, Icon, tone]) => (
+                <button key={k} type="button" onClick={() => setQuick(quick === k ? null : k)} data-testid={`quick-${k}`} data-active={quick === k}
+                  className={`flex items-center justify-between rounded-md border bg-white px-4 py-3 text-left transition-colors ${quick === k ? "border-slate-900 ring-1 ring-slate-900" : "border-border hover:border-slate-300"}`}>
+                  <span><span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500"><Icon className={`h-3.5 w-3.5 ${tone}`} />{label}</span></span>
+                  <span className="font-heading text-2xl font-bold text-slate-900" data-testid={`quick-${k}-count`}>{quickCounts ? quickCounts.counts[k] : "—"}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2" data-testid="material-filters">
               <div className="relative w-64"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><Input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="Search name / SKU / mfr" className="pl-8" data-testid="material-search" /></div>
-              <Select value={filters.category} onValueChange={(v) => setFilters({ ...filters, category: v })}><SelectTrigger className="w-40" data-testid="filter-category"><SelectValue placeholder="Category" /></SelectTrigger><SelectContent><SelectItem value="all">All categories</SelectItem>{facets.categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-              <Select value={filters.manufacturer} onValueChange={(v) => setFilters({ ...filters, manufacturer: v })}><SelectTrigger className="w-40" data-testid="filter-manufacturer"><SelectValue placeholder="Manufacturer" /></SelectTrigger><SelectContent><SelectItem value="all">All manufacturers</SelectItem>{facets.manufacturers.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-              <Select value={filters.supplier_id} onValueChange={(v) => setFilters({ ...filters, supplier_id: v })}><SelectTrigger className="w-40" data-testid="filter-supplier"><SelectValue placeholder="Supplier" /></SelectTrigger><SelectContent><SelectItem value="all">All suppliers</SelectItem>{facets.suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select>
-              <Select value={filters.active} onValueChange={(v) => setFilters({ ...filters, active: v })}><SelectTrigger className="w-32" data-testid="filter-active"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent></Select>
-              <Button variant={filters.low_stock ? "default" : "outline"} size="sm" onClick={() => setFilters({ ...filters, low_stock: !filters.low_stock })} data-testid="filter-low-stock"><AlertTriangle className="h-4 w-4" /> Low stock</Button>
-              <div className="ml-auto flex items-center gap-2" data-testid="saved-filters">
-                {savedFilters.length > 0 && (
-                  <Select value="" onValueChange={applySavedFilter}>
-                    <SelectTrigger className="w-44" data-testid="saved-filter-select"><SelectValue placeholder="Saved filters" /></SelectTrigger>
-                    <SelectContent>{savedFilters.map((f) => (
-                      <div key={f.name} className="flex items-center justify-between pr-1">
-                        <SelectItem value={f.name} className="flex-1" data-testid={`saved-filter-${f.name}`}>{f.name}</SelectItem>
-                        <button className="px-1 text-slate-400 hover:text-red-600" onClick={(e) => { e.stopPropagation(); deleteSavedFilter(f.name); }} data-testid={`saved-filter-del-${f.name}`}><X className="h-3.5 w-3.5" /></button>
-                      </div>
-                    ))}</SelectContent>
-                  </Select>
-                )}
-                <Button variant="outline" size="sm" onClick={saveCurrentFilter} data-testid="save-filter-button">Save filter</Button>
+              <Select value={filters.supplier_id} onValueChange={(v) => setFilters({ ...filters, supplier_id: v })}><SelectTrigger className="w-44" data-testid="filter-supplier"><SelectValue placeholder="Supplier" /></SelectTrigger><SelectContent><SelectItem value="all">All suppliers</SelectItem>{facets.suppliers.map((x) => <SelectItem key={x.id} value={x.id}>{x.name}</SelectItem>)}</SelectContent></Select>
+              <Button variant="ghost" size="sm" onClick={() => setMoreFilters((v) => !v)} data-testid="more-filters-toggle"><SlidersHorizontal className="h-4 w-4" /> More filters</Button>
+              {quick && <Button variant="ghost" size="sm" onClick={() => setQuick(null)} data-testid="quick-clear"><X className="h-3.5 w-3.5" /> Clear quick filter</Button>}
+              <div className="ml-auto flex items-center gap-3">
+                {canManage && <ReorderSuggestions onCreated={load} />}
+                <label className="flex items-center gap-2 text-xs text-slate-600"><Switch checked={moreCols} onCheckedChange={setMoreCols} data-testid="more-columns-toggle" /> More columns</label>
               </div>
             </div>
-            {canManage && selected.size > 0 && (
-              <div className="mb-3 flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2" data-testid="bulk-action-bar">
-                <span className="text-sm font-medium text-indigo-800" data-testid="bulk-selected-count">{selected.size} selected</span>
-                <Button size="sm" variant="outline" onClick={openBulk} data-testid="bulk-edit-button">Bulk edit</Button>
-                <Button size="sm" variant="outline" onClick={bulkDeactivate} data-testid="bulk-deactivate-button"><PackageSearch className="h-3.5 w-3.5" /> Deactivate</Button>
-                <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={bulkDelete} data-testid="bulk-delete-button"><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
-                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="bulk-clear"><X className="h-3.5 w-3.5" /> Clear</Button>
+            {moreFilters && (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border p-3" data-testid="more-filters">
+                <Select value={filters.category} onValueChange={(v) => setFilters({ ...filters, category: v })}><SelectTrigger className="w-40" data-testid="filter-category"><SelectValue placeholder="Category" /></SelectTrigger><SelectContent><SelectItem value="all">All categories</SelectItem>{facets.categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+                <Select value={filters.manufacturer} onValueChange={(v) => setFilters({ ...filters, manufacturer: v })}><SelectTrigger className="w-40" data-testid="filter-manufacturer"><SelectValue placeholder="Manufacturer" /></SelectTrigger><SelectContent><SelectItem value="all">All manufacturers</SelectItem>{facets.manufacturers.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+                <Select value={filters.active} onValueChange={(v) => setFilters({ ...filters, active: v })}><SelectTrigger className="w-32" data-testid="filter-active"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent></Select>
+                <Button variant={filters.low_stock ? "default" : "outline"} size="sm" onClick={() => setFilters({ ...filters, low_stock: !filters.low_stock })} data-testid="filter-low-stock"><AlertTriangle className="h-4 w-4" /> Low stock</Button>
+                <div className="ml-auto flex items-center gap-2" data-testid="saved-filters">
+                  {savedFilters.length > 0 && (
+                    <Select value="" onValueChange={applySavedFilter}>
+                      <SelectTrigger className="w-44" data-testid="saved-filter-select"><SelectValue placeholder="Saved filters" /></SelectTrigger>
+                      <SelectContent>{savedFilters.map((f) => (
+                        <div key={f.name} className="flex items-center justify-between pr-1">
+                          <SelectItem value={f.name} className="flex-1" data-testid={`saved-filter-${f.name}`}>{f.name}</SelectItem>
+                          <button className="px-1 text-slate-400 hover:text-red-600" onClick={(e) => { e.stopPropagation(); deleteSavedFilter(f.name); }} data-testid={`saved-filter-del-${f.name}`}><X className="h-3.5 w-3.5" /></button>
+                        </div>
+                      ))}</SelectContent>
+                    </Select>
+                  )}
+                  <Button variant="outline" size="sm" onClick={saveCurrentFilter} data-testid="save-filter-button">Save filter</Button>
+                </div>
               </div>
             )}
-            <div className="overflow-x-auto rounded-md border border-border bg-white">
+            {canManage && bulkMode && (
+              <div className="flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2" data-testid="bulk-action-bar">
+                <span className="text-sm font-medium text-indigo-800" data-testid="bulk-selected-count">{selected.size} selected</span>
+                <Button size="sm" variant="outline" disabled={!selected.size} onClick={openBulk} data-testid="bulk-edit-button">Bulk edit</Button>
+                <Button size="sm" variant="outline" disabled={!selected.size} onClick={bulkDeactivate} data-testid="bulk-deactivate-button"><PackageSearch className="h-3.5 w-3.5" /> Deactivate</Button>
+                <Button size="sm" variant="outline" disabled={!selected.size} className="text-red-600 hover:text-red-700" onClick={bulkDelete} data-testid="bulk-delete-button"><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="bulk-clear"><X className="h-3.5 w-3.5" /> Clear</Button>
+                <Button size="sm" variant="ghost" className="ml-auto" onClick={() => { setBulkMode(false); setSelected(new Set()); }} data-testid="bulk-exit">Done</Button>
+              </div>
+            )}
+            <div className={`relative overflow-x-auto rounded-md border border-border bg-white transition-opacity ${matLoading && materials.length ? "opacity-50" : ""}`} aria-busy={matLoading}>
+              {matLoading && materials.length > 0 && <div className="absolute inset-x-0 top-0 z-10 flex justify-center pt-2" data-testid="materials-refreshing"><span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…</span></div>}
               <Table data-testid="materials-table">
-                <TableHeader><TableRow>{canManage && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={materials.length > 0 && materials.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(materials.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}<TableHead>Material</TableHead><TableHead>SKU</TableHead><TableHead>Category</TableHead><TableHead>Primary supplier</TableHead><TableHead>Cost</TableHead><TableHead>Price</TableHead><TableHead>On hand</TableHead><TableHead>Reserved</TableHead><TableHead>Available</TableHead><TableHead>On order</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
+                <TableHeader><TableRow>
+                  {canManage && bulkMode && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={materials.length > 0 && materials.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(materials.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}
+                  <TableHead>Material</TableHead>
+                  {moreCols && <><TableHead>SKU</TableHead><TableHead>Category</TableHead></>}
+                  <TableHead className="text-right">Available</TableHead><TableHead className="text-right">Reserved</TableHead><TableHead className="text-right">On order</TableHead>
+                  {moreCols && <TableHead className="text-right">On hand</TableHead>}
+                  <TableHead>Status</TableHead><TableHead>Preferred supplier</TableHead>
+                  {moreCols && <><TableHead className="text-right">Cost</TableHead><TableHead className="text-right">Price</TableHead></>}
+                  {canManage && <TableHead className="w-10" />}
+                </TableRow></TableHeader>
                 <TableBody>
                   {materials.map((m) => (
                     <TableRow key={m.id} data-testid={`material-row-${m.id}`} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/inventory/materials/${m.id}`)}>
-                      {canManage && <TableCell onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} data-testid={`bulk-select-${m.id}`} /></TableCell>}
+                      {canManage && bulkMode && <TableCell onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} data-testid={`bulk-select-${m.id}`} /></TableCell>}
                       <TableCell className="font-medium text-slate-900">{m.name}<ChevronRight className="ml-1 inline h-3.5 w-3.5 text-slate-300" /></TableCell>
-                      <TableCell className="text-slate-500 font-mono text-xs">{m.sku || "—"}</TableCell>
-                      <TableCell className="text-slate-500">{m.category || "—"}</TableCell>
+                      {moreCols && <><TableCell className="font-mono text-xs text-slate-500">{m.sku || "—"}</TableCell><TableCell className="text-slate-500">{m.category || "—"}</TableCell></>}
+                      <TableCell className="text-right tabular-nums font-semibold" data-testid={`mat-available-${m.id}`}>{m.available}</TableCell>
+                      <TableCell className="text-right tabular-nums text-slate-500" data-testid={`mat-reserved-${m.id}`}>{m.reserved}</TableCell>
+                      <TableCell className="text-right tabular-nums text-slate-500" data-testid={`mat-on-order-${m.id}`}>{m.on_order}</TableCell>
+                      {moreCols && <TableCell className="text-right tabular-nums">{m.on_hand}</TableCell>}
+                      <TableCell>{!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge>
+                        : shortIds.has(m.id) ? <Badge variant="secondary" className="bg-red-50 text-red-700" data-testid={`short-badge-${m.id}`}>Short for jobs</Badge>
+                        : orderIds.has(m.id) ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Needs ordering</Badge>
+                        : <Badge variant="secondary" className="bg-green-50 text-green-700">OK</Badge>}</TableCell>
                       <TableCell className="text-slate-600">{m.primary_supplier_name || "—"}</TableCell>
-                      <TableCell className="tabular-nums text-slate-600" data-testid={`mat-cost-${m.id}`}>{m.effective_cost != null ? money(m.effective_cost) : "—"}</TableCell>
-                      <TableCell className="tabular-nums font-medium text-slate-800" data-testid={`mat-price-${m.id}`}>{m.effective_price != null ? <span className="inline-flex items-center gap-1">{money(m.effective_price)}{m.price_is_custom && <Badge variant="secondary" className="bg-amber-100 text-amber-700 px-1 py-0 text-[10px]" data-testid={`mat-price-custom-${m.id}`}>Custom</Badge>}</span> : "—"}</TableCell>
-                      <TableCell className="tabular-nums font-medium">{m.on_hand}</TableCell>
-                      <TableCell className="tabular-nums text-slate-500">{m.reserved}</TableCell>
-                      <TableCell className="tabular-nums font-medium">{m.available}</TableCell>
-                      <TableCell className="tabular-nums text-slate-500">{m.on_order}</TableCell>
-                      <TableCell>{!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge> : m.low_stock ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Low</Badge> : <Badge variant="secondary" className="bg-green-50 text-green-700">OK</Badge>}</TableCell>
-                      {canManage && <TableCell><div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}><Button size="sm" variant="outline" onClick={() => openEdit(m)} data-testid={`edit-${m.id}`}>Edit</Button><Button size="sm" variant="outline" onClick={() => { setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust</Button><Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => deleteMaterial(m)} data-testid={`delete-${m.id}`}><Trash2 className="h-3.5 w-3.5" /></Button></div></TableCell>}
+                      {moreCols && <>
+                        <TableCell className="text-right tabular-nums text-slate-600" data-testid={`mat-cost-${m.id}`}>{m.effective_cost != null ? money(m.effective_cost) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums font-medium text-slate-800" data-testid={`mat-price-${m.id}`}>{m.effective_price != null ? <span className="inline-flex items-center gap-1">{money(m.effective_price)}{m.price_is_custom && <Badge variant="secondary" className="bg-amber-100 px-1 py-0 text-[10px] text-amber-700" data-testid={`mat-price-custom-${m.id}`}>Custom</Badge>}</span> : "—"}</TableCell>
+                      </>}
+                      {canManage && <TableCell onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" data-testid={`row-actions-${m.id}`}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openEdit(m)} data-testid={`edit-${m.id}`}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => { setAdjTarget(m); setAdj({ delta: 0, reason: "manual_correction", note: "" }); setAdjOpen(true); }} data-testid={`adjust-${m.id}`}>Adjust stock</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-red-600" onClick={() => deleteMaterial(m)} data-testid={`delete-${m.id}`}><Trash2 className="mr-2 h-3.5 w-3.5" /> Delete</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>}
                     </TableRow>
                   ))}
-                  {materials.length === 0 && <TableRow><TableCell colSpan={13} className="text-center text-sm text-slate-400">No materials match.</TableCell></TableRow>}
+                  {materials.length === 0 && <TableRow><TableCell colSpan={14} className="text-center text-sm text-slate-400" data-testid="materials-empty">{matLoading ? <span className="inline-flex items-center gap-2" data-testid="materials-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading materials…</span> : "No materials match."}</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
           </TabsContent>
 
-          <TabsContent value="pos" className="mt-6">
-            {canManage && <div className="mb-4"><Button onClick={() => setPoOpen(true)} data-testid="create-po-button"><Plus className="h-4 w-4" /> Create purchase order</Button></div>}
+          <TabsContent value="pos" className="mt-6 space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {PO_FILTERS.map(([k, l]) => <Button key={k} size="sm" variant={poFilter === k ? "default" : "outline"} onClick={() => setPoFilter(k)} data-testid={`po-filter-${k}`}>{l}</Button>)}
+              <div className="ml-auto flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setAbcHistOpen((v) => !v)} data-testid="tab-abc-orders"><Send className="h-4 w-4" /> {abcHistOpen ? "Hide" : "ABC Supply"} order history</Button>
+                {canManage && <Button onClick={() => setPoOpen(true)} data-testid="create-po-button"><Plus className="h-4 w-4" /> Create purchase order</Button>}
+              </div>
+            </div>
+            {abcHistOpen && <div className="rounded-md border border-border bg-white p-4" data-testid="abc-orders-tab"><AbcOrderHistory /></div>}
             <div className="overflow-x-auto rounded-md border border-border bg-white">
               <Table data-testid="pos-table">
-                <TableHeader><TableRow><TableHead>PO #</TableHead><TableHead>Supplier</TableHead><TableHead>Total</TableHead><TableHead>Expected</TableHead><TableHead>Status</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>PO #</TableHead><TableHead>Supplier</TableHead><TableHead>Expected</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Received</TableHead><TableHead className="text-right">Outstanding</TableHead><TableHead className="text-right">Total</TableHead>{canManage && <TableHead />}</TableRow></TableHeader>
                 <TableBody>
-                  {pos.map((po) => (
-                    <TableRow key={po.id} data-testid={`po-row-${po.id}`}>
-                      <TableCell className="font-medium text-slate-900">{po.number}</TableCell>
-                      <TableCell className="text-slate-600">{po.supplier_name || "—"}</TableCell>
-                      <TableCell className="tabular-nums">{money(po.total)}</TableCell>
-                      <TableCell className="text-slate-500">{shortDate(po.expected_date)}</TableCell>
-                      <TableCell>
-                        {canManage ? (
-                          <Select value={po.status} onValueChange={(v) => setPoStatus(po.id, v)}>
-                            <SelectTrigger className="h-8 w-[160px]" data-testid={`po-status-${po.id}`}><Badge className={sc[po.status] || ""} variant="secondary">{po.status.replace("_", " ")}</Badge></SelectTrigger>
-                            <SelectContent>{PO_STATUS.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}</SelectContent>
-                          </Select>
-                        ) : <Badge className={sc[po.status] || ""} variant="secondary">{po.status.replace("_", " ")}</Badge>}
-                      </TableCell>
-                      {canManage && <TableCell><div className="flex gap-2">
-                        {po.integration_provider === "abc_supply" && <Button size="sm" variant="outline" onClick={() => { setAbcPo(po); setAbcOpen(true); }} data-testid={`abc-order-${po.id}`}><Send className="h-4 w-4" /> {po.external_confirmation_number ? "ABC Order" : "Submit to ABC"}</Button>}
-                        <Button size="sm" variant="outline" disabled={po.status === "cancelled" || po.status === "received"} onClick={() => { setRecvPo(po); setRecvOpen(true); }} data-testid={`receive-${po.id}`}><PackageCheck className="h-4 w-4" /> Receive</Button>
-                      </div></TableCell>}
-                    </TableRow>
-                  ))}
-                  {pos.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-slate-400">No purchase orders yet.</TableCell></TableRow>}
+                  {visiblePos.map((po) => {
+                    const ordered = sumQty(po, "quantity"); const received = sumQty(po, "received_quantity");
+                    const outstanding = (po.items || []).reduce((t, l) => t + Math.max((Number(l.quantity) || 0) - (Number(l.received_quantity) || 0), 0), 0);
+                    const late = po.expected_date && OPEN_PO.includes(po.status) && outstanding > 0 && new Date(po.expected_date) < new Date();
+                    return (
+                      <TableRow key={po.id} data-testid={`po-row-${po.id}`} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/purchase-orders/${po.id}`)}>
+                        <TableCell className="font-medium text-slate-900">{po.number}{po.integration_provider === "abc_supply" && <Badge variant="secondary" className="ml-2 bg-slate-100 px-1.5 py-0 text-[10px] text-slate-600">ABC</Badge>}</TableCell>
+                        <TableCell className="text-slate-600">{po.supplier_name || "—"}</TableCell>
+                        <TableCell className={late ? "font-medium text-red-600" : "text-slate-500"} data-testid={`po-expected-${po.id}`}>{shortDate(po.expected_date)}{late ? " · late" : ""}</TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          {canManage ? (
+                            <Select value={po.status} onValueChange={(v) => setPoStatus(po.id, v)}>
+                              <SelectTrigger className="h-8 w-[160px]" data-testid={`po-status-${po.id}`}><Badge className={sc[po.status] || ""} variant="secondary">{label(po.status)}</Badge></SelectTrigger>
+                              <SelectContent>{(PO_STATUS.includes(po.status) ? PO_STATUS : [po.status, ...PO_STATUS]).map((st) => <SelectItem key={st} value={st}>{label(st)}</SelectItem>)}</SelectContent>
+                            </Select>
+                          ) : <Badge className={sc[po.status] || ""} variant="secondary">{label(po.status)}</Badge>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums" data-testid={`po-received-${po.id}`}>{received} / {ordered}</TableCell>
+                        <TableCell className={`text-right tabular-nums ${outstanding > 0 ? "font-semibold text-slate-900" : "text-slate-400"}`} data-testid={`po-outstanding-${po.id}`}>{outstanding}</TableCell>
+                        <TableCell className="text-right tabular-nums">{money(po.total)}</TableCell>
+                        {canManage && <TableCell onClick={(e) => e.stopPropagation()}><div className="flex justify-end gap-2">
+                          {po.integration_provider === "abc_supply" && <Button size="sm" variant="outline" onClick={() => { setAbcPo(po); setAbcOpen(true); }} data-testid={`abc-order-${po.id}`}><Send className="h-4 w-4" /> {po.external_confirmation_number ? "ABC order" : "Submit to ABC"}</Button>}
+                          <Button size="sm" variant="outline" disabled={po.status === "cancelled" || po.status === "received"} onClick={() => { setRecvPo(po); setRecvOpen(true); }} data-testid={`receive-${po.id}`}><PackageCheck className="h-4 w-4" /> Receive</Button>
+                        </div></TableCell>}
+                      </TableRow>
+                    );
+                  })}
+                  {visiblePos.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-slate-400">{posLoading ? <span className="inline-flex items-center gap-2" data-testid="pos-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading purchase orders…</span> : poFilter === "open" ? "No open purchase orders." : "No purchase orders here."}</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
-          </TabsContent>
-
-          <TabsContent value="abc-orders" className="mt-6" data-testid="abc-orders-tab">
-            <AbcOrderHistory />
-          </TabsContent>
-
-          <TabsContent value="abc-templates" className="mt-6" data-testid="abc-templates-tab">
-            <AbcTemplatesPanel />
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={tplOpen} onOpenChange={setTplOpen}>
+        <DialogContent className="max-w-3xl" data-testid="abc-templates-dialog">
+          <DialogHeader><DialogTitle>ABC Supply templates</DialogTitle><DialogDescription>Saved ABC order templates.</DialogDescription></DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto" data-testid="abc-templates-tab"><AbcTemplatesPanel /></div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={matOpen} onOpenChange={setMatOpen}>
         <DialogContent data-testid="material-dialog">
@@ -449,7 +552,7 @@ export default function Inventory() {
       </Dialog>
 
       <PODialog open={poOpen} onOpenChange={setPoOpen} onCreated={load} />
-      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={load} />
+      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={() => { loadPos(); loadCounts(); }} />
       <AbcOrderPanel open={abcOpen} onOpenChange={setAbcOpen} po={abcPo} onChanged={load} />
     </div>
   );

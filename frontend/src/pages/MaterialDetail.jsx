@@ -13,7 +13,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2, Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2, Sparkles, MoreHorizontal } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const MANAGE = ["owner", "administrator", "office"];
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
@@ -53,6 +55,9 @@ export default function MaterialDetail() {
   const [d, setD] = useState(null);
   const [balances, setBalances] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [shortIds, setShortIds] = useState([]);
+  const [orderIds, setOrderIds] = useState([]);
+  useEffect(() => { api.get("/materials/quick-counts").then((r) => { setShortIds(r.data.short_for_jobs_ids || []); setOrderIds(r.data.needs_ordering_ids || []); }).catch(() => {}); }, [id]);
   const [busy, setBusy] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({});
@@ -150,34 +155,49 @@ export default function MaterialDetail() {
 
   if (loading || !d) return <div className="p-10 text-center text-slate-400" data-testid="material-detail-loading"><Loader2 className="mx-auto h-6 w-6 animate-spin" /></div>;
   const m = d.material; const q = d.quantities;
+  const preferred = d.suppliers.find((x) => x.is_preferred);
+  const isShort = shortIds.includes(m.id);
+  const needsReorder = orderIds.includes(m.id);  // same server-side rule as the Materials "Needs ordering" filter
 
   return (
     <div>
       <PageHeader title={m.name} description={m.category || "Material"} testid="page-material-detail" />
       <div className="p-6 sm:p-8 space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="detail-back"><ArrowLeft className="h-4 w-4" /> Inventory</Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="detail-back"><ArrowLeft className="h-4 w-4" /> Materials</Button>
           {canManage && (
             <div className="flex flex-wrap items-center gap-2" data-testid="material-actions">
               <Button size="sm" variant="outline" onClick={openEdit} data-testid="edit-material-button"><Pencil className="h-4 w-4" /> Edit</Button>
               <Button size="sm" variant="outline" onClick={() => setAdjOpen(true)} data-testid="adjust-inventory-button"><SlidersHorizontal className="h-4 w-4" /> Adjust inventory</Button>
-              <Button size="sm" variant="outline" onClick={toggleActive} data-testid="toggle-active-button"><Power className="h-4 w-4" /> {m.active ? "Deactivate" : "Reactivate"}</Button>
-              <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={doDelete} data-testid="delete-material-button"><Trash2 className="h-4 w-4" /> Delete</Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" data-testid="material-more-actions"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={toggleActive} data-testid="toggle-active-button"><Power className="mr-2 h-4 w-4" /> {m.active ? "Deactivate" : "Reactivate"}</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-red-600" onClick={doDelete} data-testid="delete-material-button"><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
         </div>
 
-        {/* Overview */}
-        <section className="rounded-md border border-border bg-white p-4" data-testid="detail-overview">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Overview</h3>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
-            <div><span className="text-slate-400">SKU</span><div className="font-mono">{m.sku || "—"}</div></div>
-            <div><span className="text-slate-400">Manufacturer</span><div>{m.manufacturer || "—"}</div></div>
-            <div><span className="text-slate-400">Brand</span><div>{m.brand || "—"}</div></div>
-            <div><span className="text-slate-400">Base unit</span><div>{m.unit}</div></div>
-            <div><span className="text-slate-400">Reorder at</span><div className="tabular-nums">{m.reorder_threshold}</div></div>
-            <div><span className="text-slate-400">Status</span><div>{m.active ? "Active" : "Inactive"}</div></div>
-            <div className="col-span-2"><span className="text-slate-400">Best known cost</span> <span className="font-medium" data-testid="best-known-cost">{m.best_known_cost != null ? money(m.best_known_cost) : "—"}</span> <span className="text-xs text-slate-400">(lowest active supplier cost — not the preferred supplier)</span></div>
+        {/* Inventory quantities */}
+        <section data-testid="detail-inventory">
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <h3 className="text-sm font-semibold text-slate-700">Inventory</h3>
+            {!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge>
+              : isShort ? <Badge variant="secondary" className="bg-red-50 text-red-700" data-testid="detail-status-short">Short for jobs</Badge>
+              : needsReorder ? <Badge variant="secondary" className="bg-amber-50 text-amber-700" data-testid="detail-status-reorder">Needs ordering</Badge>
+              : <Badge variant="secondary" className="bg-green-50 text-green-700" data-testid="detail-status-ok">OK</Badge>}
+            <span className="text-sm text-slate-500" data-testid="detail-preferred-supplier">Preferred supplier: <span className="font-medium text-slate-800">{preferred ? (preferred.supplier_name || preferred.integration_provider) : "—"}</span>{preferred?.current_cost != null && canManage ? ` · ${money(preferred.current_cost)}` : ""}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <Stat label="On Hand" value={q.on_hand} />
+            <Stat label="Reserved" value={q.reserved} accent="text-amber-600" />
+            <Stat label="Available" value={q.available} accent={q.available < 0 ? "text-red-600" : "text-green-700"} />
+            <Stat label="On Order" value={q.on_order} accent="text-blue-600" />
+            <Stat label="Required" value={q.required} />
+            <Stat label="Projected" value={q.projected} accent={q.projected < 0 ? "text-red-600" : "text-slate-900"} />
           </div>
         </section>
 
@@ -207,33 +227,16 @@ export default function MaterialDetail() {
           </div>
         </section>
 
-        {/* Inventory quantities */}
-        <section data-testid="detail-inventory">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Inventory</h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <Stat label="On Hand" value={q.on_hand} />
-            <Stat label="Reserved" value={q.reserved} accent="text-amber-600" />
-            <Stat label="Available" value={q.available} accent={q.available < 0 ? "text-red-600" : "text-green-700"} />
-            <Stat label="On Order" value={q.on_order} accent="text-blue-600" />
-            <Stat label="Required" value={q.required} />
-            <Stat label="Projected" value={q.projected} accent={q.projected < 0 ? "text-red-600" : "text-slate-900"} />
-          </div>
-          <div className="mt-4 rounded-md border border-border bg-white p-4" data-testid="detail-by-location">
-            <h4 className="mb-2 text-xs font-semibold uppercase text-slate-400">Inventory by location</h4>
-            <div className="max-w-sm space-y-1 text-sm">
-              {balances.length === 0 ? <p className="text-slate-400">No stock on hand at any location.</p> : balances.map((b) => (
-                <div key={b.location_id} className="flex items-center justify-between" data-testid={`loc-balance-${b.location_id}`}>
-                  <span className="text-slate-700">{b.location_name} <span className="text-xs text-slate-400">({b.location_type})</span></span>
-                  <span className="tabular-nums">{b.quantity_on_hand}</span>
-                </div>
-              ))}
-              <div className="mt-1 flex items-center justify-between border-t border-border pt-1 font-semibold">
-                <span>Total On Hand</span><span className="tabular-nums" data-testid="loc-balance-total">{Math.round(balances.reduce((s, b) => s + b.quantity_on_hand, 0) * 1000) / 1000}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
+        <Tabs defaultValue="suppliers" data-testid="material-detail-tabs">
+          <TabsList>
+            <TabsTrigger value="suppliers" data-testid="md-tab-suppliers">Supplier pricing</TabsTrigger>
+            <TabsTrigger value="pos" data-testid="md-tab-pos">Open POs ({d.open_po_lines.length})</TabsTrigger>
+            <TabsTrigger value="jobs" data-testid="md-tab-jobs">Jobs ({d.jobs.length})</TabsTrigger>
+            <TabsTrigger value="locations" data-testid="md-tab-locations">By location</TabsTrigger>
+            <TabsTrigger value="history" data-testid="md-tab-history">History</TabsTrigger>
+            <TabsTrigger value="details" data-testid="md-tab-details">Details</TabsTrigger>
+          </TabsList>
+          <TabsContent value="suppliers" className="mt-4">
         {/* Supplier pricing */}
         <section className="rounded-md border border-border bg-white" data-testid="detail-suppliers">
           <div className="flex items-center justify-between border-b border-border p-3">
@@ -262,7 +265,8 @@ export default function MaterialDetail() {
             </TableBody>
           </Table>
         </section>
-
+          </TabsContent>
+          <TabsContent value="pos" className="mt-4">
         {/* Open POs */}
         <section className="rounded-md border border-border bg-white" data-testid="detail-open-pos">
           <h3 className="border-b border-border p-3 text-sm font-semibold text-slate-700">Open purchase orders</h3>
@@ -276,7 +280,8 @@ export default function MaterialDetail() {
             </TableBody>
           </Table>
         </section>
-
+          </TabsContent>
+          <TabsContent value="jobs" className="mt-4">
         {/* Jobs */}
         <section className="rounded-md border border-border bg-white" data-testid="detail-jobs">
           <h3 className="border-b border-border p-3 text-sm font-semibold text-slate-700">Jobs requiring this material</h3>
@@ -288,7 +293,24 @@ export default function MaterialDetail() {
             </TableBody>
           </Table>
         </section>
-
+          </TabsContent>
+          <TabsContent value="locations" className="mt-4">
+          <div className="rounded-md border border-border bg-white p-4" data-testid="detail-by-location">
+            <h4 className="mb-2 text-xs font-semibold uppercase text-slate-400">Inventory by location</h4>
+            <div className="max-w-sm space-y-1 text-sm">
+              {balances.length === 0 ? <p className="text-slate-400">No stock on hand at any location.</p> : balances.map((b) => (
+                <div key={b.location_id} className="flex items-center justify-between" data-testid={`loc-balance-${b.location_id}`}>
+                  <span className="text-slate-700">{b.location_name} <span className="text-xs text-slate-400">({b.location_type})</span></span>
+                  <span className="tabular-nums">{b.quantity_on_hand}</span>
+                </div>
+              ))}
+              <div className="mt-1 flex items-center justify-between border-t border-border pt-1 font-semibold">
+                <span>Total On Hand</span><span className="tabular-nums" data-testid="loc-balance-total">{Math.round(balances.reduce((s, b) => s + b.quantity_on_hand, 0) * 1000) / 1000}</span>
+              </div>
+            </div>
+          </div>
+          </TabsContent>
+          <TabsContent value="history" className="mt-4">
         {/* Transaction history */}
         <section className="rounded-md border border-border bg-white" data-testid="detail-transactions">
           <h3 className="border-b border-border p-3 text-sm font-semibold text-slate-700">Transaction history</h3>
@@ -309,6 +331,24 @@ export default function MaterialDetail() {
             </TableBody>
           </Table>
         </section>
+          </TabsContent>
+          <TabsContent value="details" className="mt-4">
+        {/* Overview */}
+        <section className="rounded-md border border-border bg-white p-4" data-testid="detail-overview">
+          
+          <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
+            <div><span className="text-slate-400">SKU</span><div className="font-mono">{m.sku || "—"}</div></div>
+            <div><span className="text-slate-400">Manufacturer</span><div>{m.manufacturer || "—"}</div></div>
+            <div><span className="text-slate-400">Brand</span><div>{m.brand || "—"}</div></div>
+            <div><span className="text-slate-400">Base unit</span><div>{m.unit}</div></div>
+            <div><span className="text-slate-400">Reorder at</span><div className="tabular-nums">{m.reorder_threshold}</div></div>
+            <div><span className="text-slate-400">Status</span><div>{m.active ? "Active" : "Inactive"}</div></div>
+            <div className="col-span-2"><span className="text-slate-400">Best known cost</span> <span className="font-medium" data-testid="best-known-cost">{m.best_known_cost != null ? money(m.best_known_cost) : "—"}</span> <span className="text-xs text-slate-400">(lowest active supplier cost — not the preferred supplier)</span></div>
+          </div>
+        </section>
+
+          </TabsContent>
+        </Tabs>
       </div>
 
       {/* Edit dialog */}

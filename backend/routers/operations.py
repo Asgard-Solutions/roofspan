@@ -148,8 +148,16 @@ async def reorder_suggestions(user: User = Depends(get_current_user), db: AsyncS
     return {"suggestions": out}
 
 
+@router.get("/materials/quick-counts")
+async def materials_quick_counts(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from services.materials_quick import quick_sets
+    sets = await quick_sets(db)
+    return {"counts": {k: len(v) for k, v in sets.items()}, "short_for_jobs_ids": sorted(sets["short_for_jobs"]),
+            "needs_ordering_ids": sorted(sets["needs_ordering"])}
+
+
 @router.get("/materials", response_model=list[MaterialListItemOut])
-async def list_materials(low_stock: bool | None = Query(None), q: str | None = Query(None),
+async def list_materials(low_stock: bool | None = Query(None), q: str | None = Query(None), quick: str | None = Query(None),
                          category: str | None = Query(None), manufacturer: str | None = Query(None),
                          supplier_id: str | None = Query(None), active: bool | None = Query(None),
                          user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -165,6 +173,14 @@ async def list_materials(low_stock: bool | None = Query(None), q: str | None = Q
         stmt = stmt.where(Material.active.is_(active))
     if supplier_id:
         stmt = stmt.where(Material.id.in_(select(SupplierMaterial.material_id).where(SupplierMaterial.supplier_id == supplier_id)))
+    if quick:
+        from services.materials_quick import quick_sets, QUICK_KEYS
+        if quick not in QUICK_KEYS:
+            raise HTTPException(status_code=422, detail=f"quick must be one of {', '.join(QUICK_KEYS)}")
+        ids = (await quick_sets(db))[quick]
+        if not ids:
+            return []
+        stmt = stmt.where(Material.id.in_(list(ids)))
     rows = (await db.execute(stmt)).scalars().all()
     out = [_strip_cost_for_sales(await _mat_list_item(db, m), user) for m in rows]
     if low_stock:

@@ -122,7 +122,8 @@ class TestJobsMaterialStatus:
             assert byid[i]["material_status"] == "short", i
 
     def test_none_means_no_materials(self, owner, owner_jobs):
-        nones = [j for j in owner_jobs if j["material_status"] == "none"][:5]
+        # cancelled jobs are reported as "none" by design even if they still carry JobMaterial rows
+        nones = [j for j in owner_jobs if j["material_status"] == "none" and j.get("status") != "cancelled"][:5]
         for j in nones:
             d = owner.get(f"{BASE_URL}/api/jobs/{j['id']}", timeout=30).json()
             assert d["materials"] == []
