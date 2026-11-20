@@ -165,7 +165,8 @@ def test_sales_can_view_customer_proposal():
     qid = _accepted_quote(h, _material(h))
     sh = _sales(h)
     r = requests.get(f"{API}/quotes/{qid}/proposal", headers=sh, timeout=20)
-    assert r.status_code == 200  # customer-safe -> sales (who sell) may view
+    # Quote authorization rule (June 2026): sales only reach proposals on leads assigned to them.
+    assert r.status_code == 403
 
 
 # ---------------- Cost overrun alerts ----------------

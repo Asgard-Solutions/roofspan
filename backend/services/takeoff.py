@@ -500,14 +500,19 @@ async def status(db: AsyncSession, estimate_id: str) -> dict:
         EstimateTakeoff.estimate_id == estimate.id
     ).order_by(EstimateTakeoff.generated_at.desc()))).scalars().first()
     if not takeoff:
-        return {"estimate_id": str(estimate.id), "has_takeoff": False, "measurements_changed": False, "changed_metrics": []}
+        return {"estimate_id": str(estimate.id), "has_takeoff": False, "measurements_changed": False, "changed_metrics": [], "pending_unverified_revision_number": None}
     used = await db.get(MeasurementRevision, takeoff.measurement_revision_id)
-    latest = None
+    latest = pending = None
     if used:
+        # Trusted baseline = newest office-verified revision; unverified drafts are only reported as pending.
         latest = (await db.execute(select(MeasurementRevision).where(
-            MeasurementRevision.set_id == used.set_id
+            MeasurementRevision.set_id == used.set_id, MeasurementRevision.status.in_(("office_verified", "locked"))
         ).order_by(MeasurementRevision.revision_number.desc()))).scalars().first()
-    changed = bool(latest and str(latest.id) != str(used.id))
+        pending = (await db.execute(select(MeasurementRevision).where(
+            MeasurementRevision.set_id == used.set_id, MeasurementRevision.status.not_in(("office_verified", "locked")),
+            MeasurementRevision.revision_number > max(used.revision_number, latest.revision_number if latest else 0)
+        ).order_by(MeasurementRevision.revision_number.desc()))).scalars().first()
+    changed = bool(latest and str(latest.id) != str(used.id) and latest.revision_number > used.revision_number)
     changes = []
     if changed and used and latest:
         before = _metric_map(await measurement_svc.build_out(db, used))
@@ -522,6 +527,7 @@ async def status(db: AsyncSession, estimate_id: str) -> dict:
         "latest_measurement_revision_id": str(latest.id) if latest else None,
         "latest_measurement_revision_number": latest.revision_number if latest else None,
         "measurements_changed": changed, "changed_metrics": changes,
+        "pending_unverified_revision_number": pending.revision_number if pending else None,
     }
 
 

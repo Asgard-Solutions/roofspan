@@ -1,0 +1,23 @@
+{
+  "summary": "Retest of the HIGH defect from iteration_123: FIXED. The accepted-quote lock now holds on both apply endpoints. POST /price-book/apply and POST /cost-refresh/apply return 409 with the exact message 'This estimate has an accepted quote and can no longer be edited.' on a TEST estimate with an accepted quote and on seeded EST-1041. The check covers cost refresh both with and without line_ids and with recalc. After each refused call, the version, items, subtotal, total and price_book_id are all unchanged. On an unlocked estimate, the owner gets 200 from both endpoints, the version goes up by 1 each time, and the result persists on GET. UI on locked EST-1041: the More menu shows only 'Site plan PDF'. The estimate-price-book-open and estimate-cost-refresh items are absent, and Save and el-unit-0 are disabled. Totals stay $3,500 / $3,788.75 and the version stays 1. UI on an unlocked TEST draft: More shows 'Change price book' and 'Refresh current costs'. The price-book dialog opens and lists 'None (manual)' and 'Standard ★'. The cost-refresh dialog opens; it shows 'No catalog-linked lines to refresh' and 'Apply 0 changes' is disabled, which is correct for a manual line. Sales UI on an unassigned estimate shows estimate-load-error 'Can't open this estimate'. Regression suites: test_lock_apply_iter124 (3, new), test_round3_closeout_iter123 (5, the lock test now passes), test_estimate_line_identity (8), test_takeoff_reapply_after_save and test_estimating_modernization (14). 30/30 passed. Price books are still only 'Standard' (default) after the run.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "EstimateEditor price-book dialog (dev only)", "issues": ["Opening the price-book Select inside the Dialog triggers the CRA dev overlay 'ResizeObserver loop completed with undelivered notifications'. This is harmless and dev-only, but it hides the UI in preview. Consider adding a global window error filter for the ResizeObserver message."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_lock_apply_iter124.py", "/app/backend/tests/test_round3_closeout_iter123.py", "/app/backend/tests/test_estimate_line_identity.py", "/app/test_reports/pytest/pytest_iter124.xml", "/app/test_reports/pytest/pytest_iter124_extra.xml"],
+  "action_items": ["Optional: suppress the ResizeObserver dev overlay"],
+  "critical_code_review_comments": [
+    "The lock check is still repeated in each endpoint. A shared _get_editable_estimate() helper would stop future mutating endpoints from missing it.",
+    "Accepted TEST estimates cannot be deleted (409), so the test runs leave accepted TEST_I124 / TEST_I123 estimates and their leads behind. This is the existing pattern."
+  ],
+  "updated_files": ["/app/backend/tests/test_lock_apply_iter124.py"],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "100%"},
+  "seed_data_creation": "Created TEST_I124_* and TEST_I124UI_* leads and estimates. The unlocked estimates were deleted. One accepted TEST_I124 estimate remains because the lock refuses deletion. No price books were created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The lock is fixed on price-book/apply and cost-refresh/apply. EST-1041 (61cd2edb-...) is locked, version 1, total 3788.75. Token key is access_token."
+}

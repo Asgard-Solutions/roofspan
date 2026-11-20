@@ -125,7 +125,7 @@ async def _snapshot_cost(db: AsyncSession, d: dict):
         d["purchase_unit"] = sm.supplier_uom
 
 
-async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None, keep_ids=frozenset(), old_lines=()) -> list[dict]:
+async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None, keep_ids=frozenset()) -> list[dict]:
     """Snapshot cost, apply Price Book rule (deterministic priority, respecting explicit user pricing),
     compute authoritative fields, persist. Returns computed line dicts (for totals).
     keep_ids: ids of this estimate's previous lines that may be reused (so takeoff links survive a save)."""
@@ -134,10 +134,6 @@ async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None,
     for idx, it in enumerate(items):
         d = it.model_dump() if hasattr(it, "model_dump") else dict(it)
         reuse = d.pop("id", None)
-        if not reuse and idx < len(old_lines):  # clients that don't send ids: same position + same item = same line
-            o = old_lines[idx]
-            if (o[1] or "") == (d.get("description") or "") and str(o[2] or "") == str(d.get("material_id") or "") and str(o[3] or "") == str(d.get("assembly_id") or ""):
-                reuse = str(o[0])
         reuse = reuse if reuse in keep_ids and reuse not in used else None
         if reuse:
             used.add(reuse)
@@ -187,6 +183,24 @@ async def _apply_items(db: AsyncSession, estimate_id, items, price_book_id=None,
     return computed
 
 
+async def _assert_lead_for_sales(db: AsyncSession, lead_id, user: User) -> None:
+    """Sales may only reach estimates on leads assigned to them (same rule as quotes); other roles unchanged."""
+    if user.role != "sales":
+        return
+    from models import Lead
+    lead = await db.get(Lead, lead_id) if lead_id else None
+    if not lead or lead.assigned_user_id != user.id:
+        raise HTTPException(status_code=403, detail="This estimate belongs to a lead that is not assigned to you.")
+
+
+async def _get_estimate(db: AsyncSession, estimate_id: str, user: User) -> Estimate:
+    e = await db.get(Estimate, estimate_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    await _assert_lead_for_sales(db, e.lead_id, user)
+    return e
+
+
 @router.get("", response_model=list[EstimateOut])
 async def list_estimates(lead_id: str | None = Query(None), customer_id: str | None = Query(None), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Estimate).order_by(Estimate.created_at.desc())
@@ -194,12 +208,16 @@ async def list_estimates(lead_id: str | None = Query(None), customer_id: str | N
         stmt = stmt.where(Estimate.lead_id == lead_id)
     if customer_id:
         stmt = stmt.where(Estimate.customer_id == customer_id)
+    if user.role == "sales":
+        from models import Lead
+        stmt = stmt.join(Lead, Lead.id == Estimate.lead_id).where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
     return [await _out(db, e, user) for e in rows]
 
 
 @router.post("", response_model=EstimateOut, status_code=201)
 async def create_estimate(payload: EstimateIn, request: Request, idempotency_key: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+    await _assert_lead_for_sales(db, payload.lead_id, user)
     existing_id = await check_idempotency(db, idempotency_key, "estimate")
     if existing_id:
         e = await db.get(Estimate, existing_id)
@@ -224,30 +242,29 @@ async def create_estimate(payload: EstimateIn, request: Request, idempotency_key
 
 @router.get("/{estimate_id}", response_model=EstimateOut)
 async def get_estimate(estimate_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
     return await _out(db, e, user)
 
 
 @router.put("/{estimate_id}", response_model=EstimateOut)
 async def update_estimate(estimate_id: str, payload: EstimateIn, request: Request, if_match: str | None = Header(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
     if await _has_accepted_quote(db, e.id):
         raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     enforce_version(e, if_match, "Estimate")
-    if getattr(payload, "price_book_id", None) is not None:
-        e.price_book_id = payload.price_book_id
     from takeoff_models import EstimateTakeoffLine
-    old_lines = (await db.execute(select(EstimateLineItem.id, EstimateLineItem.description, EstimateLineItem.material_id, EstimateLineItem.assembly_id)
-                                  .where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).all()
-    old_ids = [str(x[0]) for x in old_lines]
+    old_ids = [str(x) for x in (await db.execute(select(EstimateLineItem.id).where(EstimateLineItem.estimate_id == e.id))).scalars().all()]
     links = (await db.execute(select(EstimateTakeoffLine.id, EstimateTakeoffLine.estimate_line_item_id)
                               .where(EstimateTakeoffLine.estimate_line_item_id.in_(old_ids)))).all() if old_ids else []
+    # Line identity contract: clients that send no line ids cannot safely manage takeoff-created lines.
+    # Refuse BEFORE any change (atomic: nothing from this request is applied).
+    if links and not payload.line_ids and not any(getattr(it, "id", None) for it in payload.items):
+        raise HTTPException(status_code=409, detail={"code": "ESTIMATE_LINE_IDS_REQUIRED",
+                            "message": "This estimate contains items calculated from roof measurements. Update the app or edit this estimate in RoofSpan Office."})
+    if getattr(payload, "price_book_id", None) is not None:
+        e.price_book_id = payload.price_book_id
     await db.execute(EstimateLineItem.__table__.delete().where(EstimateLineItem.estimate_id == e.id))
-    computed = await _apply_items(db, e.id, payload.items, price_book_id=e.price_book_id, keep_ids=frozenset(old_ids), old_lines=old_lines)
+    computed = await _apply_items(db, e.id, payload.items, price_book_id=e.price_book_id, keep_ids=frozenset(old_ids))
     await db.flush()
     kept = {str(x) for x in (await db.execute(select(EstimateLineItem.id).where(EstimateLineItem.estimate_id == e.id))).scalars().all()}
     for link_id, line_id in links:  # FK is ON DELETE SET NULL; restore links for lines that survived the save
@@ -267,9 +284,7 @@ async def update_estimate(estimate_id: str, payload: EstimateIn, request: Reques
 @router.post("/{estimate_id}/duplicate", response_model=EstimateOut, status_code=201)
 async def duplicate_estimate(estimate_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     """Copy an estimate (header + all line items, preserving their snapshots) into a brand-new draft."""
-    src = await db.get(Estimate, estimate_id)
-    if not src:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    src = await _get_estimate(db, estimate_id, user)
     number = await next_number(db, "estimate", "EST")
     dup = Estimate(number=number, lead_id=src.lead_id, customer_id=src.customer_id, property_id=src.property_id,
                    inspection_id=src.inspection_id, status="draft", tax_rate=src.tax_rate,
@@ -300,9 +315,7 @@ async def _has_accepted_quote(db: AsyncSession, estimate_id) -> bool:
 async def delete_estimate(estimate_id: str, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     """Delete an estimate unless it has an accepted quote (history stays intact). Line items cascade;
     any non-accepted quotes keep their own snapshot (their estimate_id is set null)."""
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
     if await _has_accepted_quote(db, e.id):
         raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can't be deleted.")
     await db.delete(e)
@@ -324,9 +337,7 @@ async def _current_cost(db: AsyncSession, line: EstimateLineItem):
 
 @router.get("/{estimate_id}/cost-refresh/preview", response_model=CostRefreshPreviewOut)
 async def cost_refresh_preview(estimate_id: str, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     rows = []
     for i in items:
@@ -350,9 +361,9 @@ async def cost_refresh_preview(estimate_id: str, user: User = Depends(require_ro
 
 @router.post("/{estimate_id}/cost-refresh/apply", response_model=EstimateOut)
 async def cost_refresh_apply(estimate_id: str, payload: CostRefreshApplyIn, request: Request, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     ids = set(payload.line_ids)
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     computed = []
@@ -399,9 +410,7 @@ class PriceBookApplyIn(_BM):
 
 @router.post("/{estimate_id}/price-book/preview")
 async def price_book_preview(estimate_id: str, payload: PriceBookApplyIn, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     rows = []
     for i in items:
@@ -422,9 +431,9 @@ async def price_book_preview(estimate_id: str, payload: PriceBookApplyIn, user: 
 
 @router.post("/{estimate_id}/price-book/apply", response_model=EstimateOut)
 async def price_book_apply(estimate_id: str, payload: PriceBookApplyIn, request: Request, user: User = Depends(require_roles(*COST_ROLES)), db: AsyncSession = Depends(get_db)):
-    e = await db.get(Estimate, estimate_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    e = await _get_estimate(db, estimate_id, user)
+    if await _has_accepted_quote(db, e.id):
+        raise HTTPException(status_code=409, detail="This estimate has an accepted quote and can no longer be edited.")
     e.price_book_id = payload.price_book_id
     items = (await db.execute(select(EstimateLineItem).where(EstimateLineItem.estimate_id == e.id).order_by(EstimateLineItem.sort))).scalars().all()
     computed = []

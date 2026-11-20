@@ -131,6 +131,7 @@ class EstimateIn(BaseModel):
     tax_rate: float = 0
     notes: Optional[str] = None
     price_book_id: Optional[str] = None
+    line_ids: bool = False  # client sends existing line ids (current Office editor); legacy clients omit this
     items: List[LineItemIn] = []
 
 

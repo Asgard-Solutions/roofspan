@@ -51,6 +51,7 @@ export default function EstimateEditor() {
   const [reprice, setReprice] = useState(null); // { price_book_id, lines }
   const [sitePlan, setSitePlan] = useState(null); // { available, revision_id, assets_updated_at }
   const [saved, setSaved] = useState("");
+  const [loadError, setLoadError] = useState(null);
   const [details, setDetails] = useState(false);
   const [pbOpen, setPbOpen] = useState(false);
   const [proposals, setProposals] = useState([]);
@@ -74,7 +75,7 @@ export default function EstimateEditor() {
       }));
       setLines(mapped);
       setSaved(snap(mapped, data.tax_rate || 0, data.price_book_id || ""));
-    } catch (e) { toast.error(apiError(e)); }
+    } catch (e) { setLoadError(apiError(e)); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
 
@@ -122,7 +123,7 @@ export default function EstimateEditor() {
     setBusy(true);
     try {
       const payload = { lead_id: est.lead_id, customer_id: est.customer_id, property_id: est.property_id,
-        inspection_id: est.inspection_id, tax_rate: Number(taxRate) || 0, price_book_id: priceBookId || null,
+        inspection_id: est.inspection_id, tax_rate: Number(taxRate) || 0, price_book_id: priceBookId || null, line_ids: true,
         items: lines.map((l) => ({ ...l, measured_quantity: Number(l.measured_quantity) || 0, waste_percent: Number(l.waste_percent) || 0,
           material_cost: Number(l.material_cost) || 0, labor_cost: Number(l.labor_cost) || 0,
           equipment_cost: Number(l.equipment_cost) || 0, subcontract_cost: Number(l.subcontract_cost) || 0,
@@ -188,6 +189,15 @@ export default function EstimateEditor() {
     } catch (e) { toast.error(apiError(e)); }
   };
 
+  if (!est && loadError) return (
+    <div className="p-8" data-testid="estimate-load-error">
+      <div className="max-w-md rounded-md border border-border bg-white p-6">
+        <h3 className="font-heading text-lg font-semibold text-slate-900">Can't open this estimate</h3>
+        <p className="mt-1 text-sm text-slate-500">{loadError}</p>
+        <button type="button" onClick={() => navigate("/leads")} className="mt-3 text-sm font-medium text-orange-700 hover:underline" data-testid="estimate-load-error-back">Back to leads</button>
+      </div>
+    </div>
+  );
   if (!est) return <div className="p-8"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
   const pbName = priceBooks.find((pb) => pb.id === priceBookId)?.name;
   const latestProposal = proposals[0];
@@ -203,10 +213,10 @@ export default function EstimateEditor() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" data-testid="estimate-more"><MoreHorizontal className="h-4 w-4" /> More</Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {seeCost && priceBooks.length > 0 && <DropdownMenuItem onClick={() => setPbOpen(true)} data-testid="estimate-price-book-open"><BookOpen className="mr-2 h-4 w-4" /> Change price book</DropdownMenuItem>}
-                {seeCost && <DropdownMenuItem onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="mr-2 h-4 w-4" /> Refresh current costs</DropdownMenuItem>}
+                {seeCost && editable && priceBooks.length > 0 && <DropdownMenuItem onClick={() => setPbOpen(true)} data-testid="estimate-price-book-open"><BookOpen className="mr-2 h-4 w-4" /> Change price book</DropdownMenuItem>}
+                {seeCost && editable && <DropdownMenuItem onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="mr-2 h-4 w-4" /> Refresh current costs</DropdownMenuItem>}
                 {sitePlan?.available && <DropdownMenuItem onClick={downloadSitePlan} data-testid="estimate-site-plan-pdf"><Map className="mr-2 h-4 w-4" /> Site plan PDF</DropdownMenuItem>}
-                {!seeCost && !sitePlan?.available && <DropdownMenuItem disabled>No extra options</DropdownMenuItem>}
+                {!(seeCost && editable) && !sitePlan?.available && <DropdownMenuItem disabled>No extra options</DropdownMenuItem>}
               </DropdownMenuContent>
             </DropdownMenu>
             <Button variant="outline" size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
