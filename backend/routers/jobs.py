@@ -61,6 +61,23 @@ async def _best_cost(db, material_id):
     return await inv.best_known_cost(db, material_id)
 
 
+def _uuid(value, detail: str, code: int = 422):
+    import uuid
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        raise HTTPException(status_code=code, detail=detail)
+
+
+async def _assert_sales_job(db, job_id: str, user: User) -> Job:
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if user.role == "sales" and j.assigned_user_id != user.id:
+        raise HTTPException(status_code=403, detail="This job is not assigned to you")
+    return j
+
+
 class AssignIn(BaseModel):
     user_id: str | None = None
 
@@ -132,7 +149,7 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
 
 @router.get("/{job_id}", response_model=JobDetailOut)
 async def get_job(job_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
+    j = await db.get(Job, _uuid(job_id, "Job not found", 404))
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     if user.role == "sales" and j.assigned_user_id != user.id:  # strict visibility
@@ -204,7 +221,7 @@ async def _apply_crew(db: AsyncSession, j: Job, crew_id: str | None) -> None:
     if not crew_id:
         j.crew_id, j.assigned_to = None, None
         return
-    crew = await db.get(Crew, crew_id)
+    crew = await db.get(Crew, _uuid(crew_id, "Crew not found"))
     if not crew:
         raise HTTPException(status_code=422, detail="Crew not found")
     if not crew.active and crew.id != j.crew_id:
@@ -232,7 +249,7 @@ async def assign_job(job_id: str, payload: AssignIn, request: Request, user: Use
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
     if payload.user_id:
-        target = await db.get(User, payload.user_id)
+        target = await db.get(User, _uuid(payload.user_id, "Assignee must be an active user"))
         if not target or not target.is_active:
             raise HTTPException(status_code=422, detail="Assignee must be an active user")
         j.assigned_user_id = target.id
@@ -246,6 +263,7 @@ async def assign_job(job_id: str, payload: AssignIn, request: Request, user: Use
 
 @router.get("/{job_id}/materials", response_model=list[JobMaterialOut])
 async def list_job_materials(job_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await _assert_sales_job(db, job_id, user)
     jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == job_id))).scalars().all()
     return [await _job_material_out(db, jm) for jm in jms]
 
@@ -279,11 +297,12 @@ async def remove_job_material(job_id: str, jm_id: str, user: User = Depends(requ
 
 @router.get("/{job_id}/material-plan")
 async def job_material_plan(job_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    j = await db.get(Job, job_id)
-    if not j:
-        raise HTTPException(status_code=404, detail="Job not found")
+    j = await _assert_sales_job(db, job_id, user)
     jms = (await db.execute(select(JobMaterial).where(JobMaterial.job_id == j.id))).scalars().all()
     rows = [await _plan_row(db, jm) for jm in jms]
+    if user.role == "sales":  # cost data is never shown to sales
+        for r in rows:
+            r.pop("best_known_cost", None)
     order = {"backordered": 0, "waiting_on_materials": 1, "partially_ready": 2, "ready": 3}
     job_status = min([r["status"] for r in rows], key=lambda s: order.get(s, 1)) if rows else "ready"
     return {"job_id": str(j.id), "job_number": j.number, "job_status": job_status,

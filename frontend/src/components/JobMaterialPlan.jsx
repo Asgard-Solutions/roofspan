@@ -77,7 +77,7 @@ function PlanRow({ m, expanded, toggle, canManage, navigate, reserve, release, s
               <Detail label="Net used" value={m.net_used} testid={`plan-netused-${m.id}`} />
               <Detail label="Waste" value={m.waste || 0} testid={`plan-waste-${m.id}`} />
               <Detail label="Supplier" value={m.preferred_supplier ? <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-indigo-500 text-indigo-500" />{m.preferred_supplier}</span> : "—"} testid={`plan-supplier-${m.id}`} />
-              <Detail label="Best known cost" value={m.best_known_cost != null ? money(m.best_known_cost) : "—"} testid={`plan-bestcost-${m.id}`} />
+              {canManage && <Detail label="Best known cost" value={m.best_known_cost != null ? money(m.best_known_cost) : "—"} testid={`plan-bestcost-${m.id}`} />}
             </div>
             {(m.assembly_name || m.notes) && <div className="mt-2 pl-6 text-xs text-slate-500">{m.assembly_name ? `From ${m.assembly_name}` : ""}{m.assembly_name && m.notes ? " · " : ""}{m.notes || ""}</div>}
           </TableCell>

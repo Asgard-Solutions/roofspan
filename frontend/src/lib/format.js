@@ -9,7 +9,7 @@ export const dayOnly = (d) => {
   const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
   return new Date(y, m - 1, day);
 };
-export const shortDay = (d) => (d ? dayOnly(d).toLocaleDateString() : "—");
+export const shortDay = (d) => (d ? dayOnly(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
 export const dayToIso = (date) => {
   if (!date) return null;
   const p = (n) => String(n).padStart(2, "0");

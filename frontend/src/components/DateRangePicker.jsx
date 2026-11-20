@@ -28,10 +28,16 @@ export function rangeLabel({ from, to }) {
 
 export function DateRangePicker({ value, onChange, disabled, testid = "date-range" }) {
   const [open, setOpen] = useState(false);
+  const [fresh, setFresh] = useState(false);
+  const openChange = (o) => { setOpen(o); setFresh(o); };
+  const select = (r, day) => {
+    if (fresh) { setFresh(false); onChange({ from: day, to: null }); return; }
+    onChange({ from: r?.from || null, to: r?.to || null });
+  };
   const wide = useWide();
   const days = dayCount(value.from, value.to);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={openChange}>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" disabled={disabled} data-testid={`${testid}-trigger`}
           className={`w-full justify-start gap-2 font-normal ${value.from ? "text-slate-900" : "text-slate-400"}`}>
@@ -41,15 +47,15 @@ export function DateRangePicker({ value, onChange, disabled, testid = "date-rang
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start" data-testid={`${testid}-popover`}>
         <Calendar mode="range" numberOfMonths={wide ? 2 : 1} defaultMonth={value.from || new Date()}
-          selected={value.from && !(value.to && value.to < value.from) ? value : undefined}
-          onSelect={(r) => onChange({ from: r?.from || null, to: r?.to || r?.from || null })} />
+          selected={value.from && !(value.to && value.to < value.from) ? { from: value.from, to: value.to || undefined } : undefined}
+          onSelect={select} />
         <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
           <span className="text-xs text-slate-500" data-testid={`${testid}-days`}>
             {!value.from ? "Pick the start day, then the end day" : days < 1 ? "The saved end date is before the start. Pick the dates again." : `${days} scheduled day${days === 1 ? "" : "s"}`}
           </span>
           <div className="flex gap-2">
             {value.from && <Button size="sm" variant="ghost" onClick={() => onChange({ from: null, to: null })} data-testid={`${testid}-clear`}><X className="h-3.5 w-3.5" /> Clear</Button>}
-            <Button size="sm" onClick={() => setOpen(false)} data-testid={`${testid}-done`}>Done</Button>
+            <Button size="sm" onClick={() => openChange(false)} data-testid={`${testid}-done`}>Done</Button>
           </div>
         </div>
       </PopoverContent>

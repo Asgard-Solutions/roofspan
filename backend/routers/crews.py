@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
@@ -64,14 +65,26 @@ async def create_crew(payload: CrewIn, request: Request, user: User = Depends(re
         raise HTTPException(status_code=409, detail="A crew with this name already exists")
     c = Crew(name=name, notes=payload.notes)
     db.add(c)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A crew with this name already exists")
     await log_action(db, user=user, action="crew.create", entity_type="crew", entity_id=c.id, detail={"name": name}, request=request)
     return _out(c, {})
 
 
+def _crew_uuid(crew_id: str):
+    import uuid
+    try:
+        return uuid.UUID(crew_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Crew not found")
+
+
 @router.put("/{crew_id}")
 async def update_crew(crew_id: str, payload: CrewPatch, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    c = await db.get(Crew, crew_id)
+    c = await db.get(Crew, _crew_uuid(crew_id))
     if not c:
         raise HTTPException(status_code=404, detail="Crew not found")
     data = payload.model_dump(exclude_unset=True)
@@ -86,14 +99,18 @@ async def update_crew(crew_id: str, payload: CrewPatch, request: Request, user: 
         c.notes = data["notes"]
     if data.get("active") is not None:
         c.active = data["active"]
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A crew with this name already exists")
     await log_action(db, user=user, action="crew.update", entity_type="crew", entity_id=c.id, detail=data, request=request)
     return _out(c, await _counts(db))
 
 
 @router.delete("/{crew_id}")
 async def delete_crew(crew_id: str, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    c = await db.get(Crew, crew_id)
+    c = await db.get(Crew, _crew_uuid(crew_id))
     if not c:
         raise HTTPException(status_code=404, detail="Crew not found")
     used = (await db.execute(select(func.count()).select_from(Job).where(Job.crew_id == c.id))).scalar()

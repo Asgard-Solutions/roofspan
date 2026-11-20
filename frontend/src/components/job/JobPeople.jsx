@@ -41,7 +41,7 @@ export function JobPeople({ job, canManage, onChange }) {
   }
 
   const crewOptions = job.crew_id && !crews.some((c) => c.id === job.crew_id)
-    ? [...crews, { id: job.crew_id, name: `${job.crew_name} (inactive)` }] : crews;
+    ? [...crews, { id: job.crew_id, name: job.crew_active === false ? `${job.crew_name} (inactive)` : job.crew_name }] : crews;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
