@@ -84,6 +84,7 @@ async def _out(db: AsyncSession, e: Estimate, user: User) -> EstimateOut:
                         "overall_margin_percent": overall, "overall_below": overall < target,
                         "below_lines": below_lines}
     return EstimateOut(
+        locked=await _has_accepted_quote(db, e.id),
         id=str(e.id), number=e.number, lead_id=str(e.lead_id) if e.lead_id else None,
         customer_id=str(e.customer_id) if e.customer_id else None,
         property_id=str(e.property_id) if e.property_id else None,

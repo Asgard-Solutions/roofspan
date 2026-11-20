@@ -115,7 +115,7 @@ export default function EstimateEditor() {
   }, [lines, taxRate]);
 
   const dirty = !!saved && snap(lines, taxRate, priceBookId) !== saved;
-  const lockedByAcceptance = proposals.some((q) => q.status === "accepted");
+  const lockedByAcceptance = !!est?.locked || proposals.some((q) => q.status === "accepted");
   const editable = est ? (est.status === "draft" || est.status === "sent") && !lockedByAcceptance : false;
 
   const save = async () => {
@@ -214,7 +214,7 @@ export default function EstimateEditor() {
         </div>
 
         {lockedByAcceptance && <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-600" data-testid="estimate-locked-note">A proposal from this estimate was accepted, so it can no longer be changed. Duplicate it from the lead to price a change.</div>}
-        <RoofTakeoffPanel est={est} canCalculate={seeCost && editable} dirty={dirty} onApplied={load} />
+        <RoofTakeoffPanel est={est} canCalculate={seeCost && editable} locked={lockedByAcceptance} dirty={dirty} onApplied={load} />
 
         <section className="rounded-md border border-border bg-white" data-testid="estimate-scope-section">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
@@ -241,7 +241,7 @@ export default function EstimateEditor() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
+          <fieldset disabled={!editable} className="overflow-x-auto" data-testid="estimate-lines-fieldset">
             <Table data-testid="estimate-lines-table">
               <TableHeader>
                 <TableRow>
@@ -291,7 +291,7 @@ export default function EstimateEditor() {
                 {lines.length === 0 && <TableRow><TableCell colSpan={10} className="py-8 text-center text-sm text-slate-400">No items yet. Calculate materials from the roof measurements above, or use "Add item".</TableCell></TableRow>}
               </TableBody>
             </Table>
-          </div>
+          </fieldset>
 
           <div className="flex justify-end border-t border-border p-5">
             <div className="w-full max-w-sm text-sm" data-testid="estimate-summary">
@@ -303,7 +303,7 @@ export default function EstimateEditor() {
               </>}
               <Row label="Selling Price" value={money(totals.selling)} testid="summary-selling" bold />
               <div className="flex items-center justify-between py-1">
-                <span className="flex items-center gap-2 text-slate-500">Tax rate %<Input type="number" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} className="h-7 w-20" data-testid="estimate-taxrate" /></span>
+                <span className="flex items-center gap-2 text-slate-500">Tax rate %<Input type="number" value={taxRate} disabled={!editable} onChange={(e) => setTaxRate(e.target.value)} className="h-7 w-20" data-testid="estimate-taxrate" /></span>
                 <span className="tabular-nums">{money(totals.tax)}</span>
               </div>
               <Row label="Total" value={money(totals.total)} testid="summary-total" bold />
@@ -315,7 +315,7 @@ export default function EstimateEditor() {
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><FileCheck2 className="h-4 w-4 text-orange-600" /> 3. Proposal</div>
             <div className="text-xs text-slate-600" data-testid="estimate-proposal-hint">
-              {latestProposal ? <>Proposal {latestProposal.number} ({latestProposal.status}) was created from this estimate. Changes made since then need a new proposal.</> : lines.length ? (dirty ? "Your changes are saved first, then the proposal opens." : "Ready when you are. The proposal opens for review, sharing and PDF.") : "Add items before creating the proposal."}
+              {lockedByAcceptance && !latestProposal ? "A proposal from this estimate was accepted." : latestProposal ? <>Proposal {latestProposal.number} ({latestProposal.status}) was created from this estimate. Changes made since then need a new proposal.</> : lines.length ? (dirty ? "Your changes are saved first, then the proposal opens." : "Ready when you are. The proposal opens for review, sharing and PDF.") : "Add items before creating the proposal."}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">

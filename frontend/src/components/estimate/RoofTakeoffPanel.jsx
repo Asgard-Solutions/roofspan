@@ -17,7 +17,7 @@ const coverageLabel = (s) => ({ template_rule: "Template override", material_cat
 const n2 = (v) => Number(v || 0).toFixed(2);
 
 // Roof takeoff for ONE estimate: plain path by default, every existing control under Advanced.
-export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }) {
+export default function RoofTakeoffPanel({ est, canCalculate, locked, dirty, onApplied }) {
   const [revisions, setRevisions] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [usedTemplate, setUsedTemplate] = useState(null);
@@ -141,7 +141,9 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
 
         {!!warnings.length && <div className="space-y-1.5">{warnings.map((w) => <div key={w.code} className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900"><AlertTriangle className="mr-1 inline h-4 w-4" /> {w.message}</div>)}</div>}
 
-        {chosen && !canCalculate && <p className="text-sm text-slate-500" data-testid="takeoff-office-only">The office turns the roof measurements into estimate materials.</p>}
+        {chosen && !canCalculate && (locked
+          ? <p className="text-sm text-slate-500" data-testid="takeoff-locked">This estimate is locked because its proposal was accepted.</p>
+          : <p className="text-sm text-slate-500" data-testid="takeoff-office-only">The office turns the roof measurements into estimate materials.</p>)}
 
         {chosen && canCalculate && (
           <>
@@ -163,7 +165,9 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
             {preview && (
               <div className="rounded-md border border-border bg-slate-50 p-3" data-testid="takeoff-preview">
                 <div className="mb-2 text-sm text-slate-600">Includes {n2(preview.effective_roof_waste_percent)}% waste. Nothing changes on the estimate until you add it.</div>
-                {wasteChanged && <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900" data-testid="takeoff-waste-change"><AlertTriangle className="mr-1 inline h-4 w-4" />Waste changed from <b>{n2(preview.waste_change.previous_percent)}%</b> to <b>{n2(preview.waste_change.current_percent)}%</b> ({Number(preview.waste_change.extra_squares_delta) >= 0 ? "+" : ""}{n2(preview.waste_change.extra_squares_delta)} squares of material).</div>}
+                {wasteChanged && <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900" data-testid="takeoff-waste-change"><AlertTriangle className="mr-1 inline h-4 w-4" />{Math.abs(Number(preview.waste_change.percent_delta || 0)) > 0.0001
+                  ? <>Waste changed from <b>{n2(preview.waste_change.previous_percent)}%</b> to <b>{n2(preview.waste_change.current_percent)}%</b> </>
+                  : <>Same {n2(preview.waste_change.current_percent)}% waste on a changed roof area </>}({Number(preview.waste_change.extra_squares_delta) >= 0 ? "+" : ""}{n2(preview.waste_change.extra_squares_delta)} squares of waste material).</div>}
                 {preview.review_required && <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-800" data-testid="takeoff-review-required"><AlertTriangle className="mr-1 inline h-4 w-4" /> Some items from the last calculation were edited by hand. Updating replaces them with the new quantities.</div>}
                 <Table data-testid="takeoff-preview-table">
                   <TableHeader><TableRow><TableHead>Item</TableHead><TableHead className="text-right">Quantity</TableHead><TableHead className="text-right">Order</TableHead></TableRow></TableHeader>
@@ -206,7 +210,7 @@ export default function RoofTakeoffPanel({ est, canCalculate, dirty, onApplied }
                   </div>
                 )}
                 {status?.has_takeoff && <div className="text-xs text-slate-500" data-testid="takeoff-used-versions">Last calculated with measurement revision {status.measurement_revision_number} and template v{status.template_revision_number}.</div>}
-                {!!status?.changed_metrics?.length && <div className="max-h-36 overflow-auto rounded bg-slate-50 p-2 text-xs" data-testid="takeoff-changed-metrics">{status.changed_metrics.map((c) => <div key={c.metric}><b>{c.metric.replace(/_/g, " ")}</b>: {typeof c.from === "object" ? "changed" : `${c.from ?? "—"} → ${c.to ?? "—"}`}</div>)}</div>}
+                {!!status?.changed_metrics?.length && <div className="max-h-36 overflow-auto rounded bg-slate-50 p-2 text-xs" data-testid="takeoff-changed-metrics">{status.changed_metrics.map((c) => <div key={c.metric}><b>{c.metric.replace(/_/g, " ")}</b>: {(c.from && typeof c.from === "object") || (c.to && typeof c.to === "object") ? "changed" : `${c.from ?? "—"} → ${c.to ?? "—"}`}</div>)}</div>}
                 {preview && (
                   <Table data-testid="takeoff-preview-details">
                     <TableHeader><TableRow><TableHead>Description</TableHead><TableHead>Assembly</TableHead><TableHead>Measured</TableHead><TableHead>Waste</TableHead><TableHead>Calculated Qty</TableHead><TableHead>Packaging source</TableHead></TableRow></TableHeader>

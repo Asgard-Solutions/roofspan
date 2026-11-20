@@ -155,6 +155,7 @@ class EstimateOut(BaseModel):
     cost_summary: Optional[dict] = None
     can_see_cost: bool = False
     margin_warnings: Optional[dict] = None
+    locked: bool = False  # a quote from this estimate was accepted; edits are refused
 
 
 # ---- Quotes ----
