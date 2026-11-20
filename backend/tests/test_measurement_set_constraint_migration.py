@@ -202,7 +202,11 @@ def test_z_downgrade_refuses_to_reintroduce_broad_indexes_when_data_would_be_rej
         assert refused.returncode != 0, combined
         assert "Cannot downgrade lead-primary measurement-set constraints" in combined
         current = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        assert current == NEW_REVISION
+        from alembic.config import Config as _Cfg
+        from alembic.script import ScriptDirectory as _SD
+        _cfg = _Cfg()
+        _cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+        assert current == _SD.from_config(_cfg).get_current_head()
     finally:
         connection.execute("DELETE FROM measurement_sets WHERE id IN (%s, %s)", (set_a, set_b))
         connection.execute("DELETE FROM leads WHERE id IN (%s, %s)", (lead_a, lead_b))

@@ -15,7 +15,7 @@ from db import engine, SessionLocal
 from migrations_runner import run_migrations
 from routers import auth, users, audit, integrations, settings, territories, properties, imports, leads
 from routers import setup as setup_router
-from routers import customers, inspections, estimates, quotes, invoices, jobs
+from routers import customers, inspections, estimates, quotes, invoices, jobs, crews
 from routers import operations, purchasing, cron, admin_ops, mobile, location_resolution, building_tiles, licensing as licensing_router
 from routers import abc_supply
 from routers import meta as meta_router
@@ -108,6 +108,7 @@ from routers import inventory_ops as inventory_ops_router
 app.include_router(inventory_ops_router.router)
 app.include_router(invoices.router)
 app.include_router(jobs.router)
+app.include_router(crews.router)
 from routers import reporting as reporting_router
 app.include_router(reporting_router.router)
 app.include_router(reporting_router.dashboard_router)

@@ -4,12 +4,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
-from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User, ActualCostEntry, JobCostSnapshot
+from models import Job, JobMaterial, Material, Customer, Property, PurchaseOrder, User, ActualCostEntry, JobCostSnapshot, Crew
 from core import get_current_user, require_roles, MANAGE_ROLES, log_action
 from schemas_phase3 import JobOut
 from schemas_phase4 import JobPatch, JobMaterialIn, JobMaterialOut, JobDetailOut
 from services import job_planning as jp
 from services import job_costing as jc
+from services import job_readiness as jr
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -109,11 +110,16 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
     cmap = {c.id: c.name for c in (await db.execute(select(Customer).where(Customer.id.in_(cids)))).scalars().all()} if cids else {}
     pmap = {p.id: p.formatted_address for p in (await db.execute(select(Property).where(Property.id.in_(pids)))).scalars().all()} if pids else {}
     short = await jp.shortages_by_job(db, [j.id for j in rows])
+    crews = await jr.crew_name_map(db, [j.crew_id for j in rows])
     out = []
     for j in rows:
         o = _out(j, user_name=umap.get(j.assigned_user_id))
         o.scheduled_start = j.scheduled_start
+        o.scheduled_end = j.scheduled_end
         o.assigned_to = j.assigned_to
+        o.crew_id = str(j.crew_id) if j.crew_id else None
+        o.crew_name = crews.get(j.crew_id)
+        o.readiness = jr.readiness(j, short.get(j.id, 0))
         o.customer_name = cmap.get(j.customer_id)
         o.property_address = pmap.get(j.property_id)
         if j.id not in short or j.status == "cancelled":
@@ -139,6 +145,8 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
     if j.assigned_user_id:
         au = await db.get(User, j.assigned_user_id)
         assigned_user_name = (au.full_name or au.email) if au else None
+    crew = await db.get(Crew, j.crew_id) if j.crew_id else None
+    ready = (await jr.readiness_by_job(db, [j]))[j.id]
     return JobDetailOut(
         id=str(j.id), number=j.number, quote_id=str(j.quote_id) if j.quote_id else None,
         customer_id=str(j.customer_id) if j.customer_id else None, customer_name=cust.name if cust else None,
@@ -146,6 +154,8 @@ async def get_job(job_id: str, user: User = Depends(get_current_user), db: Async
         status=j.status, scope=j.scope, notes=j.notes, total=j.total, scheduled_start=j.scheduled_start,
         scheduled_end=j.scheduled_end, schedule_notes=j.schedule_notes, assigned_to=j.assigned_to,
         assigned_user_id=str(j.assigned_user_id) if j.assigned_user_id else None, assigned_user_name=assigned_user_name,
+        crew_id=str(crew.id) if crew else None, crew_name=crew.name if crew else None,
+        crew_active=crew.active if crew else None, readiness=ready,
         created_at=j.created_at,
         materials=[await _job_material_out(db, jm) for jm in jms],
         purchase_orders=[{"id": str(p.id), "number": p.number, "status": p.status, "total": p.total} for p in pos],
@@ -161,6 +171,12 @@ async def update_job(job_id: str, payload: JobPatch, request: Request, user: Use
     data = payload.model_dump(exclude_unset=True)
     if "status" in data and data["status"] not in valid:
         raise HTTPException(status_code=422, detail=f"Status must be one of {valid}")
+    validate_schedule(j, data)
+    if "crew_id" in data:
+        await _apply_crew(db, j, data.pop("crew_id"))
+        data.pop("assigned_to", None)
+    elif "assigned_to" in data:  # legacy free-text clients: map the text onto a crew record
+        await _apply_crew_name(db, j, data.pop("assigned_to"))
     for k, v in data.items():
         setattr(j, k, v)
     # Slice 10: auto-release remaining reservations when a job is completed/cancelled (idempotent, no On Hand change)
@@ -173,6 +189,41 @@ async def update_job(job_id: str, payload: JobPatch, request: Request, user: Use
     await db.commit()
     await log_action(db, user=user, action="job.update", entity_type="job", entity_id=j.id, detail=payload.model_dump(exclude_unset=True, mode="json"), request=request)
     return await get_job(job_id, user, db)
+
+
+def validate_schedule(j: Job, data: dict) -> None:
+    if "scheduled_start" not in data and "scheduled_end" not in data:
+        return
+    start = data.get("scheduled_start", j.scheduled_start)
+    end = data.get("scheduled_end", j.scheduled_end)
+    if start and end and end.date() < start.date():
+        raise HTTPException(status_code=422, detail="The end date can't be before the start date")
+
+
+async def _apply_crew(db: AsyncSession, j: Job, crew_id: str | None) -> None:
+    if not crew_id:
+        j.crew_id, j.assigned_to = None, None
+        return
+    crew = await db.get(Crew, crew_id)
+    if not crew:
+        raise HTTPException(status_code=422, detail="Crew not found")
+    if not crew.active and crew.id != j.crew_id:
+        raise HTTPException(status_code=422, detail="This crew is inactive")
+    j.crew_id, j.assigned_to = crew.id, crew.name
+
+
+async def _apply_crew_name(db: AsyncSession, j: Job, name: str | None) -> None:
+    from sqlalchemy import func
+    name = (name or "").strip()[:120]
+    if not name:
+        j.crew_id, j.assigned_to = None, None
+        return
+    crew = (await db.execute(select(Crew).where(func.lower(Crew.name) == name.lower()))).scalars().first()
+    if not crew:
+        crew = Crew(name=name)
+        db.add(crew)
+        await db.flush()
+    j.crew_id, j.assigned_to = crew.id, crew.name
 
 
 @router.put("/{job_id}/assign", response_model=JobDetailOut)

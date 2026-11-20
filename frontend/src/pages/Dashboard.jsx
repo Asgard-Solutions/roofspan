@@ -5,7 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Contact, CalendarClock, FileSignature, Hammer, ArrowRight, Boxes, PackageOpen, ShoppingCart, Truck as TruckIcon, AlertTriangle, Warehouse, DatabaseBackup, Wallet, ChevronDown } from "lucide-react";
-import { money, shortDate } from "@/lib/format";
+import { money, shortDate, shortDay } from "@/lib/format";
 
 function BackupAlert() {
   const [h, setH] = useState(null);
@@ -121,7 +121,7 @@ export default function Dashboard() {
           <AttentionCard title="Proposals waiting on customers" icon={FileSignature} testid="attention-proposals" count={s("proposals").count} items={s("proposals").items}
             sub={a ? `${money(a.proposals.total)} outstanding` : null} empty="No proposals waiting." viewAll="/sales/quotes" renderMeta={(it) => money(it.amount)} />
           <AttentionCard title="Jobs scheduled & in progress" icon={Hammer} testid="attention-jobs" count={s("jobs").count} items={s("jobs").items}
-            empty="No jobs scheduled." viewAll="/jobs" renderMeta={(it) => (it.date ? shortDate(it.date) : it.status.replace("_", " "))} />
+            empty="No jobs scheduled." viewAll="/jobs" renderMeta={(it) => (it.date ? shortDay(it.date) : it.status.replace("_", " "))} />
           <MaterialIssues d={p} />
           {a?.money && (
             <AttentionCard title="Money due" icon={Wallet} testid="attention-money" count={money(a.money.open_total)} items={a.money.items}

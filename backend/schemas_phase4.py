@@ -311,6 +311,7 @@ class JobPatch(BaseModel):
     scheduled_end: Optional[datetime] = None
     schedule_notes: Optional[str] = None
     assigned_to: Optional[str] = None
+    crew_id: Optional[str] = None
     scope: Optional[str] = None
     notes: Optional[str] = None
 
@@ -350,6 +351,10 @@ class JobDetailOut(BaseModel):
     assigned_to: Optional[str] = None
     assigned_user_id: Optional[str] = None
     assigned_user_name: Optional[str] = None
+    crew_id: Optional[str] = None
+    crew_name: Optional[str] = None
+    crew_active: Optional[bool] = None
+    readiness: Optional[dict] = None
     created_at: datetime
     materials: List[JobMaterialOut] = []
     purchase_orders: list = []

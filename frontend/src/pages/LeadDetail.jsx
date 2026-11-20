@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { money, shortDate } from "@/lib/format";
+import { money, shortDate, shortDay } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -320,7 +320,7 @@ export default function LeadDetail() {
             <Link key={j.id} to={`/jobs/${j.id}`} className="flex items-center justify-between rounded border border-border p-3 text-sm hover:border-slate-300 hover:bg-slate-50" data-testid={`job-${j.id}`}>
               <div>
                 <div><span className="font-medium text-slate-900">{j.number}</span> <Badge variant="secondary" className="ml-1">{j.status.replace("_", " ")}</Badge></div>
-                <div className="mt-1 text-xs text-slate-500">{j.scheduled_start ? `Install ${shortDate(j.scheduled_start)}` : "Not scheduled"} · {j.assigned_user_name || j.assigned_to || "Unassigned"} · Materials: {{ ready: "ready", short: "short", none: "not planned" }[j.material_status] || "—"}</div>
+                <div className="mt-1 text-xs text-slate-500">{j.scheduled_start ? `Install ${shortDay(j.scheduled_start)}` : "Not scheduled"} · Manager: {j.assigned_user_name || "Unassigned"} · Crew: {j.crew_name || "none"}{j.readiness?.ready ? " · Ready to install" : ""} · Materials: {{ ready: "ready", short: "short", none: "not planned" }[j.material_status] || "—"}</div>
               </div>
               <span className="tabular-nums">{money(j.total)}</span>
             </Link>

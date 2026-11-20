@@ -73,6 +73,11 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
         number = await next_number(db, "job", "JOB")
         job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created",
                   total=accepted_total, scope=f"From quote {q.number}", created_by=accepted_by)
+        if q.lead_id:  # the lead's rep becomes the Job Manager so they can see the job they sold
+            lead = await db.get(Lead, q.lead_id)
+            rep = await db.get(User, lead.assigned_user_id) if lead and lead.assigned_user_id else None
+            if rep and rep.is_active:
+                job.assigned_user_id = rep.id
         db.add(job)
         await db.flush()
     await db.commit()

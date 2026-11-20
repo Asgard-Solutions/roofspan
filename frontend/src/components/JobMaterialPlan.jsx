@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Boxes, Wand2, Lock, Unlock, ShoppingCart, Loader2, Eye, Star, AlertTriangle, MoreHorizontal, ArrowDownToLine, Undo2, Trash2 } from "lucide-react";
+import { Boxes, Wand2, Lock, Unlock, ShoppingCart, Loader2, Eye, Star, AlertTriangle, MoreHorizontal, ArrowDownToLine, Undo2, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 
@@ -25,13 +25,76 @@ function Readiness({ status, testid }) {
   return <Badge variant="secondary" className={r.cls} data-testid={testid}>{r.label}</Badge>;
 }
 
-export default function JobMaterialPlan({ jobId, canManage }) {
+const onOrder = (m) => Math.max(Math.round(((m.ordered || 0) - (m.received || 0)) * 1000) / 1000, 0);
+
+function Detail({ label, value, testid }) {
+  return <div><div className="text-xs text-slate-400">{label}</div><div className="tabular-nums text-slate-800" data-testid={testid}>{value}</div></div>;
+}
+
+function PlanRow({ m, expanded, toggle, canManage, navigate, reserve, release, startMove }) {
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  return (
+    <>
+      <TableRow data-testid={`plan-row-${m.id}`} className="cursor-pointer" onClick={toggle}>
+        <TableCell>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <Chevron className="h-4 w-4 shrink-0 text-slate-400" data-testid={`plan-expand-${m.id}`} />
+            <span className="truncate font-medium text-slate-800 hover:text-orange-600" title={m.material_name} onClick={(e) => { e.stopPropagation(); navigate(`/inventory/materials/${m.material_id}`); }} data-testid={`plan-material-${m.id}`}>{m.material_name}</span>
+          </div>
+        </TableCell>
+        <TableCell className="text-right tabular-nums">{m.required} <span className="text-xs text-slate-400">{m.unit}</span></TableCell>
+        <TableCell className="text-right tabular-nums">{m.available}</TableCell>
+        <TableCell className="text-right tabular-nums">{m.reserved}</TableCell>
+        <TableCell className={`text-right tabular-nums ${m.shortage > 0 ? "font-semibold text-red-600" : "text-slate-400"}`} data-testid={`plan-shortage-${m.id}`}>{m.shortage}</TableCell>
+        <TableCell className="text-right tabular-nums" data-testid={`plan-onorder-${m.id}`}>{onOrder(m)}</TableCell>
+        <TableCell><Readiness status={m.status} testid={`plan-status-${m.id}`} /></TableCell>
+        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+          {canManage && (
+            <div className="flex items-center justify-end gap-1">
+              {m.reserved > 0
+                ? <Button size="sm" variant="ghost" title="Release reservation" onClick={() => release(m)} data-testid={`release-${m.id}`}><Unlock className="h-4 w-4" /></Button>
+                : <Button size="sm" variant="ghost" title="Reserve available stock" disabled={m.available <= 0} onClick={() => reserve(m)} data-testid={`reserve-${m.id}`}><Lock className="h-4 w-4" /></Button>}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" data-testid={`plan-actions-${m.id}`}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => startMove("issue", Math.max(m.reserved || 0, 0) || 1)} data-testid={`issue-${m.id}`}><ArrowDownToLine className="mr-2 h-4 w-4" /> Issue materials</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => startMove("return", 1)} data-testid={`return-${m.id}`}><Undo2 className="mr-2 h-4 w-4" /> Return to stock</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => startMove("waste", 1)} data-testid={`waste-${m.id}`}><Trash2 className="mr-2 h-4 w-4" /> Waste / Damage</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </TableCell>
+      </TableRow>
+      {expanded && (
+        <TableRow className="bg-slate-50 hover:bg-slate-50" data-testid={`plan-details-${m.id}`}>
+          <TableCell colSpan={8}>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 py-1 pl-6 text-sm sm:grid-cols-4 xl:grid-cols-8">
+              <Detail label="Ordered" value={m.ordered} testid={`plan-ordered-${m.id}`} />
+              <Detail label="Received" value={m.received} testid={`plan-received-${m.id}`} />
+              <Detail label="Issued" value={m.issued} testid={`plan-issued-${m.id}`} />
+              <Detail label="Returned" value={m.returned ?? 0} testid={`plan-returned-${m.id}`} />
+              <Detail label="Net used" value={m.net_used} testid={`plan-netused-${m.id}`} />
+              <Detail label="Waste" value={m.waste || 0} testid={`plan-waste-${m.id}`} />
+              <Detail label="Supplier" value={m.preferred_supplier ? <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-indigo-500 text-indigo-500" />{m.preferred_supplier}</span> : "—"} testid={`plan-supplier-${m.id}`} />
+              <Detail label="Best known cost" value={m.best_known_cost != null ? money(m.best_known_cost) : "—"} testid={`plan-bestcost-${m.id}`} />
+            </div>
+            {(m.assembly_name || m.notes) && <div className="mt-2 pl-6 text-xs text-slate-500">{m.assembly_name ? `From ${m.assembly_name}` : ""}{m.assembly_name && m.notes ? " · " : ""}{m.notes || ""}</div>}
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+export default function JobMaterialPlan({ jobId, canManage, refreshKey, onChanged }) {
   const navigate = useNavigate();
   const [plan, setPlan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState(null);
   const [locations, setLocations] = useState([]);
   const [move, setMove] = useState(null); // { kind, row, quantity, location_id }
+  const [open, setOpen] = useState({});
 
   useEffect(() => { api.get("/inventory/locations", { params: { active: true } }).then((r) => setLocations(r.data)).catch(() => {}); }, []);
 
@@ -44,7 +107,7 @@ export default function JobMaterialPlan({ jobId, canManage }) {
       else if (kind === "return") await api.post("/inventory/return", { material_id: row.material_id, location_id, quantity: Number(quantity), job_id: jobId });
       else await api.post("/inventory/disposition", { material_id: row.material_id, location_id, quantity: Number(quantity), kind, job_id: jobId, reason: "Job disposition" });
       toast.success(`${kind === "issue" ? "Issued" : kind === "return" ? "Returned" : kind} ${quantity} ${row.unit}`);
-      setMove(null); load();
+      setMove(null); refresh();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
@@ -52,15 +115,16 @@ export default function JobMaterialPlan({ jobId, canManage }) {
     try { const { data } = await api.get(`/jobs/${jobId}/material-plan`); setPlan(data); }
     catch (e) { toast.error(apiError(e)); }
   }, [jobId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
+  const refresh = () => { load(); onChanged?.(); };
 
   const generate = async () => {
     setBusy(true);
-    try { const { data } = await api.post(`/jobs/${jobId}/materials/generate`); toast.success(`Generated ${data.created} material line${data.created === 1 ? "" : "s"}${data.skipped ? `, ${data.skipped} already present` : ""}`); load(); }
+    try { const { data } = await api.post(`/jobs/${jobId}/materials/generate`); toast.success(`Generated ${data.created} material line${data.created === 1 ? "" : "s"}${data.skipped ? `, ${data.skipped} already present` : ""}`); refresh(); }
     catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
-  const reserve = async (jm) => { try { const { data } = await api.post(`/jobs/${jobId}/materials/${jm.id}/reserve`, {}); toast.success(`Reserved ${data.reserved} ${jm.unit}`); load(); } catch (e) { toast.error(apiError(e)); } };
-  const release = async (jm) => { try { await api.post(`/jobs/${jobId}/materials/${jm.id}/release`); toast.success("Reservation released"); load(); } catch (e) { toast.error(apiError(e)); } };
+  const reserve = async (jm) => { try { const { data } = await api.post(`/jobs/${jobId}/materials/${jm.id}/reserve`, {}); toast.success(`Reserved ${data.reserved} ${jm.unit}`); refresh(); } catch (e) { toast.error(apiError(e)); } };
+  const release = async (jm) => { try { await api.post(`/jobs/${jobId}/materials/${jm.id}/release`); toast.success("Reservation released"); refresh(); } catch (e) { toast.error(apiError(e)); } };
 
   const openProposal = async () => {
     try {
@@ -97,7 +161,7 @@ export default function JobMaterialPlan({ jobId, canManage }) {
       const anyAbc = rows.some((r) => (r.suppliers.find((o) => o.supplier_id === r.supplier_id) || {}).integration_provider === "abc_supply");
       toast.success(`Created ${Object.keys(groups).length} draft PO(s)${anyAbc && !warnings.length ? " — open ABC PO(s) to review & submit" : ""}`);
       warnings.forEach((w) => toast.warning(w, { duration: 9000 }));
-      setProposal(null); load();
+      setProposal(null); refresh();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
@@ -120,49 +184,17 @@ export default function JobMaterialPlan({ jobId, canManage }) {
         <p className="text-sm text-slate-500" data-testid="plan-empty">No material plan yet.{plan.can_generate ? " Generate it from the accepted quote." : " Add materials manually."}</p>
       ) : (
         <div className="overflow-x-auto rounded-md border border-border bg-white">
-          <Table data-testid="plan-table">
+          <Table data-testid="plan-table" className="min-w-[800px] table-fixed">
+            <colgroup><col /><col className="w-24" /><col className="w-20" /><col className="w-20" /><col className="w-20" /><col className="w-20" /><col className="w-36" /><col className="w-24" /></colgroup>
             <TableHeader><TableRow>
-              <TableHead>Material</TableHead><TableHead className="text-right">Required</TableHead><TableHead className="text-right">Reserved</TableHead>
-              <TableHead className="text-right">Available</TableHead><TableHead className="text-right">Shortage</TableHead>
-              <TableHead className="text-right">Ordered</TableHead><TableHead className="text-right">Received</TableHead>
-              <TableHead className="text-right">Issued</TableHead><TableHead className="text-right">Net Used</TableHead>
-              <TableHead>Status</TableHead><TableHead />
+              <TableHead>Material</TableHead><TableHead className="text-right">Required</TableHead><TableHead className="text-right">Available</TableHead>
+              <TableHead className="text-right">Reserved</TableHead><TableHead className="text-right">Shortage</TableHead>
+              <TableHead className="text-right">On order</TableHead><TableHead>Status</TableHead><TableHead />
             </TableRow></TableHeader>
             <TableBody>
-              {plan.materials.map((m) => (
-                <TableRow key={m.id} data-testid={`plan-row-${m.id}`}>
-                  <TableCell>
-                    <div className="cursor-pointer font-medium text-slate-800 hover:text-orange-600" onClick={() => navigate(`/inventory/materials/${m.material_id}`)} data-testid={`plan-material-${m.id}`}>{m.material_name}</div>
-                    <div className="text-xs text-slate-400">{m.preferred_supplier ? <span className="inline-flex items-center gap-0.5"><Star className="h-2.5 w-2.5 fill-indigo-500 text-indigo-500" />{m.preferred_supplier}</span> : ""}{m.best_known_cost != null ? ` · best ${money(m.best_known_cost)}` : ""}</div>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{m.required} {m.unit}</TableCell>
-                  <TableCell className="text-right tabular-nums">{m.reserved}</TableCell>
-                  <TableCell className="text-right tabular-nums">{m.available}</TableCell>
-                  <TableCell className={`text-right tabular-nums ${m.shortage > 0 ? "font-semibold text-red-600" : "text-slate-400"}`} data-testid={`plan-shortage-${m.id}`}>{m.shortage}</TableCell>
-                  <TableCell className="text-right tabular-nums">{m.ordered}</TableCell>
-                  <TableCell className="text-right tabular-nums">{m.received}</TableCell>
-                  <TableCell className="text-right tabular-nums" data-testid={`plan-issued-${m.id}`}>{m.issued}</TableCell>
-                  <TableCell className="text-right tabular-nums" data-testid={`plan-netused-${m.id}`}>{m.net_used}{m.waste > 0 ? <span className="ml-1 text-xs text-red-500" title="Waste">(+{m.waste} waste)</span> : ""}</TableCell>
-                  <TableCell><Readiness status={m.status} testid={`plan-status-${m.id}`} /></TableCell>
-                  <TableCell className="text-right">
-                    {canManage && (
-                      <div className="flex items-center justify-end gap-1">
-                        {m.reserved > 0
-                          ? <Button size="sm" variant="ghost" onClick={() => release(m)} data-testid={`release-${m.id}`}><Unlock className="h-4 w-4" /></Button>
-                          : <Button size="sm" variant="ghost" disabled={m.available <= 0} onClick={() => reserve(m)} data-testid={`reserve-${m.id}`}><Lock className="h-4 w-4" /></Button>}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" data-testid={`plan-actions-${m.id}`}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setMove({ kind: "issue", row: m, quantity: Math.max(m.reserved || 0, 0) || 1, location_id: locations[0]?.id || "" })} data-testid={`issue-${m.id}`}><ArrowDownToLine className="mr-2 h-4 w-4" /> Issue materials</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setMove({ kind: "return", row: m, quantity: 1, location_id: locations[0]?.id || "" })} data-testid={`return-${m.id}`}><Undo2 className="mr-2 h-4 w-4" /> Return to stock</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setMove({ kind: "waste", row: m, quantity: 1, location_id: locations[0]?.id || "" })} data-testid={`waste-${m.id}`}><Trash2 className="mr-2 h-4 w-4" /> Waste / Damage</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {plan.materials.map((m) => <PlanRow key={m.id} m={m} expanded={!!open[m.id]} toggle={() => setOpen((o) => ({ ...o, [m.id]: !o[m.id] }))}
+                canManage={canManage} navigate={navigate} reserve={reserve} release={release}
+                startMove={(kind, quantity) => setMove({ kind, row: m, quantity, location_id: locations[0]?.id || "" })} />)}
             </TableBody>
           </Table>
         </div>
