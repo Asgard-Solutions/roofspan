@@ -56,7 +56,8 @@ export default function MaterialDetail() {
   const [balances, setBalances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [shortIds, setShortIds] = useState([]);
-  useEffect(() => { api.get("/materials/quick-counts").then((r) => setShortIds(r.data.short_for_jobs_ids || [])).catch(() => {}); }, [id]);
+  const [orderIds, setOrderIds] = useState([]);
+  useEffect(() => { api.get("/materials/quick-counts").then((r) => { setShortIds(r.data.short_for_jobs_ids || []); setOrderIds(r.data.needs_ordering_ids || []); }).catch(() => {}); }, [id]);
   const [busy, setBusy] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({});
@@ -156,7 +157,7 @@ export default function MaterialDetail() {
   const m = d.material; const q = d.quantities;
   const preferred = d.suppliers.find((x) => x.is_preferred);
   const isShort = shortIds.includes(m.id);
-  const needsReorder = Number(m.reorder_threshold || 0) > 0 && q.projected < Number(m.reorder_threshold);
+  const needsReorder = orderIds.includes(m.id);  // same server-side rule as the Materials "Needs ordering" filter
 
   return (
     <div>
@@ -186,7 +187,7 @@ export default function MaterialDetail() {
             <h3 className="text-sm font-semibold text-slate-700">Inventory</h3>
             {!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge>
               : isShort ? <Badge variant="secondary" className="bg-red-50 text-red-700" data-testid="detail-status-short">Short for jobs</Badge>
-              : needsReorder ? <Badge variant="secondary" className="bg-amber-50 text-amber-700" data-testid="detail-status-reorder">Reorder point reached</Badge>
+              : needsReorder ? <Badge variant="secondary" className="bg-amber-50 text-amber-700" data-testid="detail-status-reorder">Needs ordering</Badge>
               : <Badge variant="secondary" className="bg-green-50 text-green-700" data-testid="detail-status-ok">OK</Badge>}
             <span className="text-sm text-slate-500" data-testid="detail-preferred-supplier">Preferred supplier: <span className="font-medium text-slate-800">{preferred ? (preferred.supplier_name || preferred.integration_provider) : "—"}</span>{preferred?.current_cost != null && canManage ? ` · ${money(preferred.current_cost)}` : ""}</span>
           </div>

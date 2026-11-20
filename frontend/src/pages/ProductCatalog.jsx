@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Link as RouterLink } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { money } from "@/lib/format";
@@ -358,11 +357,11 @@ export default function ProductCatalog() {
 
   return (
     <div>
-      <PageHeader title="Product Catalog" description="Find supplier products, compare pricing and add them to your materials." testid="page-product-catalog" actions={<RouterLink to="/inventory" className="text-sm font-medium text-orange-700 hover:underline" data-testid="catalog-back-to-materials">Back to Materials</RouterLink>} />
+      <PageHeader title="Product Catalog" description="Find supplier products, compare pricing and add them to your materials." testid="page-product-catalog" />
 
       <div className="p-6 sm:p-8">
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="catalog-back"><ArrowLeft className="h-4 w-4" /> Inventory</Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/inventory")} data-testid="catalog-back"><ArrowLeft className="h-4 w-4" /> Materials</Button>
           <div className="w-64">
             <Select value={sourceId} onValueChange={setSourceId}>
               <SelectTrigger data-testid="catalog-source-select"><SelectValue placeholder="Source" /></SelectTrigger>

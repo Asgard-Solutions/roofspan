@@ -152,7 +152,8 @@ async def reorder_suggestions(user: User = Depends(get_current_user), db: AsyncS
 async def materials_quick_counts(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from services.materials_quick import quick_sets
     sets = await quick_sets(db)
-    return {"counts": {k: len(v) for k, v in sets.items()}, "short_for_jobs_ids": sorted(sets["short_for_jobs"])}
+    return {"counts": {k: len(v) for k, v in sets.items()}, "short_for_jobs_ids": sorted(sets["short_for_jobs"]),
+            "needs_ordering_ids": sorted(sets["needs_ordering"])}
 
 
 @router.get("/materials", response_model=list[MaterialListItemOut])

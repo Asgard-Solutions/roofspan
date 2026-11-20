@@ -65,6 +65,7 @@ export default function Inventory() {
   const setTab = (t) => setParams(t === "pos" ? { tab: "pos" } : {}, { replace: true });
   const [quick, setQuick] = useState(null);
   const [matLoading, setMatLoading] = useState(true);
+  const [posLoading, setPosLoading] = useState(false);
   const reqSeq = useRef(0);
   const [quickCounts, setQuickCounts] = useState(null);
   const [moreCols, setMoreCols] = useState(false);
@@ -74,7 +75,7 @@ export default function Inventory() {
   const [poFilter, setPoFilter] = useState("open");
   const [abcHistOpen, setAbcHistOpen] = useState(false);
 
-  const load = useCallback(() => {
+  const loadMaterials = useCallback(() => {
     const p = {};
     if (filters.q) p.q = filters.q;
     if (filters.category !== "all") p.category = filters.category;
@@ -83,16 +84,19 @@ export default function Inventory() {
     if (filters.active !== "all") p.active = filters.active === "active";
     if (filters.low_stock) p.low_stock = true;
     if (quick) p.quick = quick;
-    api.get("/materials/quick-counts").then((r) => setQuickCounts(r.data)).catch(() => {});
     setMatLoading(true);
     const req = ++reqSeq.current;  // ignore slower, stale responses (e.g. full list finishing after a quick filter)
     api.get("/materials", { params: p })
       .then((r) => { if (req === reqSeq.current) setMaterials(r.data); })
       .catch((e) => toast.error(apiError(e)))
       .finally(() => { if (req === reqSeq.current) setMatLoading(false); });
-    api.get("/purchase-orders").then((r) => setPos(r.data)).catch(() => {});
   }, [filters, quick]);
-  useEffect(() => { load(); }, [load]);
+  const loadCounts = useCallback(() => { api.get("/materials/quick-counts").then((r) => setQuickCounts(r.data)).catch(() => {}); }, []);
+  const loadPos = useCallback(() => { setPosLoading(true); api.get("/purchase-orders").then((r) => setPos(r.data)).catch(() => {}).finally(() => setPosLoading(false)); }, []);
+  const load = useCallback(() => { loadMaterials(); loadCounts(); loadPos(); }, [loadMaterials, loadCounts, loadPos]);
+  useEffect(() => { const t = setTimeout(loadMaterials, filters.q ? 350 : 0); return () => clearTimeout(t); }, [loadMaterials]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadCounts(); }, [loadCounts]);
+  useEffect(() => { if (tab === "pos" && !pos.length) loadPos(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api.get("/materials/facets").then((r) => setFacets(r.data)).catch(() => {}); }, []);
 
 
@@ -217,6 +221,8 @@ export default function Inventory() {
   const sumQty = (po, f) => (po.items || []).reduce((t, l) => t + (Number(l[f]) || 0), 0);
   const visiblePos = pos.filter((po) => poFilter === "all" || (poFilter === "open" ? OPEN_PO.includes(po.status) : po.status === poFilter));
   const shortIds = new Set(quickCounts?.short_for_jobs_ids || []);
+  const orderIds = new Set(quickCounts?.needs_ordering_ids || []);
+  const label = (st) => st.replace(/_/g, " ");
   const QUICK = [
     ["short_for_jobs", "Short for jobs", Hammer, "text-red-600"],
     ["needs_ordering", "Needs ordering", ShoppingCart, "text-amber-600"],
@@ -304,7 +310,8 @@ export default function Inventory() {
                 <Button size="sm" variant="ghost" className="ml-auto" onClick={() => { setBulkMode(false); setSelected(new Set()); }} data-testid="bulk-exit">Done</Button>
               </div>
             )}
-            <div className="overflow-x-auto rounded-md border border-border bg-white">
+            <div className={`relative overflow-x-auto rounded-md border border-border bg-white transition-opacity ${matLoading && materials.length ? "opacity-50" : ""}`} aria-busy={matLoading}>
+              {matLoading && materials.length > 0 && <div className="absolute inset-x-0 top-0 z-10 flex justify-center pt-2" data-testid="materials-refreshing"><span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…</span></div>}
               <Table data-testid="materials-table">
                 <TableHeader><TableRow>
                   {canManage && bulkMode && <TableHead className="w-8"><input type="checkbox" aria-label="Select all" checked={materials.length > 0 && materials.every((m) => selected.has(m.id))} onChange={(e) => toggleSelectAll(materials.map((m) => m.id), e.target.checked)} data-testid="bulk-select-all" /></TableHead>}
@@ -328,7 +335,7 @@ export default function Inventory() {
                       {moreCols && <TableCell className="text-right tabular-nums">{m.on_hand}</TableCell>}
                       <TableCell>{!m.active ? <Badge variant="secondary" className="bg-slate-100 text-slate-500">Inactive</Badge>
                         : shortIds.has(m.id) ? <Badge variant="secondary" className="bg-red-50 text-red-700" data-testid={`short-badge-${m.id}`}>Short for jobs</Badge>
-                        : m.low_stock ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Low</Badge>
+                        : orderIds.has(m.id) ? <Badge className="bg-amber-50 text-amber-700" variant="secondary" data-testid={`low-badge-${m.id}`}><AlertTriangle className="mr-1 h-3 w-3" /> Needs ordering</Badge>
                         : <Badge variant="secondary" className="bg-green-50 text-green-700">OK</Badge>}</TableCell>
                       <TableCell className="text-slate-600">{m.primary_supplier_name || "—"}</TableCell>
                       {moreCols && <>
@@ -379,10 +386,10 @@ export default function Inventory() {
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           {canManage ? (
                             <Select value={po.status} onValueChange={(v) => setPoStatus(po.id, v)}>
-                              <SelectTrigger className="h-8 w-[160px]" data-testid={`po-status-${po.id}`}><Badge className={sc[po.status] || ""} variant="secondary">{po.status.replace("_", " ")}</Badge></SelectTrigger>
-                              <SelectContent>{PO_STATUS.map((st) => <SelectItem key={st} value={st}>{st.replace("_", " ")}</SelectItem>)}</SelectContent>
+                              <SelectTrigger className="h-8 w-[160px]" data-testid={`po-status-${po.id}`}><Badge className={sc[po.status] || ""} variant="secondary">{label(po.status)}</Badge></SelectTrigger>
+                              <SelectContent>{(PO_STATUS.includes(po.status) ? PO_STATUS : [po.status, ...PO_STATUS]).map((st) => <SelectItem key={st} value={st}>{label(st)}</SelectItem>)}</SelectContent>
                             </Select>
-                          ) : <Badge className={sc[po.status] || ""} variant="secondary">{po.status.replace("_", " ")}</Badge>}
+                          ) : <Badge className={sc[po.status] || ""} variant="secondary">{label(po.status)}</Badge>}
                         </TableCell>
                         <TableCell className="text-right tabular-nums" data-testid={`po-received-${po.id}`}>{received} / {ordered}</TableCell>
                         <TableCell className={`text-right tabular-nums ${outstanding > 0 ? "font-semibold text-slate-900" : "text-slate-400"}`} data-testid={`po-outstanding-${po.id}`}>{outstanding}</TableCell>
@@ -394,7 +401,7 @@ export default function Inventory() {
                       </TableRow>
                     );
                   })}
-                  {visiblePos.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-slate-400">{poFilter === "open" ? "No open purchase orders." : "No purchase orders here."}</TableCell></TableRow>}
+                  {visiblePos.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-slate-400">{posLoading ? <span className="inline-flex items-center gap-2" data-testid="pos-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading purchase orders…</span> : poFilter === "open" ? "No open purchase orders." : "No purchase orders here."}</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>
@@ -545,7 +552,7 @@ export default function Inventory() {
       </Dialog>
 
       <PODialog open={poOpen} onOpenChange={setPoOpen} onCreated={load} />
-      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={load} />
+      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={() => { loadPos(); loadCounts(); }} />
       <AbcOrderPanel open={abcOpen} onOpenChange={setAbcOpen} po={abcPo} onChanged={load} />
     </div>
   );
