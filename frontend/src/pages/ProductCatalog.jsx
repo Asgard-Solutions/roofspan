@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { money } from "@/lib/format";
@@ -271,7 +272,7 @@ function MaterialsSource({ supplierId, canManage, onAddToPo }) {
             <TableRow>
               <TableHead>Product</TableHead><TableHead>Manufacturer</TableHead><TableHead>Category</TableHead>
               <TableHead className="text-right">Available</TableHead>
-              <TableHead>Preferred Supplier</TableHead><TableHead>Best Known Cost</TableHead>
+              <TableHead>Preferred supplier &amp; your price</TableHead><TableHead>Lowest supplier cost</TableHead>
               <TableHead></TableHead>
             </TableRow>
           </TableHeader>
@@ -357,7 +358,7 @@ export default function ProductCatalog() {
 
   return (
     <div>
-      <PageHeader title="Product Catalog" description="Browse RoofSpan materials and supplier catalogs, compare pricing, and source products." testid="page-product-catalog" />
+      <PageHeader title="Product Catalog" description="Find supplier products, compare pricing and add them to your materials." testid="page-product-catalog" actions={<RouterLink to="/inventory" className="text-sm font-medium text-orange-700 hover:underline" data-testid="catalog-back-to-materials">Back to Materials</RouterLink>} />
 
       <div className="p-6 sm:p-8">
         <div className="mb-4 flex flex-wrap items-center gap-2">
