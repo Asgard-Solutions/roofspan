@@ -77,18 +77,26 @@ async def _find_or_create_supplier(db: AsyncSession, name: str | None):
     return s
 
 
-async def _out(db: AsyncSession, po: PurchaseOrder) -> POOut:
-    items = (await db.execute(select(POLineItem).where(POLineItem.po_id == po.id).order_by(POLineItem.sort))).scalars().all()
+async def _out(db: AsyncSession, po: PurchaseOrder, pre: dict | None = None) -> POOut:
+    # pre: optional batch prefetch from list_pos (same data, a handful of queries for the whole list)
+    if pre is not None:
+        items = pre["items"].get(po.id, [])
+    else:
+        items = (await db.execute(select(POLineItem).where(POLineItem.po_id == po.id).order_by(POLineItem.sort))).scalars().all()
     supplier_name = None
     if po.supplier_id:
-        s = await db.get(Supplier, po.supplier_id)
+        s = pre["suppliers"].get(po.supplier_id) if pre is not None else await db.get(Supplier, po.supplier_id)
         supplier_name = s.name if s else None
     unresolved = sum(1 for i in items if i.integration_provider == "abc_supply" and i.abc_price_status == "unavailable")
     warning = None
     if unresolved:
         warning = f"{unresolved} ABC Supply item{'s' if unresolved != 1 else ''} do not currently have pricing."
     abc_delivery = None
-    if po.integration_provider == "abc_supply":
+    if po.integration_provider == "abc_supply" and pre is not None:
+        sub = pre["subs"].get(po.id)
+        if sub:
+            abc_delivery = sub.delivery
+    elif po.integration_provider == "abc_supply":
         sub = (await db.execute(select(AbcOrderSubmission).where(
             AbcOrderSubmission.purchase_order_id == po.id, AbcOrderSubmission.status.in_(["confirmed", "unknown"]))
             .order_by(AbcOrderSubmission.attempted_at.desc()))).scalars().first()
@@ -123,7 +131,22 @@ async def list_pos(job_id: str | None = Query(None), status: str | None = Query(
         stmt = stmt.where(PurchaseOrder.job_id == job_id)
     if status:
         stmt = stmt.where(PurchaseOrder.status == status)
-    return [await _out(db, po) for po in (await db.execute(stmt)).scalars().all()]
+    pos = (await db.execute(stmt)).scalars().all()
+    ids = [po.id for po in pos]
+    pre = {"items": {}, "suppliers": {}, "subs": {}}
+    if ids:
+        for it in (await db.execute(select(POLineItem).where(POLineItem.po_id.in_(ids)).order_by(POLineItem.po_id, POLineItem.sort))).scalars().all():
+            pre["items"].setdefault(it.po_id, []).append(it)
+        sids = {po.supplier_id for po in pos if po.supplier_id}
+        if sids:
+            pre["suppliers"] = {x.id: x for x in (await db.execute(select(Supplier).where(Supplier.id.in_(sids)))).scalars().all()}
+        abc_ids = [po.id for po in pos if po.integration_provider == "abc_supply"]
+        if abc_ids:
+            for sub in (await db.execute(select(AbcOrderSubmission).where(
+                    AbcOrderSubmission.purchase_order_id.in_(abc_ids), AbcOrderSubmission.status.in_(["confirmed", "unknown"]))
+                    .order_by(AbcOrderSubmission.attempted_at.desc()))).scalars().all():
+                pre["subs"].setdefault(sub.purchase_order_id, sub)  # first = latest attempt (same as .first())
+    return [await _out(db, po, pre) for po in pos]
 
 
 @router.post("", response_model=POOut, status_code=201)

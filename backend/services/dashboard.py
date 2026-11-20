@@ -26,14 +26,14 @@ async def purchasing_dashboard(db: AsyncSession, include_cost: bool, only_user_i
     reserved_qty = 0.0
     reserved_value = Z
     low_stock = 0
+    qs = await inv_core.batch_quantities(db, mats)
     for m in mats:
-        q = await inv_core.compute_quantities(db, m)
+        q = qs[m.id]
         avg = _d(m.avg_cost) if m.avg_cost is not None else Z
         inv_value += _d(q["on_hand"]) * avg
         reserved_qty += q["reserved"]
         reserved_value += _d(q["reserved"]) * avg
-        thr = float(m.reorder_threshold or 0)
-        if thr > 0 and q["projected"] < thr:
+        if inv_core.is_low_stock(q["available"], m.reorder_threshold):
             low_stock += 1
 
     # Open POs (exclude cancelled/received); committed value + incoming-this-week from expected_date.

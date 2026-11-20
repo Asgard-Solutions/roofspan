@@ -2,7 +2,7 @@
 
 short_for_jobs  : material has a JobMaterial row on an active job with shortage > 0
                   (planned - reserved - incoming on that job's open POs; same formula as Job Detail).
-needs_ordering  : short_for_jobs, OR reorder point reached (threshold > 0 and On Hand + On Order - Required < threshold,
+needs_ordering  : short_for_jobs, OR reorder point reached (threshold > 0 and On Hand + On Order - Required <= threshold,
                   the same rule as Reorder suggestions).
 on_order        : outstanding quantity on open purchase orders > 0.
 arriving_week   : outstanding quantity on an open PO whose expected date is within the next 7 days (or already past).
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Material, JobMaterial, Job, PurchaseOrder, POLineItem
 from services import job_planning as jp
-from services.inventory_core import _OPEN_PO_STATUSES, _ACTIVE_JOB_STATUSES_EXCLUDED
+from services.inventory_core import _OPEN_PO_STATUSES, _ACTIVE_JOB_STATUSES_EXCLUDED, reorder_point_reached
 
 QUICK_KEYS = ("short_for_jobs", "needs_ordering", "on_order", "arriving_week")
 _OUTSTANDING = func.greatest(POLineItem.quantity - POLineItem.received_quantity, 0)
@@ -35,8 +35,7 @@ async def quick_sets(db: AsyncSession) -> dict:
         .where(Job.status.notin_(_ACTIVE_JOB_STATUSES_EXCLUDED)).group_by(JobMaterial.material_id))).all()}
     reorder = set()
     for mid, (_id, on_hand, thr) in mats.items():
-        thr = float(thr or 0)
-        if thr > 0 and float(on_hand or 0) + on_order.get(mid, 0) - required.get(mid, 0) < thr:
+        if reorder_point_reached(round(float(on_hand or 0) + on_order.get(mid, 0) - required.get(mid, 0), 3), thr):
             reorder.add(mid)
     soon = datetime.now(timezone.utc) + timedelta(days=7)
     arriving = {str(m) for m in (await db.execute(

@@ -83,11 +83,13 @@ def _out(j: Job, user_name: str | None = None) -> JobOut:
 
 async def _job_material_out(db: AsyncSession, jm: JobMaterial) -> JobMaterialOut:
     m = await db.get(Material, jm.material_id)
+    from services import inventory_core as inv_core
+    avail = (await inv_core.compute_quantities(db, m))["available"] if m else 0
     return JobMaterialOut(
         id=str(jm.id), material_id=str(jm.material_id), material_name=m.name if m else "?",
         unit=m.unit if m else "", planned_quantity=jm.planned_quantity,
         quantity_on_hand=m.quantity_on_hand if m else 0,
-        low_stock=(m.quantity_on_hand <= m.reorder_threshold) if m else False, notes=jm.notes,
+        low_stock=inv_core.is_low_stock(avail, m.reorder_threshold) if m else False, notes=jm.notes,
     )
 
 

@@ -110,7 +110,7 @@ def price_from_margin_d(cost: Decimal, margin_percent: Decimal) -> Decimal:
     return _q4(cost / (Decimal(1) - m))
 
 
-async def resolve_effective_cost(db: AsyncSession, material: Material) -> dict:
+async def resolve_effective_cost(db: AsyncSession, material: Material, pf: dict | None = None) -> dict:
     """Resolve the material's effective unit cost + its source, in priority order:
     preferred supplier cost -> best known cost -> standard_cost -> MWAC avg_cost -> none.
     The supplier that provides the cost basis is returned so a Supplier Price Book rule can be matched
@@ -121,16 +121,16 @@ async def resolve_effective_cost(db: AsyncSession, material: Material) -> dict:
     async def _sup_name(sid):
         if not sid:
             return None
-        s = await db.get(Supplier, sid)
+        s = pf["names"].get(sid) if pf is not None else await db.get(Supplier, sid)
         return s.name if s else None
 
-    pref = await inv_core.preferred_supplier_material(db, material.id)
+    pref = pf["pref"].get(material.id) if pf is not None else await inv_core.preferred_supplier_material(db, material.id)
     if pref is not None and pref.current_cost is not None:
         out.update({"effective_cost": _q4(_d(pref.current_cost)), "effective_cost_source": "preferred_supplier",
                     "effective_cost_supplier_id": (str(pref.supplier_id) if pref.supplier_id else None),
                     "effective_cost_supplier_name": await _sup_name(pref.supplier_id)})
         return out
-    best = await inv_core.best_known_supplier_material(db, material.id)
+    best = pf["best"].get(material.id) if pf is not None else await inv_core.best_known_supplier_material(db, material.id)
     if best is not None and best.current_cost is not None:
         out.update({"effective_cost": _q4(_d(best.current_cost)), "effective_cost_source": "best_known_cost",
                     "effective_cost_supplier_id": (str(best.supplier_id) if best.supplier_id else None),
@@ -146,13 +146,12 @@ async def resolve_effective_cost(db: AsyncSession, material: Material) -> dict:
 
 
 async def resolve_material_rule(db: AsyncSession, price_book_id, material: Material,
-                                cost_supplier_id) -> PriceBookEntry | None:
+                                cost_supplier_id, entries=None) -> PriceBookEntry | None:
     """Most-specific-wins: Item -> Supplier(of the effective cost) -> Manufacturer -> Category -> Default."""
     if not price_book_id:
         return None
-    entries = (await db.execute(select(PriceBookEntry).where(
-        PriceBookEntry.price_book_id == price_book_id, PriceBookEntry.active.is_(True))
-        .order_by(PriceBookEntry.sort))).scalars().all()
+    if entries is None:
+        entries = await _book_entries(db, price_book_id)
     hit = next((e for e in entries if e.target_type == "material" and e.material_id and str(e.material_id) == str(material.id)), None)
     if hit:
         return hit
@@ -173,10 +172,26 @@ async def resolve_material_rule(db: AsyncSession, price_book_id, material: Mater
     return next((e for e in entries if _is_default_entry(e)), None)
 
 
-async def compute_material_pricing(db: AsyncSession, material: Material) -> dict:
+async def _book_entries(db: AsyncSession, price_book_id):
+    return (await db.execute(select(PriceBookEntry).where(
+        PriceBookEntry.price_book_id == price_book_id, PriceBookEntry.active.is_(True))
+        .order_by(PriceBookEntry.sort))).scalars().all()
+
+
+async def pricing_prefetch(db: AsyncSession, material_ids) -> dict:
+    """Everything compute_material_pricing reads per material, loaded once for a whole list (same results)."""
+    pf = await inv_core.batch_supplier_maps(db, material_ids)
+    pb_id = await default_price_book_id(db)
+    pf["pb_id"] = pb_id
+    pf["pb"] = await db.get(PriceBook, pb_id) if pb_id else None
+    pf["entries"] = await _book_entries(db, pb_id) if pb_id else []
+    return pf
+
+
+async def compute_material_pricing(db: AsyncSession, material: Material, pf: dict | None = None) -> dict:
     """Live effective Cost + Default-Price-Book Price for a material (never stored). Returns full
     provenance so the UI can explain both numbers. If no cost basis exists, price is None (never $0)."""
-    out = await resolve_effective_cost(db, material)
+    out = await resolve_effective_cost(db, material, pf)
     out.update({"effective_price": None, "price_book_id": None, "price_book_name": None,
                 "matched_rule_id": None, "matched_rule_type": None, "matched_rule_label": None,
                 "price_is_custom": False})
@@ -190,13 +205,13 @@ async def compute_material_pricing(db: AsyncSession, material: Material) -> dict
     cost = out["effective_cost"]
     if cost is None:
         return out  # never fabricate a $0 price
-    pb_id = await default_price_book_id(db)
+    pb_id = pf["pb_id"] if pf is not None else await default_price_book_id(db)
     if not pb_id:
         return out  # no default price book -> price stays None (missing-default is explicit)
-    pb = await db.get(PriceBook, pb_id)
+    pb = pf["pb"] if pf is not None else await db.get(PriceBook, pb_id)
     out["price_book_id"] = str(pb_id)
     out["price_book_name"] = pb.name if pb else None
-    rule = await resolve_material_rule(db, pb_id, material, out["effective_cost_supplier_id"])
+    rule = await resolve_material_rule(db, pb_id, material, out["effective_cost_supplier_id"], pf["entries"] if pf is not None else None)
     if not rule:
         return out
     price = None

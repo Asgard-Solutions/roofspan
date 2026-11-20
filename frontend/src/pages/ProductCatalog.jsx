@@ -234,7 +234,7 @@ function MaterialsSource({ supplierId, canManage, onAddToPo }) {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [facets, setFacets] = useState({ categories: [], manufacturers: [], suppliers: [] });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ q: "", category: "all", manufacturer: "all", availability: "all" });
 
   const load = useCallback(async () => {
@@ -318,6 +318,11 @@ function MaterialsSource({ supplierId, canManage, onAddToPo }) {
                 </TableRow>
               );
             })}
+            {loading && rows.length === 0 && (
+              <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500" data-testid="catalog-materials-loading">
+                <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-slate-400" /> Loading products…
+              </TableCell></TableRow>
+            )}
             {!loading && rows.length === 0 && (
               <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-slate-400" data-testid="catalog-materials-empty">
                 <PackageSearch className="mx-auto mb-2 h-6 w-6 text-slate-300" /> No materials found.
