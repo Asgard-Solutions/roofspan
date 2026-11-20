@@ -264,9 +264,9 @@ export default function LeadDetail() {
             <div key={e.id} className="flex items-center justify-between rounded border border-border p-2 text-sm" data-testid={`estimate-${e.id}`}>
               <div><span className="font-medium text-slate-900">{e.number}</span> · <span className="tabular-nums">{money(e.total)}</span> <Badge className={statusColor[e.status] || ""} variant="secondary">{e.status}</Badge></div>
               <div className="flex items-center gap-1">
-                <Button size="sm" variant="ghost" onClick={() => navigate(`/estimates/${e.id}`)} data-testid={`edit-estimate-${e.id}`}>Edit</Button>
+                <Button size="sm" variant="ghost" onClick={() => navigate(`/estimates/${e.id}`)} data-testid={`edit-estimate-${e.id}`}>Open</Button>
                 <Button size="sm" variant="ghost" onClick={() => duplicateEstimate(e)} data-testid={`duplicate-estimate-${e.id}`}><FileText className="h-4 w-4" /> Duplicate</Button>
-                <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Proposal</Button>
+                <Button size="sm" variant="ghost" onClick={() => generateQuote(e.id)} data-testid={`generate-quote-${e.id}`}><FileCheck2 className="h-4 w-4" /> Create proposal</Button>
                 {isManage && <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={() => deleteEstimate(e)} data-testid={`delete-estimate-${e.id}`}><Trash2 className="h-4 w-4" /></Button>}
               </div>
             </div>
@@ -278,7 +278,7 @@ export default function LeadDetail() {
 
   const quotesSection = (
     <Section icon={FileCheck2} title="Proposals" testid="section-quotes">
-      {quotes.length === 0 ? <p className="text-sm text-slate-500">No proposals yet. Use “Proposal” on an estimate.</p> : (
+      {quotes.length === 0 ? <p className="text-sm text-slate-500">No proposals yet. Open an estimate and choose “Create proposal”.</p> : (
         <div className="space-y-2">
           {quotes.map((q) => (
             <div key={q.id} className="rounded border border-border p-3 text-sm" data-testid={`quote-${q.id}`}>

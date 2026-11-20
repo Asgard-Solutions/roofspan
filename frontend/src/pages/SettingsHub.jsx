@@ -12,7 +12,7 @@ const GROUPS = [
     { to: "/admin/roles", label: "Roles & permissions", hint: "What each role can see and do", icon: ShieldCheck, testid: "settings-roles" },
   ] },
   { title: "Estimating Setup", need: "manage", items: [
-    { to: "/estimating/takeoff", label: "Roof takeoff", hint: "Turn measurements into estimate quantities", icon: Calculator, testid: "settings-takeoff" },
+    { to: "/estimating/takeoff", label: "Roof takeoff setup", hint: "Roof systems, rules, versions and default waste", icon: Calculator, testid: "settings-takeoff" },
     { to: "/estimating/assemblies", label: "Assemblies", hint: "Reusable bundles of materials and labor", icon: Layers, testid: "settings-assemblies" },
     { to: "/estimating/price-books", label: "Price books", hint: "Your default selling prices", icon: BookOpen, testid: "settings-price-books" },
   ] },

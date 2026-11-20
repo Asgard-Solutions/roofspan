@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { AlertTriangle, Calculator, CheckCircle2, Layers, Plus, RefreshCw, Save } from "lucide-react";
+import { Layers, Plus, Save } from "lucide-react";
 
 const METRICS = [
   ["roof_squares", "Roof squares (included structures)"], ["roof_area_sqft", "Roof area SF (included structures)"],
@@ -37,88 +37,23 @@ export default function Takeoff() {
   const [settings, setSettings] = useState({ default_waste_percent: 10 });
   const [templates, setTemplates] = useState([]);
   const [assemblies, setAssemblies] = useState([]);
-  const [estimates, setEstimates] = useState([]);
-  const [estimateId, setEstimateId] = useState("");
-  const [measurements, setMeasurements] = useState([]);
-  const [measurementId, setMeasurementId] = useState("");
-  const [measurement, setMeasurement] = useState(null);
-  const [templateRevisionId, setTemplateRevisionId] = useState("");
-  const [estimateWaste, setEstimateWaste] = useState("");
-  const [dripOverride, setDripOverride] = useState("");
-  const [structureWaste, setStructureWaste] = useState({});
-  const [preview, setPreview] = useState(null);
-  const [status, setStatus] = useState(null);
-  const [warnings, setWarnings] = useState([]);
   const [busy, setBusy] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [revisionTemplateId, setRevisionTemplateId] = useState(null);
   const [templateForm, setTemplateForm] = useState({ name: "", description: "", default_waste_percent: 10, notes: "", rules: [blankRule()] });
 
-  const selectedEstimate = useMemo(() => estimates.find((row) => row.id === estimateId), [estimates, estimateId]);
-  const verifiedMeasurements = useMemo(() => measurements.filter((row) => ["office_verified", "locked"].includes(row.status)), [measurements]);
-  const templateRevisions = useMemo(() => templates.map((row) => row.latest_revision).filter(Boolean), [templates]);
 
   const loadReference = useCallback(async () => {
     try {
-      const [s, t, a, e] = await Promise.all([
+      const [s, t, a] = await Promise.all([
         api.get("/takeoff/settings"), api.get("/takeoff/templates", { params: { active: true } }),
-        api.get("/estimating/assemblies", { params: { active: true } }), api.get("/estimates"),
+        api.get("/estimating/assemblies", { params: { active: true } }),
       ]);
-      setSettings(s.data); setTemplates(t.data); setAssemblies(a.data); setEstimates(e.data);
+      setSettings(s.data); setTemplates(t.data); setAssemblies(a.data);
     } catch (err) { toast.error(apiError(err)); }
   }, []);
   useEffect(() => { loadReference(); }, [loadReference]);
 
-  useEffect(() => {
-    setMeasurements([]); setMeasurementId(""); setMeasurement(null); setPreview(null); setWarnings([]); setStatus(null);
-    if (!selectedEstimate) return;
-    const params = selectedEstimate.property_id ? { property_id: selectedEstimate.property_id } : selectedEstimate.inspection_id ? { inspection_id: selectedEstimate.inspection_id } : null;
-    if (!params) return;
-    api.get("/measurements", { params }).then(({ data }) => {
-      setMeasurements(data);
-      const first = data.find((row) => ["office_verified", "locked"].includes(row.status));
-      if (first) setMeasurementId(first.id);
-    }).catch((e) => toast.error(apiError(e)));
-    api.get(`/takeoff/estimates/${selectedEstimate.id}/status`).then(({ data }) => setStatus(data)).catch(() => {});
-  }, [selectedEstimate]);
-
-  useEffect(() => {
-    setMeasurement(null); setWarnings([]); setStructureWaste({}); setPreview(null);
-    if (!measurementId) return;
-    Promise.all([api.get(`/measurements/${measurementId}`), api.get(`/takeoff/measurements/${measurementId}/warnings`)]).then(([m, w]) => {
-      setMeasurement(m.data); setWarnings(w.data.warnings || []);
-    }).catch((e) => toast.error(apiError(e)));
-  }, [measurementId]);
-
-  const payload = (replace = false) => ({
-    measurement_revision_id: measurementId, template_revision_id: templateRevisionId,
-    estimate_waste_override: estimateWaste === "" ? null : Number(estimateWaste),
-    drip_edge_override_lf: dripOverride === "" ? null : Number(dripOverride),
-    structure_waste_overrides: Object.fromEntries(Object.entries(structureWaste).filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)])),
-    replace_modified_generated: replace,
-  });
-
-  const doPreview = async () => {
-    if (!estimateId || !measurementId || !templateRevisionId) return toast.error("Select an estimate, verified measurement revision, and takeoff template.");
-    setBusy(true);
-    try { setPreview((await api.post(`/takeoff/estimates/${estimateId}/preview`, payload(false))).data); }
-    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
-  };
-  const doApply = async (replace = false) => {
-    setBusy(true);
-    try {
-      const { data } = await api.post(`/takeoff/estimates/${estimateId}/apply`, payload(replace));
-      toast.success(`Takeoff applied — ${data.created_line_ids.length} estimate line(s) generated`);
-      setPreview(null);
-      setStatus((await api.get(`/takeoff/estimates/${estimateId}/status`)).data);
-      setEstimates((await api.get("/estimates")).data);
-    } catch (e) {
-      if (e?.response?.status === 409 && e?.response?.data?.detail?.code === "TAKEOFF_GENERATED_LINES_MODIFIED") {
-        setPreview((p) => ({ ...(p || {}), review_required: true, manually_modified_generated_lines: e.response.data.detail.lines || [] }));
-        toast.warning("Takeoff-generated lines were manually edited. Review before replacing.");
-      } else toast.error(apiError(e));
-    } finally { setBusy(false); }
-  };
   const saveDefaultWaste = async () => {
     try { setSettings((await api.put("/takeoff/settings", null, { params: { default_waste_percent: Number(settings.default_waste_percent) } })).data); toast.success("Company takeoff waste default saved"); }
     catch (e) { toast.error(apiError(e)); }
@@ -143,7 +78,7 @@ export default function Takeoff() {
     try {
       if (revisionTemplateId) {
         await api.post(`/takeoff/templates/${revisionTemplateId}/revisions`, { default_waste_percent: Number(templateForm.default_waste_percent), notes: templateForm.notes || null, rules });
-        toast.success("New immutable takeoff template revision created");
+        toast.success("New version saved");
       } else {
         await api.post("/takeoff/templates", { name: templateForm.name, description: templateForm.description || null, active: true, default_waste_percent: Number(templateForm.default_waste_percent), notes: templateForm.notes || null, rules });
         toast.success("Takeoff template created");
@@ -152,60 +87,27 @@ export default function Takeoff() {
     } catch (e) { toast.error(apiError(e)); }
   };
 
-  const scopedSquares = Number(measurement?.totals?.takeoff_squares ?? measurement?.totals?.total_squares ?? 0);
-  const wasteExtraSquares = preview ? scopedSquares * Number(preview.effective_roof_waste_percent || 0) / 100 : 0;
-  const measuredDrip = measurement?.summary?.drip_edge_lf;
-  const calcDrip = Number(measurement?.totals?.takeoff_edge_totals?.eave_lf ?? measurement?.totals?.edge_totals?.eave_lf ?? 0) + Number(measurement?.totals?.takeoff_edge_totals?.rake_lf ?? measurement?.totals?.edge_totals?.rake_lf ?? 0);
-  const wasteChanged = preview?.waste_change && (Math.abs(Number(preview.waste_change.percent_delta || 0)) > 0.0001 || Math.abs(Number(preview.waste_change.extra_squares_delta || 0)) > 0.0001);
-
   return <div>
-    <PageHeader title="Roof Takeoff" description="Bind verified roof measurements to versioned estimating templates without changing the physical measurement snapshot." testid="page-takeoff" />
+    <PageHeader title="Roof Takeoff Setup" description="Roof systems (takeoff templates) turn roof measurements into estimate materials." testid="page-takeoff" actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
     <div className="space-y-6 p-6 sm:p-8">
       <section className="rounded-md border bg-white p-4" data-testid="takeoff-settings">
         <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="font-semibold text-slate-900">Company takeoff settings</div><div className="text-sm text-slate-500">Waste is an estimating assumption, not a roof measurement.</div></div><div className="flex items-end gap-2"><div><Label className="text-xs">Default waste %</Label><Input className="w-28" type="number" value={settings.default_waste_percent} onChange={(e) => setSettings({ ...settings, default_waste_percent: e.target.value })} /></div><Button variant="outline" onClick={saveDefaultWaste}><Save className="h-4 w-4" /> Save</Button></div></div>
       </section>
 
       <section className="rounded-md border bg-white p-4" data-testid="takeoff-templates">
-        <div className="mb-3 flex items-center justify-between"><div><div className="font-semibold">Takeoff Templates</div><div className="text-sm text-slate-500">Every edit creates a new immutable revision with an Assembly snapshot.</div></div><Button onClick={openNewTemplate}><Plus className="h-4 w-4" /> New template</Button></div>
-        <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Revision</TableHead><TableHead>Waste</TableHead><TableHead>Rules</TableHead><TableHead /></TableRow></TableHeader><TableBody>{templates.map((template) => <TableRow key={template.id}><TableCell className="font-medium">{template.name}</TableCell><TableCell>v{template.latest_revision?.revision_number || "—"}</TableCell><TableCell>{template.latest_revision?.default_waste_percent ?? 10}%</TableCell><TableCell>{template.latest_revision?.rules?.length || 0}</TableCell><TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => openNewRevision(template)}>New revision</Button></TableCell></TableRow>)}{!templates.length && <TableRow><TableCell colSpan={5} className="py-6 text-center text-slate-400">No takeoff templates yet.</TableCell></TableRow>}</TableBody></Table>
+        <div className="mb-3 flex items-center justify-between"><div><div className="font-semibold">Roof systems (takeoff templates)</div><div className="text-sm text-slate-500">Each change saves a new version. Estimates keep the version they were calculated with.</div></div><Button onClick={openNewTemplate} data-testid="takeoff-new-template"><Plus className="h-4 w-4" /> New template</Button></div>
+        <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Version</TableHead><TableHead>Waste</TableHead><TableHead>Rules</TableHead><TableHead /></TableRow></TableHeader><TableBody>{templates.map((template) => <TableRow key={template.id}><TableCell className="font-medium">{template.name}</TableCell><TableCell>v{template.latest_revision?.revision_number || "—"}</TableCell><TableCell>{template.latest_revision?.default_waste_percent ?? 10}%</TableCell><TableCell>{template.latest_revision?.rules?.length || 0}</TableCell><TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => openNewRevision(template)} data-testid={`takeoff-edit-template-${template.id}`}>Edit (new version)</Button></TableCell></TableRow>)}{!templates.length && <TableRow><TableCell colSpan={5} className="py-6 text-center text-slate-400">No takeoff templates yet.</TableCell></TableRow>}</TableBody></Table>
       </section>
 
-      <section className="rounded-md border bg-white p-4" data-testid="estimate-takeoff-workspace">
-        <div className="mb-4"><div className="font-semibold text-slate-900">Estimate Takeoff</div><div className="text-sm text-slate-500">Select exact measurement/template revisions. Recalculation is always explicit.</div></div>
-        {status?.measurements_changed && <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="measurements-changed-warning"><div className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" /> Measurements have changed since Estimate {selectedEstimate?.number} was calculated.</div><div className="mt-1">Estimate used Revision {status.measurement_revision_number}; current is Revision {status.latest_measurement_revision_number}. Review changes and recalculate only when you choose.</div>{!!status.changed_metrics?.length && <div className="mt-2 max-h-36 overflow-auto rounded bg-white/70 p-2 text-xs">{status.changed_metrics.map((c) => <div key={c.metric}><b>{c.metric}</b>: {JSON.stringify(c.from)} → {JSON.stringify(c.to)}</div>)}</div>}</div>}
-        <div className="grid gap-3 lg:grid-cols-3">
-          <div><Label className="text-xs">Estimate</Label><Select value={estimateId} onValueChange={setEstimateId}><SelectTrigger><SelectValue placeholder="Select estimate" /></SelectTrigger><SelectContent>{estimates.map((row) => <SelectItem key={row.id} value={row.id}>{row.number} · {row.status}</SelectItem>)}</SelectContent></Select></div>
-          <div><Label className="text-xs">Office-Verified Measurement Revision</Label><Select value={measurementId} onValueChange={setMeasurementId} disabled={!estimateId}><SelectTrigger><SelectValue placeholder="Select revision" /></SelectTrigger><SelectContent>{verifiedMeasurements.map((row) => <SelectItem key={row.id} value={row.id}>Revision {row.revision_number} · {row.status} · {Number(row.total_squares || 0).toFixed(2)} SQ</SelectItem>)}</SelectContent></Select></div>
-          <div><Label className="text-xs">Takeoff Template Revision</Label><Select value={templateRevisionId} onValueChange={setTemplateRevisionId}><SelectTrigger><SelectValue placeholder="Select template" /></SelectTrigger><SelectContent>{templateRevisions.map((row) => <SelectItem key={row.id} value={row.id}>{row.template_name} · v{row.revision_number}</SelectItem>)}</SelectContent></Select></div>
-        </div>
-        {measurement && <>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div><Label className="text-xs">Estimate waste override %</Label><Input type="number" placeholder="Use template/default" value={estimateWaste} onChange={(e) => setEstimateWaste(e.target.value)} /></div>
-            <div><Label className="text-xs">Drip edge override LF</Label><Input type="number" placeholder={measuredDrip != null ? `${measuredDrip} measured` : `${calcDrip} eave+rake`} value={dripOverride} onChange={(e) => setDripOverride(e.target.value)} /></div>
-            <div className="rounded border bg-slate-50 p-2 text-xs"><div className="font-semibold">Measured roof</div><div>{Number(measurement.totals?.total_squares || 0).toFixed(2)} SQ total</div></div>
-            <div className="rounded border bg-slate-50 p-2 text-xs"><div className="font-semibold">Takeoff scope</div><div>{scopedSquares.toFixed(2)} SQ included</div></div>
-          </div>
-          {!!measurement.totals?.area_by_structure?.length && <div className="mt-3"><div className="mb-1 text-xs font-semibold uppercase text-slate-400">Per-structure waste override</div><div className="flex flex-wrap gap-3">{measurement.totals.area_by_structure.filter((row) => row.structure_id && row.included_in_scope !== false).map((row) => <div key={row.structure_id}><Label className="text-xs">{row.name} ({Number(row.squares).toFixed(2)} SQ)</Label><Input className="w-32" type="number" placeholder="Default" value={structureWaste[row.structure_id] ?? ""} onChange={(e) => setStructureWaste({ ...structureWaste, [row.structure_id]: e.target.value })} /></div>)}</div></div>}
-          {!!warnings.length && <div className="mt-4 space-y-2">{warnings.map((w) => <div key={w.code} className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900"><AlertTriangle className="mr-1 inline h-4 w-4" /> {w.message}</div>)}</div>}
-        </>}
-        <div className="mt-4 flex gap-2"><Button variant="outline" onClick={doPreview} disabled={busy || !measurementId || !templateRevisionId}><Calculator className="h-4 w-4" /> Preview takeoff</Button>{status?.measurements_changed && status.latest_measurement_revision_id && <Button variant="ghost" onClick={() => setMeasurementId(status.latest_measurement_revision_id)}><RefreshCw className="h-4 w-4" /> Use latest revision</Button>}</div>
-
-        {preview && <div className="mt-5 rounded-md border bg-slate-50 p-3" data-testid="takeoff-preview">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div><b>Preview:</b> Measurement R{preview.measurement_revision_number} + Template v{preview.template_revision_number}</div><div className="flex flex-wrap gap-2"><Badge variant="secondary">Effective roof waste {Number(preview.effective_roof_waste_percent).toFixed(2)}%</Badge><Badge variant="secondary">+{wasteExtraSquares.toFixed(2)} SQ waste impact</Badge></div></div>
-          {wasteChanged && <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900" data-testid="takeoff-waste-change"><AlertTriangle className="mr-1 inline h-4 w-4" />Waste changed from <b>{Number(preview.waste_change.previous_percent).toFixed(2)}%</b> to <b>{Number(preview.waste_change.current_percent).toFixed(2)}%</b>. Waste-driven material impact changes by <b>{Number(preview.waste_change.extra_squares_delta) >= 0 ? "+" : ""}{Number(preview.waste_change.extra_squares_delta).toFixed(2)} SQ</b>. Nothing changes until you apply this preview.</div>}
-          {preview.review_required && <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-800"><AlertTriangle className="mr-1 inline h-4 w-4" /> Previously generated lines were manually edited. Applying requires explicit replacement confirmation.</div>}
-          <Table><TableHeader><TableRow><TableHead>Description</TableHead><TableHead>Assembly</TableHead><TableHead>Measured</TableHead><TableHead>Waste</TableHead><TableHead>Calculated Qty</TableHead><TableHead>Order Qty</TableHead><TableHead>Packaging source</TableHead></TableRow></TableHeader><TableBody>{preview.lines.map((line, i) => <TableRow key={`${line.description}-${i}`}><TableCell>{line.description}</TableCell><TableCell>{line.assembly_name || "—"} v{line.assembly_version || "—"}</TableCell><TableCell>{Number(line.measured_quantity).toFixed(2)} {line.unit}</TableCell><TableCell>{Number(line.waste_percent).toFixed(2)}%</TableCell><TableCell>{Number(line.quantity).toFixed(2)} {line.unit}</TableCell><TableCell>{line.order_quantity != null ? `${Number(line.order_quantity).toFixed(0)} ${line.purchase_unit || "pkg"}` : "—"}</TableCell><TableCell><div>{coverageLabel(line.coverage_source)}</div>{line.coverage_per_package != null && <div className="text-xs text-slate-400">{Number(line.coverage_per_package).toFixed(4)} {line.unit}/pkg</div>}</TableCell></TableRow>)}</TableBody></Table>
-          <div className="mt-3 flex justify-end">{preview.review_required ? <Button variant="destructive" onClick={() => doApply(true)} disabled={busy}>Replace reviewed generated lines & recalculate</Button> : <Button onClick={() => doApply(false)} disabled={busy}><CheckCircle2 className="h-4 w-4" /> Apply to Estimate</Button>}</div>
-        </div>}
-      </section>
+      <p className="text-sm text-slate-500" data-testid="takeoff-setup-usage-note">To use a roof system, open an estimate and choose <b>Calculate materials</b> under Roof measurements.</p>
     </div>
 
     <Dialog open={templateOpen} onOpenChange={setTemplateOpen}><DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto" data-testid="takeoff-template-dialog">
-      <DialogHeader><DialogTitle>{revisionTemplateId ? `New revision — ${templateForm.name}` : "New Takeoff Template"}</DialogTitle><DialogDescription>Rules map one measurement metric to an existing Assembly. Saving an existing template creates a new immutable revision.</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{revisionTemplateId ? `Edit ${templateForm.name} (new version)` : "New Takeoff Template"}</DialogTitle><DialogDescription>Each rule turns one roof measurement into an assembly of materials. Saving an existing template saves a new version.</DialogDescription></DialogHeader>
       {!revisionTemplateId && <div className="grid grid-cols-2 gap-3"><div><Label>Name</Label><Input value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} /></div><div><Label>Description</Label><Input value={templateForm.description} onChange={(e) => setTemplateForm({ ...templateForm, description: e.target.value })} /></div></div>}
       <div className="grid grid-cols-2 gap-3"><div><Label>Template default waste %</Label><Input type="number" value={templateForm.default_waste_percent} onChange={(e) => setTemplateForm({ ...templateForm, default_waste_percent: e.target.value })} /></div><div><Label>Revision notes</Label><Input value={templateForm.notes} onChange={(e) => setTemplateForm({ ...templateForm, notes: e.target.value })} /></div></div>
-      <div className="space-y-3"><div className="font-semibold">Rules</div>{templateForm.rules.map((rule, i) => <div key={i} className="rounded border p-3"><div className="grid gap-2 lg:grid-cols-4"><div><Label className="text-xs">Rule name</Label><Input value={rule.name} onChange={(e) => setRule(i, { name: e.target.value })} /></div><div><Label className="text-xs">Measurement metric</Label><Select value={rule.metric_key} onValueChange={(v) => setRule(i, { metric_key: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{METRICS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></div><div><Label className="text-xs">Assembly</Label><Select value={rule.assembly_id || "none"} onValueChange={(v) => setRule(i, { assembly_id: v === "none" ? "" : v })}><SelectTrigger><SelectValue placeholder="Select Assembly" /></SelectTrigger><SelectContent><SelectItem value="none">Select Assembly</SelectItem>{assemblies.map((a) => <SelectItem key={a.id} value={a.id}>{a.name} · v{a.version}</SelectItem>)}</SelectContent></Select></div><div><Label className="text-xs">Metric multiplier</Label><Input type="number" value={rule.quantity_factor} onChange={(e) => setRule(i, { quantity_factor: e.target.value })} /></div></div><div className="mt-2 flex flex-wrap items-end gap-4"><label className="flex items-center gap-2 text-sm"><Checkbox checked={rule.apply_waste} onCheckedChange={(v) => setRule(i, { apply_waste: !!v })} /> Apply waste to material items</label><div><Label className="text-xs">Assembly waste default %</Label><Input className="w-32" type="number" placeholder="inherit" value={rule.assembly_waste_percent} onChange={(e) => setRule(i, { assembly_waste_percent: e.target.value })} /></div><div><Label className="text-xs">Package coverage override</Label><Input className="w-44" type="number" placeholder="blank = product catalog" value={rule.coverage_per_package} onChange={(e) => setRule(i, { coverage_per_package: e.target.value })} /></div><Button variant="ghost" size="sm" onClick={() => setTemplateForm((form) => ({ ...form, rules: form.rules.filter((_, idx) => idx !== i) }))}>Remove</Button></div><div className="mt-1 text-xs text-slate-400">Leave package coverage blank to use Material coverage_amount/coverage_unit, then supplier conversion as fallback.</div></div>)}<Button variant="outline" size="sm" onClick={() => setTemplateForm((form) => ({ ...form, rules: [...form.rules, blankRule()] }))}><Plus className="h-4 w-4" /> Add rule</Button></div>
-      <DialogFooter><Button variant="outline" onClick={() => setTemplateOpen(false)}>Cancel</Button><Button onClick={saveTemplate} disabled={!revisionTemplateId && !templateForm.name}><Layers className="h-4 w-4" /> {revisionTemplateId ? "Create Revision" : "Create Template"}</Button></DialogFooter>
+      <div className="space-y-3"><div className="font-semibold">Rules</div>{templateForm.rules.map((rule, i) => <div key={i} className="rounded border p-3"><div className="grid gap-2 lg:grid-cols-4"><div><Label className="text-xs">Rule name</Label><Input value={rule.name} onChange={(e) => setRule(i, { name: e.target.value })} /></div><div><Label className="text-xs">Measurement metric</Label><Select value={rule.metric_key} onValueChange={(v) => setRule(i, { metric_key: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{METRICS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent></Select></div><div><Label className="text-xs">Assembly</Label><Select value={rule.assembly_id || "none"} onValueChange={(v) => setRule(i, { assembly_id: v === "none" ? "" : v })}><SelectTrigger><SelectValue placeholder="Select Assembly" /></SelectTrigger><SelectContent><SelectItem value="none">Select Assembly</SelectItem>{assemblies.map((a) => <SelectItem key={a.id} value={a.id}>{a.name} · v{a.version}</SelectItem>)}</SelectContent></Select></div><div><Label className="text-xs">Quantity multiplier</Label><Input type="number" value={rule.quantity_factor} onChange={(e) => setRule(i, { quantity_factor: e.target.value })} /></div></div><div className="mt-2 flex flex-wrap items-end gap-4"><label className="flex items-center gap-2 text-sm"><Checkbox checked={rule.apply_waste} onCheckedChange={(v) => setRule(i, { apply_waste: !!v })} /> Apply waste to material items</label><div><Label className="text-xs">Assembly waste default %</Label><Input className="w-32" type="number" placeholder="inherit" value={rule.assembly_waste_percent} onChange={(e) => setRule(i, { assembly_waste_percent: e.target.value })} /></div><div><Label className="text-xs">Package coverage (optional)</Label><Input className="w-44" type="number" placeholder="blank = product catalog" value={rule.coverage_per_package} onChange={(e) => setRule(i, { coverage_per_package: e.target.value })} /></div><Button variant="ghost" size="sm" onClick={() => setTemplateForm((form) => ({ ...form, rules: form.rules.filter((_, idx) => idx !== i) }))}>Remove</Button></div><div className="mt-1 text-xs text-slate-400">Leave package coverage blank to use the product's coverage from the catalog (or the supplier conversion).</div></div>)}<Button variant="outline" size="sm" onClick={() => setTemplateForm((form) => ({ ...form, rules: [...form.rules, blankRule()] }))}><Plus className="h-4 w-4" /> Add rule</Button></div>
+      <DialogFooter><Button variant="outline" onClick={() => setTemplateOpen(false)}>Cancel</Button><Button onClick={saveTemplate} disabled={!revisionTemplateId && !templateForm.name}><Layers className="h-4 w-4" /> {revisionTemplateId ? "Save new version" : "Create Template"}</Button></DialogFooter>
     </DialogContent></Dialog>
   </div>;
 }

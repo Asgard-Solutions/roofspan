@@ -14,7 +14,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Plus, Trash2, Loader2, Search, Package, Layers, PenLine, Save, RefreshCw, FileCheck2, Star, Map } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Loader2, Search, Layers, PenLine, Save, RefreshCw, FileCheck2, FileText, Star, Map, MoreHorizontal, BookOpen, ListChecks } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import RoofTakeoffPanel from "@/components/estimate/RoofTakeoffPanel";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNITS = ["EA", "PC", "BDL", "SQ", "RL", "BX", "PL", "LF", "SF", "GAL", "PAIL"];
@@ -22,6 +24,8 @@ const UNITS = ["EA", "PC", "BDL", "SQ", "RL", "BX", "PL", "LF", "SF", "GAL", "PA
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const calcQty = (measured, waste) => r2((Number(measured) || 0) * (1 + (Number(waste) || 0) / 100));
 const unitCost = (l) => r2((Number(l.material_cost) || 0) + (Number(l.labor_cost) || 0) + (Number(l.equipment_cost) || 0) + (Number(l.subcontract_cost) || 0));
+
+const snap = (lines, taxRate, pb) => JSON.stringify({ lines, t: Number(taxRate) || 0, pb });
 
 function blankLine(over = {}) {
   return { description: "", unit: "EA", measured_quantity: 1, waste_percent: 0, material_cost: 0, labor_cost: 0,
@@ -46,6 +50,10 @@ export default function EstimateEditor() {
   const [priceBookId, setPriceBookId] = useState("");
   const [reprice, setReprice] = useState(null); // { price_book_id, lines }
   const [sitePlan, setSitePlan] = useState(null); // { available, revision_id, assets_updated_at }
+  const [saved, setSaved] = useState("");
+  const [details, setDetails] = useState(false);
+  const [pbOpen, setPbOpen] = useState(false);
+  const [proposals, setProposals] = useState([]);
 
   useEffect(() => { api.get("/estimating/price-books", { params: { active: true } }).then((r) => setPriceBooks(r.data)).catch(() => {}); }, []);
 
@@ -54,7 +62,7 @@ export default function EstimateEditor() {
       const { data } = await api.get(`/estimates/${id}`);
       setEst(data); setTaxRate(data.tax_rate || 0); setVersion(data.version);
       setPriceBookId(data.price_book_id || "");
-      setLines((data.items || []).map((i) => ({
+      const mapped = (data.items || []).map((i) => ({
         description: i.description, unit: i.unit || "EA", measured_quantity: i.measured_quantity ?? i.quantity,
         waste_percent: i.waste_percent || 0, material_cost: i.material_cost || 0, labor_cost: i.labor_cost || 0,
         equipment_cost: i.equipment_cost || 0, subcontract_cost: i.subcontract_cost || 0,
@@ -63,10 +71,17 @@ export default function EstimateEditor() {
         conversion_factor: i.conversion_factor, purchase_unit: i.purchase_unit,
         cost_source_supplier_name: i.cost_source_supplier_name, cost_source: i.cost_source,
         assembly_id: i.assembly_id, assembly_version: i.assembly_version, assembly_name: i.assembly_name,
-      })));
+      }));
+      setLines(mapped);
+      setSaved(snap(mapped, data.tax_rate || 0, data.price_book_id || ""));
     } catch (e) { toast.error(apiError(e)); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!est?.lead_id) return;
+    api.get("/quotes", { params: { lead_id: est.lead_id } }).then((r) => setProposals(r.data.filter((q) => q.estimate_id === id))).catch(() => {});
+  }, [est?.lead_id, id]);
 
   useEffect(() => {
     if (!est?.lead_id) { setSitePlan(null); return; }
@@ -99,6 +114,9 @@ export default function EstimateEditor() {
     return { est_cost, selling, gp, gm, tax, total: r2(selling + tax) };
   }, [lines, taxRate]);
 
+  const dirty = !!saved && snap(lines, taxRate, priceBookId) !== saved;
+  const editable = est ? est.status === "draft" || est.status === "sent" : false;
+
   const save = async () => {
     setBusy(true);
     try {
@@ -110,12 +128,14 @@ export default function EstimateEditor() {
           markup_percent: Number(l.markup_percent) || 0, selling_unit_price: Number(l.selling_unit_price) || 0 })) };
       const { data } = await api.put(`/estimates/${id}`, payload, { headers: { "If-Match": String(version) } });
       setEst(data); setVersion(data.version); toast.success("Estimate saved");
-      load();
-    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+      await load();
+      return true;
+    } catch (e) { toast.error(apiError(e)); return false; } finally { setBusy(false); }
   };
 
   const generateQuote = async () => {
-    try { const { data } = await api.post("/quotes", { estimate_id: id }); toast.success(`Quote ${data.number} created`); navigate(est.lead_id ? `/leads/${est.lead_id}` : "/"); }
+    if (dirty && editable && !(await save())) return;
+    try { const { data } = await api.post("/quotes", { estimate_id: id }); toast.success(`Proposal ${data.number} created`); navigate(`/quotes/${data.id}/proposal`); }
     catch (e) { toast.error(apiError(e)); }
   };
 
@@ -168,112 +188,153 @@ export default function EstimateEditor() {
   };
 
   if (!est) return <div className="p-8"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
-  const editable = est.status === "draft" || est.status === "sent";
+  const pbName = priceBooks.find((pb) => pb.id === priceBookId)?.name;
+  const latestProposal = proposals[0];
 
   return (
     <div>
-      <PageHeader title={`Estimate ${est.number}`} description="Catalog-backed pricing — cost, waste, markup and selling price." testid="page-estimate-editor" />
-      <div className="p-6 sm:p-8">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate(est.lead_id ? `/leads/${est.lead_id}` : "/")} data-testid="estimate-back"><ArrowLeft className="h-4 w-4" /> Back</Button>
+      <PageHeader title={`Estimate ${est.number}`} description="Measurement → Scope → Price → Proposal" testid="page-estimate-editor" />
+      <div className="space-y-5 p-6 sm:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate(est.lead_id ? `/leads/${est.lead_id}` : "/")} data-testid="estimate-back"><ArrowLeft className="h-4 w-4" /> Back to lead</Button>
           <div className="flex flex-wrap items-center gap-2">
-            {seeCost && priceBooks.length > 0 && (
-              <div className="flex items-center gap-1.5">
-                <Label className="text-xs text-slate-500">Price Book</Label>
-                <Select value={priceBookId || "none"} onValueChange={(v) => onPriceBookChange(v === "none" ? "" : v)}>
-                  <SelectTrigger className="h-9 w-44" data-testid="estimate-price-book"><SelectValue placeholder="None" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none" data-testid="price-book-none">None (manual)</SelectItem>
-                    {priceBooks.map((pb) => <SelectItem key={pb.id} value={pb.id} data-testid={`price-book-${pb.id}`}>{pb.name}{pb.is_default ? " ★" : ""}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {seeCost && <Button variant="outline" size="sm" onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="h-4 w-4" /> Refresh Current Costs</Button>}
-            {sitePlan?.available && <Button variant="outline" size="sm" onClick={downloadSitePlan} data-testid="estimate-site-plan-pdf"><Map className="h-4 w-4" /> Site Plan PDF</Button>}
-            <Button variant="outline" size="sm" onClick={generateQuote} data-testid="estimate-generate-quote"><FileCheck2 className="h-4 w-4" /> Generate Quote</Button>
-            <Button size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
+            {dirty && <span className="text-xs font-medium text-amber-600" data-testid="estimate-unsaved">Unsaved changes</span>}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" data-testid="estimate-more"><MoreHorizontal className="h-4 w-4" /> More</Button></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {seeCost && priceBooks.length > 0 && <DropdownMenuItem onClick={() => setPbOpen(true)} data-testid="estimate-price-book-open"><BookOpen className="mr-2 h-4 w-4" /> Change price book</DropdownMenuItem>}
+                {seeCost && <DropdownMenuItem onClick={openRefresh} data-testid="estimate-cost-refresh"><RefreshCw className="mr-2 h-4 w-4" /> Refresh current costs</DropdownMenuItem>}
+                {sitePlan?.available && <DropdownMenuItem onClick={downloadSitePlan} data-testid="estimate-site-plan-pdf"><Map className="mr-2 h-4 w-4" /> Site plan PDF</DropdownMenuItem>}
+                {!seeCost && !sitePlan?.available && <DropdownMenuItem disabled>No extra options</DropdownMenuItem>}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="outline" size="sm" onClick={save} disabled={busy || !editable} data-testid="estimate-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
           </div>
         </div>
 
-        {seeCost && est.margin_warnings?.enabled && est.margin_warnings.overall_below && (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="estimate-margin-warning">
-            <span className="font-medium">Margin below target.</span>
-            <span>Actual: {Number(est.margin_warnings.overall_margin_percent).toFixed(1)}% · Target: {Number(est.margin_warnings.target_minimum_margin).toFixed(1)}%
-            {est.margin_warnings.below_lines?.length ? ` · ${est.margin_warnings.below_lines.length} line(s) below target.` : ""}</span>
-          </div>
-        )}
+        <RoofTakeoffPanel est={est} canCalculate={seeCost && editable} dirty={dirty} onApplied={load} />
 
-        <div className="mb-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button variant="outline" size="sm" data-testid="estimate-add-item"><Plus className="h-4 w-4" /> Add Item</Button></DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={() => setProdOpen(true)} data-testid="add-from-catalog"><Search className="mr-2 h-4 w-4" /> Search Product Catalog</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setAsmOpen(true)} data-testid="add-assembly"><Layers className="mr-2 h-4 w-4" /> Add Assembly</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setLines((ls) => [...ls, blankLine()])} data-testid="add-custom-line"><PenLine className="mr-2 h-4 w-4" /> Add Custom Line</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        <div className="overflow-x-auto rounded-md border border-border bg-white">
-          <Table data-testid="estimate-lines-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Description</TableHead><TableHead className="w-20">Measured</TableHead><TableHead className="w-16">UOM</TableHead>
-                <TableHead className="w-16">Waste %</TableHead><TableHead className="w-20 text-right">Qty</TableHead>
-                {seeCost && <TableHead className="w-24 text-right">Unit Cost</TableHead>}
-                {seeCost && <TableHead className="w-20 text-right">Markup %</TableHead>}
-                <TableHead className="w-24 text-right">Sell Price</TableHead>
-                <TableHead className="w-24 text-right">Line Total</TableHead><TableHead className="w-8" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {lines.map((l, i) => {
-                const q = calcQty(l.measured_quantity, l.waste_percent);
-                const uc = unitCost(l);
-                return (
-                  <TableRow key={i} data-testid={`estimate-line-${i}`}>
-                    <TableCell>
-                      <Input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} className="h-8" data-testid={`el-desc-${i}`} />
-                      {(l.cost_source_supplier_name || l.assembly_name) && <div className="mt-0.5 text-[11px] text-slate-400">{l.assembly_name ? `${l.assembly_name} · ` : ""}{l.cost_source_supplier_name || ""}{l.cost_source ? ` (${l.cost_source})` : ""}</div>}
-                    </TableCell>
-                    <TableCell><Input type="number" value={l.measured_quantity} onChange={(e) => setLine(i, { measured_quantity: e.target.value })} className="h-8" data-testid={`el-measured-${i}`} /></TableCell>
-                    <TableCell>
-                      <Select value={l.unit} onValueChange={(v) => setLine(i, { unit: v })}><SelectTrigger className="h-8" data-testid={`el-unit-${i}`}><SelectValue /></SelectTrigger>
-                        <SelectContent>{[...new Set([l.unit, ...UNITS])].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select>
-                    </TableCell>
-                    <TableCell><Input type="number" value={l.waste_percent} onChange={(e) => setLine(i, { waste_percent: e.target.value })} className="h-8" data-testid={`el-waste-${i}`} /></TableCell>
-                    <TableCell className="text-right tabular-nums" data-testid={`el-qty-${i}`}>{q}</TableCell>
-                    {seeCost && <TableCell><Input type="number" value={l.material_cost} onChange={(e) => setLine(i, { material_cost: e.target.value })} className="h-8 text-right" data-testid={`el-cost-${i}`} title="Material cost/unit" /></TableCell>}
-                    {seeCost && <TableCell><Input type="number" value={l.markup_percent} onChange={(e) => onMarkup(i, e.target.value)} className="h-8 text-right" data-testid={`el-markup-${i}`} /></TableCell>}
-                    <TableCell><Input type="number" value={l.selling_unit_price} onChange={(e) => onSell(i, e.target.value)} className="h-8 text-right" data-testid={`el-sell-${i}`} /></TableCell>
-                    <TableCell className="text-right tabular-nums font-medium" data-testid={`el-total-${i}`}>{money(q * (Number(l.selling_unit_price) || 0))}</TableCell>
-                    <TableCell><button onClick={() => removeLine(i)} className="text-slate-300 hover:text-red-500" data-testid={`el-remove-${i}`}><Trash2 className="h-4 w-4" /></button></TableCell>
-                  </TableRow>
-                );
-              })}
-              {lines.length === 0 && <TableRow><TableCell colSpan={seeCost ? 10 : 8} className="py-8 text-center text-sm text-slate-400">No line items. Use "Add Item" to begin.</TableCell></TableRow>}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:justify-end">
-          <div className="w-full max-w-sm rounded-md border border-border bg-white p-4 text-sm" data-testid="estimate-summary">
-            {seeCost && <>
-              <Row label="Estimated Cost" value={money(totals.est_cost)} testid="summary-cost" />
-              <Row label="Gross Profit" value={money(totals.gp)} testid="summary-gp" />
-              <Row label="Gross Margin" value={`${totals.gm}%`} testid="summary-gm" />
-              <div className="my-2 border-t border-border" />
-            </>}
-            <Row label="Selling Price" value={money(totals.selling)} testid="summary-selling" bold />
-            <div className="flex items-center justify-between py-1">
-              <span className="flex items-center gap-2 text-slate-500">Tax rate %<Input type="number" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} className="h-7 w-20" data-testid="estimate-taxrate" /></span>
-              <span className="tabular-nums">{money(totals.tax)}</span>
+        <section className="rounded-md border border-border bg-white" data-testid="estimate-scope-section">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
+            <div className="flex items-center gap-2"><ListChecks className="h-4 w-4 text-orange-600" /><h2 className="text-sm font-semibold text-slate-900">2. Scope &amp; price</h2>
+              {seeCost && pbName && <span className="text-xs text-slate-500" data-testid="estimate-price-book-name">Prices from {pbName}</span>}</div>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-slate-600"><Switch checked={details} onCheckedChange={setDetails} data-testid="estimate-details-toggle" /> Show cost &amp; waste details</label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={!editable} data-testid="estimate-add-item"><Plus className="h-4 w-4" /> Add item</Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setProdOpen(true)} data-testid="add-from-catalog"><Search className="mr-2 h-4 w-4" /> From product catalog</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setAsmOpen(true)} data-testid="add-assembly"><Layers className="mr-2 h-4 w-4" /> Assembly (bundle of items)</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setLines((ls) => [...ls, blankLine()])} data-testid="add-custom-line"><PenLine className="mr-2 h-4 w-4" /> Custom line</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
-            <Row label="Total" value={money(totals.total)} testid="summary-total" bold />
           </div>
-        </div>
+
+          {seeCost && est.margin_warnings?.enabled && est.margin_warnings.overall_below && (
+            <div className="mx-5 mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-testid="estimate-margin-warning">
+              <span className="font-medium">Margin is below your target.</span>
+              <span>Actual: {Number(est.margin_warnings.overall_margin_percent).toFixed(1)}% · Target: {Number(est.margin_warnings.target_minimum_margin).toFixed(1)}%
+              {est.margin_warnings.below_lines?.length ? ` · ${est.margin_warnings.below_lines.length} line(s) below target.` : ""}</span>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <Table data-testid="estimate-lines-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Item</TableHead>
+                  {details && <><TableHead className="w-20">Measured</TableHead><TableHead className="w-16">Waste %</TableHead></>}
+                  <TableHead className="w-24 text-right">Quantity</TableHead><TableHead className="w-20">Unit</TableHead>
+                  {details && seeCost && <><TableHead className="w-24 text-right">Unit Cost</TableHead><TableHead className="w-20 text-right">Markup %</TableHead></>}
+                  <TableHead className="w-28 text-right">Price</TableHead>
+                  <TableHead className="w-28 text-right">Total</TableHead><TableHead className="w-8" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {lines.map((l, i) => {
+                  const q = calcQty(l.measured_quantity, l.waste_percent);
+                  const w = Number(l.waste_percent) || 0;
+                  return (
+                    <TableRow key={i} data-testid={`estimate-line-${i}`}>
+                      <TableCell>
+                        <Input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} className="h-8" data-testid={`el-desc-${i}`} />
+                        {l.assembly_name && <div className="mt-0.5 text-[11px] text-slate-400">Part of {l.assembly_name}</div>}
+                        {details && l.cost_source_supplier_name && <div className="text-[11px] text-slate-400">{l.cost_source_supplier_name}{l.cost_source ? ` (${l.cost_source})` : ""}</div>}
+                      </TableCell>
+                      {details && <>
+                        <TableCell><Input type="number" value={l.measured_quantity} onChange={(e) => setLine(i, { measured_quantity: e.target.value })} className="h-8" data-testid={`el-measured-${i}`} /></TableCell>
+                        <TableCell><Input type="number" value={l.waste_percent} onChange={(e) => setLine(i, { waste_percent: e.target.value })} className="h-8" data-testid={`el-waste-${i}`} /></TableCell>
+                      </>}
+                      <TableCell className="text-right">
+                        {!details && w === 0
+                          ? <Input type="number" value={l.measured_quantity} onChange={(e) => setLine(i, { measured_quantity: e.target.value })} className="h-8 text-right" data-testid={`el-qty-input-${i}`} />
+                          : <div className="tabular-nums" data-testid={`el-qty-${i}`}>{q}</div>}
+                        {!details && w > 0 && <div className="text-[11px] text-slate-400" data-testid={`el-qty-waste-${i}`}>incl. {w}% waste</div>}
+                      </TableCell>
+                      <TableCell>
+                        <Select value={l.unit} onValueChange={(v) => setLine(i, { unit: v })}><SelectTrigger className="h-8" data-testid={`el-unit-${i}`}><SelectValue /></SelectTrigger>
+                          <SelectContent>{[...new Set([l.unit, ...UNITS])].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select>
+                      </TableCell>
+                      {details && seeCost && <>
+                        <TableCell><Input type="number" value={l.material_cost} onChange={(e) => setLine(i, { material_cost: e.target.value })} className="h-8 text-right" data-testid={`el-cost-${i}`} title="Material cost/unit" /></TableCell>
+                        <TableCell><Input type="number" value={l.markup_percent} onChange={(e) => onMarkup(i, e.target.value)} className="h-8 text-right" data-testid={`el-markup-${i}`} /></TableCell>
+                      </>}
+                      <TableCell><Input type="number" value={l.selling_unit_price} onChange={(e) => onSell(i, e.target.value)} className="h-8 text-right" data-testid={`el-sell-${i}`} /></TableCell>
+                      <TableCell className="text-right tabular-nums font-medium" data-testid={`el-total-${i}`}>{money(q * (Number(l.selling_unit_price) || 0))}</TableCell>
+                      <TableCell><button onClick={() => removeLine(i)} className="text-slate-300 hover:text-red-500" data-testid={`el-remove-${i}`}><Trash2 className="h-4 w-4" /></button></TableCell>
+                    </TableRow>
+                  );
+                })}
+                {lines.length === 0 && <TableRow><TableCell colSpan={10} className="py-8 text-center text-sm text-slate-400">No items yet. Calculate materials from the roof measurements above, or use "Add item".</TableCell></TableRow>}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex justify-end border-t border-border p-5">
+            <div className="w-full max-w-sm text-sm" data-testid="estimate-summary">
+              {details && seeCost && <>
+                <Row label="Estimated Cost" value={money(totals.est_cost)} testid="summary-cost" />
+                <Row label="Gross Profit" value={money(totals.gp)} testid="summary-gp" />
+                <Row label="Gross Margin" value={`${totals.gm}%`} testid="summary-gm" />
+                <div className="my-2 border-t border-border" />
+              </>}
+              <Row label="Selling Price" value={money(totals.selling)} testid="summary-selling" bold />
+              <div className="flex items-center justify-between py-1">
+                <span className="flex items-center gap-2 text-slate-500">Tax rate %<Input type="number" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} className="h-7 w-20" data-testid="estimate-taxrate" /></span>
+                <span className="tabular-nums">{money(totals.tax)}</span>
+              </div>
+              <Row label="Total" value={money(totals.total)} testid="summary-total" bold />
+            </div>
+          </div>
+        </section>
+
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-orange-200 bg-orange-50 px-5 py-4" data-testid="estimate-proposal-section">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><FileCheck2 className="h-4 w-4 text-orange-600" /> 3. Proposal</div>
+            <div className="text-xs text-slate-600" data-testid="estimate-proposal-hint">
+              {latestProposal ? <>Proposal {latestProposal.number} ({latestProposal.status}) was created from this estimate. Changes made since then need a new proposal.</> : lines.length ? (dirty ? "Your changes are saved first, then the proposal opens." : "Ready when you are. The proposal opens for review, sharing and PDF.") : "Add items before creating the proposal."}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {latestProposal && <Button variant="outline" onClick={() => navigate(`/quotes/${latestProposal.id}/proposal`)} data-testid="estimate-open-proposal"><FileText className="h-4 w-4" /> Open proposal</Button>}
+            <Button onClick={generateQuote} disabled={busy || !lines.length} data-testid="estimate-generate-quote"><FileCheck2 className="h-4 w-4" /> {latestProposal ? "Create new proposal" : "Create proposal"}</Button>
+          </div>
+        </section>
       </div>
+
+      <Dialog open={pbOpen} onOpenChange={setPbOpen}>
+        <DialogContent className="max-w-sm" data-testid="price-book-dialog">
+          <DialogHeader><DialogTitle>Price book</DialogTitle><DialogDescription>Selling prices come from this price book. You'll see any price changes before they apply.</DialogDescription></DialogHeader>
+          <Select value={priceBookId || "none"} onValueChange={(v) => { setPbOpen(false); onPriceBookChange(v === "none" ? "" : v); }}>
+            <SelectTrigger data-testid="estimate-price-book"><SelectValue placeholder="None" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none" data-testid="price-book-none">None (manual)</SelectItem>
+              {priceBooks.map((pb) => <SelectItem key={pb.id} value={pb.id} data-testid={`price-book-${pb.id}`}>{pb.name}{pb.is_default ? " ★" : ""}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </DialogContent>
+      </Dialog>
 
       <ProductPicker open={prodOpen} onOpenChange={setProdOpen} seeCost={seeCost} onPick={addProduct} />
       <AssemblyPicker open={asmOpen} onOpenChange={setAsmOpen} onAdd={addAssemblyLines} />
