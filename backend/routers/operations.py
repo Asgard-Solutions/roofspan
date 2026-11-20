@@ -40,44 +40,46 @@ def _mat_out(m: Material) -> MaterialOut:
     return MaterialOut(
         id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
         active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
-        low_stock=(m.quantity_on_hand <= m.reorder_threshold),
+        low_stock=inv_core.is_low_stock(m.quantity_on_hand, m.reorder_threshold),  # no reservation data here
         vendor=m.vendor, abc_item_number=m.abc_item_number,
     )
 
 
-async def _mat_list_item(db: AsyncSession, m: Material) -> MaterialListItemOut:
+async def _mat_list_item(db: AsyncSession, m: Material, pf: dict | None = None, qty: dict | None = None) -> MaterialListItemOut:
+    # pf/qty: optional batch prefetch (list endpoint); single-item callers fall back to per-row queries.
     from integrations.supplier_connectors import capabilities_for  # noqa: F401
-    qty = await inv_core.compute_quantities(db, m)
-    pref = await inv_core.preferred_supplier_material(db, m.id)
+    qty = qty if qty is not None else await inv_core.compute_quantities(db, m)
+    _sup = (lambda sid: pf["names"].get(sid)) if pf is not None else None
+    pref = pf["pref"].get(m.id) if pf is not None else await inv_core.preferred_supplier_material(db, m.id)
     pref_name = pref_provider = pref_status = pref_updated = None
     if pref:
         if pref.supplier_id:
-            s = await db.get(Supplier, pref.supplier_id)
+            s = _sup(pref.supplier_id) if _sup else await db.get(Supplier, pref.supplier_id)
             pref_name = s.name if s else None
             pref_provider = (s.integration_provider if s else None) or pref.integration_provider
         else:
             pref_provider = pref.integration_provider
         pref_status = pref.price_status or ("manual" if not pref_provider or pref_provider == "manual" else None)
         pref_updated = pref.price_updated_at
-    best_sm = await inv_core.best_known_supplier_material(db, m.id)
+    best_sm = pf["best"].get(m.id) if pf is not None else await inv_core.best_known_supplier_material(db, m.id)
     best = best_sm.current_cost if best_sm else None
     best_name = best_provider = best_status = best_updated = None
     if best_sm:
         if best_sm.supplier_id:
-            bs = await db.get(Supplier, best_sm.supplier_id)
+            bs = _sup(best_sm.supplier_id) if _sup else await db.get(Supplier, best_sm.supplier_id)
             best_name = bs.name if bs else None
             best_provider = (bs.integration_provider if bs else None) or best_sm.integration_provider
         else:
             best_provider = best_sm.integration_provider
         best_status = best_sm.price_status or ("manual" if not best_provider or best_provider == "manual" else None)
         best_updated = best_sm.price_updated_at
-    count = await inv_core.supplier_material_count(db, m.id)
+    count = pf["count"].get(m.id, 0) if pf is not None else await inv_core.supplier_material_count(db, m.id)
     from services import pricing as pricing_svc
-    pr = await pricing_svc.compute_material_pricing(db, m)
+    pr = await pricing_svc.compute_material_pricing(db, m, pf)
     return MaterialListItemOut(
         id=str(m.id), name=m.name, sku=m.sku, category=m.category, unit=m.unit, description=m.description,
         active=m.active, quantity_on_hand=m.quantity_on_hand, reorder_threshold=m.reorder_threshold,
-        low_stock=(qty["available"] <= m.reorder_threshold),
+        low_stock=inv_core.is_low_stock(qty["available"], m.reorder_threshold),
         vendor=m.vendor, abc_item_number=m.abc_item_number,
         manufacturer=m.manufacturer, brand=m.brand, status=("active" if m.active else "inactive"),
         on_hand=qty["on_hand"], reserved=qty["reserved"], available=qty["available"],
@@ -123,12 +125,13 @@ async def reorder_suggestions(user: User = Depends(get_current_user), db: AsyncS
     """Materials whose projected quantity falls below the reorder threshold, after accounting for
     inbound On Order. Recommends a replenishment quantity; never auto-orders."""
     mats = (await db.execute(select(Material).where(Material.active.is_(True)))).scalars().all()
+    qs = await inv_core.batch_quantities(db, mats)
     out = []
     for m in mats:
-        q = await inv_core.compute_quantities(db, m)
+        q = qs[m.id]
         threshold = float(m.reorder_threshold or 0)
         # Do not suggest if inbound already covers projected need
-        if q["projected"] >= threshold or threshold <= 0:
+        if not inv_core.reorder_point_reached(q["projected"], threshold):
             continue
         pref = await inv_core.preferred_supplier_material(db, m.id)
         pref_name = None
@@ -182,7 +185,10 @@ async def list_materials(low_stock: bool | None = Query(None), q: str | None = Q
             return []
         stmt = stmt.where(Material.id.in_(list(ids)))
     rows = (await db.execute(stmt)).scalars().all()
-    out = [_strip_cost_for_sales(await _mat_list_item(db, m), user) for m in rows]
+    from services import pricing as pricing_svc
+    pf = await pricing_svc.pricing_prefetch(db, [m.id for m in rows])  # batch: same results, ~10 queries total
+    qs = await inv_core.batch_quantities(db, rows)
+    out = [_strip_cost_for_sales(await _mat_list_item(db, m, pf, qs[m.id]), user) for m in rows]
     if low_stock:
         out = [m for m in out if m.low_stock]
     return out

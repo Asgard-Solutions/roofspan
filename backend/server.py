@@ -142,6 +142,9 @@ if _abc_mock_enabled():
 # remains the outermost middleware (guard 403 responses still receive CORS headers).
 app.add_middleware(SubscriptionGuardMiddleware)
 
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=2048)  # large lists (materials, POs) shrink ~10x on the wire
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

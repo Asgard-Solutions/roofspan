@@ -552,7 +552,11 @@ export default function Inventory() {
       </Dialog>
 
       <PODialog open={poOpen} onOpenChange={setPoOpen} onCreated={load} />
-      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={() => { loadPos(); loadCounts(); }} />
+      <ReceiveDialog open={recvOpen} onOpenChange={setRecvOpen} po={recvPo} onReceived={() => {
+        // update the received PO row right away, then refresh counts/list in the background
+        if (recvPo) api.get(`/purchase-orders/${recvPo.id}`).then((r) => setPos((ps) => ps.map((p) => (p.id === r.data.id ? r.data : p)))).catch(() => {});
+        loadCounts(); loadPos();
+      }} />
       <AbcOrderPanel open={abcOpen} onOpenChange={setAbcOpen} po={abcPo} onChanged={load} />
     </div>
   );

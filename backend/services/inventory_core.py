@@ -157,3 +157,65 @@ async def preferred_supplier_material(db: AsyncSession, material_id) -> Supplier
                                        SupplierMaterial.is_preferred.is_(True),
                                        SupplierMaterial.active.is_(True))
     )).scalars().first()
+
+
+# ---------------- Shared threshold rules (one definition for every screen) ----------------
+def is_low_stock(available, reorder_threshold) -> bool:
+    """Low stock: a reorder point is configured (> 0) and Available (On Hand - Reserved) is at or below it.
+    A reorder point of 0 means no threshold — never Low by itself (job shortages are handled separately)."""
+    thr = float(reorder_threshold or 0)
+    return thr > 0 and float(available or 0) <= thr
+
+
+def reorder_point_reached(projected, reorder_threshold) -> bool:
+    """Needs ordering (reorder part): a reorder point is configured and Projected (On Hand + On Order - Required) <= it."""
+    thr = float(reorder_threshold or 0)
+    return thr > 0 and float(projected or 0) <= thr
+
+
+async def batch_quantities(db: AsyncSession, materials) -> dict:
+    """compute_quantities for many materials in 3 grouped queries (identical formulas and rounding)."""
+    ids = [m.id for m in materials]
+    if not ids:
+        return {}
+    reserved = {r[0]: abs(float(r[1] or 0)) for r in (await db.execute(
+        select(InventoryTxn.material_id, func.coalesce(func.sum(InventoryTxn.delta), 0))
+        .where(InventoryTxn.material_id.in_(ids), InventoryTxn.reason == "job_reservation")
+        .group_by(InventoryTxn.material_id))).all()}
+    required = {r[0]: float(r[1] or 0) for r in (await db.execute(
+        select(JobMaterial.material_id, func.coalesce(func.sum(JobMaterial.planned_quantity), 0))
+        .select_from(JobMaterial).join(Job, Job.id == JobMaterial.job_id)
+        .where(JobMaterial.material_id.in_(ids), Job.status.notin_(_ACTIVE_JOB_STATUSES_EXCLUDED))
+        .group_by(JobMaterial.material_id))).all()}
+    on_order = {r[0]: float(r[1] or 0) for r in (await db.execute(
+        select(POLineItem.material_id, func.coalesce(func.sum(func.greatest(POLineItem.quantity - POLineItem.received_quantity, 0)), 0))
+        .select_from(POLineItem).join(PurchaseOrder, PurchaseOrder.id == POLineItem.po_id)
+        .where(POLineItem.material_id.in_(ids), PurchaseOrder.status.in_(_OPEN_PO_STATUSES))
+        .group_by(POLineItem.material_id))).all()}
+    out = {}
+    for m in materials:
+        on_hand = float(m.quantity_on_hand or 0)
+        rs, rq, oo = reserved.get(m.id, 0.0), required.get(m.id, 0.0), on_order.get(m.id, 0.0)
+        out[m.id] = {"on_hand": round(on_hand, 3), "reserved": round(rs, 3), "available": round(on_hand - rs, 3),
+                     "on_order": round(oo, 3), "required": round(rq, 3), "projected": round(on_hand + oo - rq, 3)}
+    return out
+
+
+async def batch_supplier_maps(db: AsyncSession, material_ids) -> dict:
+    """Preferred mapping, best-known (lowest cost) mapping, active mapping count and supplier names, in 2 queries."""
+    ids = list(material_ids)
+    pref, best, count = {}, {}, {}
+    if not ids:
+        return {"pref": pref, "best": best, "count": count, "names": {}}
+    sms = (await db.execute(select(SupplierMaterial).where(SupplierMaterial.material_id.in_(ids), SupplierMaterial.active.is_(True)))).scalars().all()
+    for sm in sms:
+        count[sm.material_id] = count.get(sm.material_id, 0) + 1
+        if sm.is_preferred and sm.material_id not in pref:
+            pref[sm.material_id] = sm
+        if sm.current_cost is not None:
+            cur = best.get(sm.material_id)
+            if cur is None or sm.current_cost < cur.current_cost:
+                best[sm.material_id] = sm
+    sids = {sm.supplier_id for sm in sms if sm.supplier_id}
+    names = {s.id: s for s in (await db.execute(select(Supplier).where(Supplier.id.in_(sids)))).scalars().all()} if sids else {}
+    return {"pref": pref, "best": best, "count": count, "names": names}
