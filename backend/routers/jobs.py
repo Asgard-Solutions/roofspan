@@ -102,7 +102,35 @@ async def list_jobs(customer_id: str | None = Query(None), status: str | None = 
         stmt = stmt.where(Job.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
     umap = await _user_name_map(db, [j.assigned_user_id for j in rows])
-    return [_out(j, user_name=umap.get(j.assigned_user_id)) for j in rows]
+    cids = {j.customer_id for j in rows if j.customer_id}
+    pids = {j.property_id for j in rows if j.property_id}
+    cmap = {c.id: c.name for c in (await db.execute(select(Customer).where(Customer.id.in_(cids)))).scalars().all()} if cids else {}
+    pmap = {p.id: p.formatted_address for p in (await db.execute(select(Property).where(Property.id.in_(pids)))).scalars().all()} if pids else {}
+    by_job = {}
+    if rows:
+        for jm in (await db.execute(select(JobMaterial).where(JobMaterial.job_id.in_([j.id for j in rows])))).scalars().all():
+            by_job.setdefault(jm.job_id, []).append(jm)
+    out = []
+    for j in rows:
+        o = _out(j, user_name=umap.get(j.assigned_user_id))
+        o.scheduled_start = j.scheduled_start
+        o.assigned_to = j.assigned_to
+        o.customer_name = cmap.get(j.customer_id)
+        o.property_address = pmap.get(j.property_id)
+        o.material_status = await _material_status(db, j, by_job.get(j.id, []))
+        out.append(o)
+    return out
+
+
+async def _material_status(db: AsyncSession, job: Job, jms: list) -> str:
+    if not jms:
+        return "none"
+    if job.status in ("completed", "cancelled"):
+        return "ready"
+    for jm in jms:
+        if (await jp.rollup(db, jm)).get("shortage", 0) > 0:
+            return "short"
+    return "ready"
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)

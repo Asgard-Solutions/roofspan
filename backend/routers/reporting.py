@@ -23,7 +23,13 @@ dashboard_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 async def purchasing_dashboard(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # Operational counts visible to all internal roles; cost/value figures only for management roles.
     include_cost = user.role in MANAGE_ROLES
-    return await dash.purchasing_dashboard(db, include_cost)
+    return await dash.purchasing_dashboard(db, include_cost, only_user_id=user.id if user.role == "sales" else None)
+
+
+@dashboard_router.get("/attention")
+async def attention_dashboard(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Home screen: today's work and exceptions. Sales see only their own leads/jobs; money only for management.
+    return await dash.attention(db, user, include_money=user.role in MANAGE_ROLES)
 
 
 inv_report_router = APIRouter(prefix="/api/reports/inventory", tags=["reports-inventory"])

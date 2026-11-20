@@ -619,7 +619,7 @@ export default function MapView() {
       <div className="flex flex-1 overflow-hidden">
         <div className="hidden w-80 shrink-0 flex-col border-r border-border bg-white md:flex" data-testid="territory-panel">
           <div className="border-b border-border px-5 py-4">
-            <h1 className="font-heading text-lg font-bold text-slate-900">Property Acquisition</h1>
+            <h1 className="font-heading text-lg font-bold text-slate-900">Territories & Canvassing</h1>
             <p className="text-xs text-slate-500">Territories, imports & properties</p>
           </div>
 

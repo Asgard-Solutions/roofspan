@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -9,80 +9,57 @@ import ChangePasswordDialog from "@/components/ChangePasswordDialog";
 
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import {
-  LayoutDashboard, Users2, Map, Contact, Hammer, Boxes, Wallet, BarChart3,
-  Settings2, LogOut, Menu, ShieldCheck, ScrollText, KeyRound, DatabaseBackup, CreditCard, Truck, Layers, BookOpen, Calculator,
+  Home, Map, Contact, Hammer, Boxes, Wallet, BarChart3, Settings2, LogOut, Menu, KeyRound,
 } from "lucide-react";
 
 const APPICON = "/brand/roofspan-appicon.png";
 const WORDMARK_LIGHT = "/brand/roofspan-wordmark-light.webp";
 
 const MAIN_NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
-  { to: "/leads", label: "Leads", icon: Contact, testid: "nav-leads" },
-  { to: "/map", label: "Map", icon: Map, testid: "nav-map" },
-  { to: "/customers", label: "Customers", icon: Users2, testid: "nav-customers" },
-  { to: "/jobs", label: "Jobs", icon: Hammer, testid: "nav-jobs" },
-  { to: "/inventory", label: "Inventory", icon: Boxes, testid: "nav-inventory" },
-  { to: "/suppliers", label: "Suppliers", icon: Truck, testid: "nav-suppliers" },
-  { to: "/finance", label: "Finance", icon: Wallet, testid: "nav-finance" },
-  { to: "/reports", label: "Reports", icon: BarChart3, testid: "nav-reports" },
+  { to: "/", label: "Home", icon: Home, testid: "nav-dashboard", match: ["/"] },
+  { to: "/leads", label: "Sales", icon: Contact, testid: "nav-sales", match: ["/leads", "/customers", "/sales", "/estimates", "/quotes"] },
+  { to: "/map", label: "Map", icon: Map, testid: "nav-map", match: ["/map"] },
+  { to: "/jobs", label: "Jobs", icon: Hammer, testid: "nav-jobs", match: ["/jobs"] },
+  { to: "/inventory", label: "Materials", icon: Boxes, testid: "nav-materials", match: ["/inventory", "/suppliers", "/purchase-orders"] },
+  { to: "/billing", label: "Billing", icon: Wallet, testid: "nav-billing", match: ["/billing"], manage: true },
+  { to: "/reports", label: "Reports", icon: BarChart3, testid: "nav-reports", match: ["/reports"] },
 ];
 
-const ESTIMATING_NAV = [
-  { to: "/estimating/takeoff", label: "Roof Takeoff", icon: Calculator, testid: "nav-takeoff" },
-  { to: "/estimating/assemblies", label: "Assemblies", icon: Layers, testid: "nav-assemblies" },
-  { to: "/estimating/price-books", label: "Price Books", icon: BookOpen, testid: "nav-price-books" },
-];
+const SETTINGS_MATCH = ["/settings", "/admin", "/estimating"];
 
-const ADMIN_NAV = [
-  { to: "/admin/users", label: "Users", icon: Users2, testid: "nav-admin-users" },
-  { to: "/admin/roles", label: "Roles", icon: ShieldCheck, testid: "nav-admin-roles" },
-  { to: "/admin/audit", label: "Audit Log", icon: ScrollText, testid: "nav-admin-audit" },
-  { to: "/admin/backups", label: "Backups", icon: DatabaseBackup, testid: "nav-admin-backups" },
-  { to: "/admin/subscription", label: "Subscription", icon: CreditCard, testid: "nav-admin-subscription" },
-  { to: "/admin/settings", label: "Settings", icon: Settings2, testid: "nav-admin-settings" },
-];
+const isOn = (path, prefixes) => prefixes.some((p) => (p === "/" ? path === "/" : path === p || path.startsWith(`${p}/`)));
 
-const linkClass = ({ isActive }) =>
+const linkClass = (active) =>
   cn(
     "flex items-center gap-3 border-l-4 px-4 py-2.5 text-sm font-medium transition-colors",
-    isActive
+    active
       ? "border-orange-600 bg-slate-100 text-slate-900"
       : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
   );
 
-function NavContent({ onNavigate, isSensitive, isManage }) {
+function NavContent({ onNavigate, isManage }) {
+  const { pathname } = useLocation();
   return (
     <nav className="flex flex-col gap-0.5 py-2" data-testid="sidebar-nav">
-      {MAIN_NAV.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.end} className={linkClass} onClick={onNavigate} data-testid={item.testid}>
+      {MAIN_NAV.filter((i) => !i.manage || isManage).map((item) => (
+        <Link key={item.to} to={item.to} className={linkClass(isOn(pathname, item.match))} onClick={onNavigate} data-testid={item.testid}>
           <item.icon className="h-4 w-4" />
           {item.label}
-        </NavLink>
+        </Link>
       ))}
-      {isManage && (
-        <>
-          <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Estimating</div>
-          {ESTIMATING_NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate} data-testid={item.testid}>
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
-          ))}
-        </>
-      )}
-      {isSensitive && (
-        <>
-          <div className="mt-4 px-4 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Administration</div>
-          {ADMIN_NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} className={linkClass} onClick={onNavigate} data-testid={item.testid}>
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
-          ))}
-        </>
-      )}
     </nav>
+  );
+}
+
+function SettingsLink({ onNavigate, isManage }) {
+  const { pathname } = useLocation();
+  if (!isManage) return null;
+  return (
+    <div className="border-t border-border">
+      <Link to="/settings" className={linkClass(isOn(pathname, SETTINGS_MATCH))} onClick={onNavigate} data-testid="nav-settings">
+        <Settings2 className="h-4 w-4" /> Settings
+      </Link>
+    </div>
   );
 }
 
@@ -99,7 +76,7 @@ function Brand() {
 }
 
 export default function AppShell() {
-  const { user, logout, isSensitive } = useAuth();
+  const { user, logout } = useAuth();
   const isManage = ["owner", "administrator", "office"].includes(user?.role);
   const [open, setOpen] = useState(false);
   const [appVersion, setAppVersion] = useState("");
@@ -141,7 +118,8 @@ export default function AppShell() {
     <div className="App flex min-h-screen bg-background">
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-border bg-white md:flex" data-testid="desktop-sidebar">
         <Brand />
-        <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} isManage={isManage} /></div>
+        <div className="flex-1 overflow-y-auto"><NavContent isManage={isManage} /></div>
+        <SettingsLink isManage={isManage} />
         <UserFooter />
       </aside>
 
@@ -153,7 +131,8 @@ export default function AppShell() {
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0">
             <Brand />
-            <div className="flex-1 overflow-y-auto"><NavContent isSensitive={isSensitive} isManage={isManage} onNavigate={() => setOpen(false)} /></div>
+            <div className="flex-1 overflow-y-auto"><NavContent isManage={isManage} onNavigate={() => setOpen(false)} /></div>
+            <SettingsLink isManage={isManage} onNavigate={() => setOpen(false)} />
             <UserFooter />
           </SheetContent>
         </Sheet>

@@ -1,0 +1,48 @@
+{
+  "summary": "UX Round 1 (nav/Home/Jobs/Billing/Sales Quotes/Settings hub/ABC Advanced/wording). Backend: new test_ux_round1_nav.py, 13/13 pass. It covers /api/dashboard/attention shape, money totals matching issued invoices, proposals matching sent quotes, sales scoping (money=null, jobs count matches sales' own jobs), 401 without a token, the new /api/jobs fields (scheduled_start, assigned_to, customer_name, property_address, material_status in ready/short/none), sales seeing only assigned jobs, and reads behind the moved screens. Frontend (owner and sales, desktop and mobile): almost every item in the request works. 1) The owner sidebar shows exactly Home/Sales/Map/Jobs/Materials/Billing/Reports plus Settings at the bottom, with no Estimating/Administration sections. The mobile sheet shows the same items. 2) Sales is highlighted on /leads, /customers, /sales/quotes and /leads/:id. Materials is highlighted on /inventory, /purchase-orders/:id and material detail. 3) The Sales subnav tabs work. Quotes & Proposals lists quotes, View/PDF opens the dialog, and the quote number links to the lead. 4) Inventory keeps all 4 tabs. 5) Billing shows the 3 summary cards, the 4 filters work (open 0 / overdue 0 / paid 28 / all 30), the status select offers draft/issued/paid/void, View/Send opens the dialog, there is no Quotes tab, and /finance redirects to /billing. 6) Home shows all 6 attention cards for the owner and 5 for sales (no money card). The Active Users, Phase and MWAC text is gone. The snapshot opens with 7 cards and 'At average cost'. No backup badge appears (health is ok). 7) Jobs shows the 7 expected columns, all 4 filters work and there is no Phase text. The 'view in Quotes' link goes to /sales/quotes. 8) The Settings hub shows 6 groups and all 12 links reach the right page and tab. 9) In /admin/settings, Company is the default tab, and Company save (200) and margin policy save (200) work. The recovery card shows, in the expected error state because the CP is not deployed. Integrations shows the ABC status card and the provider list (Connected / Not set up) with no inputs. The Advanced link and ?tab=advanced open the version card, the 3 key cards and the cadastre check (which returned HTTP 200). Maps shows the satellite toggle. 10) On the ABC page, Advanced starts collapsed. When expanded, Client ID/Secret/Redirect/Webhook/Environment/Scopes/Save are visible, and both Go-Live check and Test connection work against the mock. 11) The Map heading reads 'Territories & Canvassing', and Material detail no longer shows MWAC. 12) All 11 legacy routes load. There are no JS page errors. Two navigation bugs and some RBAC/UX gaps are listed below. No functionality was lost compared with the old Finance page and old sidebar.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/jobs", "issue": "material_status is an N+1 query: one JobMaterial query plus a rollup per job. With 782 jobs the response takes about 1.8-1.9s. Batch the JobMaterial load, or compute shortages in one aggregate query."},
+      {"endpoint": "GET /api/quotes (sales role)", "issue": "Not scoped for sales: sales_bk sees all 866 quotes on /sales/quotes, while their Home 'Proposals waiting' card is scoped to their leads and shows 0. This was already true in the old Finance > Quotes tab, but the new Sales area makes it more visible. Consider filtering by Lead.assigned_user_id for sales, as attention() does."},
+      {"endpoint": "GET /api/dashboard/purchasing (sales role)", "issue": "The 'Material problems & deliveries' card on the sales Home lists company-wide job shortages (40 items, JOB-0006...), although sales can only open their own jobs (403 on others). This is inconsistent with the sales-scoped attention cards."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "App.js routes / Suppliers", "issue": "/suppliers is NOT wrapped in <MaterialsLayout>, so the materials-subnav (Inventory & Purchasing | Suppliers) disappears on the Suppliers page. The user cannot click back to Inventory from the subnav, and the subnav is only ever visible on /inventory. Fix: move <Route path=\"/suppliers\"> inside the MaterialsLayout route group (App.js lines 70-78).", "selector": "[data-testid='materials-subnav'] on /suppliers", "priority": "HIGH"},
+      {"component": "AppShell SettingsLink", "issue": "The active Settings item has no orange left border. cn(linkClass(active), 'border-t border-border') runs tailwind-merge, and 'border-border' (a colour class) overrides 'border-orange-600'. The rendered class is '...border-l-4 ... bg-slate-100 text-slate-900 border-t border-border', so Settings is the only nav item without the orange active indicator on /settings, /admin/* and /estimating/*. Fix: wrap the link in a div that carries the border-t, or use 'border-t-border' for the top colour.", "selector": "[data-testid='nav-settings']", "priority": "MEDIUM"},
+      {"component": "Billing / Settings routes for sales role", "issue": "/billing and /settings are not route-guarded. For sales, /billing shows an empty Billing page with $0 cards, because the 403 from /api/invoices is silently swallowed. /settings shows a 'Settings' header with zero groups. Redirect non-manage roles, or show a 'no access' message.", "selector": "[data-testid='page-billing'], [data-testid='page-settings-hub']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Settings > Integrations ABC status", "issue": "abc-status-summary only distinguishes connected from everything else. The ABC page shows 'Reconnect Required' while the summary card says 'Not connected'. Map reconnect_required/expired to an amber 'Needs reconnect' badge.", "affected_selectors": ["[data-testid='abc-status-summary']"]}
+    ],
+    "design_issues": [
+      {"screen": "Sales > Quotes & Proposals", "issues": ["The description reads 'Every quote sent to a customer', but the list includes drafts.", "There is no customer/lead name column, search or pagination (866 rows render at once), so on mobile the table needs horizontal scrolling."]},
+      {"screen": "Billing", "issues": ["The invoice table has no Customer column, so a balance-due list cannot be read without opening each invoice.", "Invoice lists load without a loading state, so an empty table shows 'No invoices here.' while data is still loading. The same happens on Jobs/Quotes."]},
+      {"screen": "Jobs", "issues": ["Jobs with status 'scheduled' but no scheduled_start show 'Not scheduled' and are counted under 'Needs scheduling'. This is correct by data, but confusing. Consider a hint or a backfill."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ux_round1_nav.py", "/app/test_reports/pytest/ux_round1.xml"],
+  "action_items": [
+    "Move the /suppliers route inside <MaterialsLayout> so materials-subnav shows on Suppliers (HIGH)",
+    "Fix the nav-settings active style: tailwind-merge drops border-orange-600 because of 'border-border'",
+    "Guard /billing and /settings for the sales role (redirect or no-access message) instead of rendering empty pages",
+    "Show 'Needs reconnect' in abc-status-summary when status is reconnect_required",
+    "Optional: scope GET /api/quotes and the dashboard material problems for the sales role; batch the material_status computation in GET /api/jobs (about 1.9s with 782 jobs)"
+  ],
+  "critical_code_review_comments": [
+    "App.js: the MaterialsLayout group only contains /inventory; /suppliers, /inventory/catalog, /inventory/locations, /inventory/transactions and /purchase-orders/:id render without the subnav (Suppliers is the one in the subnav tabs, so it matters most).",
+    "AppShell.jsx SettingsLink: the cn() class conflict described above.",
+    "Billing.jsx: the rows useMemo depends on [filter, invoices] but closes over derived arrays; this works only because they are re-derived each render (eslint-disable). Simpler to compute without useMemo.",
+    "jobs.py list_jobs: the per-row await _material_status → jp.rollup is O(n) round trips.",
+    "dashboard.attention: follow_ups loads all new/working leads into memory just to count and filter staleness. Fine now (230), but use a SQL count with an updated_at filter as the data grows."
+  ],
+  "updated_files": ["/app/backend/tests/test_ux_round1_nav.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "~92% (2 nav bugs out of ~25 verified items)"},
+  "seed_data_creation": "None. Company profile and margin policy were saved with their existing values (no data change).",
+  "test_credentials": "owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; sales sales_bk@example.com / SalesBk#2026. No office-role user exists, so office-only Settings visibility was verified by code review only.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && REACT_APP_BACKEND_URL=<frontend .env> python -m pytest tests/test_ux_round1_nav.py. Active nav detection: check for 'bg-slate-100' in the link class (Settings lacks border-orange-600 because of the bug above). Job with a quote, for the 'view in Quotes' link: 1bfa050b-1eca-482b-92f7-cc4126be8e62. PO: 9bc3081f-5d04-433c-9343-858992a84a60. Recovery card is in its expected error state (CP not deployed). The ABC Connect OAuth flow was not exercised. Not tested: office role (no user), and a backup badge in a non-ok state (health is currently ok)."
+}

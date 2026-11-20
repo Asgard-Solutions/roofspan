@@ -1,0 +1,35 @@
+{
+  "summary": "Retest of the iteration_117 fixes, UX Round 1. All 9 requested items pass. Backend: new tests/test_ux_round1_fixes.py (10 tests) plus test_ux_round1_nav.py (13), 23/23 pass. GET /api/quotes: the owner sees all quotes. sales_bk sees 0, because no leads are assigned to them. The positive case was proven with sales1: a TEST quote on their own lead 68e4968b showed in /api/quotes, in ?lead_id and on the owner's list, and not on sales_bk's list. The same quote showed in the Lead Detail Quotes section (QUO-0885) and on /sales/quotes, then was deleted (GET returns 404). sales_bk with a foreign lead_id gets []. Sales Home 'proposals' count matches their scoped quotes. GET /api/dashboard/purchasing: for sales there are no po_* actions and only their own job shortages (0 for sales_bk). For the owner there are 40 action_required items, including job_shortage. GET /api/jobs material_status: values are none/ready/short (none 318, short 436, ready 28). Every owner dashboard job_shortage job is 'short'. 'none' jobs have empty materials, and non-none jobs have materials. The response now takes about 1.5s, down from 1.9s. Frontend: on /suppliers and /inventory, materials-subnav is visible, the tabs switch both ways, and nav-materials is active with the orange border. nav-settings has bg-slate-100 and border-orange-600 on /settings, /admin/settings, /admin/settings/abc and /estimating/assemblies, and not on /jobs. For sales_bk, the desktop and mobile sidebar is Home/Sales/Map/Jobs/Materials/Reports (no Billing, no Settings), and /billing, /settings and /finance redirect to /. abc-status-summary was checked with route-mocked status: real reconnect_required shows 'Needs reconnect' (amber), expired shows 'Needs reconnect' (amber), connected shows 'Connected' (green), not_connected shows 'Not connected' (slate). The Sales Quotes description reads 'All quotes, from draft to accepted'. Regression: the owner sidebar shows 8 items and Home shows 6 attention cards (sales has no money card). Jobs filters: active 739, unscheduled 707, completed 16, all 782. Billing filters: open 1, overdue 1, paid 28, all 30. ABC Advanced starts collapsed and expands to show Client ID. No JS page errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET/PUT/DELETE /api/quotes/{id} (sales role)", "issue": "Only the list endpoint is scoped. A sales user can still GET, update or delete any quote by id, including quotes on leads not assigned to them. This was already true before this round, but it is inconsistent with the new strict list scoping (jobs/{id} already returns 403)."},
+      {"endpoint": "GET /api/dashboard/purchasing", "issue": "cards.jobs_needing_materials=130, but /api/jobs shows 436 active jobs as 'short'. The dashboard only checks active_jobs[:200], and the loop is still N+1. This existed before; the card under-counts."},
+      {"endpoint": "GET /api/jobs", "issue": "JobMaterial load is batched, but jp.rollup is still awaited per material. The response takes about 1.5s with 782 jobs."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Deferred (known)", "issues": ["No customer column in Billing/Quotes, and no pagination in the quotes list. The main agent already deferred these."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ux_round1_fixes.py", "/app/backend/tests/test_ux_round1_nav.py", "/app/test_reports/pytest/ux_round1_fixes.xml"],
+  "action_items": [
+    "Optional: scope GET/PUT/DELETE /api/quotes/{id} for the sales role to quotes on their assigned leads (403 otherwise)",
+    "Optional: make the purchasing dashboard jobs_needing_materials count all active jobs, not just the first 200, so it matches the Jobs material_status"
+  ],
+  "critical_code_review_comments": [
+    "quotes.py list_quotes: the sales join on Lead hides quotes that have no lead_id (customer-only quotes) from sales. This is acceptable under the strict rule, but should be noted.",
+    "Settings.jsx AbcStatusCard: 'reconnect' is any status other than connected/not_connected, so an unknown or future status (for example 'error') would also show 'Needs reconnect'. This is acceptable.",
+    "dashboard.purchasing_dashboard: the job loop still runs a per-job JobMaterial query and is capped at [:200]."
+  ],
+  "updated_files": ["/app/backend/tests/test_ux_round1_fixes.py"],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (all 9 requested items verified)"},
+  "seed_data_creation": "Temporary TEST quotes (terms TEST_scoping / TEST_ui) were created by sales1 on their own test lead 68e4968b-ec51-46f7-b60e-331322a123e9 and deleted by id right after (verified 404). There is no residual data.",
+  "test_credentials": "owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; sales sales_bk@example.com / SalesBk#2026 (0 leads, 0 jobs); sales1_38f545f9@example.com / Sales1#2026 (1 lead 68e4968b, 1 job), used for the positive quote scoping check.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app/backend && REACT_APP_BACKEND_URL=<frontend .env> python -m pytest tests/test_ux_round1_fixes.py tests/test_ux_round1_nav.py. Use the 'action_required' key, not 'actions', in /api/dashboard/purchasing. The real ABC status is reconnect_required (mock). Other ABC states were checked by intercepting the /api/integrations/abc/status route. Not tested: the office role (no user exists)."
+}

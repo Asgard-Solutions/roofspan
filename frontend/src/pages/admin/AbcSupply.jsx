@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, Link2, Unlink, RefreshCw, Building2, ShieldCheck, Eye, EyeOff, Copy, AlertTriangle,
+  Loader2, PlugZap, CheckCircle2, XCircle, Save, Trash2, Link2, Unlink, RefreshCw, Building2, ShieldCheck, Eye, EyeOff, Copy, AlertTriangle, ChevronDown,
 } from "lucide-react";
 
 const STATUS_BADGE = {
@@ -39,6 +40,7 @@ export default function AbcSupply() {
   const [goLive, setGoLive] = useState(null);
   const [goLiveBusy, setGoLiveBusy] = useState(false);
   const [params, setParams] = useSearchParams();
+  const [advOpen, setAdvOpen] = useState(false);
 
   // config form
   const [environment, setEnvironment] = useState("sandbox");
@@ -177,7 +179,8 @@ export default function AbcSupply() {
 
   return (
     <div>
-      <PageHeader title="ABC Supply" description="Connect your myABCSupply account for products, pricing, and ordering." testid="page-abc-supply" />
+      <PageHeader title="ABC Supply" description="Connect your myABCSupply account for products, pricing, and ordering." testid="page-abc-supply"
+        actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
       <div className="space-y-6 p-6 sm:p-8">
         {status.is_mock && (
           <div className="max-w-2xl rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800" data-testid="abc-mock-banner">
@@ -195,7 +198,6 @@ export default function AbcSupply() {
             <div className="rounded-md border border-border bg-slate-50 px-4 py-3 text-sm text-slate-600" data-testid="abc-identity">
               <div><span className="text-slate-400">Connected Account:</span> {identity.sold_to_name || "—"} {identity.sold_to_number ? `(${identity.sold_to_number})` : ""}</div>
               {status.last_connected_at && <div><span className="text-slate-400">Last Connected:</span> {new Date(status.last_connected_at).toLocaleString()}</div>}
-              {status.token_scopes && <div className="mt-1 text-xs text-slate-400">Scopes: {status.token_scopes}</div>}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -213,53 +215,15 @@ export default function AbcSupply() {
             <Button variant="outline" onClick={test} disabled={testing || (!status.has_client_secret && !status.is_mock)} data-testid="abc-test-button">
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <><PlugZap className="h-4 w-4" /> Test connection</>}
             </Button>
-            <Button variant="outline" onClick={runGoLive} disabled={goLiveBusy} data-testid="abc-golive-button">
-              {goLiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><ShieldCheck className="h-4 w-4" /> Go-Live check</>}
-            </Button>
           </div>
-          {goLive && (
-            <div className={`rounded-md border p-4 ${goLive.ready ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`} data-testid="abc-golive-result">
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                {goLive.ready ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
-                {goLive.ready ? "Ready for Production — you can start placing real ABC Supply orders." : "Not ready for Production yet — resolve the items below."}
-              </div>
-              <ul className="space-y-1.5">
-                {goLive.checks.map((c) => (
-                  <li key={c.key} className="flex items-start gap-2 text-sm" data-testid={`abc-golive-${c.key}`}>
-                    {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
-                          : (c.severity === "critical"
-                              ? <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-                              : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />)}
-                    <span>
-                      <span className={c.ok ? "text-slate-700" : "font-medium text-slate-800"}>{c.label}</span>
-                      {c.severity === "recommended" && <span className="ml-1 text-xs text-slate-400">(recommended)</span>}
-                      <span className="block text-xs text-slate-500">{c.detail}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
           {testResult && (
             <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${testResult.ok ? "border-green-200 bg-green-50 text-green-700" : "border-red-200 bg-red-50 text-red-700"}`} data-testid="abc-test-result">
               {testResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
               {testResult.message}
             </div>
           )}
-          {!status.has_client_id && <p className="text-sm text-amber-700" data-testid="abc-config-required">Configure your ABC Client ID and Client Secret below before connecting.</p>}
+          {!status.has_client_id && <p className="text-sm text-amber-700" data-testid="abc-config-required">ABC Supply needs a one-time setup before you can connect. Contact RoofSpan support, or open Advanced below.</p>}
 
-          {/* Redirect URI registration callout — the #1 cause of ABC's "redirect_uri must be a Login redirect URI" 400 */}
-          {!connected && !status.is_mock && status.redirect_uri_effective && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="abc-redirect-callout">
-              <div className="mb-1 flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> Before connecting: register this Redirect URI with ABC</div>
-              <p className="text-amber-800">In your <span className="font-medium">ABC Developer Portal</span> application, add this <span className="font-medium">exact</span> value under <span className="font-medium">OAuth 2.0 Redirect URI(s)</span>. It must match byte-for-byte — same scheme (<span className="font-mono">http</span>), host (<span className="font-mono">127.0.0.1</span>, not <span className="font-mono">localhost</span>), port, path, and no trailing slash.</p>
-              <div className="mt-2 flex items-center gap-2">
-                <code className="flex-1 overflow-x-auto rounded border border-amber-200 bg-white px-3 py-2 font-mono text-xs text-slate-800" data-testid="abc-redirect-callout-value">{status.redirect_uri_effective}</code>
-                <Button variant="outline" size="sm" onClick={() => copyRedirect(status.redirect_uri_effective)} data-testid="abc-copy-redirect-callout"><Copy className="h-4 w-4" /> Copy</Button>
-              </div>
-              <p className="mt-2 text-xs text-amber-700">If ABC still returns a 400 after saving, wait a moment and retry — or ask ABC API Support to confirm the portal value propagated to their Okta client.</p>
-            </div>
-          )}
         </Section>
 
         {/* Account & branch defaults */}
@@ -300,6 +264,54 @@ export default function AbcSupply() {
           </Section>
         )}
 
+        <Collapsible open={advOpen} onOpenChange={setAdvOpen} className="max-w-2xl" data-testid="abc-advanced">
+          <CollapsibleTrigger className="flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900" data-testid="abc-advanced-toggle">
+            <ChevronDown className={`h-4 w-4 transition-transform ${advOpen ? "rotate-180" : ""}`} /> Advanced (for support & troubleshooting)
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-4 space-y-6">
+            <Section title="Diagnostics" description="Technical checks used by RoofSpan support." testid="abc-diagnostics-card">
+              <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={runGoLive} disabled={goLiveBusy} data-testid="abc-golive-button">
+              {goLiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><ShieldCheck className="h-4 w-4" /> Go-Live check</>}
+            </Button>
+              </div>
+          {goLive && (
+            <div className={`rounded-md border p-4 ${goLive.ready ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`} data-testid="abc-golive-result">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                {goLive.ready ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                {goLive.ready ? "Ready for Production — you can start placing real ABC Supply orders." : "Not ready for Production yet — resolve the items below."}
+              </div>
+              <ul className="space-y-1.5">
+                {goLive.checks.map((c) => (
+                  <li key={c.key} className="flex items-start gap-2 text-sm" data-testid={`abc-golive-${c.key}`}>
+                    {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                          : (c.severity === "critical"
+                              ? <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                              : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />)}
+                    <span>
+                      <span className={c.ok ? "text-slate-700" : "font-medium text-slate-800"}>{c.label}</span>
+                      {c.severity === "recommended" && <span className="ml-1 text-xs text-slate-400">(recommended)</span>}
+                      <span className="block text-xs text-slate-500">{c.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+              {status.token_scopes && <div className="text-xs text-slate-400" data-testid="abc-scopes">Scopes: {status.token_scopes}</div>}
+          {/* Redirect URI registration callout — the #1 cause of ABC's "redirect_uri must be a Login redirect URI" 400 */}
+          {!connected && !status.is_mock && status.redirect_uri_effective && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="abc-redirect-callout">
+              <div className="mb-1 flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> Before connecting: register this Redirect URI with ABC</div>
+              <p className="text-amber-800">In your <span className="font-medium">ABC Developer Portal</span> application, add this <span className="font-medium">exact</span> value under <span className="font-medium">OAuth 2.0 Redirect URI(s)</span>. It must match byte-for-byte — same scheme (<span className="font-mono">http</span>), host (<span className="font-mono">127.0.0.1</span>, not <span className="font-mono">localhost</span>), port, path, and no trailing slash.</p>
+              <div className="mt-2 flex items-center gap-2">
+                <code className="flex-1 overflow-x-auto rounded border border-amber-200 bg-white px-3 py-2 font-mono text-xs text-slate-800" data-testid="abc-redirect-callout-value">{status.redirect_uri_effective}</code>
+                <Button variant="outline" size="sm" onClick={() => copyRedirect(status.redirect_uri_effective)} data-testid="abc-copy-redirect-callout"><Copy className="h-4 w-4" /> Copy</Button>
+              </div>
+              <p className="mt-2 text-xs text-amber-700">If ABC still returns a 400 after saving, wait a moment and retry — or ask ABC API Support to confirm the portal value propagated to their Okta client.</p>
+            </div>
+          )}
+            </Section>
         {/* Configuration */}
         <Section title="Configuration" description="ABC developer application credentials. The client secret is encrypted and never returned to the browser." testid="abc-config-card">
           <div className="space-y-1.5">
@@ -352,6 +364,8 @@ export default function AbcSupply() {
           </div>
           <Button onClick={saveConfig} disabled={busy} data-testid="abc-save-config">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /> Save configuration</>}</Button>
         </Section>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );

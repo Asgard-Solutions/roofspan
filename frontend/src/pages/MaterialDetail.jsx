@@ -18,7 +18,7 @@ import { ArrowLeft, Loader2, Star, Pencil, SlidersHorizontal, Power, Trash2, Spa
 const MANAGE = ["owner", "administrator", "office"];
 const TXN_TYPES = ["initial_inventory", "receive_po", "job_reservation", "job_issue", "job_return", "supplier_return", "transfer", "damage", "waste", "loss", "cycle_count", "manual_correction"];
 const txnLabel = (t) => (t || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-const costSourceLabel = (s) => ({ preferred_supplier: "Preferred Supplier", best_known_cost: "Best Known Cost", standard_cost: "Standard Cost", mwac: "Inventory Avg (MWAC)" }[s] || "—");
+const costSourceLabel = (s) => ({ preferred_supplier: "Preferred Supplier", best_known_cost: "Best Known Cost", standard_cost: "Standard Cost", mwac: "Average Cost" }[s] || "—");
 
 function Stat({ label, value, accent }) {
   return (

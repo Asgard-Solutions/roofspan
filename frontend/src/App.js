@@ -1,7 +1,7 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
-import { ProtectedRoute, RequireSensitive } from "@/components/ProtectedRoute";
+import { ProtectedRoute, RequireSensitive, RequireManage } from "@/components/ProtectedRoute";
 import { Toaster } from "@/components/ui/sonner";
 import AppShell from "@/components/AppShell";
 import Login from "@/pages/Login";
@@ -24,7 +24,10 @@ import Assemblies from "@/pages/Assemblies";
 import PriceBooks from "@/pages/PriceBooks";
 import Takeoff from "@/pages/Takeoff";
 import Suppliers from "@/pages/Suppliers";
-import Finance from "@/pages/Finance";
+import Billing from "@/pages/Billing";
+import SalesQuotes from "@/pages/SalesQuotes";
+import SettingsHub from "@/pages/SettingsHub";
+import { SalesLayout, MaterialsLayout } from "@/components/SubNav";
 import Reports from "@/pages/Reports";
 import ProposalPreview from "@/pages/ProposalPreview";
 import PublicProposal from "@/pages/PublicProposal";
@@ -56,25 +59,32 @@ function App() {
           >
             <Route path="/" element={<Dashboard />} />
             <Route path="/map" element={<MapView />} />
-            <Route path="/leads" element={<Leads />} />
+            <Route element={<SalesLayout />}>
+              <Route path="/leads" element={<Leads />} />
+              <Route path="/customers" element={<Customers />} />
+              <Route path="/sales/quotes" element={<SalesQuotes />} />
+            </Route>
             <Route path="/leads/:id" element={<LeadDetail />} />
-            <Route path="/customers" element={<Customers />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/jobs/:id" element={<JobDetail />} />
-            <Route path="/inventory" element={<Inventory />} />
+            <Route element={<MaterialsLayout />}>
+              <Route path="/inventory" element={<Inventory />} />
+              <Route path="/suppliers" element={<Suppliers />} />
+            </Route>
             <Route path="/inventory/catalog" element={<ProductCatalog />} />
             <Route path="/inventory/locations" element={<InventoryLocations />} />
             <Route path="/inventory/transactions" element={<InventoryTransactions />} />
             <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
-            <Route path="/suppliers" element={<Suppliers />} />
             <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
             <Route path="/quotes/:id/proposal" element={<ProposalPreview />} />
             <Route path="/estimating/takeoff" element={<Takeoff />} />
             <Route path="/estimating/assemblies" element={<Assemblies />} />
             <Route path="/estimating/price-books" element={<PriceBooks />} />
-            <Route path="/finance" element={<Finance />} />
+            <Route path="/billing" element={<RequireManage><Billing /></RequireManage>} />
+            <Route path="/finance" element={<Navigate to="/billing" replace />} />
+            <Route path="/settings" element={<RequireManage><SettingsHub /></RequireManage>} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/admin/users" element={<RequireSensitive><Users /></RequireSensitive>} />
             <Route path="/admin/roles" element={<RequireSensitive><Roles /></RequireSensitive>} />
