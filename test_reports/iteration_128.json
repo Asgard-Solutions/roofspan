@@ -1,0 +1,23 @@
+{
+  "summary": "Retest of the iteration_127 issues as owner. All pass. (1) PO tab: tab-pos click to first po-row took 1.12s (was 7.5s). The Receive dialog opened in 0.28s (was 3.9s). Receive submit to po-received '3 / 10' and po-outstanding 7 took 0.84s (was 5.1s). The tab renders 100 rows with 'Showing 100 of 1584'. pos-show-more gives 300 rows. Each filter (open 1584 / received 640 / cancelled 18 / all 2242) resets the table to 100 rows and switches in under 0.9s. pos-show-all renders all 2242 rows but takes about 10s (opt-in, minor). (2) Materials: first rows appear in 1.36s, 100 of 1287 at first. Show more gives 300, and Show all gives 1287 in 1.7s. Each quick card count equals the list's 'of N' (short 318 / needs 326 / on_order 57 / arriving 1). Search works (TEST_ITER128 -> 1, shingle -> 97), the supplier filter ABC Supply gives 8, and All brings back 100 of 1287. bulk-select-all selects the 100 visible rows, and Clear sets it back to 0. (3) Product Catalog compiles. catalog-materials-loading shows at 0.6s, then 1272 rows load at 2.1s, and the empty state never shows during loading. A no-match search shows catalog-materials-empty 'No materials found.' (4) All site-plan endpoints return 404 with the exact message 'The saved site plan file is missing. Regenerate the site plan.' instead of 500. That covers /{rev}/site-plan.pdf on all 3 revisions with a pdf_key, site-plan-v/{n}.pdf and .png, and lead/{id}/site-plan.pdf. An unknown version still returns 'No saved site plan for that version'. Every stored site-plan file is missing, so the proposal PDF was used for the gzip check and it is a valid %PDF. (5) Regression: test_materials_threshold_rules, test_iter127_thresholds_perf_gzip and test_inventory_core_hardening (-n 0) pass 18/18, and the new test_iter128 file passes 12/12. The Home 'Material problems' card (attention-materials) and Jobs material status (802 cells, Short/Not planned badges) render. No page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter128_siteplan_404.py", "/app/test_reports/pytest/pytest_results_iter128a.xml", "/app/test_reports/pytest/pytest_results_iter128b.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Inventory.jsx line 80: useEffect resets matLimit on every materials reload. After any action that calls load() (edit, adjust, bulk update, PO status change), a user who clicked Show all is sent back to 100 rows. Consider resetting only when filters/quick change.",
+    "pos-show-all still renders all ~2242 rows with a Radix Select each (about 10s main-thread block). It is opt-in, so this is acceptable, but virtualizing or memoizing the rows would make it instant.",
+    "setPoStatus calls load(), which refetches materials, counts and POs. A single-PO patch like the one onReceived uses would be cheaper.",
+    "There is no DELETE /api/purchase-orders/{id} (405), so test POs can only be cancelled."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter128_siteplan_404.py"],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "100%"},
+  "seed_data_creation": "Created TEST_ITER128_<hex> material (id e89056fa-ec8d-453d-bc54-03d01f9c3211) and PO-2242 (185802f6-417f-4356-8f2c-eef866cd2826) to test Receive. Afterwards the PO was cancelled, stock was adjusted back to 0 and the material was deactivated. It could not be deleted because it has history (409).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Token key access_token. Login testids: login-email-input, login-password-input, login-submit-button. Every stored site-plan file in object storage is missing (revisions 8fa662ee, 7d466513, 422ea69c), so a site-plan PDF through gzip cannot be checked until a plan is regenerated. Counts at the end: materials 1287, POs 2242 (open 1584 / received 640 / cancelled 18 + 1 TEST cancelled), short 318 / needs 326 / on_order 57."
+}

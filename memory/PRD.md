@@ -1,5 +1,14 @@
 # RoofSpan — Product Requirements & Status
 
+## Materials closeout (2026-06) — IMPLEMENTED & TESTED (iteration_127-128, 100%)
+- Threshold rules (user-approved), in services/inventory_core.py: `is_low_stock` = RP>0 && Available<=RP; `reorder_point_reached` = RP>0 && Projected<=RP (was <). RP 0 = no threshold. Used by the list low_stock flag/filter, reorder suggestions, materials_quick needs_ordering, the dashboard Low Stock card and Job Detail material low_stock. Job shortages stay in short_for_jobs.
+- Performance (identical output verified): /api/materials 5s -> 0.4s (batch_quantities + batch_supplier_maps + pricing_prefetch; 0 diffs over 1211 materials). /api/purchase-orders 2.3s -> 0.55s (batched items/suppliers/ABC submissions; equal over 2211 POs). GZipMiddleware (min 2KB): materials 1.3MB -> 53KB, POs 3.3MB -> 265KB. The frontend renders 100 rows at a time with Show more/Show all. Receive patches the PO row from a single-PO fetch.
+- Product Catalog shows a loading state (no fake empty table).
+- Site-plan file endpoints return 404 "file missing, regenerate" instead of 500 when the stored object is missing (some objects were lost in an earlier restore).
+- Tests: backend/tests/test_materials_threshold_rules.py. tests/test_inventory_core_hardening.py::test_db_rejects_two_active_preferred is flaky under xdist only.
+- Deferred to the Job round: Job Detail materials table overflow, native date picker.
+
+
 ## UX Round 4: Materials daily workspace (2026-06) — IMPLEMENTED & TESTED (iteration_125-126)
 - User choices: quick filters + slim table; one Manage menu; Purchase Orders tab opens on open orders, with ABC history inside it and ABC templates under Manage.
 - Backend: services/materials_quick.py (single definition): short_for_jobs (active-job JobMaterial row shortage>0, the job_planning.shortage_rows formula), needs_ordering (short ∪ reorder rule threshold>0 & on_hand+on_order-required<threshold), on_order, arriving_week (open PO outstanding, expected<=now+7d). GET /api/materials/quick-counts (counts + short/needs_ordering ids); GET /api/materials?quick=<key>.
