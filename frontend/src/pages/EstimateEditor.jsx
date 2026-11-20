@@ -275,8 +275,8 @@ export default function EstimateEditor() {
                         {!details && w > 0 && <div className="text-[11px] text-slate-400" data-testid={`el-qty-waste-${i}`}>incl. {w}% waste</div>}
                       </TableCell>
                       <TableCell>
-                        <Select value={l.unit} onValueChange={(v) => setLine(i, { unit: v })}><SelectTrigger className="h-8" data-testid={`el-unit-${i}`}><SelectValue /></SelectTrigger>
-                          <SelectContent>{[...new Set([l.unit, ...UNITS])].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select>
+                        <Select value={l.unit} disabled={!editable} onValueChange={(v) => setLine(i, { unit: v })}><SelectTrigger className="h-8" data-testid={`el-unit-${i}`}><SelectValue /></SelectTrigger>
+                          <SelectContent>{[...new Set([l.unit, ...UNITS.filter((u) => u !== String(l.unit || "").toUpperCase())])].map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select>
                       </TableCell>
                       {details && seeCost && <>
                         <TableCell><Input type="number" value={l.material_cost} onChange={(e) => setLine(i, { material_cost: e.target.value })} className="h-8 text-right" data-testid={`el-cost-${i}`} title="Material cost/unit" /></TableCell>

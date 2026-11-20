@@ -1,0 +1,22 @@
+{
+  "summary": "Retest of the iteration_121 follow-up fixes. Backend: 11 passed + 1 known xfail (new tests/test_round3_lock_iter122.py + regression test_round3_fixes_iter121.py). The GET estimate locked flag works: EST-1041 has locked=true for owner and sales, a new estimate has locked=false, and accepting a quote sets locked=true and PUT returns 409. Owner and sales (own lead) can edit and save unlocked estimates. UI on EST-1041, owner and sales: estimate-locked-note shows; the fieldset, desc/qty/sell inputs, remove, tax rate, Save and Add item are disabled; fill is blocked; remove does nothing; takeoff-locked shows (office-only hidden). ONE GAP: the unit Select (Radix) still opens on a real mouse click while locked. Picking 'EA' changes the unit and shows 'Unsaved changes' (Save stays disabled and the backend 409s, so no data risk). Re-measure scenario (TEST lead, rev1 2000sf applied, rev2 2600sf verified): Advanced changed-metrics shows 'roof squares: 20 → 26', 'roof area sqft: 2000 → 2600', and object metrics show 'changed'. The waste notice reads 'Same 10.00% waste on a changed roof area (+0.60 squares of waste material).' I could not make a null metric value, so the '— → x' rendering was checked by code review only (c.from ?? '—'; null is guarded before the typeof-object check). Regression: lead → New estimate → custom line (4 x $25) → Save → reload persists → Create proposal → /quotes/{id}/proposal QUO-0967, $100. Sales on own lead: edit price + tax → save → reload persists ($42.00).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EstimateEditor locked state - unit Select", "issue": "Radix <Select> ignores the native fieldset disabled. A real mouse click on el-unit-{i} opens the listbox while the estimate is locked, and choosing an option changes the unit and shows 'Unsaved changes'. Fix: pass disabled={!editable} to <Select> (or to SelectTrigger).", "selector": "[data-testid^='el-unit-']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "EstimateEditor", "issues": ["The unit list shows both 'sq' and 'SQ' (and ea/EA) because the line unit is merged with UNITS without case normalization", "The tax rate value text looks faded/grey even when enabled (sales own estimate)", "Locked estimate: 'Create proposal' / 'Create new proposal' stays enabled. This is probably intended, but for sales on EST-1041 the hint just says 'A proposal from this estimate was accepted.' next to an enabled Create proposal button"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_round3_lock_iter122.py", "/app/backend/tests/test_round3_fixes_iter121.py", "/app/backend/tests/setup_iter122_remeasure.py", "/app/test_reports/pytest/pytest_iter122.xml"],
+  "action_items": ["Add disabled={!editable} to the line unit <Select> in EstimateEditor.jsx (line ~278)", "Optional: dedupe the unit options case-insensitively"],
+  "critical_code_review_comments": ["_out calls _has_accepted_quote per estimate. If the list endpoint uses _out, that is one extra query per row (N+1). Fine at the current scale.", "Leads have no DELETE (405), so TEST_ leads from tests stay in the DB"],
+  "updated_files": ["/app/backend/tests/test_round3_lock_iter122.py", "/app/backend/tests/setup_iter122_remeasure.py"],
+  "success_rate": {"backend": "100%", "frontend": "95%"},
+  "seed_data_creation": "Created TEST_R3i122_* leads (UI: d0093fa3-5e50-407b-961f-269f01b41986, sales: 381870a3-8753-4e7c-9ccf-9385cc225bcf, plus pytest leads). Leads cannot be deleted (405). The estimates/quotes created by the UI were deleted. The pytest owner test leaves an accepted TEST quote/estimate (deleting a locked estimate may be refused).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "EST-1041 (61cd2edb-...) is the locked fixture (accepted QUO-0883). setup_iter122_remeasure.py builds a re-measure scenario (prints the est id). The only open item is the unit Select not being disabled when locked. Known/accepted: no-id clients insert-at-front lose links (xfail); changed_metrics compares against the latest draft."
+}
