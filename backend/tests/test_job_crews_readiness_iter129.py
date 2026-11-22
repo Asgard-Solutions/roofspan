@@ -10,7 +10,15 @@ OWNER = ("pjacobsen@asgardsolution.io", "RoofSpan#Owner2026")
 SALES1 = ("sales1_38f545f9@example.com", "Sales1#2026")
 SALES1_ID = "d47710df-133f-4436-9ffd-b61a05a0060f"
 SALES_BK = ("sales_bk@example.com", "SalesBk#2026")
-CREW_A = "76dc5342-12e3-4809-bd5b-156ed4f99171"
+
+
+def _crew_a_id():
+    """Id of the migrated 'Crew A' crew, looked up by name (ids are not stable across environments)."""
+    h = {"Authorization": "Bearer " + requests.post(f"{API}/auth/login", json={"email": "pjacobsen@asgardsolution.io", "password": "RoofSpan#Owner2026"}, timeout=20).json()["access_token"]}
+    return next(c["id"] for c in requests.get(f"{API}/crews", headers=h, timeout=20).json() if c["name"] == "Crew A")
+
+
+CREW_A = _crew_a_id()
 
 
 def _short_job(owner):

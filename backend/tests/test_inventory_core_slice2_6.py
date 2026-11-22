@@ -27,6 +27,14 @@ def _first_abc_material(h):
     return next(x for x in mats if x.get("abc_item_number"))
 
 
+def _temp_material(h):
+    """Run-owned material, so stock movements never touch real inventory (removed by the session cleanup)."""
+    r = requests.post(f"{BASE_URL}/api/materials", headers=h, timeout=30,
+                      json={"name": f"TEST_Slice26_{uuid.uuid4().hex[:8]}", "unit": "each", "quantity_on_hand": 10, "reorder_threshold": 0})
+    assert r.status_code in (200, 201), r.text[:200]
+    return r.json()
+
+
 # ---------------- async unit: quantity math ----------------
 def test_compute_quantities_math():
     async def run():
@@ -70,7 +78,7 @@ def test_compute_quantities_math():
 # ---------------- HTTP invariants ----------------
 def test_reservation_does_not_reduce_on_hand():
     h = _headers()
-    m = _first_abc_material(h)
+    m = _temp_material(h)
     before = requests.get(f"{BASE_URL}/api/materials/{m['id']}/quantities", headers=h, timeout=30).json()["on_hand"]
     requests.post(f"{BASE_URL}/api/materials/{m['id']}/adjust", headers=h,
                   json={"delta": -2, "reason": "job_reservation", "note": "t"}, timeout=30)
@@ -81,14 +89,14 @@ def test_reservation_does_not_reduce_on_hand():
 
 def test_invalid_txn_type_rejected():
     h = _headers()
-    m = _first_abc_material(h)
+    m = _temp_material(h)
     r = requests.post(f"{BASE_URL}/api/materials/{m['id']}/adjust", headers=h, json={"delta": 1, "reason": "not_a_type"}, timeout=30)
     assert r.status_code == 400
 
 
 def test_structured_txn_type_accepted():
     h = _headers()
-    m = _first_abc_material(h)
+    m = _temp_material(h)
     r = requests.post(f"{BASE_URL}/api/materials/{m['id']}/adjust", headers=h,
                       json={"delta": 5, "reason": "receive_po", "note": "manual receive"}, timeout=30)
     assert r.status_code == 200
