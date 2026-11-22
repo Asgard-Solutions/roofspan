@@ -1,5 +1,12 @@
 # RoofSpan — Product Requirements & Status
 
+## Job closeout (2026-06) — DONE & TESTED (iteration_131 + local pytest 61/61)
+- Cleanup: deleted the 30 automated-test jobs with end<start (customer TEST_P4_Lead, created by phase4_test), their 30 job-material lines, 1 cost snapshot and draft invoice INV-0029. The 27 received POs were KEPT and unlinked (job_id=null). Inventory unchanged: 1561 txns, sum(delta) 13131.5, on hand 16031.5. Deleted 992 automated-test users (strict TEST_USER_RE in tests/_test_data_cleanup.py). Kept: owner, sales_bk, sales1_38f545f9, sales2_7ad4f5cd. Audit logs kept; refresh tokens deleted; visits.user_id set to null.
+- Root cause: tests create random-suffix users and never delete them. Fix: conftest pytest_configure snapshots user ids, and pytest_sessionfinish purges new users that match the pattern. phase4_test no longer creates inverted dates.
+- Job Manager picker: UserSearchPicker (server type-ahead /api/users/assignable?q=&limit=25, active users only, LIKE wildcards escaped, stale responses ignored).
+- Sales purchasing restriction: /api/purchase-orders (list/detail/status-history) for sales only covers POs on jobs they manage, with total/unit_cost/line_total/abc_price null; other POs return 404. Job Detail purchase_orders for sales have no total (supplier_name and expected_date added). The PO card is not clickable for sales, and the /purchase-orders/:id route is RequireManage.
+- Open: tests still leave leads/quotes/customers/jobs behind (only users and price books are purged). Mobile lead assign doesn't validate the user (500 on a bad uuid). Both are out of scope.
+
 ## UX Round 5: Job assignments, crews & scheduling (2026-06) — IMPLEMENTED & TESTED (iteration_129-130, 100%)
 - User choices: Job Manager (user; = jobs.assigned_user_id, permissions unchanged) + Crew from a Settings-managed list; the lead's rep becomes Job Manager when a quote is accepted; Ready to install = start date + crew + no shortage (calculated automatically); full-width materials table with expandable details; one date-range calendar.
 - Data: new `crews` table (unique lower(name)) + jobs.crew_id (alembic a9c8e7d6f5b4). The migration turned the free-text assigned_to values into crews (31 jobs -> "Crew A"). jobs.assigned_to is KEPT and synced to the crew name (on assign and rename) for older Office/Field clients. Legacy PATCH {assigned_to} maps to a crew, or creates one.

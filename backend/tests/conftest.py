@@ -42,13 +42,28 @@ def pytest_configure(config):
     except Exception as exc:
         config._pb_snapshot = None
         print(f"[test cleanup] price book snapshot skipped: {exc}")
+    try:
+        config._user_snapshot = _cleanup_module().user_snapshot()
+    except Exception as exc:
+        config._user_snapshot = None
+        print(f"[test cleanup] user snapshot skipped: {exc}")
 
 
 def pytest_sessionfinish(session, exitstatus):
     # After ALL workers finish: delete price books this run created (strict test-name pattern only), restore default.
     config = session.config
+    if hasattr(config, "workerinput"):
+        return
+    users = getattr(config, "_user_snapshot", None)
+    if users is not None:
+        try:
+            n = _cleanup_module().purge_users(only_new_since=users)
+            if n:
+                print(f"[test cleanup] removed {n} automated-test user(s)")
+        except Exception as exc:
+            print(f"[test cleanup] user purge skipped: {exc}")
     snap = getattr(config, "_pb_snapshot", None)
-    if hasattr(config, "workerinput") or not snap:
+    if not snap:
         return
     try:
         n = _cleanup_module().purge(only_new_since=snap[0], restore_default=snap[1])

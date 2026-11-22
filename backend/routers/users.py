@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
@@ -30,10 +30,17 @@ async def list_roles(user: User = Depends(get_current_user)):
 
 
 @router.get("/assignable", response_model=list[UserOut])
-async def list_assignable(user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    """Active users available for lead/job assignment. Accessible to owner/admin/office (not sales)."""
-    result = await db.execute(select(User).where(User.is_active == True).order_by(User.full_name))
-    return [_out(u) for u in result.scalars().all()]
+async def list_assignable(q: str | None = Query(None, max_length=100), limit: int | None = Query(None, ge=1, le=100),
+                          user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    """Active users available for lead/job assignment (owner/admin/office/sales). Optional name/email search."""
+    stmt = select(User).where(User.is_active == True, User.role.in_(ROLES)).order_by(User.full_name, User.email)
+    if q and q.strip():
+        term = q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{term}%"
+        stmt = stmt.where(or_(func.lower(User.full_name).like(like, escape="\\"), func.lower(User.email).like(like, escape="\\")))
+    if limit:
+        stmt = stmt.limit(limit)
+    return [_out(u) for u in (await db.execute(stmt)).scalars().all()]
 
 
 @router.get("", response_model=list[UserOut])

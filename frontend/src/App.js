@@ -77,7 +77,7 @@ function App() {
             <Route path="/inventory/transactions" element={<InventoryTransactions />} />
             <Route path="/inventory/abc-catalog" element={<Navigate to="/inventory/catalog" replace />} />
             <Route path="/inventory/materials/:id" element={<MaterialDetail />} />
-            <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+            <Route path="/purchase-orders/:id" element={<RequireManage><PurchaseOrderDetail /></RequireManage>} />
             <Route path="/estimates/:id" element={<EstimateEditor />} />
             <Route path="/quotes/:id/proposal" element={<ProposalPreview />} />
             <Route path="/estimating/takeoff" element={<Takeoff />} />

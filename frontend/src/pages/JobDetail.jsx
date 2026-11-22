@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { money } from "@/lib/format";
+import { money, shortDay } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -93,9 +93,12 @@ export default function JobDetail() {
             {job.purchase_orders.length === 0 ? <p className="text-sm text-slate-500">No purchase orders for this job.</p> : (
               <div className="space-y-2">
                 {job.purchase_orders.map((po) => (
-                  <div key={po.id} className="flex cursor-pointer items-center justify-between rounded border border-border p-2 text-sm hover:border-orange-300" onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`job-po-${po.id}`}>
-                    <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary">{po.status.replace(/_/g, " ")}</Badge></div>
-                    <span className="tabular-nums">{money(po.total)}</span>
+                  <div key={po.id} className={`flex items-center justify-between gap-3 rounded border border-border p-2 text-sm ${canManage ? "cursor-pointer hover:border-orange-300" : ""}`} onClick={canManage ? () => navigate(`/purchase-orders/${po.id}`) : undefined} data-testid={`job-po-${po.id}`}>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2"><span className="font-medium text-slate-900">{po.number}</span><Badge variant="secondary" data-testid={`job-po-status-${po.id}`}>{po.status.replace(/_/g, " ")}</Badge></div>
+                      <div className="mt-0.5 truncate text-xs text-slate-500" data-testid={`job-po-meta-${po.id}`}>{po.supplier_name || "No supplier"}{po.expected_date ? ` · Expected ${shortDay(po.expected_date)}` : ""}</div>
+                    </div>
+                    {po.total != null && <span className="tabular-nums" data-testid={`job-po-total-${po.id}`}>{money(po.total)}</span>}
                   </div>
                 ))}
               </div>
