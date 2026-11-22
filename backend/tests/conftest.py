@@ -43,6 +43,11 @@ def pytest_configure(config):
         config._pb_snapshot = None
         print(f"[test cleanup] price book snapshot skipped: {exc}")
     try:
+        config._biz_snapshot = _cleanup_module().business_snapshot()
+    except Exception as exc:
+        config._biz_snapshot = None
+        print(f"[test cleanup] business snapshot skipped: {exc}")
+    try:
         config._user_snapshot = _cleanup_module().user_snapshot()
     except Exception as exc:
         config._user_snapshot = None
@@ -50,24 +55,33 @@ def pytest_configure(config):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    # After ALL workers finish: delete price books this run created (strict test-name pattern only), restore default.
+    # After ALL workers finish. Order matters: price books first (their entries reference materials),
+    # then business records (tracked by id), then users.
     config = session.config
     if hasattr(config, "workerinput"):
         return
+    c = _cleanup_module()
+    snap = getattr(config, "_pb_snapshot", None)
+    if snap:
+        try:
+            n = c.purge(only_new_since=snap[0], restore_default=snap[1])
+            if n:
+                print(f"[test cleanup] removed {n} automated-test price book(s)")
+        except Exception as exc:
+            print(f"[test cleanup] price book purge skipped: {exc}")
+    biz = getattr(config, "_biz_snapshot", None)
+    if biz is not None:
+        try:
+            r = c.purge_business(biz)
+            if r:
+                print(f"[test cleanup] removed test business records: {r}")
+        except Exception as exc:
+            print(f"[test cleanup] business purge skipped: {exc}")
     users = getattr(config, "_user_snapshot", None)
     if users is not None:
         try:
-            n = _cleanup_module().purge_users(only_new_since=users)
+            n = c.purge_users(only_new_since=users)
             if n:
                 print(f"[test cleanup] removed {n} automated-test user(s)")
         except Exception as exc:
             print(f"[test cleanup] user purge skipped: {exc}")
-    snap = getattr(config, "_pb_snapshot", None)
-    if not snap:
-        return
-    try:
-        n = _cleanup_module().purge(only_new_since=snap[0], restore_default=snap[1])
-        if n:
-            print(f"[test cleanup] removed {n} automated-test price book(s)")
-    except Exception as exc:
-        print(f"[test cleanup] price book purge skipped: {exc}")

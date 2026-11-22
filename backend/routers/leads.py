@@ -1,3 +1,5 @@
+import uuid
+from services.assignees import resolve_assignee
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -113,16 +115,14 @@ async def update_lead(lead_id: str, payload: LeadPatch, request: Request, user: 
 
 @router.put("/{lead_id}/assign", response_model=LeadDetailOut)
 async def assign_lead(lead_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    lead = await db.get(Lead, lead_id)
+    try:
+        lead = await db.get(Lead, uuid.UUID(lead_id))
+    except ValueError:
+        lead = None
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    if payload.user_id:
-        target = await db.get(User, payload.user_id)
-        if not target or not target.is_active:
-            raise HTTPException(status_code=422, detail="Assignee must be an active user")
-        lead.assigned_user_id = target.id
-    else:
-        lead.assigned_user_id = None
+    target = await resolve_assignee(db, payload.user_id)
+    lead.assigned_user_id = target.id if target else None
     await db.commit()
     await db.refresh(lead)
     await log_action(db, user=user, action="lead.assign", entity_type="lead", entity_id=lead.id,

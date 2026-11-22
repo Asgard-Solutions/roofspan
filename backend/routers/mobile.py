@@ -19,6 +19,7 @@ from models import Property, Visit, Inspection, Photo, Lead, Job, IdempotencyKey
 from models import MeasurementSet, MeasurementRevision
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from services.object_storage import put_object, get_object
+from services.assignees import resolve_assignee
 from services import mobile_authz as mauthz
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
@@ -622,12 +623,18 @@ async def my_jobs(scope: str = Query("auto"), user: User = Depends(require_roles
 
 
 @router.post("/leads/{lead_id}/assign")
-async def assign_lead(lead_id: str, payload: AssignIn, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
-    l = await db.get(Lead, lead_id)
+async def assign_lead(lead_id: str, payload: AssignIn, request: Request, user: User = Depends(require_roles(*MANAGE_ROLES)), db: AsyncSession = Depends(get_db)):
+    try:
+        l = await db.get(Lead, uuid.UUID(lead_id))
+    except ValueError:
+        l = None
     if not l:
         raise HTTPException(status_code=404, detail="Lead not found")
-    l.assigned_user_id = uuid.UUID(payload.user_id) if payload.user_id else None
+    target = await resolve_assignee(db, payload.user_id)  # validates before any change
+    l.assigned_user_id = target.id if target else None
     await db.commit()
+    await log_action(db, user=user, action="lead.assign", entity_type="lead", entity_id=l.id,
+                     detail={"assigned_user_id": str(l.assigned_user_id) if l.assigned_user_id else None, "via": "mobile"}, request=request)
     return {"id": str(l.id), "assigned_user_id": str(l.assigned_user_id) if l.assigned_user_id else None}
 
 
@@ -639,16 +646,8 @@ async def assign_job(job_id: str, payload: AssignIn, request: Request, user: Use
         j = None
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
-    if payload.user_id:
-        try:
-            target = await db.get(User, uuid.UUID(payload.user_id))
-        except ValueError:
-            target = None
-        if not target or not target.is_active:
-            raise HTTPException(status_code=422, detail="Assignee must be an active user")
-        j.assigned_user_id = target.id
-    else:
-        j.assigned_user_id = None
+    target = await resolve_assignee(db, payload.user_id)
+    j.assigned_user_id = target.id if target else None
     await db.commit()
     await log_action(db, user=user, action="job.assign", entity_type="job", entity_id=j.id,
                      detail={"assigned_user_id": str(j.assigned_user_id) if j.assigned_user_id else None, "via": "mobile"}, request=request)

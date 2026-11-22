@@ -1,5 +1,15 @@
 # RoofSpan — Product Requirements & Status
 
+## Test-data hygiene + Field lead assign validation (2026-06) — DONE (pytest; full suite run twice, business counts unchanged)
+- Field app `POST /api/mobile/leads/{id}/assign` and Office `PUT /api/leads/{id}/assign` now use the shared `services/assignees.resolve_assignee` (user must exist, be active and have an assignable role; 422 otherwise; malformed lead id -> 404). Validation runs before any change, and mobile now writes the `lead.assign` audit entry (via=mobile). Mobile job assign uses the same helper.
+- Tests: `tests/_test_data_cleanup.py` snapshots the ids of tracked tables (properties, customers, leads, inspections, measurement_sets, estimates, quotes, jobs, invoices, purchase_orders, materials, suppliers, visits) at pytest_configure. `purge_business` runs at pytest_sessionfinish, after price books and before users, and removes only the rows created during the run, children included.
+  - Stock movements are removed only together with a material the run itself created. A run-created job/PO whose movements touched pre-existing stock is KEPT, as is everything it references. Audit logs are always kept.
+- Test fixes:
+  - test_inventory_core_slice2_6 now uses its own temp material; it was adding +5 on hand and a 2 reservation to the real "Mock Aluminum Drip Edge" on every run.
+  - The migration test no longer downgrades the working DB once later migrations exist. The downgrade dropped and recreated the crews table, which changed the Crew A id; tests now look Crew A up by name.
+- One-off: removed the records my own earlier test runs leaked this session (everything created after 2026-11-22 20:00 server time, all test-named; counts matched the session start exactly). Reversed the two test movements on Mock Aluminum Drip Edge (116 -> 111).
+- Remaining: about 51 failures and 43 errors in the full suite. They are stale tests (e.g. phase2 sales property authorization, mobile_new_revision, stripe auth, relay), not caused by this round. Records created outside pytest (testing-agent ad-hoc scripts, manual UI tests) are not tracked. Older leftover test data from before this session remains (e.g. about 324 TEST_ customers).
+
 ## Job closeout (2026-06) — DONE & TESTED (iteration_131 + local pytest 61/61)
 - Cleanup: deleted the 30 automated-test jobs with end<start (customer TEST_P4_Lead, created by phase4_test), their 30 job-material lines, 1 cost snapshot and draft invoice INV-0029. The 27 received POs were KEPT and unlinked (job_id=null). Inventory unchanged: 1561 txns, sum(delta) 13131.5, on hand 16031.5. Deleted 992 automated-test users (strict TEST_USER_RE in tests/_test_data_cleanup.py). Kept: owner, sales_bk, sales1_38f545f9, sales2_7ad4f5cd. Audit logs kept; refresh tokens deleted; visits.user_id set to null.
 - Root cause: tests create random-suffix users and never delete them. Fix: conftest pytest_configure snapshots user ids, and pytest_sessionfinish purges new users that match the pattern. phase4_test no longer creates inverted dates.

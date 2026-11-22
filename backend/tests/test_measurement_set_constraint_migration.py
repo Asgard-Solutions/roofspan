@@ -164,6 +164,13 @@ def test_migration_is_report_only_for_suspicious_historical_relationships():
 
 def test_z_downgrade_refuses_to_reintroduce_broad_indexes_when_data_would_be_rejected():
     """Downgrade must fail before DDL when currently-valid lead-specific rows share a property."""
+    from alembic.config import Config as _Cfg
+    from alembic.script import ScriptDirectory as _SD
+    _c = _Cfg()
+    _c.set_main_option("script_location", str(BACKEND / "alembic"))
+    if _SD.from_config(_c).get_current_head() != NEW_REVISION:
+        # Downgrading the shared working database through newer migrations would drop their data (e.g. crews).
+        pytest.skip("later migrations exist; live downgrade/upgrade check only runs while this revision is head")
     property_id = uuid.uuid4()
     lead_a = uuid.uuid4()
     lead_b = uuid.uuid4()

@@ -72,7 +72,8 @@ def po_job(owner, sales_id):
         pytest.skip("no job with a costed PO")
     r = requests.put(f"{API}/jobs/{pick[0]}/assign", json={"user_id": sales_id}, headers=owner, timeout=20)
     assert r.status_code == 200, r.text
-    other_po = next(p["id"] for p in pos if p.get("job_id") != pick[0])
+    other_po = next(p["id"] for p in pos if p.get("job_id") != pick[0]
+                    and not (jobs.get(p.get("job_id")) or {}).get("assigned_user_id"))
     yield pick[0], pick[1], other_po
     requests.put(f"{API}/jobs/{pick[0]}/assign", json={"user_id": None}, headers=owner, timeout=20)
 
@@ -140,7 +141,9 @@ class TestSalesPO:
         r = requests.get(f"{API}/purchase-orders", headers=sales, timeout=30)
         assert r.status_code == 200
         lst = r.json()
-        assert lst and all(p["job_id"] == jid for p in lst), [p["job_id"] for p in lst]
+        mine = {j["id"] for j in requests.get(f"{API}/jobs", headers=sales, timeout=60).json()}
+        assert lst and any(p["job_id"] == jid for p in lst)
+        assert all(p["job_id"] in mine for p in lst), [p["job_id"] for p in lst]
         for p in lst:
             assert p["total"] is None
             for i in p["items"]:

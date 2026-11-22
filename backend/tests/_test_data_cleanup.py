@@ -105,3 +105,135 @@ def user_snapshot():
 
 def purge_users(only_new_since=None) -> int:
     return asyncio.run(_purge_users(only_new_since))
+
+
+# ---------------- business records created during a test session ----------------
+# Tracked by id: anything in these tables that did not exist when the session started was created by the run.
+TRACKED = ("properties", "customers", "leads", "inspections", "measurement_sets", "estimates", "quotes",
+           "jobs", "invoices", "purchase_orders", "materials", "suppliers", "visits")
+
+
+async def _business_ids():
+    eng, maker = _session()
+    async with maker() as s:
+        out = {t: set((await s.execute(text(f"select id::text from {t}"))).scalars().all()) for t in TRACKED}
+    await eng.dispose()
+    return out
+
+
+def business_snapshot():
+    return asyncio.run(_business_ids())
+
+
+async def _purge_business(start: dict) -> dict:
+    """Delete the records a run created. Stock movements are only removed together with a material the run itself
+    created; a job/PO whose movements touched pre-existing stock is kept so real on-hand and receiving history stay intact."""
+    eng, maker = _session()
+    out = {}
+    async with maker() as s:
+        async def q(sql, **kw):
+            return set((await s.execute(text(sql), kw)).scalars().all())
+
+        async def run(key, sql, ids):
+            n = (await s.execute(text(sql), {"ids": list(ids)})).rowcount if ids else 0
+            if n:
+                out[key] = out.get(key, 0) + n
+
+        new = {}
+        for t in TRACKED:
+            new[t] = list((await q(f"select id::text from {t}")) - start.get(t, set()))
+        NJ, NP, NM = new["jobs"], new["purchase_orders"], new["materials"]
+
+        async def held_materials(cands):
+            """Run-created materials still referenced by rows that are staying."""
+            if not cands:
+                return set()
+            h = set()
+            h |= await q("select material_id::text from po_line_items where material_id::text = any(:m) and po_id::text <> all(:p)", m=cands, p=del_pos or ["-"])
+            h |= await q("select material_id::text from job_materials where material_id::text = any(:m) and job_id::text <> all(:j)", m=cands, j=del_jobs or ["-"])
+            for t in ("assembly_items", "abc_catalog_items", "price_book_entries"):
+                h |= await q(f"select material_id::text from {t} where material_id::text = any(:m)", m=cands)
+            h |= await q("select material_id::text from estimate_line_items where material_id::text = any(:m) and estimate_id::text <> all(:e)", m=cands, e=new["estimates"] or ["-"])
+            h |= await q("select material_id::text from quote_line_items where material_id::text = any(:m) and quote_id::text <> all(:x)", m=cands, x=new["quotes"] or ["-"])
+            return h
+
+        del_jobs, del_pos = NJ, NP  # optimistic first pass for the material check
+        test_mats = set(NM) - await held_materials(NM)
+        tm = list(test_mats) or ["-"]
+        # a job/PO is removable only if every stock movement it caused is on a run-created material
+        keep_jobs = await q("select distinct job_id::text from inventory_txns where job_id::text = any(:j) and material_id::text <> all(:m)", j=NJ or ["-"], m=tm)
+        keep_pos = await q("select distinct po_id::text from inventory_txns where po_id::text = any(:p) and material_id::text <> all(:m)", p=NP or ["-"], m=tm)
+        del_jobs = [j for j in NJ if j not in keep_jobs]
+        del_pos = [p for p in NP if p not in keep_pos]
+
+        await run("abc_order_submissions", "delete from abc_order_submissions where purchase_order_id::text = any(:ids)", del_pos)
+        await run("po_status_history", "delete from po_status_history where purchase_order_id::text = any(:ids)", del_pos)
+        await run("inventory_txns", "delete from inventory_txns where po_id::text = any(:ids)", del_pos)
+        await run("po_line_items", "delete from po_line_items where po_id::text = any(:ids)", del_pos)
+        await run("purchase_orders", "delete from purchase_orders where id::text = any(:ids)", del_pos)
+        await run("po_unlinked", "update purchase_orders set job_id = null where job_id::text = any(:ids)", del_jobs)
+        await run("inventory_txns", "delete from inventory_txns where job_id::text = any(:ids)", del_jobs)
+
+        await run("invoices", "delete from invoices where id::text = any(:ids)", new["invoices"])
+        await s.execute(text("update invoices set job_id = null where job_id::text = any(:ids)"), {"ids": del_jobs or ["-"]})
+        await run("photos", "delete from photos where record_type = 'job' and record_id::text = any(:ids)", del_jobs)
+        await run("jobs", "delete from jobs where id::text = any(:ids)", del_jobs)
+
+        kj = list(keep_jobs) or ["-"]
+        quotes = [x for x in new["quotes"] if x not in await q("select quote_id::text from jobs where id::text = any(:k) and quote_id is not null", k=kj)]
+        await run("quote_line_items", "delete from quote_line_items where quote_id::text = any(:ids)", quotes)
+        await run("quote_packages", "delete from quote_packages where quote_id::text = any(:ids)", quotes)
+        await run("quotes", "delete from quotes where id::text = any(:ids)", quotes)
+
+        held_est = await q("select estimate_id::text from quotes where estimate_id is not null")
+        estimates = [e for e in new["estimates"] if e not in held_est]
+        await run("estimates", "delete from estimates where id::text = any(:ids)", estimates)
+
+        held_ms = await q("select distinct r.set_id::text from measurement_revisions r join estimate_takeoffs t on t.measurement_revision_id = r.id")
+        msets = [m for m in new["measurement_sets"] if m not in held_ms]
+        await run("relay_outbox_events", "delete from relay_outbox_events where measurement_set_id::text = any(:ids)", msets)
+        await run("measurement_sets", "delete from measurement_sets where id::text = any(:ids)", msets)
+        await run("inspections", "delete from inspections where id::text = any(:ids) and id not in (select inspection_id from estimates where inspection_id is not null)", new["inspections"])
+
+        held_leads = await q("select lead_id::text from quotes where lead_id is not null") | await q("select lead_id::text from estimates where lead_id is not null")
+        leads = [x for x in new["leads"] if x not in held_leads]
+        await run("relay_outbox_events", "delete from relay_outbox_events where lead_id::text = any(:ids)", leads)
+        await run("leads", "delete from leads where id::text = any(:ids)", leads)
+
+        held_c = set()
+        for t in ("jobs", "invoices", "quotes", "estimates", "leads", "inspections"):
+            held_c |= await q(f"select customer_id::text from {t} where customer_id is not null")
+        await run("customers", "delete from customers where id::text = any(:ids)", [c for c in new["customers"] if c not in held_c])
+
+        held_p = set()
+        for t in ("jobs", "invoices", "quotes", "estimates", "leads", "inspections", "measurement_sets", "customer_properties"):
+            held_p |= await q(f"select property_id::text from {t} where property_id is not null")
+        held_v = await q("select source_visit_id::text from leads where source_visit_id is not null")
+        await run("visits", "delete from visits where id::text = any(:ids)", [v for v in new["visits"] if v not in held_v])
+        props = [x for x in new["properties"] if x not in held_p]
+        await run("visits", "delete from visits where property_id::text = any(:ids)", props)
+        await run("property_contacts", "delete from property_contacts where property_id::text = any(:ids)", props)
+        await run("properties", "delete from properties where id::text = any(:ids)", props)
+
+        mats = list(test_mats - await held_materials(list(test_mats)))  # re-check against what is staying
+        await run("supplier_price_history", "delete from supplier_price_history where material_id::text = any(:ids)", mats)
+        await run("supplier_materials", "delete from supplier_materials where material_id::text = any(:ids)", mats)
+        await run("materials", "delete from materials where id::text = any(:ids)", mats)  # its own txns/balances cascade
+
+        held_s = (await q("select supplier_id::text from purchase_orders where supplier_id is not null")
+                  | await q("select supplier_id::text from supplier_materials where supplier_id is not null")
+                  | await q("select supplier_id::text from price_book_entries where supplier_id is not null")
+                  | await q("select cost_source_supplier_id::text from estimate_line_items where cost_source_supplier_id is not null"))
+        sups = [x for x in new["suppliers"] if x not in held_s]
+        await run("supplier_price_history", "delete from supplier_price_history where supplier_id::text = any(:ids)", sups)
+        await run("suppliers", "delete from suppliers where id::text = any(:ids)", sups)
+        if keep_jobs or keep_pos:
+            out["kept_jobs_with_real_stock_movements"] = len(keep_jobs)
+            out["kept_pos_with_real_receiving"] = len(keep_pos)
+        await s.commit()
+    await eng.dispose()
+    return out
+
+
+def purge_business(start: dict) -> dict:
+    return asyncio.run(_purge_business(start))
