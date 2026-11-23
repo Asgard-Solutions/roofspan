@@ -1,5 +1,38 @@
 # RoofSpan — Product Requirements & Status
 
+## Test-suite stabilization (2026-06) — full suite green (final run: 1209 tests = 1152 passed / 0 failed / 0 errors / 56 skipped / 1 xfailed; counts + stock unchanged)
+- Isolation infrastructure (tests/conftest.py):
+  - Fresh DB pools per test (asyncpg pools are bound to the loop that opened them).
+  - Cross-worker locks:
+    - EXCLUSIVE for suites that change the live licence/subscription/relay state (licensing_api, billing, stripe_billing, seat_enforcement, pairing, relay), SHARED for every other module.
+    - Per-group EXCLUSIVE for the shared MOCKED ABC connection and for the company default price book. The original default is restored after each price-book module.
+- Run-scoped cleanup now also tracks territories, canvass_sections, import_jobs, assemblies and inventory_locations.
+- Manual/helper scripts (tests/_setup_round3_e2e.py, setup_iter122_remeasure.py) call `manual_begin()`. After UI checks, run `python tests/_test_data_cleanup.py end` to remove everything created since.
+- Outdated tests updated to approved behaviour:
+  - Sales sees only assigned leads, estimates, quotes and properties (phase2, phase3, final_e2e, round3_lock).
+  - An estimate save without line ids is refused (409) when takeoff lines exist (iter121).
+  - Idempotency-Key reused with a different body -> 409 (measurements).
+  - Relay tiles use an office-signed tile token, and MapTiler may be configured.
+  - The /ready readiness model changed; source-string checks follow current code (location pipeline).
+- Environment fixes:
+  - aiosqlite added to requirements.txt.
+  - The Stripe suite skips explicitly when the sandbox key is rejected.
+  - The fake asyncpg in test_windows_cp_db_bootstrap is restored after each test.
+  - The hermetic SQLite mobile-revision cases run in a fresh interpreter (tests/_mobile_new_revision_cases.py via test_mobile_new_revision.py).
+  - The migration downgrade test skips once later migrations exist.
+- Test-data dependency fixes:
+  - phase2 password change uses a temp user, never the real owner (it was causing 401s in parallel workers).
+  - backend_test wrong-password test no longer burns the owner's lockout budget.
+  - The outbox lease test only claims its own event.
+  - Measurements use a run-owned property.
+  - The map-config test no longer flips satellite on.
+- Concurrency: quick-count comparisons read inside a stable window (iter127, kiss_r4).
+- KNOWN ENV ISSUES:
+  - The STRIPE_SECRET_KEY test sandbox key is EXPIRED, so the Stripe billing lifecycle is not verified.
+  - uvicorn --reload watches backend/tests, so editing a test file restarts the backend mid-run.
+  - Overlapping pytest sessions can each miss the other's records.
+- Legacy data: about 349 of the 356 customers match current test generators. 7 are probable test data but have no current source (TEST_QuoteBug x2, TEST_Q, TEST_SalesView, UITest, TEST_E2E_ac, TEST_I124UI). Nothing has been deleted yet; it needs the user's decision.
+
 ## Test-data hygiene + Field lead assign validation (2026-06) — DONE (pytest; full suite run twice, business counts unchanged)
 - Field app `POST /api/mobile/leads/{id}/assign` and Office `PUT /api/leads/{id}/assign` now use the shared `services/assignees.resolve_assignee` (user must exist, be active and have an assignable role; 422 otherwise; malformed lead id -> 404). Validation runs before any change, and mobile now writes the `lead.assign` audit entry (via=mobile). Mobile job assign uses the same helper.
 - Tests: `tests/_test_data_cleanup.py` snapshots the ids of tracked tables (properties, customers, leads, inspections, measurement_sets, estimates, quotes, jobs, invoices, purchase_orders, materials, suppliers, visits) at pytest_configure. `purge_business` runs at pytest_sessionfinish, after price books and before users, and removes only the rows created during the run, children included.

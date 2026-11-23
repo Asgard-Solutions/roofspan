@@ -231,8 +231,13 @@ def test_rbac_sales_can_create_estimate_and_customer(sales_headers):
     r = requests.post(f"{API}/customers", json={"name": f"TEST_SalesCust_{uuid.uuid4().hex[:6]}"}, headers=sales_headers, timeout=15)
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
-    # sales can create estimate
+    # Approved rule: a salesperson's estimate must sit on a lead assigned to them (no lead -> 403).
     er = requests.post(f"{API}/estimates", json={"customer_id": cid, "tax_rate": 5, "items": [{"description": "x", "quantity": 1, "unit_price": 100}]}, headers=sales_headers, timeout=15)
+    assert er.status_code == 403, er.text
+    lr = requests.post(f"{API}/mobile/leads", json={"name": f"TEST_SalesLead_{uuid.uuid4().hex[:6]}", "address": "1 Test St"}, headers=sales_headers, timeout=15)
+    assert lr.status_code in (200, 201), lr.text
+    er = requests.post(f"{API}/estimates", json={"lead_id": lr.json()["id"], "customer_id": cid, "tax_rate": 5,
+                                                 "items": [{"description": "x", "quantity": 1, "unit_price": 100}]}, headers=sales_headers, timeout=15)
     assert er.status_code == 201, er.text
 
 

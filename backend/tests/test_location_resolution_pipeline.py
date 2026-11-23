@@ -12,9 +12,12 @@ def test_rentcast_import_is_separate_from_mapbox_resolution():
     assert "_mark_location_pending(nd)" in run_import
     assert "geocode_batch" not in run_import
     assert 'job.status = "completed"' in run_import
-    assert "refresh_existing_property_locations(territory_id=territory_id)" in run_import
-    assert run_import.index('job.status = "completed"') < run_import.index("refresh_existing_property_locations")
-    assert "Mapbox Permanent Geocoding runs separately" in source
+    # Current flow: after the import completes, duplicates are cleaned up first, then Mapbox resolution runs.
+    assert "_cleanup_then_resolve(territory_id)" in run_import
+    assert run_import.index('job.status = "completed"') < run_import.index("_cleanup_then_resolve(territory_id)")
+    cleanup = source[source.index("async def _cleanup_then_resolve"):]
+    assert "refresh_existing_property_locations(territory_id=territory_id)" in cleanup[:1500]
+    assert "before Mapbox Permanent Geocoding runs" in source  # user-facing estimate note (current wording)
 
 
 def test_second_phase_batches_uncached_properties_and_persists_completed_cache():
@@ -62,7 +65,7 @@ def test_mapbox_byok_and_windows_freeze_are_wired():
     assert 'provider="mapbox"' in settings
     assert "Mapbox Permanent Geocoding" in settings
     assert '"location_upgrade", "mapbox_geocoding"' in spec
-    assert "import server, location_upgrade, mapbox_geocoding" in build
+    assert "import server, property_dedup, location_upgrade, mapbox_geocoding" in build
 
 
 def test_location_status_endpoint_exists():
@@ -75,14 +78,16 @@ def test_map_progress_is_sidebar_content_and_pin_diagnostics_are_collapsed_foote
     progress = (FRONTEND / "components" / "LocationResolutionProgress.jsx").read_text(encoding="utf-8")
     sheet = (FRONTEND / "components" / "PropertySheet.jsx").read_text(encoding="utf-8")
 
-    assert 'document.querySelector(\'[data-testid="territory-panel"]\')' in progress
-    assert "createPortal(" in progress
+    # Progress now renders inline inside the territory's row in the Map sidebar (no floating overlay/portal).
+    mapview = (FRONTEND / "pages" / "MapView.jsx").read_text(encoding="utf-8")
+    assert "<LocationResolutionProgress territoryId={t.id} />" in mapview
     assert "fixed top-3" not in progress
 
     assert '<details className="group mt-6' in sheet
     assert 'data-testid="pin-location-diagnostics"' in sheet
     assert "<summary" in sheet
-    assert " open=" not in sheet
+    details_tag = sheet[sheet.index('<details className="group mt-6'):].split(">", 1)[0]
+    assert " open" not in details_tag  # diagnostics start collapsed
     assert sheet.index('data-testid="convert-lead-button"') < sheet.index('data-testid="pin-location-diagnostics"')
 
 

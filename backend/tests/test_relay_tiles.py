@@ -154,11 +154,14 @@ def test_tile_routes_through_tunnel_to_office():
         return await _with_tunnel(data["installation_id"], priv, inner)
 
     r = asyncio.run(scenario())
-    # 404 => reached the Office satellite proxy (MapTiler not configured). Never 401/403.
-    assert r.status_code == 404, (r.status_code, r.text)
+    # Reached the Office satellite proxy: 404 when MapTiler is not configured in this environment,
+    # 200 + image when it is. Never 401/403.
+    assert r.status_code in (200, 404), (r.status_code, r.text[:120])
+    if r.status_code == 200:
+        assert r.headers.get("content-type", "").startswith("image/")
 
 
-def test_tile_bad_user_token_propagates_401():
+def test_tile_expired_user_token_does_not_blank_map():
     data, priv = _activate()
     device_id, cred = _pair(data, priv)
     ticket = _mint(data["installation_id"], device_id, cred, "not-a-valid-jwt").json()["ticket"]
@@ -170,5 +173,7 @@ def test_tile_bad_user_token_propagates_401():
         return await _with_tunnel(data["installation_id"], priv, inner)
 
     r = asyncio.run(scenario())
-    # Office get_current_user rejects the embedded token -> 401 propagated.
-    assert r.status_code == 401, (r.status_code, r.text)
+    # Approved design (relay/tunnel_client.py): tile fetches are authorized at the Office with an office-signed
+    # tile token, NOT the rep's access token, so an expired/invalid user session never blanks the map.
+    # The ticket + paired device are still required (see the 401/403 ticket tests above).
+    assert r.status_code not in (401, 403), (r.status_code, r.text[:120])

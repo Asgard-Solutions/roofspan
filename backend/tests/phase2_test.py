@@ -198,10 +198,32 @@ def test_property_detail(owner_headers, imported_territory):
 
 
 # ---------- Do Not Knock (sales allowed) ----------
-def test_sales_can_toggle_dnk(sales_headers, owner_headers, imported_territory):
-    tid = imported_territory["territory_id"]
+# Slightly inset copy of SAMPLE_POLY: a Canvass Section must lie strictly inside its Territory.
+INNER_POLY = {"type": "Polygon", "coordinates": [[[-86.7899, 36.1551], [-86.7801, 36.1551], [-86.7801, 36.1649], [-86.7899, 36.1649], [-86.7899, 36.1551]]]}
+
+
+def _in_section(props):
+    """Properties strictly inside INNER_POLY (those are the ones the sales section covers)."""
+    inside = [p for p in props if p.get("latitude") is not None and -86.7899 < p["longitude"] < -86.7801 and 36.1551 < p["latitude"] < 36.1649]
+    assert inside, "no imported property inside the sales section"
+    return inside
+
+
+@pytest.fixture(scope="module")
+def sales_in_territory(sales_headers, owner_headers, imported_territory):
+    """Approved rule: a salesperson only reaches properties in a Canvass Section assigned to them."""
+    me = requests.get(f"{API}/auth/me", headers=sales_headers, timeout=15).json()["id"]
+    r = requests.post(f"{API}/canvass-sections", json={"territory_id": imported_territory["territory_id"], "name": f"TEST_Sec_{uuid.uuid4().hex[:6]}",
+                                                       "geometry": INNER_POLY, "assigned_user_id": me}, headers=owner_headers, timeout=30)
+    assert r.status_code == 201, r.text
+    yield imported_territory
+    requests.delete(f"{API}/canvass-sections/{r.json()['id']}", headers=owner_headers, timeout=15)
+
+
+def test_sales_can_toggle_dnk(sales_headers, owner_headers, sales_in_territory):
+    tid = sales_in_territory["territory_id"]
     props = requests.get(f"{API}/properties", params={"territory_id": tid}, headers=owner_headers, timeout=15).json()
-    pid = props[0]["id"]
+    pid = _in_section(props)[0]["id"]
     r = requests.patch(f"{API}/properties/{pid}", json={"do_not_knock": True, "do_not_knock_reason": "test"}, headers=sales_headers, timeout=15)
     assert r.status_code == 200, r.text
     assert r.json()["do_not_knock"] is True
@@ -214,10 +236,10 @@ def test_sales_can_toggle_dnk(sales_headers, owner_headers, imported_territory):
 
 
 # ---------- Visits + Convert to lead ----------
-def test_visit_with_dnk_outcome_flips_property(sales_headers, owner_headers, imported_territory):
-    tid = imported_territory["territory_id"]
+def test_visit_with_dnk_outcome_flips_property(sales_headers, owner_headers, sales_in_territory):
+    tid = sales_in_territory["territory_id"]
     props = requests.get(f"{API}/properties", params={"territory_id": tid}, headers=owner_headers, timeout=15).json()
-    pid = props[1]["id"]
+    pid = _in_section(props)[-1]["id"]
     r = requests.post(f"{API}/properties/{pid}/visits", json={"outcome": "do_not_knock", "notes": "TEST dnk visit"}, headers=sales_headers, timeout=15)
     assert r.status_code == 201, r.text
     assert r.json()["outcome"] == "do_not_knock"
@@ -226,8 +248,8 @@ def test_visit_with_dnk_outcome_flips_property(sales_headers, owner_headers, imp
     assert any(v["outcome"] == "do_not_knock" for v in detail["visits"])
 
 
-def test_convert_to_lead_falls_back_to_owner_name(sales_headers, owner_headers, imported_territory):
-    tid = imported_territory["territory_id"]
+def test_convert_to_lead_falls_back_to_owner_name(sales_headers, owner_headers, sales_in_territory):
+    tid = sales_in_territory["territory_id"]
     props = requests.get(f"{API}/properties", params={"territory_id": tid}, headers=owner_headers, timeout=15).json()
     pid = props[2]["id"]
     # blank name -> should use owner contact name
@@ -252,30 +274,17 @@ def test_change_password_wrong_current_400(owner_headers):
     assert r.status_code == 400
 
 
-def test_change_password_roundtrip_reverts():
-    new_pwd = f"TmpPass_{uuid.uuid4().hex[:6]}"
-    # login fresh (don't reuse module fixture — we'll re-login after change)
-    r = requests.post(f"{API}/auth/login", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}, timeout=15)
-    assert r.status_code == 200
-    tok = r.json()["access_token"]
-    h = {"Authorization": f"Bearer {tok}"}
-
-    r = requests.post(f"{API}/auth/change-password", json={"current_password": OWNER_PASSWORD, "new_password": new_pwd}, headers=h, timeout=15)
+def test_change_password_roundtrip(owner_headers):
+    # Run-owned user: never change the real owner's password (other workers log in as the owner concurrently).
+    email, pwd, new_pwd = f"test_pwchange_{uuid.uuid4().hex[:8]}@example.com", "PwStart#2026", f"TmpPass_{uuid.uuid4().hex[:6]}"
+    r = requests.post(f"{API}/users", json={"email": email, "full_name": "TEST PwChange", "password": pwd, "role": "office"}, headers=owner_headers, timeout=15)
+    assert r.status_code == 201, r.text
+    tok = requests.post(f"{API}/auth/login", json={"email": email, "password": pwd}, timeout=15).json()["access_token"]
+    r = requests.post(f"{API}/auth/change-password", json={"current_password": pwd, "new_password": new_pwd},
+                      headers={"Authorization": f"Bearer {tok}"}, timeout=15)
     assert r.status_code == 200, r.text
-
-    # login with new
-    r = requests.post(f"{API}/auth/login", json={"email": OWNER_EMAIL, "password": new_pwd}, timeout=15)
-    assert r.status_code == 200, "login with new password failed"
-    tok2 = r.json()["access_token"]
-
-    # revert
-    h2 = {"Authorization": f"Bearer {tok2}"}
-    r = requests.post(f"{API}/auth/change-password", json={"current_password": new_pwd, "new_password": OWNER_PASSWORD}, headers=h2, timeout=15)
-    assert r.status_code == 200
-
-    # verify original works again
-    r = requests.post(f"{API}/auth/login", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}, timeout=15)
-    assert r.status_code == 200, "REVERT FAILED - owner password not restored!"
+    assert requests.post(f"{API}/auth/login", json={"email": email, "password": new_pwd}, timeout=15).status_code == 200
+    assert requests.post(f"{API}/auth/login", json={"email": email, "password": pwd}, timeout=15).status_code == 401
 
 
 # ---------- Territory delete preserves properties ----------

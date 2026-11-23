@@ -6,6 +6,7 @@ the SQL issued and simulates server state. This lets us assert the provisioning 
 real PostgreSQL superuser or Windows DPAPI.
 """
 import sys
+import pytest
 import types
 import asyncio
 import importlib
@@ -42,6 +43,17 @@ class _FakeConn:
 
     async def close(self):
         pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_asyncpg():
+    """The fake asyncpg must never leak into later tests in this worker (it broke SQLAlchemy engines)."""
+    real = sys.modules.get("asyncpg")
+    yield
+    if real is not None:
+        sys.modules["asyncpg"] = real
+    else:
+        sys.modules.pop("asyncpg", None)
 
 
 def _install_fake_asyncpg(state):

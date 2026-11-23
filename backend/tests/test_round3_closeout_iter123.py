@@ -95,7 +95,8 @@ def test_sales_apply_endpoints_forbidden(owner, sales, created):
 # Default price book is Standard on new estimate
 def test_default_price_book_standard(owner, created):
     pbs = _pb(owner)
-    assert [p["name"] for p in pbs] == ["Standard"] and pbs[0]["is_default"] is True
+    pbs = [p for p in pbs if p["is_default"]]  # other run-created books may exist; the company default is "Standard"
+    assert [p["name"] for p in pbs] == ["Standard"]
     lid, cust = _lead(owner)
     e = owner.post(f"{BASE_URL}/api/estimates", json={"lead_id": lid, "customer_id": cust, "items": []}).json()
     created["estimates"].append(e["id"])

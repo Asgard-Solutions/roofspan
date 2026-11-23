@@ -1,5 +1,7 @@
 # Round 3 E2E setup: TEST lead + verified measurement (lead_id primary) + empty estimate. Writes ids to /tmp/r3.json
 import json, uuid, requests
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _test_data_cleanup import manual_begin; manual_begin()  # data stays for UI checks; clean with: python tests/_test_data_cleanup.py end
 B = open('/app/frontend/.env').read().split('REACT_APP_BACKEND_URL=')[1].split()[0].rstrip('/') + '/api'
 s = requests.Session()
 s.headers["Authorization"] = "Bearer " + s.post(f"{B}/auth/login", json={"email": "pjacobsen@asgardsolution.io", "password": "RoofSpan#Owner2026"}).json()["access_token"]

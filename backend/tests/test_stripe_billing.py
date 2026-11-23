@@ -31,6 +31,14 @@ LOOKUP = os.environ.get("STRIPE_SEAT_LOOKUP_KEY", "roofspan_seat_monthly")
 
 stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
 
+# Integration-dependent: these drive a REAL Stripe test-mode account. If that sandbox key is expired or revoked,
+# skip explicitly (the lifecycle is not verified) instead of erroring in setup.
+try:
+    stripe.Account.retrieve()
+except stripe.error.AuthenticationError as _exc:
+    pytest.skip(f"Stripe test sandbox key rejected by Stripe ({_exc.user_message or 'authentication failed'}); "
+                "billing lifecycle NOT verified in this run", allow_module_level=True)
+
 
 def _activate(seats=5):
     priv = Ed25519PrivateKey.generate()

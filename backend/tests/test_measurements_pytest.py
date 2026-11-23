@@ -16,11 +16,12 @@ def auth():
 
 @pytest.fixture(scope="module")
 def property_id(auth):
-    r = requests.get(f"{BASE_URL}/api/properties?limit=1", headers=auth, timeout=30)
-    items = r.json()
-    items = items if isinstance(items, list) else (items.get("items") or items.get("properties"))
-    assert items, "need at least one property"
-    return items[0]["id"]
+    # Run-owned property (never write measurements onto an existing working-data property).
+    r = requests.post(f"{BASE_URL}/api/properties", headers=auth, timeout=30, json={
+        "address_line1": f"TEST_{uuid.uuid4().hex[:8]} Measure Ln", "city": "Austin", "state": "TX",
+        "zip_code": "78701", "latitude": 30.27, "longitude": -97.74})
+    assert r.status_code in (200, 201), r.text
+    return r.json()["id"]
 
 
 def _payload(pid):
@@ -143,8 +144,9 @@ class TestMobile:
         assert m1.status_code == 201, m1.text
         mid = m1.json()["id"]
         # idempotent replay
-        m2 = requests.post(f"{BASE_URL}/api/mobile/measurements", headers=mh, json={"property_id": property_id}, timeout=30)
-        assert m2.status_code in (200, 201)
+        # Replay = same key + same body (a different body with the same key is rejected 409 by design).
+        m2 = requests.post(f"{BASE_URL}/api/mobile/measurements", headers=mh, json=payload, timeout=30)
+        assert m2.status_code in (200, 201), m2.text
         assert m2.json()["id"] == mid
         assert m2.json().get("replayed") is True
         # list
