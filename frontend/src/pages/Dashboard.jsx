@@ -116,7 +116,7 @@ export default function Dashboard() {
         {isSensitive && <BackupAlert />}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <AttentionCard title="Follow-ups due" icon={BellRing} testid="attention-follow-ups" count={s("follow_ups").count} items={s("follow_ups").items}
-            sub={a ? `${a.follow_ups.overdue_count} overdue · ${a.follow_ups.today_count} due today` : null} empty="No follow-ups due. Nice work." viewAll="/leads?view=overdue"
+            sub={a ? `${a.follow_ups.overdue_count} overdue · ${a.follow_ups.today_count} due today` : null} empty="No follow-ups due. Nice work." viewAll={a && !a.follow_ups.overdue_count && a.follow_ups.today_count ? "/leads?view=today" : "/leads?view=overdue"}
             renderMeta={(it) => <span className={`rounded px-1.5 py-0.5 ${WHEN_STYLE[it.when]}`}>{it.when === "today" ? dateTime(it.date).split(", ").pop() : `${WHEN_LABEL[it.when]} · ${shortDate(it.date)}`}</span>} />
           <AttentionCard title="Inspections booked" icon={CalendarClock} testid="attention-inspections" count={s("inspections").count} items={s("inspections").items}
             sub="Today and the next 7 days" empty="No inspections booked." viewAll="/leads"

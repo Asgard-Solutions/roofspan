@@ -2943,3 +2943,9 @@ reminders = Office Home + Field My Day lists only (no email/push).
   callback/appointment visit outcomes prompt for a follow-up/booking, next action on Leads list. Helpers: mobile/src/followups.js
   (node src/tests/followups.node.test.js). Device testing NOT done.
 - Tests: backend/tests/test_follow_ups_iter133.py.
+- Also fixed (found by the suite): an expired/unconfigured MOCKED ABC Supply connection returned "Internal Server Error";
+  server.py now maps AbcError -> 409 (reconnect/not connected) or 502 with the user message. test_abc_supply_pricing_v2 now always
+  reconnects (mock keeps tokens in memory, lost on backend reload). test_kiss_r4_materials_quick count/list check uses a per-key window.
+- Final full suite 2026-06: 1159 passed, 1 failed (test_licensing_api network connect timeout to preview URL; passes 8/8 on rerun),
+  56 skipped, 1 xfailed. Working-data counts and stock (sum delta 13196.5) unchanged after cleanup.
+- UI testing: iteration_134 all flows pass; follow-ups: Home "View all" now opens Due today when nothing is overdue; icon buttons labelled; cancel has Undo.

@@ -20,8 +20,8 @@ function OpenItem({ f, onAct }) {
       </div>
       <div className="flex gap-1">
         <Button size="sm" variant="outline" onClick={() => onAct("complete", f)} data-testid={`followup-done-${f.id}`}><Check className="h-3.5 w-3.5" /> Done</Button>
-        <Button size="sm" variant="ghost" onClick={() => onAct("reschedule", f)} data-testid={`followup-reschedule-${f.id}`}><CalendarClock className="h-3.5 w-3.5" /></Button>
-        <Button size="sm" variant="ghost" className="text-slate-400 hover:text-red-600" onClick={() => onAct("cancel", f)} data-testid={`followup-cancel-${f.id}`}><X className="h-3.5 w-3.5" /></Button>
+        <Button size="sm" variant="ghost" onClick={() => onAct("reschedule", f)} title="Reschedule" aria-label="Reschedule" data-testid={`followup-reschedule-${f.id}`}><CalendarClock className="h-3.5 w-3.5" /></Button>
+        <Button size="sm" variant="ghost" className="text-slate-400 hover:text-red-600" onClick={() => onAct("cancel", f)} title="Cancel follow-up" aria-label="Cancel follow-up" data-testid={`followup-cancel-${f.id}`}><X className="h-3.5 w-3.5" /></Button>
       </div>
     </div>
   );
@@ -55,8 +55,12 @@ export function FollowUpsPanel({ leadId, visits, onChanged, onOpenChange }) {
 
   const act = async (m, f) => {
     if (m !== "cancel") { setTarget(f || null); setMode(m); return; }
-    try { await api.patch(`/follow-ups/${f.id}`, { status: "cancelled" }); toast.success("Follow-up cancelled"); load(); onChanged?.(); }
-    catch (e) { toast.error(apiError(e)); }
+    setRows((prev) => prev.filter((x) => x.id !== f.id));
+    const t = setTimeout(async () => {
+      try { await api.patch(`/follow-ups/${f.id}`, { status: "cancelled" }); onChanged?.(); } catch (e) { toast.error(apiError(e)); }
+      load();
+    }, 5000);
+    toast("Follow-up cancelled", { duration: 5000, action: { label: "Undo", onClick: () => { clearTimeout(t); load(); } } });
   };
   const open = rows.filter((r) => r.status === "open").sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
   const history = [
