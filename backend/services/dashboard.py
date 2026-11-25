@@ -99,30 +99,11 @@ def _iso(d):
     return d.isoformat() if d else None
 
 
-async def attention(db: AsyncSession, user, include_money: bool) -> dict:
-    from models import Lead, Inspection, Quote, Invoice
+async def attention(db: AsyncSession, user, include_money: bool, tz: str | None = None) -> dict:
+    from models import Invoice
+    from services.follow_ups import sales_attention
     now = datetime.now(timezone.utc)
     sales = user.role == "sales"
-
-    lq = select(Lead).where(Lead.status.in_(("new", "working"))).order_by(Lead.updated_at.asc())
-    if sales:
-        lq = lq.where(Lead.assigned_user_id == user.id)
-    stale = now - timedelta(days=3)
-    follow = [l for l in (await db.execute(lq)).scalars().all()
-              if l.status == "new" or (l.updated_at and l.updated_at < stale)]
-
-    iq = (select(Inspection, Lead).outerjoin(Lead, Lead.id == Inspection.lead_id)
-          .where(Inspection.inspection_date >= now - timedelta(hours=12), Inspection.inspection_date <= now + timedelta(days=7))
-          .order_by(Inspection.inspection_date.asc()))
-    if sales:
-        iq = iq.where(Lead.assigned_user_id == user.id)
-    insp = (await db.execute(iq)).all()
-
-    qq = (select(Quote, Lead).outerjoin(Lead, Lead.id == Quote.lead_id)
-          .where(Quote.status == "sent").order_by(Quote.issue_date.asc().nullslast()))
-    if sales:
-        qq = qq.where(Lead.assigned_user_id == user.id)
-    quotes = (await db.execute(qq)).all()
 
     jq = (select(Job).where(Job.status.in_(("scheduled", "in_progress")))
           .order_by(Job.scheduled_start.asc().nullslast()))
@@ -131,17 +112,7 @@ async def attention(db: AsyncSession, user, include_money: bool) -> dict:
     jobs = (await db.execute(jq)).scalars().all()
 
     out = {
-        "follow_ups": {"count": len(follow), "items": [
-            {"id": str(l.id), "title": l.name or l.address or "Unnamed lead", "subtitle": l.address,
-             "status": l.status, "date": _iso(l.updated_at), "link": f"/leads/{l.id}"} for l in follow[:6]]},
-        "inspections": {"count": len(insp), "items": [
-            {"id": str(i.id), "title": (ld.name if ld else None) or i.inspector or "Inspection",
-             "subtitle": ld.address if ld else None, "date": _iso(i.inspection_date),
-             "link": f"/leads/{i.lead_id}" if i.lead_id else "/leads"} for i, ld in insp[:6]]},
-        "proposals": {"count": len(quotes), "total": round(sum(float(q.total or 0) for q, _ in quotes), 2), "items": [
-            {"id": str(q.id), "title": q.number, "subtitle": ld.name if ld else None, "amount": q.total,
-             "date": _iso(q.issue_date), "link": f"/leads/{q.lead_id}" if q.lead_id else f"/quotes/{q.id}/proposal"}
-            for q, ld in quotes[:6]]},
+        **(await sales_attention(db, user, tz, only_mine=False)),
         "jobs": {"count": len(jobs), "items": [
             {"id": str(j.id), "title": j.number, "subtitle": j.scope, "status": j.status,
              "date": _iso(j.scheduled_start), "link": f"/jobs/{j.id}"} for j in jobs[:6]]},

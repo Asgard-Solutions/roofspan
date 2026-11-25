@@ -4,8 +4,9 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Contact, CalendarClock, FileSignature, Hammer, ArrowRight, Boxes, PackageOpen, ShoppingCart, Truck as TruckIcon, AlertTriangle, Warehouse, DatabaseBackup, Wallet, ChevronDown } from "lucide-react";
+import { Contact, UserX, BellRing, CalendarClock, FileSignature, Hammer, ArrowRight, Boxes, PackageOpen, ShoppingCart, Truck as TruckIcon, AlertTriangle, Warehouse, DatabaseBackup, Wallet, ChevronDown } from "lucide-react";
 import { money, shortDate, shortDay } from "@/lib/format";
+import { WHEN_STYLE, WHEN_LABEL, dateTime, tz } from "@/lib/followups";
 
 function BackupAlert() {
   const [h, setH] = useState(null);
@@ -102,7 +103,7 @@ export default function Dashboard() {
   const [a, setA] = useState(null);
   const [p, setP] = useState(null);
   useEffect(() => {
-    api.get("/dashboard/attention").then((r) => setA(r.data)).catch(() => {});
+    api.get("/dashboard/attention", { params: { tz: tz() } }).then((r) => setA(r.data)).catch(() => {});
     api.get("/dashboard/purchasing").then((r) => setP(r.data)).catch(() => {});
   }, []);
   const firstName = (user?.full_name || user?.email || "").split(" ")[0];
@@ -114,12 +115,21 @@ export default function Dashboard() {
       <div className="space-y-6 p-6 sm:p-8">
         {isSensitive && <BackupAlert />}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <AttentionCard title="Leads needing follow-up" icon={Contact} testid="attention-follow-ups" count={s("follow_ups").count} items={s("follow_ups").items}
-            sub="New, or no update in 3+ days" empty="Everyone has been followed up." viewAll="/leads" renderMeta={(it) => it.status} />
-          <AttentionCard title="Inspections this week" icon={CalendarClock} testid="attention-inspections" count={s("inspections").count} items={s("inspections").items}
-            sub="Next 7 days" empty="No inspections booked this week." viewAll="/leads" />
-          <AttentionCard title="Proposals waiting on customers" icon={FileSignature} testid="attention-proposals" count={s("proposals").count} items={s("proposals").items}
-            sub={a ? `${money(a.proposals.total)} outstanding` : null} empty="No proposals waiting." viewAll="/sales/quotes" renderMeta={(it) => money(it.amount)} />
+          <AttentionCard title="Follow-ups due" icon={BellRing} testid="attention-follow-ups" count={s("follow_ups").count} items={s("follow_ups").items}
+            sub={a ? `${a.follow_ups.overdue_count} overdue · ${a.follow_ups.today_count} due today` : null} empty="No follow-ups due. Nice work." viewAll="/leads?view=overdue"
+            renderMeta={(it) => <span className={`rounded px-1.5 py-0.5 ${WHEN_STYLE[it.when]}`}>{it.when === "today" ? dateTime(it.date).split(", ").pop() : `${WHEN_LABEL[it.when]} · ${shortDate(it.date)}`}</span>} />
+          <AttentionCard title="Inspections booked" icon={CalendarClock} testid="attention-inspections" count={s("inspections").count} items={s("inspections").items}
+            sub="Today and the next 7 days" empty="No inspections booked." viewAll="/leads"
+            renderMeta={(it) => <span className={it.when === "overdue" ? "font-medium text-red-600" : ""}>{it.when === "overdue" ? "Results missing" : dateTime(it.date)}</span>} />
+          <AttentionCard title="Proposals needing attention" icon={FileSignature} testid="attention-proposals" count={s("proposals").count} items={s("proposals").items}
+            sub={a ? `Not sent or no answer for 3+ days · ${money(a.proposals.total)}` : null} empty="No proposals need attention." viewAll="/sales/quotes" renderMeta={(it) => money(it.amount)} />
+          <AttentionCard title="Leads with no follow-up" icon={Contact} testid="attention-no-follow-up" count={s("no_follow_up").count} items={s("no_follow_up").items}
+            sub="Open leads with nothing scheduled" empty="Every open lead has a next step." viewAll="/leads?view=none" renderMeta={(it) => it.status} />
+          {a?.unassigned && (
+            <AttentionCard title="Unassigned leads" icon={UserX} testid="attention-unassigned" count={a.unassigned.count} items={a.unassigned.items}
+              sub={a.overdue_by_rep?.length ? `Overdue: ${a.overdue_by_rep.map((r) => `${r.name} ${r.count}`).join(" · ")}` : "No overdue follow-ups by rep"}
+              empty="Every open lead has an owner." viewAll="/leads?view=unassigned" renderMeta={(it) => it.status} />
+          )}
           <AttentionCard title="Jobs scheduled & in progress" icon={Hammer} testid="attention-jobs" count={s("jobs").count} items={s("jobs").items}
             empty="No jobs scheduled." viewAll="/jobs" renderMeta={(it) => (it.date ? shortDay(it.date) : it.status.replace("_", " "))} />
           <MaterialIssues d={p} />

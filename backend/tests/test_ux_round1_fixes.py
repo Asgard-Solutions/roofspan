@@ -80,8 +80,9 @@ class TestQuotesScoping:
 
     def test_attention_proposals_consistent(self, sales):
         d = sales.get(f"{BASE_URL}/api/dashboard/attention", timeout=30).json()
-        sq = sales.get(f"{BASE_URL}/api/quotes", timeout=60).json()
-        assert d["proposals"]["count"] == len([q for q in sq if q["status"] == "sent"])
+        sq = {q["id"]: q for q in sales.get(f"{BASE_URL}/api/quotes", timeout=60).json()}
+        for p in d["proposals"]["items"]:  # only the rep's own draft/sent proposals that need attention
+            assert p["id"] in sq and sq[p["id"]]["status"] in ("draft", "sent")
 
 
 # Purchasing dashboard scoping

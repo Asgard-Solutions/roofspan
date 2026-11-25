@@ -25,6 +25,7 @@ export const cache = {
   leads: () => readThrough("leads", () => api.get("/mobile/leads")),
   lead: (id) => readThrough(`lead:${id}`, () => api.get(`/mobile/leads/${id}`)),
   jobs: () => readThrough("jobs", () => api.get("/mobile/jobs")),
+  myDay: () => readThrough("myday", () => api.get("/mobile/my-day", { params: { tz: Intl.DateTimeFormat().resolvedOptions().timeZone } })),
   job: (id) => readThrough(`job:${id}`, () => api.get(`/mobile/jobs/${id}`)),
   sections: () => readThrough("sections", () => api.get("/mobile/canvass-sections")),
   sectionProperties: (id) => readThrough(`section:${id}:props`, () => api.get(`/mobile/canvass-sections/${id}/properties`)),

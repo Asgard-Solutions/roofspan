@@ -48,22 +48,22 @@ class TestQuickCounts:
         print("COUNTS", d["counts"])
 
     def test_counts_match_lists(self, owner):
-        # Concurrent suites create/receive materials; only compare a window in which the counts did not move.
-        for _ in range(5):
-            d = _counts(owner)
-            lists = {}
-            for k in KEYS:
+        # Concurrent suites create/receive materials and POs; per key, only compare a list read whose count
+        # was identical immediately before and after it (a tight window instead of one spanning every key).
+        for k in KEYS:
+            for _ in range(8):
+                before = _counts(owner)
                 r = owner.get(f"{BASE_URL}/api/materials", params={"quick": k, "active": "true"}, timeout=120)
                 assert r.status_code == 200, r.text
-                lists[k] = r.json()
-            if _counts(owner) == d:
-                break
-        else:
-            pytest.skip("materials kept changing under concurrent suites; no stable snapshot")
-        for k in KEYS:
-            assert len(lists[k]) == d["counts"][k], f"{k}: list {len(lists[k])} != count {d['counts'][k]}"
+                after = _counts(owner)
+                if before["counts"][k] == after["counts"][k] and before.get("short_for_jobs_ids") == after.get("short_for_jobs_ids"):
+                    break
+            else:
+                pytest.skip(f"{k} kept changing under concurrent suites; no stable snapshot")
+            lst, d = r.json(), before
+            assert len(lst) == d["counts"][k], f"{k}: list {len(lst)} != count {d['counts'][k]}"
             if k == "short_for_jobs":
-                assert sorted(m["id"] for m in lists[k]) == sorted(d["short_for_jobs_ids"])
+                assert sorted(m["id"] for m in lst) == sorted(d["short_for_jobs_ids"])
 
     def test_short_subset_of_needs_ordering(self, owner):
         d = _counts(owner)

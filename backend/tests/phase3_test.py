@@ -81,7 +81,7 @@ def test_customer_from_lead_idempotent(owner_headers, lead_with_property):
     # Verify lead updated
     lr = requests.get(f"{API}/leads/{lid}", headers=owner_headers, timeout=15).json()
     assert lr["customer_id"] == c1["id"]
-    assert lr["status"] == "converted"
+    assert lr["status"] in ("contacted", "qualified")  # creating the customer no longer marks the lead Won
 
     # Call again -> same customer
     r2 = requests.post(f"{API}/customers/from-lead/{lid}", headers=owner_headers, timeout=15)

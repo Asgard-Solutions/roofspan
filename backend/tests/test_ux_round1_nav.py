@@ -55,9 +55,12 @@ class TestAttention:
         assert abs(d["money"]["open_total"] - sum(float(i["total"] or 0) for i in issued)) < 0.02
 
     def test_owner_proposals_match_quotes(self, owner):
+        # Sales follow-up round: the card lists draft/sent proposals on open leads that need attention.
         d = owner.get(f"{BASE_URL}/api/dashboard/attention", timeout=30).json()
-        qs = owner.get(f"{BASE_URL}/api/quotes", timeout=30).json()
-        assert d["proposals"]["count"] == len([q for q in qs if q["status"] == "sent"])
+        qs = {q["id"]: q for q in owner.get(f"{BASE_URL}/api/quotes", timeout=30).json()}
+        assert d["proposals"]["count"] >= len(d["proposals"]["items"])
+        for p in d["proposals"]["items"]:
+            assert qs[p["id"]]["status"] in ("draft", "sent") and p["reason"]
 
     def test_sales_scoped(self, sales):
         r = sales.get(f"{BASE_URL}/api/dashboard/attention", timeout=30)

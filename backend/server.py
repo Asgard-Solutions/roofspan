@@ -28,11 +28,20 @@ from control_plane.installation_router import router as control_plane_installati
 from control_plane.bootstrap import init_control_plane
 from control_plane import readiness as cp_readiness
 from version import ROOFSPAN_VERSION, DISPLAY_VERSION, CHANNEL, BUILD_SHA
+from integrations.abc_supply.exceptions import AbcError, AbcAuthError, AbcNotConfigured
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("roofspan")
 
 app = FastAPI(title="RoofSpan Office API", version="1.0.0")
+
+
+@app.exception_handler(AbcError)
+async def _abc_error(request, exc: AbcError):
+    # An expired/unconfigured ABC connection is a user-fixable state, never an Internal Server Error.
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409 if isinstance(exc, (AbcAuthError, AbcNotConfigured)) else 502,
+                        content={"detail": exc.user_message})
 
 
 @app.get("/api/health")
@@ -119,6 +128,8 @@ app.include_router(cron.router)
 app.include_router(admin_ops.router)
 from routers import canvass as canvass_router
 app.include_router(canvass_router.router)
+from routers import follow_ups as follow_ups_router
+app.include_router(follow_ups_router.router)
 app.include_router(mobile.router)
 app.include_router(meta_router.router)
 app.include_router(licensing_router.router)

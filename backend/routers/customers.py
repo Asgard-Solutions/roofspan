@@ -52,7 +52,8 @@ async def create_from_lead(lead_id: str, request: Request, user: User = Depends(
     if lead.property_id:
         db.add(CustomerProperty(customer_id=c.id, property_id=lead.property_id))
     lead.customer_id = c.id
-    lead.status = "converted"
+    if lead.status == "new":
+        lead.status = "contacted"
     await db.commit()
     await db.refresh(c)
     await log_action(db, user=user, action="customer.from_lead", entity_type="customer", entity_id=c.id, detail={"lead_id": lead_id}, request=request)

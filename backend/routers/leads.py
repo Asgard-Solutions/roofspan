@@ -1,5 +1,6 @@
 import uuid
 from services.assignees import resolve_assignee
+from services import follow_ups as fu
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -38,7 +39,7 @@ def _out(lead: Lead, address: str | None = None, user_name: str | None = None) -
 
 
 @router.get("", response_model=list[LeadOut])
-async def list_leads(status: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_leads(status: str | None = None, tz: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Lead).order_by(Lead.created_at.desc())
     if status:
         stmt = stmt.where(Lead.status == status)
@@ -46,7 +47,8 @@ async def list_leads(status: str | None = None, user: User = Depends(get_current
         stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
     umap = await _user_name_map(db, [l.assigned_user_id for l in rows])
-    return [_out(l, user_name=umap.get(l.assigned_user_id)) for l in rows]
+    extra = await fu.enrich(db, rows, tz)
+    return [_out(l, user_name=umap.get(l.assigned_user_id)).model_copy(update=extra[l.id]) for l in rows]
 
 
 @router.get("/{lead_id}/workflow")
@@ -105,6 +107,7 @@ async def update_lead(lead_id: str, payload: LeadPatch, request: Request, user: 
     if user.role == "sales" and lead.assigned_user_id != user.id:  # strict: sales may only edit their own
         raise HTTPException(status_code=403, detail="This lead is not assigned to you")
     fields = payload.model_dump(exclude_unset=True)
+    fu.validate_status(fields.get("status"), allow_archived=lead.status == "archived")
     for k, v in fields.items():
         setattr(lead, k, v)
     await db.commit()

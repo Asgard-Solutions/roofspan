@@ -8,7 +8,7 @@ export function nextAction(wf, isManage) {
     case "overview":
       return { text: "Create the customer record to start the sale.", stage: "overview" };
     case "inspection":
-      if (!f.inspections) return { text: "Record the roof inspection.", stage: "inspection" };
+      if (!f.inspections) return { text: f.inspections_scheduled ? "Inspection is booked. Record the results after the visit." : "Book or record the roof inspection.", stage: "inspection" };
       if (!f.has_measurements) return { text: "Measure the roof.", stage: "inspection" };
       return { text: "Build the estimate.", stage: "estimate" };
     case "estimate":

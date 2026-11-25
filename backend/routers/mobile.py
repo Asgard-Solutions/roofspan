@@ -21,6 +21,7 @@ from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log
 from services.object_storage import put_object, get_object
 from services.assignees import resolve_assignee
 from services import mobile_authz as mauthz
+from services import follow_ups as fu
 from services import measurements as meas_svc
 from services import measurement_sketches as sketch_svc
 from services import office_outbox
@@ -145,6 +146,7 @@ class MobileInspectionIn(BaseModel):
     recommended_work: str | None = None
     measurements: str | None = None
     notes: str | None = None
+    status: str | None = None
 
 
 @router.post("/inspections", status_code=201)
@@ -165,6 +167,7 @@ async def create_inspection(payload: MobileInspectionIn, request: Request, idemp
         if not payload.lead_id and not payload.property_id:
             raise HTTPException(status_code=403, detail="An inspection must be tied to your lead or property.")
     data = payload.model_dump()
+    data["status"] = fu.inspection_status(data) or "completed"
     if not data.get("inspection_date"):
         data["inspection_date"] = datetime.now(timezone.utc)
     i = Inspection(**data, created_by=user.email)
@@ -190,7 +193,11 @@ async def update_inspection(inspection_id: str, payload: MobileInspectionIn, req
     server_token = _token(i)
     if if_match and server_token and if_match != server_token:
         raise HTTPException(status_code=409, detail={"message": "This inspection changed on the server since your copy.", "server": _insp_out(i)})
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    st = fu.inspection_status(data, i.status, i.inspection_date)
+    if st:
+        data["status"] = st
+    for k, v in data.items():
         setattr(i, k, v)
     await db.commit()
     await db.refresh(i)
@@ -210,7 +217,7 @@ def _insp_out(i: Inspection, replayed: bool = False) -> dict:
             "inspection_date": i.inspection_date.isoformat() if i.inspection_date else None,
             "inspector": i.inspector, "roof_condition": i.roof_condition, "findings": i.findings,
             "recommended_work": i.recommended_work, "measurements": i.measurements, "notes": i.notes,
-            "if_match": _token(i), "created_by": i.created_by, "replayed": replayed}
+            "status": i.status, "if_match": _token(i), "created_by": i.created_by, "replayed": replayed}
 
 
 # ---- Mobile inspection reads (salesperson-scoped) ----
@@ -605,12 +612,13 @@ def _job_row(j: Job) -> dict:
 
 
 @router.get("/leads")
-async def my_leads(scope: str = Query("auto"), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
+async def my_leads(scope: str = Query("auto"), tz: str | None = Query(None), user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
     stmt = select(Lead).where(Lead.status != "archived").order_by(Lead.created_at.desc())
     if _field_only(user) or scope == "mine":
         stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
-    return [_lead_row(l) for l in rows]
+    extra = await fu.enrich(db, rows, tz)
+    return [{**_lead_row(l), **extra[l.id]} for l in rows]
 
 
 @router.get("/jobs")
@@ -949,6 +957,7 @@ class MobileLeadPatch(BaseModel):
     address: str | None = None
     status: str | None = None
     notes: str | None = None
+    append_note: str | None = None  # appended server-side with a timestamp; never replaces existing notes
 
 
 def _lead_token(l: Lead) -> str | None:
@@ -969,7 +978,13 @@ async def _lead_detail(db: AsyncSession, l: Lead, replayed: bool = False, existi
             visits = [{"id": str(v.id), "outcome": v.outcome, "notes": v.notes,
                        "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows]
     insp = (await db.execute(select(Inspection).where(Inspection.lead_id == l.id).order_by(Inspection.created_at.desc()))).scalars().first()
+    from models import LeadFollowUp
+    fus = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id == l.id).order_by(LeadFollowUp.due_at.desc()).limit(50))).scalars().all()
+    booked = (await db.execute(select(Inspection).where(Inspection.lead_id == l.id, Inspection.status == "scheduled")
+                               .order_by(Inspection.inspection_date.asc()))).scalars().all()
+    na = (await fu.enrich(db, [l], None))[l.id]["next_action"]
     return {
+        "follow_ups": [fu.fu_out(f) for f in fus], "scheduled_inspections": [_insp_out(b) for b in booked], "next_action": na,
         "id": str(l.id), "name": l.name, "phone": l.phone, "email": l.email,
         "address": address, "status": l.status, "notes": l.notes,
         "property_id": str(l.property_id) if l.property_id else None,
@@ -1007,7 +1022,7 @@ async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_k
     name = payload.name or (prop.formatted_address if prop else None) or "New Lead"
     address = payload.address or (prop.formatted_address if prop else None)
     l = Lead(name=name, phone=payload.phone, email=payload.email, address=address,
-             status=payload.status or "new", notes=payload.notes,
+             status=fu.validate_status(payload.status) or "new", notes=payload.notes,
              property_id=prop.id if prop else None,
              assigned_user_id=user.id,  # SERVER-AUTHORITATIVE — never trust client assignment
              assigned_to=user.full_name or user.email, created_by=user.email)
@@ -1044,11 +1059,17 @@ async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, 
     if if_match and server_token and if_match != server_token:
         raise HTTPException(status_code=409, detail={"message": "This lead changed on the server since your copy.",
                                                      "server": await _lead_detail(db, l)})
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    fu.validate_status(data.get("status"))
+    extra_note = (data.pop("append_note", None) or "").strip()
+    for k, v in data.items():
         setattr(l, k, v)
+    if extra_note:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        l.notes = f"{l.notes}\n\n[{stamp} · {user.full_name or user.email}] {extra_note}" if l.notes else f"[{stamp} · {user.full_name or user.email}] {extra_note}"
     await db.commit()
     await db.refresh(l)
-    await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=l.id, detail={"via": "mobile"}, request=request)
+    await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=l.id, detail={"via": "mobile", "fields": sorted(payload.model_dump(exclude_unset=True).keys())}, request=request)
     return await _lead_detail(db, l)
 
 

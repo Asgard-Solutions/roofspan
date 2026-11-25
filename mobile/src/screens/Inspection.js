@@ -36,8 +36,8 @@ export default function Inspection({ route, navigation }) {
     try {
       const params = lead_id ? { lead_id } : { property_id };
       const r = await api.get(`/mobile/inspections`, { params });
-      if (r.data && r.data.length) {
-        const i = r.data[0];
+      const i = (r.data || []).find((x) => x.status !== "cancelled");  // a booked inspection gets completed here
+      if (i) {
         setExisting(i);
         setForm({
           inspector: i.inspector || user?.full_name || user?.email || "",

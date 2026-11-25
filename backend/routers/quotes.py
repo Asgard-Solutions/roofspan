@@ -75,6 +75,8 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
                   total=accepted_total, scope=f"From quote {q.number}", created_by=accepted_by)
         if q.lead_id:  # the lead's rep becomes the Job Manager so they can see the job they sold
             lead = await db.get(Lead, q.lead_id)
+            if lead and lead.status in ("new", "contacted", "qualified"):
+                lead.status = "won"
             rep = await db.get(User, lead.assigned_user_id) if lead and lead.assigned_user_id else None
             if rep and rep.is_active:
                 job.assigned_user_id = rep.id
@@ -362,6 +364,10 @@ async def send_quote(quote_id: str, request: Request, user: User = Depends(requi
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not send the proposal email: {e}")
     stubbed = bool(result.get("stubbed"))
+    if not stubbed and q.status == "draft":  # a really-emailed proposal is now waiting on the customer
+        q.status = "sent"
+        q.issue_date = q.issue_date or datetime.now(timezone.utc)
+        await db.commit()
     await log_action(db, user=user, action="quote.send", entity_type="quote", entity_id=q.id,
                      detail={"to": to_email, "email_id": result.get("email_id"), "stubbed": stubbed,
                              "site_plan_attached": bool(site_plan_pdf)}, request=request)

@@ -200,16 +200,16 @@ def _ensure_connected(owner_headers):
                  json={"environment": "sandbox", "client_id": CLIENT_ID}, timeout=30)
     requests.put(f"{BASE_URL}/api/integrations/abc/config/secret", headers=owner_headers,
                  json={"client_secret": CLIENT_SECRET}, timeout=30)
-    st = requests.get(f"{BASE_URL}/api/integrations/abc/status", headers=owner_headers, timeout=30).json()
-    if st.get("status") != "connected":
-        requests.post(f"{BASE_URL}/api/integrations/abc/disconnect", headers=owner_headers, timeout=30)
-        r = requests.post(f"{BASE_URL}/api/integrations/abc/connect", headers=owner_headers, timeout=30)
-        s = requests.Session()
-        r1 = s.get(r.json()["authorize_url"], allow_redirects=False, timeout=30)
-        cb = r1.headers["location"]
-        if cb.startswith("/"):
-            cb = BASE_URL + cb
-        s.get(cb, allow_redirects=False, timeout=30)
+    # Always reconnect: the MOCKED ABC server keeps tokens in memory, so after a backend reload a stored
+    # "connected" token is unknown to it (401). Other ABC suites reconnect the same way.
+    requests.post(f"{BASE_URL}/api/integrations/abc/disconnect", headers=owner_headers, timeout=30)
+    r = requests.post(f"{BASE_URL}/api/integrations/abc/connect", headers=owner_headers, timeout=30)
+    s = requests.Session()
+    r1 = s.get(r.json()["authorize_url"], allow_redirects=False, timeout=30)
+    cb = r1.headers["location"]
+    if cb.startswith("/"):
+        cb = BASE_URL + cb
+    s.get(cb, allow_redirects=False, timeout=30)
     requests.put(f"{BASE_URL}/api/integrations/abc/defaults", headers=owner_headers,
                  json={"default_ship_to_number": "1163698", "default_branch_number": "18"}, timeout=30)
     yield

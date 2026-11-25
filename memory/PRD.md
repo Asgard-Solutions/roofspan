@@ -2916,3 +2916,30 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - POST /installation/recover: code -> same company on the new PC's key, previous PCs REPLACED (403 on next check-in); refused if company was admin-REVOKED or license inactive; 10 wrong codes / 15 min per client -> 429; failures audited.
 - Office first-run "Restore my company": /api/setup/recover/verify -> /backups (folder) -> /restore-folder or /restore-upload; after restore the backup's old CP ids are re-pointed to this PC. Only while zero users exist.
 - Tests: tests/test_company_recovery.py (+testing agent's test_company_recovery_extra.py), migrations live tests (CP_RUN_INTEGRATION=1) pass. iteration_116 issues all fixed. Restore wizard UI not e2e-tested (preview has users).
+
+## 2026-06 Test-suite baseline ACCEPTED; legacy TEST_ data kept
+- Baseline: 1152 passed / 56 skipped / 1 xfailed / 0 failed. Technical backlog TB-1..TB-5 is in ROADMAP.md.
+- Sales follow-up round: review only so far (no code changes). Waiting on user decisions.
+
+## 2026-06 Sales follow-up & reminders round — IMPLEMENTED
+Decisions: several follow-ups per lead; one status list New/Contacted/Qualified/Won/Lost (+archived for Field soft-archive);
+inspections booked as future inspection records; proposals flagged when draft/no answer 3+ days or expiring within 3 days;
+reminders = Office Home + Field My Day lists only (no email/push).
+- DB (alembic b1f0c2d3e4a5): `lead_follow_ups` (open = scheduled, done = logged contact, cancelled); `inspections.status`
+  (scheduled|completed|cancelled, existing rows = completed); lead statuses migrated working→contacted, interested→qualified, converted→won.
+- Backend: services/follow_ups.py (single rule set: statuses, due/overdue by caller tz, next action, attention lists);
+  routers/follow_ups.py: GET /api/lead-statuses, GET/POST /api/leads/{id}/follow-ups (client id = offline idempotency),
+  PATCH /api/follow-ups/{id} (If-Match conflict, repeat done/cancel no-op), GET /api/mobile/my-day?tz=.
+  /api/dashboard/attention?tz= now: follow_ups(overdue+today), inspections(booked), proposals(attention), no_follow_up,
+  + managers: unassigned, overdue_by_rep. /api/leads and /api/mobile/leads return next_action + open_follow_ups.
+  Lead status validated server-side (Office + Field). Creating a customer: new→contacted (no longer "converted");
+  accepting a quote: lead→won. Emailing a proposal (when email is really on) marks a draft sent. Logging a contact on a New lead → Contacted.
+  Recording results on a booked inspection completes it. Office POST /inspections now enforces sales lead ownership (was missing).
+  Field "Add note" now appends server-side (append_note) instead of replacing notes.
+- Office UI: Lead Detail Follow-ups panel (schedule / log contact / done / reschedule / cancel + contact history incl. door visits),
+  Book inspection, status select; Leads list views (Open/Mine/Unassigned/Overdue/Due today/No follow-up/Won/Lost/All) + Next action column;
+  Home cards updated.
+- Field: My Day (Overdue, Due today, Inspections, Proposals, No follow-up), follow-ups + book inspection on Lead Detail (offline queue),
+  callback/appointment visit outcomes prompt for a follow-up/booking, next action on Leads list. Helpers: mobile/src/followups.js
+  (node src/tests/followups.node.test.js). Device testing NOT done.
+- Tests: backend/tests/test_follow_ups_iter133.py.
