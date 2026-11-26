@@ -7,10 +7,12 @@
 // return to sign-in. Pending offline work is never dropped.
 import { getTransport } from "./transport";
 import { getToken, getRefreshToken, saveTokens, clearTokens, notifySessionExpired } from "./auth";
+import { APP_VERSION } from "./appVersion";
+import compat from "./compat";
 
 async function authHeaders(extra) {
   const t = await getToken();
-  const h = { ...(extra || {}) };
+  const h = { ...(extra || {}), "X-RoofSpan-App-Version": APP_VERSION };
   if (t) h.Authorization = `Bearer ${t}`;
   return h;
 }
@@ -55,6 +57,7 @@ async function _authedRequest(base) {
 }
 
 function _throwOn4xx(r) {
+  if (r.status === 426) compat.reportFieldTooOld(r.data && r.data.detail);
   if (r.status >= 400) {
     const e = new Error("http_" + r.status);
     e.response = { status: r.status, data: r.data };

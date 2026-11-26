@@ -27,7 +27,7 @@ psql "$C" -Atc "SELECT md5(string_agg(id::text||coalesce(assigned_to,'')||coales
 EXP_WON=$(psql "$C" -Atc "SELECT count(*) FROM leads l WHERE status='converted' AND EXISTS (SELECT 1 FROM quotes q WHERE q.lead_id=l.id AND q.status='accepted')")
 EXP_CONT=$(psql "$C" -Atc "SELECT count(*) FROM leads WHERE status IN ('converted','working')")
 EXP_CONT=$((EXP_CONT - EXP_WON))
-alembic upgrade head 2>&1 | grep -E "Running upgrade" || true
+alembic upgrade head 2>&1 | grep -E "Running upgrade|c7e2a9b4d1f3\]" || true
 snap > /app/memory/_upg_after.txt
 echo "== row-count differences (before -> after) =="
 diff /app/memory/_upg_before.txt /app/memory/_upg_after.txt || true

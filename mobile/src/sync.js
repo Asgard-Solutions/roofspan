@@ -22,7 +22,8 @@ import { countStates, deriveSyncStatus } from "./syncStatus";
 import { sketchRefreshDecision } from "./sketchRefreshDecision";
 import { cache } from "./cache";
 import { api } from "./api";
-import { setRelayEventHandler } from "./transport";
+import compat from "./compat";
+import { fetchOfficeVersion, setRelayEventHandler } from "./transport";
 
 const LAST_SYNC = "last_sync_at";
 // Separate, honest sync-status timestamps (spec): a push ATTEMPT vs a successful PUSH vs a successful
@@ -89,6 +90,12 @@ export async function runSync() {
       if ((await loadPending()).length > 0) _scheduleRetry();
       return;
     }
+    // Office/Field compatibility: never send queued work to an Office this Field can't work with.
+    const compatible = await compat.ensureCompatible(fetchOfficeVersion);
+    if (compatible !== true) {
+      if (compatible === null && (await loadPending()).length > 0) _scheduleRetry();
+      return;
+    }
     await _reviveRetryablePhotos();                 // let transiently-failed photos rejoin the queue
     const pending = await loadPending();            // active scope only
     if (pending.length > 0) {
@@ -98,6 +105,7 @@ export async function runSync() {
       // Generation-guarded writeback: a result is applied only if its row wasn't superseded by a newer
       // edit while it was in flight (spec §A6/§A7). Superseded/removed rows are preserved untouched.
       for (const m of processed) await saveMutationIfCurrent(m);
+      if (processed.some((m) => m.errorCode === "update_required")) compat.reportFieldTooOld(null);
       for (const m of processed) _recordMutationDiag(m);
       await _reconcileSketchAcks(processed);
       await _reconcileFieldAcks(processed);

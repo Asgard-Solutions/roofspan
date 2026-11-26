@@ -4,6 +4,7 @@ import { C } from "../theme";
 import { usePairing } from "../pairingContext";
 import { COPY, STATES } from "../connectionState";
 import { WEB_APP_URL } from "../config";
+import { MIN_OFFICE_VERSION } from "../compat";
 
 function Screen({ title, message, actionLabel, onAction, secondaryLabel, onSecondary, helper, tone = C.brand, testID, secondaryTestID }) {
   return (
@@ -63,6 +64,21 @@ export function UpdateRequired() {
     Linking.openURL(url).catch(() => {});
   };
   return <Screen title={c.title} message={c.message} actionLabel="Update App" onAction={open} testID="update-required-btn" />;
+}
+
+export function OfficeUpdateRequired() {
+  const { retry, officeVersion, appVersion } = usePairing();
+  const c = COPY[STATES.OFFICE_UPDATE_REQUIRED];
+  return (
+    <Screen
+      title={c.title}
+      message={c.message}
+      actionLabel="Try Again"
+      onAction={retry}
+      helper={`RoofSpan Field ${appVersion} needs RoofSpan Office ${MIN_OFFICE_VERSION} or newer. Your Office is on ${officeVersion || "an older version"}.`}
+      testID="office-update-required-retry"
+    />
+  );
 }
 
 // Non-blocking optional-update banner (shown once per session over the main app).

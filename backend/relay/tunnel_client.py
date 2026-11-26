@@ -46,8 +46,10 @@ class InstallationTunnel:
             q = frame.get("query", "")
             url = self.local + path + (("?" + q) if q else "")
             headers = dict(frame.get("headers", {}) or {})
-            for h in ("host", "Host", "content-length", "Content-Length"):
-                headers.pop(h, None)
+            for h in list(headers):
+                if h.lower() in ("host", "content-length", "x-roofspan-relay-forwarded"):
+                    headers.pop(h, None)
+            headers["X-RoofSpan-Relay-Forwarded"] = "1"  # lets the Office gate identify device (Field) traffic
             # Org-level map imagery: authorize tile-proxy fetches with a short-lived, office-signed
             # tile token instead of the salesperson's (expiring) access token. Keeps the MapTiler key
             # org-wide so a rep's expired session never blanks the map.

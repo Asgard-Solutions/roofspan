@@ -310,8 +310,13 @@ def test_relay_get_with_query_params():
     data, priv = _activate(); device_id, cred = _pair(data, priv); token = _owner_jwt()
     r = _routed(data["installation_id"], priv, device_id, cred,
                 {"method": "GET", "path": "/api/mobile/photos", "query": "record_type=lead&record_id=none",
-                 "headers": {"Authorization": f"Bearer {token}"}, "body": ""})
+                 "headers": {"Authorization": f"Bearer {token}", "X-RoofSpan-App-Version": "1.1.0"}, "body": ""})
     assert r["status"] == 200, P.b64d(r["body"])  # empty list, but proves query + auth routed
+    # A relayed device request without an app version is Field 1.0.x -> Office 0.5.0 requires an update.
+    old = _routed(data["installation_id"], priv, device_id, cred,
+                  {"method": "GET", "path": "/api/mobile/photos", "query": "record_type=lead&record_id=none",
+                   "headers": {"Authorization": f"Bearer {token}"}, "body": ""})
+    assert old["status"] == 426, P.b64d(old["body"])
 
 
 def test_relay_error_status_propagates():
@@ -328,7 +333,8 @@ def test_relay_multipart_photo_upload():
     mp = {"data": {"record_type": "lead", "record_id": "relay-test-1"},
           "file": {"field": "file", "name": "p.jpg", "type": "image/jpeg", "b64": base64.b64encode(jpeg).decode()}}
     r = _routed(data["installation_id"], priv, device_id, cred,
-                {"method": "POST", "path": "/api/mobile/photos", "headers": {"Authorization": f"Bearer {token}"},
+                {"method": "POST", "path": "/api/mobile/photos",
+                 "headers": {"Authorization": f"Bearer {token}", "X-RoofSpan-App-Version": "1.1.0"},
                  "body": "", "multipart": mp})
     # 201 (stored) or 502 (storage backend unavailable in-container) — both prove multipart crossed intact.
     assert r["status"] in (201, 502), (r["status"], P.b64d(r["body"]))

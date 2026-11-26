@@ -93,5 +93,7 @@ def require_production_config() -> None:
         missing.append("CP_KMS_SIGNING_KEY_ID (KMS entitlement signer)")
     if not (CP_OPERATOR_ISSUER and CP_OPERATOR_AUDIENCE):
         missing.append("CP_OPERATOR_ISSUER + CP_OPERATOR_AUDIENCE (operator auth)")
+    if not os.environ.get("SECRETS_ENCRYPTION_KEY"):
+        missing.append("SECRETS_ENCRYPTION_KEY (company recovery codes)")
     if missing:
         raise RuntimeError("RoofSpan Control Plane production config missing: " + "; ".join(missing))

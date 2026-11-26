@@ -41,18 +41,31 @@ def _vtuple(v: str) -> tuple:
         return (0,)
 
 
-async def require_min_mobile_version(x_roofspan_app_version: str | None = Header(default=None)):
-    """Version negotiation: reject Mobile clients below the minimum supported app version.
+# Field 1.0.x offline edits queued before the upgrade may still carry the retired "interested" status.
+LEGACY_FIELD_STATUSES = {"interested": "qualified"}
 
-    An absent header is allowed (older clients / non-mobile callers); a present-but-too-old version
-    is rejected with 426 so an outdated client cannot make incompatible API assumptions.
+async def require_min_mobile_version(request: Request, x_roofspan_app_version: str | None = Header(default=None),
+                                     x_roofspan_relay_forwarded: str | None = Header(default=None)):
+    """Version negotiation: reject Field clients below the minimum supported app version (426 must_update).
+
+    Field 1.1.0+ sends X-RoofSpan-App-Version. A request relayed from a device WITHOUT it is Field 1.0.x and is
+    rejected too (except read-only photo images fetched by the Relay). Office web calls are never relayed.
     """
     from licensing import config as lic_config
-    if x_roofspan_app_version and _vtuple(x_roofspan_app_version) < _vtuple(lic_config.MIN_MOBILE_VERSION):
+    version = x_roofspan_app_version
+    if not version:
+        if not x_roofspan_relay_forwarded:
+            return
+        if request.method == "GET" and request.url.path.startswith("/api/mobile/photos/") and request.url.path.endswith("/content"):
+            return
+        version = "1.0.0"
+    if _vtuple(version) < _vtuple(lic_config.MIN_MOBILE_VERSION):
         raise HTTPException(
             status_code=426,
-            detail={"code": "must_update", "message": "A newer version of RoofSpan Mobile is required to connect to your company's RoofSpan system.",
-                    "min_supported": lic_config.MIN_MOBILE_VERSION},
+            detail={"code": "must_update", "app": "field",
+                    "message": f"Update RoofSpan Field to version {lic_config.MIN_MOBILE_VERSION} or newer to work with "
+                               "your company's RoofSpan Office. Your unsynced work stays on this device.",
+                    "min_supported": lic_config.MIN_MOBILE_VERSION, "office_version": lic_config.SOFTWARE_VERSION},
         )
 
 
@@ -1024,7 +1037,7 @@ async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_k
     name = payload.name or (prop.formatted_address if prop else None) or "New Lead"
     address = payload.address or (prop.formatted_address if prop else None)
     l = Lead(name=name, phone=payload.phone, email=payload.email, address=address,
-             status=fu.validate_status(payload.status) or "new", notes=payload.notes,
+             status=fu.validate_status(LEGACY_FIELD_STATUSES.get(payload.status, payload.status)) or "new", notes=payload.notes,
              property_id=prop.id if prop else None,
              assigned_user_id=user.id,  # SERVER-AUTHORITATIVE — never trust client assignment
              assigned_to=user.full_name or user.email, created_by=user.email)
@@ -1062,7 +1075,8 @@ async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, 
         raise HTTPException(status_code=409, detail={"message": "This lead changed on the server since your copy.",
                                                      "server": await _lead_detail(db, l, user=user)})
     data = payload.model_dump(exclude_unset=True)
-    fu.validate_status(data.get("status"))
+    if "status" in data:
+        data["status"] = fu.validate_status(LEGACY_FIELD_STATUSES.get(data["status"], data["status"]))
     extra_note = (data.pop("append_note", None) or "").strip()
     old_status = l.status
     for k, v in data.items():

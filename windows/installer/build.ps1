@@ -113,6 +113,13 @@ foreach ($p in $required) {
   if (-not (Test-Path $p)) { throw "Staging incomplete - missing '$p'. Run installer\stage.ps1 first." }
 }
 Assert-RelayConnectorBuildInfo -ExePath $relayExe -ExpectedSha $gitSha -ExpectedVersion $Version
+# The staged Office UI must be the one built from THIS source + version, and must use the local backend.
+$feIdentity = Get-Content (Join-Path $StageDir "frontend\roofspan-build.json") -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+if (-not $feIdentity -or $feIdentity.git_sha -ne $gitSha -or $feIdentity.version -ne $Version) {
+  throw "Staged Office frontend is not from this source/version (expected $Version / $gitSha). Remove _stage and run stage.ps1 again."
+}
+node (Join-Path $PSScriptRoot "build-office-frontend.js") --check (Join-Path $StageDir "frontend")
+if ($LASTEXITCODE -ne 0) { throw "Staged Office frontend rejected: it points at a non-local server." }
 # Every staged service executable must carry the immutable build identity of THIS source + version.
 # WiX must package exactly the executables build_exes.ps1 produced for THIS source + version.
 Import-Module (Join-Path $PSScriptRoot "ServicesBuild.psm1") -Force

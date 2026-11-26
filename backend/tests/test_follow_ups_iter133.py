@@ -79,7 +79,8 @@ def test_shared_status_list_and_validation(owner, sales, my_lead):
     assert st["statuses"] == ["new", "contacted", "qualified", "won", "lost"]
     for bad in ("working", "converted", "interested", "bogus"):
         assert requests.patch(f"{API}/leads/{my_lead['id']}", json={"status": bad}, headers=owner, timeout=20).status_code == 422
-        assert requests.patch(f"{API}/mobile/leads/{my_lead['id']}", json={"status": bad}, headers=sales, timeout=20).status_code == 422
+        if bad != "interested":  # Field 1.0.x queues may still send "interested"; the mobile API maps it (test_rc_compat)
+            assert requests.patch(f"{API}/mobile/leads/{my_lead['id']}", json={"status": bad}, headers=sales, timeout=20).status_code == 422
     assert requests.get(f"{API}/leads/{my_lead['id']}", headers=owner, timeout=20).json()["status"] == "new"
 
 

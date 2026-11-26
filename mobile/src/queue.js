@@ -164,6 +164,10 @@ async function processMutation(m, send) {
       const serverValue = (res.data && typeof res.data === "object") ? res.data : null;
       return { ...m, state: STATES.SYNCED, server_id: (res.data && res.data.id) || m.server_id, serverValue, error: null, attempts };
     }
+    if (s === 426) {
+      // Office needs a newer Field: keep the change queued untouched (not a failure) until Field is updated.
+      return { ...m, state: STATES.PENDING, error: "Update RoofSpan Field to sync this change", errorCode: "update_required", attempts: m.attempts || 0 };
+    }
     if (s === 409) {
       const detail = res.data && res.data.detail;
       // B3D: an immutable/locked measurement revision is a DURABLE terminal state — the salesperson's
@@ -193,9 +197,12 @@ async function processMutation(m, send) {
 
 async function processQueue(items, send) {
   const out = [];
+  let halted = false;   // after a 426 nothing else is sent; remaining items stay exactly as they were
   for (const m of items) {
-    if (m.state === STATES.PENDING || m.state === STATES.FAILED) {
-      out.push(await processMutation(m, send));
+    if (!halted && (m.state === STATES.PENDING || m.state === STATES.FAILED)) {
+      const r = await processMutation(m, send);
+      if (r.errorCode === "update_required") halted = true;
+      out.push(r);
     } else {
       out.push(m);
     }

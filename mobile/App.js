@@ -14,7 +14,7 @@ import { C } from "./src/theme";
 import Login from "./src/screens/Login";
 import Welcome from "./src/screens/Welcome";
 import Connect from "./src/screens/Connect";
-import { SubscriptionLock, DeviceRevoked, ServerUnavailable, UpdateRequired, OptionalUpdateBanner } from "./src/screens/StatusScreens";
+import { SubscriptionLock, DeviceRevoked, ServerUnavailable, UpdateRequired, OfficeUpdateRequired, OptionalUpdateBanner } from "./src/screens/StatusScreens";
 import Home from "./src/screens/Home";
 import Leads from "./src/screens/Leads";
 import LeadDetail from "./src/screens/LeadDetail";
@@ -160,6 +160,7 @@ function Root() {
 
   // Hard blocks (apply even when signed in) — never bypass to field workflows.
   if (conn === STATES.UPDATE_REQUIRED) return <UpdateRequired />;
+  if (conn === STATES.OFFICE_UPDATE_REQUIRED) return <OfficeUpdateRequired />;
   if (conn === STATES.SUBSCRIPTION_INACTIVE) return <SubscriptionLock />;
   if (conn === STATES.DEVICE_REVOKED) return <DeviceRevoked />;
 

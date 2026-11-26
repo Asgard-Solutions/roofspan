@@ -56,15 +56,18 @@ Push-Location $feDirResolved
 try {
   yarn install --frozen-lockfile
   if ($LASTEXITCODE -ne 0) { throw "yarn install failed." }
-  # Desktop UI is served by its own local backend on the same origin (127.0.0.1:8001),
-  # so the frontend must use relative /api URLs. Force an empty backend base to override
-  # any stray .env and prevent an "undefined/api" base that renders a blank page.
-  $env:REACT_APP_BACKEND_URL = ""
-  yarn build
-  if ($LASTEXITCODE -ne 0) { throw "frontend yarn build failed." }
+  # Desktop UI is served by its own local backend on the same origin (127.0.0.1:8001), so the frontend
+  # must use relative /api URLs. build-office-frontend.js sets aside any .env* files and REACT_APP_*
+  # variables (PowerShell 5.1 cannot set an empty variable), builds, stamps roofspan-build.json and
+  # rejects output that points at a preview/hosted server.
+  if (Test-Path ".\build") { Remove-Item ".\build" -Recurse -Force }
+  node (Join-Path $PSScriptRoot "build-office-frontend.js") $feDirResolved
+  if ($LASTEXITCODE -ne 0) { throw "Office frontend build failed or was rejected (see above)." }
   if (-not (Test-Path ".\build\index.html")) { throw "frontend build did not produce build\index.html" }
   Copy-Item ".\build\*" $frontend -Recurse -Force
 } finally { Pop-Location }
+node (Join-Path $PSScriptRoot "build-office-frontend.js") --check $frontend
+if ($LASTEXITCODE -ne 0) { throw "Staged Office frontend rejected: it points at a non-local server." }
 
 # 3) Native desktop shell. This is a self-contained WinForms + WebView2 host. The customer sees a normal
 # RoofSpan Office application window; the local HTTP endpoint stays an internal implementation detail.

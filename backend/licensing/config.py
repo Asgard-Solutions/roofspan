@@ -24,7 +24,7 @@ MAX_SEATS = int(os.environ.get("LICENSING_MAX_SEATS", "50"))
 
 PRODUCT = os.environ.get("LICENSING_PRODUCT", "roofspan-office")
 MIN_SUPPORTED_VERSION = os.environ.get("ROOFSPAN_MIN_VERSION", "1.0.0")
-MIN_MOBILE_VERSION = os.environ.get("ROOFSPAN_MIN_MOBILE_VERSION", "1.0.0")
+MIN_MOBILE_VERSION = os.environ.get("ROOFSPAN_MIN_MOBILE_VERSION", "1.1.0")  # oldest Field this Office accepts
 STATE_SNAPSHOT_TTL_SECONDS = float(os.environ.get("LICENSING_SNAPSHOT_TTL", "30"))
 
 # Persist local licensing key material outside the installed application directory whenever
