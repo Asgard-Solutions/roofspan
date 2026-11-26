@@ -1,6 +1,10 @@
 # RoofSpan Field — Follow-ups & My Day: manual device acceptance checklist
 
 Nobody has run this on a real phone, emulator or simulator yet. No Android emulator or iOS simulator was available.
+**Before you start:** install the release-candidate Office build first and let it finish upgrading. The database must be at
+migration `b1f0c2d3e4a5`, otherwise Field follow-ups and My Day return errors. Then install the Field build from the same
+release candidate (Field and Office must come from the same release).
+
 Do it on one Android phone and one iPhone, signed in as a salesperson. Keep RoofSpan Office open in a browser as an owner.
 Use a test lead assigned to that salesperson. Turn on Airplane mode for the offline steps.
 

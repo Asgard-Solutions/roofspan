@@ -1,0 +1,36 @@
+{
+  "summary": "RC validation of the converted->won migration fix. Upgrade rehearsal passes: the row-count diff shows only the new tables 'crews 1' and 'lead_follow_ups 0', settings unchanged: yes, job assignments unchanged: yes. Statuses after are archived:35, contacted:127, new:229, qualified:3, won:149. Expected won=149 and contacted=127 match the actual result, and there are 0 won leads without an accepted proposal, 0 legacy statuses left, and 0 jobs with a text crew but no crew_id. Inspections are completed:145 and head is b1f0c2d3e4a5. `alembic heads` shows one head and `alembic current` = b1f0c2d3e4a5. The rehearsal did not change the working DB: leads and jobs full-table md5 were identical before and after, lead counts stayed archived:35/contacted:122/new:237/won:149 (543 total), and the copy DB was dropped. The Field map_data_flow node test passes. Office smoke as owner and sales_bk passed: Home, Leads, Lead Detail (read-only), Jobs and Job Detail render. The follow-up dialog's shadcn calendar opens on a TEST_ lead and Cancel closes it with no follow-up saved. Test data was removed by manual_end (1 lead, 1 property) and the leads md5 matches the baseline again.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/mobile/photos/fe5d22b1-2271-4840-9523-8d79d4062162/content", "issue": "Returns 502 'Could not retrieve photo' on Job Detail JOB-0002 (a35ce38c...). It is the only console error on the owner smoke. The object-storage file for an old test photo is missing (likely lost in a DB restore), and the router turns every get_object exception into a 502. This is not caused by this release. Suggest returning 404/410 when the object is missing so ingress 502s are not confused with real outages."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "FollowUpDialog", "issues": ["The Cancel button has no data-testid (FollowUpDialog.jsx line 84). Tests have to select it by role/name."]}
+    ]
+  },
+  "test_report_links": ["/app/scripts/upgrade_rehearsal.sh", "/app/mobile/src/tests/map_data_flow.node.test.js"],
+  "action_items": [
+    "Optional: add data-testid='followup-cancel-button' to the FollowUpDialog Cancel button.",
+    "Optional: make /api/mobile/photos/{id}/content return 404 when the stored object is missing, instead of 502.",
+    "Optional, rehearsal hardening: add `trap 'psql \"$BASE/postgres\" -qc \"DROP DATABASE IF EXISTS $COPY\"' EXIT` so a failed downgrade or upgrade does not leave rs_upgrade_rehearsal behind. Stop sending the downgrade output to /dev/null, and add assertions that make the script exit non-zero (expected won vs actual won, contacted, and legacy=0) instead of only printing the values.",
+    "Optional, stale test semantics: in map_data_flow.node.test.js the RT5 regexes still look for putCache(CACHE_MAP_PROPS, []) and CACHE_SECTIONS. MapScreen now uses a per-area `${CACHE_MAP_PROPS}:${area.id}` cacheKey and CACHE_AREAS, so those two checks always pass and protect nothing. RT3's block-scoped check still covers the loadPropsForArea catch path. Also, the reducer invariants RT4 and 'zero sections keeps full map' no longer match the Map Areas design: selecting an area triggers a per-area refetch via the useEffect at lines 249-253, and a null area sets features to []. Consider updating them to CACHE_AREAS/cacheKey and rewording the header."
+  ],
+  "critical_code_review_comments": [
+    "Migration b1f0c2d3e4a5 is correct for the approved rule. Order: working->contacted, interested->qualified, then converted->won only with EXISTS (quotes.lead_id = leads.id AND status='accepted'), then the rest of converted->contacted. Nothing is deleted on upgrade. inspections.status gets server_default 'completed', so existing rows become completed (145/145 in the rehearsal).",
+    "The won rule only looks at quotes.lead_id. 629 of 834 accepted quotes have lead_id NULL and are linked only through customer_id. In the working DB, 7 'contacted' leads share a customer with such an accepted quote. In a real legacy install those leads would map converted->contacted, not won. This matches the owner-approved correction list: all 7 are in scripts/data/converted_won_correction_ids.txt. So it is consistent and not a defect, but the product owner should know about it.",
+    "downgrade() does not restore legacy lead statuses, so the status change is one-way. It drops lead_follow_ups, which loses that data on downgrade. Acceptable for a forward-only release, but it should be documented.",
+    "Rehearsal script: the legacy-status simulation makes converted from won/contacted leads that have a customer_id, giving 271 converted leads, 122 of them without an accepted proposal. Both branches of the fix are exercised. The rehearsal uses the working DB's data, not a real legacy dump. The temp files are written under /app/memory and removed at the end."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (rehearsal, alembic heads, working-DB invariance)", "frontend": "100% of requested smoke (1 minor 502 from a stale photo blob)"},
+  "seed_data_creation": "Created inside manual_begin/manual_end: property 90a4217e-3f1a-483a-a9cb-5621e944f47f and lead 05fdf543-2d2d-4cae-993d-ff3521659607 (TEST_RC Followup Lead). manual_end purged both ({'leads': 1, 'properties': 1, 'users': 0}). No follow-up was saved. Existing lead statuses were not changed, and the leads md5 matches the baseline.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Working DB baseline: leads md5 1bf9e5c49cfbfcdc753b35901107c007, statuses archived:35/contacted:122/new:237/won:149 (543 total). The rehearsal takes about 8 seconds and ends with no rs_upgrade_rehearsal DB left. sales_bk sees 0 jobs and 33 leads, so Job Detail cannot be reached as sales_bk (RBAC scoping, expected). A good existing won lead for read-only checks is 02023c77-83ee-4930-b342-25b39af9258b; a good job is a35ce38c-e55a-45e0-ac98-2194e043866f (its photo blob is missing and returns 502).",
+  "test_credentials": "owner pjacobsen@asgardsolution.io / RoofSpan#Owner2026; sales sales_bk@example.com / SalesBk#2026 (both worked)"
+}
