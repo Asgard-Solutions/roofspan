@@ -69,7 +69,7 @@ export default function JobDetail() {
       <PageHeader title={`Job ${job.number}`}
         description={<span className="flex flex-wrap items-center gap-3"><span className="flex items-center gap-1"><User className="h-3.5 w-3.5" />{job.customer_name || "—"}</span><span className="flex items-center gap-1"><Home className="h-3.5 w-3.5" />{job.property_address || "—"}</span></span>}
         testid="page-job-detail"
-        actions={<div className="flex items-center gap-2"><Badge className={sc[job.status] || ""} variant="secondary" data-testid="job-status-badge">{job.status.replace("_", " ")}</Badge><span className="font-heading font-bold text-slate-900">{money(job.total)}</span></div>} />
+        actions={<div className="flex items-center gap-2"><Badge className={sc[job.status] || ""} variant="secondary" data-testid="job-status-badge">{job.status.replace("_", " ")}</Badge><span className="font-heading font-bold text-white">{money(job.total)}</span></div>} />
       <div className="space-y-5 p-6 sm:p-8">
         <ReadyPanel job={job} />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

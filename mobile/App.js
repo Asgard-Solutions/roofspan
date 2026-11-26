@@ -36,9 +36,12 @@ const MapStack = createNativeStackNavigator();
 const MoreStack = createNativeStackNavigator();
 const PairStack = createNativeStackNavigator();
 
+// RoofSpan navy headers with white titles on every stack.
+const HEADER = { headerStyle: { backgroundColor: C.bg }, headerTintColor: "#fff", headerTitleStyle: { color: "#fff" } };
+
 function MoreNav() {
   return (
-    <MoreStack.Navigator>
+    <MoreStack.Navigator screenOptions={HEADER}>
       <MoreStack.Screen name="MoreHome" component={More} options={{ title: "More" }} />
       <MoreStack.Screen name="Diagnostics" component={Diagnostics} options={{ title: "Sync Diagnostics" }} />
     </MoreStack.Navigator>
@@ -47,7 +50,7 @@ function MoreNav() {
 
 function MapNav() {
   return (
-    <MapStack.Navigator>
+    <MapStack.Navigator screenOptions={HEADER}>
       <MapStack.Screen name="MyArea" component={MapScreen} options={{ title: "My Area" }} />
       <MapStack.Screen name="Property" component={Property} options={{ title: "Property" }} />
       <MapStack.Screen name="NewLead" component={NewLead} options={{ title: "New Lead" }} />
@@ -60,13 +63,13 @@ function MapNav() {
 
 function LeadsNav() {
   return (
-    <LeadStack.Navigator>
+    <LeadStack.Navigator screenOptions={HEADER}>
       <LeadStack.Screen
         name="Leads"
         component={Leads}
         options={({ navigation }) => ({
           headerRight: () => (
-            <Text onPress={() => navigation.navigate("NewLead", {})} style={{ color: C.brand, fontWeight: "800", fontSize: 16, paddingHorizontal: 6 }} testID="new-lead-button">+ New</Text>
+            <Text onPress={() => navigation.navigate("NewLead", {})} style={{ color: C.accent, fontWeight: "800", fontSize: 16, paddingHorizontal: 6 }} testID="new-lead-button">+ New</Text>
           ),
         })}
       />
@@ -80,7 +83,7 @@ function LeadsNav() {
 }
 function JobsNav() {
   return (
-    <JobStack.Navigator>
+    <JobStack.Navigator screenOptions={HEADER}>
       <JobStack.Screen name="Jobs" component={Jobs} />
       <JobStack.Screen name="JobDetail" component={JobDetail} options={{ title: "Job" }} />
     </JobStack.Navigator>
@@ -126,9 +129,11 @@ function MainApp() {
       {optionalUpdate && !dismissedUpdate ? <OptionalUpdateBanner onDismiss={() => setDismissedUpdate(true)} /> : null}
       <Tab.Navigator
         screenOptions={({ route }) => ({
+          ...HEADER,
           headerShown: true,
-          tabBarActiveTintColor: C.brand,
-          tabBarInactiveTintColor: "#64748B",
+          tabBarActiveTintColor: C.accent,
+          tabBarInactiveTintColor: "#94A3B8",
+          tabBarStyle: { backgroundColor: C.bg, borderTopColor: "#1E2A44" },
           tabBarIcon: ({ color, size, focused }) => {
             const icons = {
               Home: focused ? "home" : "home-outline",

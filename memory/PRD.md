@@ -3023,3 +3023,9 @@ reminders = Office Home + Field My Day lists only (no email/push).
 - Field test deps react-test-renderer 19.2.3 + @babel/preset-react; root package-lock.json re-synced (npm ci had been failing).
 - Tests: backend 1177 passed (3 outdated expectations updated, then pass), Windows 292 passed/105 skipped, Field node 53/53,
   testing agent iteration_143 100%.
+
+## 2026-11-26 — RoofSpan brand colors restored (RC, colors only)
+- Office: navy (#0B1A33) sidebar, page headers and Sales/Materials sub-tabs; blue (#0B6BDE) primary buttons/links (--primary);
+  orange highlights (active nav bar, header bottom line, "Office" label). Header actions readable via .rs-header-actions.
+- Field: theme navy headers + tab bar, C.brand blue buttons, C.accent orange active tab / "+ New".
+- Tested: iteration_144 (28 Office pages); 3 dark-text header items fixed after (JobDetail total, LeadDetail stage, "All settings").

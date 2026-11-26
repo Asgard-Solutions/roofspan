@@ -4,12 +4,12 @@ import { cn } from "@/lib/utils";
 const tabClass = ({ isActive }) =>
   cn(
     "border-b-2 px-1 pb-2.5 pt-3 text-sm font-medium transition-colors",
-    isActive ? "border-orange-600 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-900"
+    isActive ? "border-orange-500 text-white" : "border-transparent text-slate-400 hover:text-white"
   );
 
 export function SubNav({ items, testid }) {
   return (
-    <div className="flex gap-6 border-b border-border bg-white px-6 sm:px-8" data-testid={testid}>
+    <div className="flex gap-6 border-b border-white/10 bg-[#0B1A33] px-6 sm:px-8" data-testid={testid}>
       {items.map((t) => (
         <NavLink key={t.to} to={t.to} end className={tabClass} data-testid={t.testid}>{t.label}</NavLink>
       ))}

@@ -27,7 +27,7 @@ code {
         --card-foreground: 222 47% 11%;
         --popover: 0 0% 100%;
         --popover-foreground: 222 47% 11%;
-        --primary: 222 47% 11%;
+        --primary: 213 91% 46%;
         --primary-foreground: 210 40% 98%;
         --secondary: 210 40% 96%;
         --secondary-foreground: 222 47% 11%;
@@ -39,7 +39,7 @@ code {
         --destructive-foreground: 0 0% 98%;
         --border: 214 32% 91%;
         --input: 214 32% 91%;
-        --ring: 222 47% 11%;
+        --ring: 213 91% 46%;
         --radius: 0.375rem;
     }
 }
@@ -52,6 +52,12 @@ code {
         @apply bg-background text-foreground;
     }
 }
+
+/* RoofSpan brand: navy chrome, blue primary actions, orange highlights. */
+.rs-header-actions { color: #fff; }
+.rs-header-actions [class*="bg-background"],
+.rs-header-actions [class*="bg-white"],
+.rs-header-actions [class*="bg-secondary"] { color: hsl(var(--foreground)); }
 
 /* MapLibre attribution styling tweak */
 .maplibregl-ctrl-attrib {

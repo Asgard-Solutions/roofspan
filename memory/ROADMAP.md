@@ -40,6 +40,7 @@ Done in the preview environment (2026-06):
 - Upgrade migration b1f0c2d3e4a5 now maps Converted -> Won only with an accepted proposal, otherwise Contacted
   (the same rule as the approved preview correction), so customer upgrades don't need the one-off script.
 
+Brand colors restored (navy/blue/orange) in Office + Field 2026-11-26.
 RC corrections done (2026-11-26, see RELEASE_RC_0.5.0.md): versions Office 0.5.0 / Field 1.1.0 (prerelease "dev"),
 EAS preview profile auto-increments build numbers; corrective migration c7e2a9b4d1f3; Office/Field version gate
 (Office rejects Field < 1.1.0 with 426, Field refuses Office < 0.5.0); guarded Windows frontend build + validation;

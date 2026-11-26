@@ -414,7 +414,7 @@ export default function LeadDetail() {
         title={lead.name}
         description={<span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {lead.property_address || lead.address || "No property"}</span>}
         testid="page-lead-detail"
-        actions={<><span className="hidden text-xs text-slate-500 sm:inline" data-testid="lead-current-stage">Stage: <span className="font-semibold text-slate-800">{STAGE_LABELS[wf.stage]}</span></span>
+        actions={<><span className="hidden text-xs text-slate-300 sm:inline" data-testid="lead-current-stage">Stage: <span className="font-semibold text-white">{STAGE_LABELS[wf.stage]}</span></span>
           <Select value={lead.status} onValueChange={changeStatus}>
             <SelectTrigger className="h-8 w-[130px]" data-testid="lead-status-select"><Badge className={statusColor[lead.status] || ""} variant="secondary" data-testid="lead-status-badge">{lead.status}</Badge></SelectTrigger>
             <SelectContent>{LEAD_STATUSES.map((st) => <SelectItem key={st.value} value={st.value} data-testid={`lead-status-option-${st.value}`}>{st.label}</SelectItem>)}</SelectContent>

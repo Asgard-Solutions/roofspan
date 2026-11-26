@@ -305,7 +305,7 @@ export default function Settings() {
   return (
     <div>
       <PageHeader title="Company & Integrations" description="Business settings first. Technical details live under Advanced." testid="page-settings"
-        actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
+        actions={<Link to="/settings" className="text-sm font-medium text-orange-400 hover:underline" data-testid="back-to-settings">All settings</Link>} />
       <div className="p-6 sm:p-8">
         <Tabs value={tab} onValueChange={(v) => setParams({ tab: v }, { replace: true })}>
           <TabsList data-testid="settings-tabs">
