@@ -1,0 +1,28 @@
+{
+  "summary": "Ran the RoofSpan RC checks (Office 0.5.0 / Field 1.1.0). Backend: 10 out of 10 pytest tests passed: the new tests/test_rc_compat_review.py (5) plus the existing tests/test_rc_compat.py (5). /api/version returns 0.5.0 and 0.5.0-dev. On /api/mobile/leads, version 1.1.0 or 1.2.0 gets 200, and 1.0.0 or 1.0.9 gets 426 with code must_update, app field and min_supported 1.1.0. A relayed request with no version gets 426 on GET and POST, and the POST writes no lead (lead count checked in the DB). A relayed GET on /mobile/photos/{random}/content returns 404 'Photo not found', not 426. Office web calls with no headers still get 200 on /mobile/leads and /mobile/photos. On a Field 1.1.0 PATCH, 'interested' is stored as 'qualified' (checked in the DB), and 'bogus' and 'converted' get 422. An Office PATCH /api/leads with 'interested' gets 422. Frontend (Office, light theme): owner login works. Sales > Leads lists 359 of 543. Opening a lead from the list works. On a lead with 7 photos, the Inspection & Measurements stage shows the Field photos gallery with 7 thumbnails, and the viewer opens. The images are placeholders because the Aug 2026 photo data is known to be damaged (content returns 502). The Job detail Field photos section loads 1 thumbnail. The Follow-up dialog opens and Cancel closes it. Lead status counts are the same before and after testing: archived 35, contacted 122, new 237, won 149. I did not run the c7e2a9b4d1f3 migration. I only reviewed its code and saw that alembic_version already equals c7e2a9b4d1f3.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/mobile/* gate", "issue": "The version gate is a router dependency that runs before auth. An unauthenticated request with X-RoofSpan-App-Version 1.0.0 gets 426, not 401. A malformed version (e.g. 'garbage') becomes (0,) and gets 426. Both seem acceptable, but check they are intended."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Lead detail > Field photos", "issues": ["PhotoGallery keeps showing 'Loading photos…' until every image blob request finishes (Promise.all). With 7 damaged photos this took about 6 seconds before any thumbnails appeared. The thumbnails could be rendered as soon as the list loads (existing behaviour, not an RC regression)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_rc_compat_review.py", "/app/backend/tests/test_rc_compat.py", "/app/test_reports/pytest/pytest_rc_143.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Migration c7e2a9b4d1f3: it only resets Won to Contacted when there is positive evidence (from_lead audit, no accepted quote, no job, no manual edit after the conversion), it writes an audit row for every change or flag, and re-running it changes nothing. This looks sound. It was not executed in this run.",
+    "The tunnel_client strips any incoming x-roofspan-relay-forwarded header and sets it to 1 itself, so devices cannot spoof the marker (covered by test_rc_compat.py)."
+  ],
+  "updated_files": ["/app/backend/tests/test_rc_compat_review.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. 1 TEST_rc_ lead was created and hard-deleted by id. The 'RC legacy status' lead from test_rc_compat.py was removed by the conftest cleanup. Lead counts are unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The DB is PostgreSQL (DATABASE_URL in backend/.env). Lead b749dfa4-70dd-4dc5-8a4b-043452677893 has 7 lead photos and job 112ed066-a8eb-4450-b0e7-da5484f5b9ca has 1, both damaged (content returns 502). Lead photos appear under the stage-inspection view. pytest.ini uses xdist."
+}
