@@ -2994,3 +2994,15 @@ reminders = Office Home + Field My Day lists only (no email/push).
   dialog defaults use pickDate(label) instead of array indexes. UI tests iteration_140 + 141 passed (DST, midnight, reschedule, existing dates).
 - Future enhancements recorded in ROADMAP (not approved): one-tap call/text, attempted vs completed contact, Lost reason.
 - Physical Android/iOS acceptance: OUTSTANDING (user, memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md).
+
+## 2026-06 Release-candidate validation (feature freeze; KISS redesign complete)
+- Full backend suite 1175 passed / 56 skipped / 1 xfailed / 0 failed; working-data counts + stock unchanged.
+- Office `yarn build` OK (bundle-size warning only). Field: 84 source files compile (JS project, no TypeScript), expo config resolves,
+  shared roof-sketch package resolves, 66/67 node tests pass (roof_preview_ui needs missing devDependency react-test-renderer);
+  map_data_flow stale source-scan updated to current names. expo install --check: 10 packages one patch behind (advisory).
+  API compatibility: all 33 Field endpoint paths exist on Office. Old Field vs new Office: "interested" status now 422 -> ship together.
+- MIGRATION FIX: b1f0c2d3e4a5 converted->won only with accepted proposal, else contacted. Upgrade rehearsal
+  (scripts/upgrade_rehearsal.sh, on a DB copy, pre-redesign schema -> head): all row counts/settings/job assignments preserved.
+- Windows packaging tests 286 passed / 105 skipped (Windows-only). PyInstaller spec ships alembic dir; new modules are statically imported.
+- Pre-existing, not changed (freeze): /api/mobile/photos/{id}/content returns 502 when the stored object is missing (old test photo).
+- Outstanding: RC-1..RC-6 in ROADMAP.md; physical device acceptance (owner).

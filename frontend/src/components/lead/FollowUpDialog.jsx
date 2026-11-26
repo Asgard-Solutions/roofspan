@@ -81,7 +81,7 @@ export function FollowUpDialog({ mode, leadId, target, closed, onClose, onSaved 
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} data-testid="followup-cancel-dialog">Cancel</Button>
           <Button onClick={save} disabled={busy || (needsWhen && !when) || (next && (mode === "log" || mode === "complete") && !nextWhen)} data-testid="followup-save">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
           </Button>
