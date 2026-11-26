@@ -79,6 +79,9 @@ async def create_follow_up(lead_id: str, payload: FollowUpIn, request: Request, 
         f.completed_at, f.completed_by = now, user.email
         if lead.status == "new":
             lead.status = "contacted"
+    elif lead.status in fu.CLOSED_LEAD_STATUSES:
+        # e.g. queued offline before the lead was marked Won/Lost: keep the record, but it can't be outstanding.
+        f.status, f.outcome, f.completed_at, f.completed_by = "cancelled", fu.closed_reason(lead.status), now, "system"
     db.add(f)
     await db.commit()
     await db.refresh(f)
@@ -102,9 +105,11 @@ async def update_follow_up(follow_up_id: str, payload: FollowUpPatch, request: R
         raise HTTPException(status_code=422, detail="A follow-up needs a due date")
     if data.get("status") and data["status"] == f.status and f.status != "open":
         return fu.fu_out(f)  # repeat complete/cancel (offline/interrupted retry) is a no-op
-    if f.status != "open" and data.get("status") != "open":
+    if f.status != "open":
         # Already done/cancelled elsewhere (e.g. in Office while Field was offline): never silently change it.
-        raise HTTPException(status_code=409, detail={"message": f"This follow-up was already {'completed' if f.status == 'done' else 'cancelled'}.", "server": fu.fu_out(f)})
+        # Terminal: done/cancelled follow-ups are never reopened or edited (incl. auto-cancel on Won/Lost).
+        reason = f" ({f.outcome})" if f.status == "cancelled" and f.outcome and f.outcome.startswith("Lead marked") else ""
+        raise HTTPException(status_code=409, detail={"message": f"This follow-up was already {'completed' if f.status == 'done' else 'cancelled'}{reason}.", "server": fu.fu_out(f)})
     token = fu.fu_out(f)["if_match"]
     if if_match and token and if_match != token:
         raise HTTPException(status_code=409, detail={"message": "This follow-up changed since your copy.", "server": fu.fu_out(f)})

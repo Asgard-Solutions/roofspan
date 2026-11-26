@@ -42,7 +42,8 @@ function Activity({ items }) {
 }
 
 // Follow-ups + contact history for one lead. Shown above the stage panels so it's visible at every stage.
-export function FollowUpsPanel({ leadId, visits, onChanged }) {
+export function FollowUpsPanel({ leadId, leadStatus, visits, onChanged }) {
+  const closed = leadStatus === "won" || leadStatus === "lost";
   const [rows, setRows] = useState([]);
   const [mode, setMode] = useState(null);
   const [target, setTarget] = useState(null);
@@ -73,12 +74,12 @@ export function FollowUpsPanel({ leadId, visits, onChanged }) {
           <span className="text-xs text-slate-500" data-testid="followup-open-count">{open.length} open</span></div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => act("log")} data-testid="log-contact-button"><MessageSquarePlus className="h-4 w-4" /> Log contact</Button>
-          <Button size="sm" onClick={() => act("schedule")} data-testid="schedule-followup-button"><Plus className="h-4 w-4" /> Follow-up</Button>
+          {!closed && <Button size="sm" onClick={() => act("schedule")} data-testid="schedule-followup-button"><Plus className="h-4 w-4" /> Follow-up</Button>}
         </div>
       </div>
       <div className="grid gap-4 p-4 lg:grid-cols-2">
         <div className="space-y-2">
-          {open.length === 0 ? <p className="text-sm text-slate-500" data-testid="followup-none">Nothing scheduled. Add a follow-up so this lead doesn't go quiet.</p>
+          {open.length === 0 ? <p className="text-sm text-slate-500" data-testid="followup-none">{closed ? `Lead is ${leadStatus}. Change the status to reopen it and schedule follow-ups.` : "Nothing scheduled. Add a follow-up so this lead doesn't go quiet."}</p>
             : open.map((f) => <OpenItem key={f.id} f={f} onAct={act} />)}
         </div>
         <div>

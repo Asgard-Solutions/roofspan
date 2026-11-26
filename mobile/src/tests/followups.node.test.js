@@ -87,5 +87,21 @@ ok(f.nextActionOf({ follow_ups: [], next_action: { type: "follow_up", text: "Cal
 ok(f.nextActionOf({ status: "won", follow_ups: [{ id: 9, status: "open", kind: "call", due_at: "2026-06-01T10:00:00Z" }], next_action: { type: "stage", text: "Schedule the job." } }).text === "Schedule the job.",
   "won lead: open follow-ups don't override the stage answer (same as Office)");
 
+// Won/Lost closes open follow-ups locally (same rule as Office); reopen never restores; history untouched.
+const hist = [{ id: "o", status: "open" }, { id: "d", status: "done", outcome: "talked" }, { id: "c", status: "cancelled", outcome: "rep" }];
+const closed = f.closeLeadLocally(hist, "qualified", "won");
+ok(closed.find((x) => x.id === "o").status === "cancelled" && closed.find((x) => x.id === "o").outcome === "Lead marked Won", "open follow-up cancelled with 'Lead marked Won'");
+ok(closed.find((x) => x.id === "d").outcome === "talked" && closed.find((x) => x.id === "c").outcome === "rep", "done/cancelled history untouched");
+ok(closed.length === 3, "nothing removed");
+ok(f.closeLeadLocally(closed, "won", "contacted") === closed, "reopening restores nothing");
+ok(f.closeLeadLocally(hist, "won", "won") === hist, "Won -> Won is not a transition");
+ok(f.closeLeadLocally(hist, "new", "lost").find((x) => x.id === "o").outcome === "Lead marked Lost", "Lost reason");
+const pendingLost = [{ kind: "lead_update", state: "pending", path: "/mobile/leads/L", body: { status: "lost" } }];
+ok(f.overlayPending([{ id: "s", status: "open" }], pendingLost, "L")[0].status === "cancelled", "queued 'mark Lost' keeps server-open follow-ups shown as cancelled before it syncs");
+ok(f.overlayPending([{ id: "s", status: "open" }], pendingLost, "OTHER")[0].status === "open", "other lead unaffected");
+ok(f.overlayPending([{ id: "s", status: "cancelled", outcome: "Lead marked Lost" }],
+  [{ kind: "follow_up_update", state: "pending", client_id: f.updateClientId("s"), body: { status: "done", lead_id: "L" } }], "L")[0].status === "cancelled",
+  "a queued 'done' never reopens an auto-cancelled follow-up");
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
 console.log("\nall follow-up helper checks passed");

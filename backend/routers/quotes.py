@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
+from services import follow_ups as fu
 from models import (Quote, QuoteLineItem, QuotePackage, Estimate, EstimateLineItem, Job, User, Customer, Property, AppConfig, Lead)
 from core import get_current_user, require_roles, FIELD_ROLES, MANAGE_ROLES, log_action
 from schemas_phase3 import (QuoteIn, QuoteUpdate, QuoteOut, QuoteAccept, QuoteAcceptResult, LineItemOut,
@@ -69,6 +70,7 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
     if notes:
         q.terms = (q.terms or "") + f"\n[Acceptance] {notes}"
     job = existing_job
+    auto_cancelled = []
     if not job:
         number = await next_number(db, "job", "JOB")
         job = Job(number=number, quote_id=q.id, customer_id=q.customer_id, property_id=q.property_id, status="created",
@@ -76,7 +78,9 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
         if q.lead_id:  # the lead's rep becomes the Job Manager so they can see the job they sold
             lead = await db.get(Lead, q.lead_id)
             if lead and lead.status in ("new", "contacted", "qualified"):
+                prev = lead.status
                 lead.status = "won"
+                auto_cancelled = await fu.cancel_on_close(db, lead, prev, accepted_by or (user.email if user else None))
             rep = await db.get(User, lead.assigned_user_id) if lead and lead.assigned_user_id else None
             if rep and rep.is_active:
                 job.assigned_user_id = rep.id
@@ -87,6 +91,8 @@ async def perform_quote_acceptance(db, q: Quote, *, acceptance_name, package_id,
     await log_action(db, user=user, action="quote.accept", entity_type="quote", entity_id=q.id,
                      detail={"job_id": str(job.id), "package_id": str(q.accepted_package_id) if q.accepted_package_id else None,
                              "via": "office" if user is not None else "public_link"}, request=request)
+    if auto_cancelled:
+        await fu.log_auto_cancel(db, await db.get(Lead, q.lead_id), auto_cancelled, user, request)
     await _notify_rep_on_accept(db, q, request=request)
     return q, job
 

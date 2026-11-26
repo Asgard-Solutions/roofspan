@@ -71,11 +71,23 @@ const FU_UPDATE_PREFIX = "follow-up-update:";
 const updateClientId = (fid) => FU_UPDATE_PREFIX + fid;
 const isActive = (m) => m && (m.state === "pending" || m.state === "failed");
 
+const CLOSED_STATUSES = ["won", "lost"];
+const closedReason = (st) => `Lead marked ${st.charAt(0).toUpperCase()}${st.slice(1)}`;
+
+// Same rule as Office: moving a lead to Won/Lost cancels its open follow-ups (never deletes; done/cancelled kept).
+// Reopening never restores them.
+function closeLeadLocally(followUps, oldStatus, newStatus) {
+  if (!CLOSED_STATUSES.includes(newStatus) || oldStatus === newStatus) return followUps || [];
+  return (followUps || []).map((f) => (f.status === "open" ? { ...f, status: "cancelled", outcome: closedReason(newStatus), _pending: true } : f));
+}
+
 // Overlay this lead's unsynced Field follow-up changes on a (possibly fresher) server copy, so a queued
 // create never vanishes and a queued done/cancel never "reappears" as open before the push lands.
 function overlayPending(serverList, mutations, leadId) {
   const list = (serverList || []).map((f) => ({ ...f }));
+  let closedTo = null;
   for (const m of mutations || []) {
+    if (isActive(m) && m.kind === "lead_update" && m.path === `/mobile/leads/${leadId}` && m.body && CLOSED_STATUSES.includes(m.body.status)) closedTo = m.body.status;
     if (!isActive(m) || !m.body || m.body.lead_id !== leadId) continue;
     if (m.kind === "follow_up") {
       if (!list.some((f) => f.id === m.body.id)) list.push({ id: m.body.id, lead_id: leadId, kind: m.body.kind, due_at: m.body.due_at, note: m.body.note, status: "open", _pending: true });
@@ -85,7 +97,7 @@ function overlayPending(serverList, mutations, leadId) {
       if (f && f.status === "open") Object.assign(f, { status: m.body.status, _pending: true });
     }
   }
-  return list;
+  return closedTo ? closeLeadLocally(list, null, closedTo) : list;
 }
 
 // Conflicts for this lead's follow-ups. "Apply mine" is only offered while Office still has it open.
@@ -95,4 +107,4 @@ function followUpConflicts(mutations, leadId) {
       server: m.serverValue || null, canApplyMine: !!(m.serverValue && m.serverValue.status === "open") }));
 }
 
-module.exports = { updateClientId, overlayPending, followUpConflicts, KIND_LABELS, LEAD_STATUSES, OPEN_STATUSES, DAY_PICKS, TIME_PICKS, whenOf, pickDate, kindLabel, fmt, myDayView, applyToMyDay, nextActionOf };
+module.exports = { CLOSED_STATUSES, closedReason, closeLeadLocally, updateClientId, overlayPending, followUpConflicts, KIND_LABELS, LEAD_STATUSES, OPEN_STATUSES, DAY_PICKS, TIME_PICKS, whenOf, pickDate, kindLabel, fmt, myDayView, applyToMyDay, nextActionOf };
