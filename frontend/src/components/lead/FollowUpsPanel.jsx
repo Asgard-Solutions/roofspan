@@ -88,7 +88,7 @@ export function FollowUpsPanel({ leadId, leadStatus, visits, onChanged }) {
           {history.length > 5 && <button type="button" className="mt-2 text-xs font-medium text-orange-700 hover:underline" onClick={() => setShowAll(!showAll)} data-testid="activity-toggle">{showAll ? "Show less" : `Show all ${history.length}`}</button>}
         </div>
       </div>
-      <FollowUpDialog mode={mode} leadId={leadId} target={target} onClose={() => setMode(null)} onSaved={() => { load(); onChanged?.(); }} />
+      <FollowUpDialog mode={mode} leadId={leadId} target={target} closed={closed} onClose={() => setMode(null)} onSaved={() => { load(); onChanged?.(); }} />
     </div>
   );
 }

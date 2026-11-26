@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the Won/Lost auto-cancel of follow-ups and the Converted->Won status correction, in the backend and the Office UI. Backend: the 3 existing suites pass (19/19). A new gap file passes (6/6). The mobile helper node test passes. The correction script's --dry-run reports listed=122, corrected=0, already_corrected_or_changed=122. Leads in the DB: 149 Won (0 without an accepted proposal), the 122 listed leads are all Contacted, and there are 122 lead.status_correction audit rows (122 distinct leads; GET /api/audit total=122). No Won/Lost lead has an open follow-up. Office UI (sales_bk + owner): every requested flow works (add, complete, Won, Leads list, reopen, Home, Lost via the list dropdown and via Lead Detail). Test data cleaned with manual_end (2 UI leads + 2 properties; pytest conftest removed the gap-test records). Lead status counts are back to the baseline.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Lead Detail on a Won/Lost lead, Log contact dialog", "issues": ["'Schedule the next follow-up' is checked by default even on closed leads. Saving creates a follow-up that the server cancels at once ('Lead marked Won/Lost'), which adds a cancelled row to the history. Hide or untick it when leadStatus is won/lost."]},
+      {"screen": "Lost lead: Leads list vs Lead Detail", "issues": ["The Leads list next action shows '—' (next_action is null for lost), while the Lead Detail banner shows 'Lead lost. Change the status to reopen it.' Won leads match on both screens. This is cosmetic."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_follow_ups_autocancel_gaps_iter138.py",
+    "/app/backend/tests/test_follow_ups_autocancel_iter137.py",
+    "/app/backend/tests/test_follow_ups_sync_iter135.py",
+    "/app/backend/tests/test_follow_ups_iter133.py",
+    "/app/backend/tests/_verify_data_iter138.py",
+    "/app/backend/tests/_check_home_iter138.py",
+    "/app/test_reports/pytest/iter138_gaps.xml"
+  ],
+  "action_items": [
+    "Optional: in FollowUpDialog, default 'Schedule the next follow-up' to off (or hide it) when the lead is won/lost.",
+    "Optional: make the Leads list next action for lost leads match the Lead Detail banner."
+  ],
+  "critical_code_review_comments": [
+    "Every place that sets a lead to won/lost calls cancel_on_close: leads.update_lead, mobile.update_lead and perform_quote_acceptance. No other writers were found. Public share-link acceptance (user=None) works and is audited.",
+    "create_follow_up on a closed lead stores status 'cancelled' for open requests but still allows 'done' logs. This matches the spec.",
+    "The terminal rule in PATCH /follow-ups covers status open/done and edits to due_at/note (409 with server payload). A repeat cancel is a no-op 200 that keeps the outcome 'Lead marked Lost'.",
+    "Auto-cancel records completed_by as the actor's email, so contact history shows the person who closed the lead rather than 'system'. This is acceptable, but note it if 'system' was expected."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_follow_ups_autocancel_gaps_iter138.py",
+    "/app/backend/tests/_verify_data_iter138.py",
+    "/app/backend/tests/_check_home_iter138.py",
+    "/app/backend/tests/_mk_ui_lead_iter138.py"
+  ],
+  "success_rate": {"backend": "100% (25/25 pytest + node helper test + dry-run)", "frontend": "100% of the requested flows"},
+  "seed_data_creation": "2 TEST_UI leads were created via the API, assigned to sales_bk, and removed by manual_end. The gap tests' leads were removed by the pytest conftest.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Gap file test_follow_ups_autocancel_gaps_iter138.py covers: audit total of 122, accepted proposals on a sample of Won leads, an Office create on a Won lead stored as cancelled, a Won->Lost change with no second auto_cancel audit, a stale If-Match on the mobile PATCH returning 409 with no cancel, a reopen attempt returning 409 with server.status cancelled, and public share-link acceptance cancelling follow-ups. Baseline lead status counts: archived 35, contacted 122, new 237, won 149."
+}

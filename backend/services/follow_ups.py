@@ -91,7 +91,9 @@ def next_action(lead: Lead, f: dict, today_start: datetime, today_end: datetime,
     answer without follow-ups, so Field can show the right text offline after completing one."""
     from services.lead_workflow import stage_action
     if lead.status in ("lost", "archived"):
-        return None
+        text = "Lead lost. Change the status to reopen it." if lead.status == "lost" else "Lead archived."
+        closed = {"text": text, "due_at": None, "when": "none", "type": "closed", "stage": None, "job_id": None, "done": False}
+        return {**closed, "fallback": closed}
     sa = stage_action(f["wf"], is_manage)
     base = {"text": sa["text"], "due_at": None, "when": "none", "type": "stage", "stage": sa["stage"],
             "job_id": sa.get("jobId"), "done": bool(sa.get("done"))}

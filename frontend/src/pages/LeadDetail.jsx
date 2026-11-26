@@ -208,7 +208,7 @@ export default function LeadDetail() {
   const na = wf.next_action;
   const action = na
     ? { text: na.due_at ? `${na.text} · ${WHEN_LABEL[whenOf(na.due_at)]} ${dateTime(na.due_at)}` : na.text,
-        stage: na.type === "follow_up" ? viewing : na.stage, jobId: na.job_id, done: na.done }
+        stage: na.type === "follow_up" || na.type === "closed" ? viewing : na.stage, jobId: na.job_id, done: na.done }
     : { text: lead.status === "lost" ? "Lead lost. Change the status to reopen it." : "Lead archived.", stage: viewing };
   const f = wf.facts;
 
