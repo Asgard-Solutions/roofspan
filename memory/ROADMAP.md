@@ -15,6 +15,12 @@ The 356 legacy TEST_ customers and everything linked to them are KEPT on purpose
   ConnectTimeoutError in any API test (seen in test_licensing_api). Run the suite against the internal backend URL / isolated env (pairs with TB-1).
 - **TB-7 Mobile node integration tests**: refresh.node.test.js / sync.node.test.js write to the live Office DB; gated, run only inside manual_begin/manual_end.
 
+## Proposed enhancements (future consideration — NOT approved for build)
+- **One-tap call / text from Field My Day** (and log that contact automatically).
+- **Attempted vs completed contact** in contact logging (e.g. "Called — no answer" vs "Spoke with homeowner").
+- **Lost reason** captured when a lead is marked Lost.
+
 ## Product rounds
-- DONE 2026-06: Sales follow-up and reminders (see PRD). Validation round done; waiting on: device checklist by user,
-  (122-lead correction and Won/Lost auto-cancel DONE 2026-06.)
+- ACCEPTED 2026-06: Sales follow-up and reminders + automated baseline (1175 passed). Office follow-up date/time now uses the
+  RoofSpan calendar picker. OUTSTANDING: physical Android/iOS acceptance (user, FIELD_FOLLOWUP_DEVICE_CHECKLIST.md).
+  Next phase: production-readiness validation (no new feature rounds).
