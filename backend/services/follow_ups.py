@@ -99,7 +99,7 @@ def next_action(lead: Lead, f: dict, today_start: datetime, today_end: datetime,
     if insp and insp.inspection_date:
         base = {**base, "text": "Inspection booked", "due_at": _iso(insp.inspection_date),
                 "when": _when(insp.inspection_date, today_start, today_end), "type": "inspection", "stage": "inspection"}
-    fu = f["next_fu"]
+    fu = f["next_fu"] if lead.status in OPEN_LEAD_STATUSES else None  # won leads: follow-ups don't drive reminders
     if fu:
         return {"text": f"{KIND_LABELS.get(fu.kind, 'Follow up')}: {fu.note}" if fu.note else KIND_LABELS.get(fu.kind, "Follow up"),
                 "due_at": _iso(fu.due_at), "when": _when(fu.due_at, today_start, today_end), "type": "follow_up",

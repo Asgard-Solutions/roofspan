@@ -59,6 +59,7 @@ function applyToMyDay(md, lead, fu) {
 
 // Next action wording when offline: earliest open follow-up first, otherwise the server's cached suggestion.
 function nextActionOf(lead) {
+  if (lead && lead.status && !OPEN_STATUSES.includes(lead.status)) return lead.next_action || null; // won/lost: server's stage answer
   const open = ((lead && lead.follow_ups) || []).filter((f) => f.status === "open").sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
   if (open[0]) return { text: `${kindLabel(open[0].kind)}${open[0].note ? ": " + open[0].note : ""}`, due_at: open[0].due_at, when: whenOf(open[0].due_at) };
   const na = lead && lead.next_action;

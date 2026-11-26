@@ -53,7 +53,10 @@ export function FollowUpDialog({ mode, leadId, target, onClose, onSaved }) {
       }
       toast.success({ schedule: "Follow-up scheduled", reschedule: "Follow-up moved", log: "Contact logged", complete: "Follow-up done" }[mode]);
       onSaved(); onClose();
-    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+    } catch (e) {
+      toast.error(apiError(e));
+      if (e?.response?.status === 409) { onSaved(); onClose(); } // changed elsewhere: show the current state
+    } finally { setBusy(false); }
   };
 
   const needsWhen = mode === "schedule" || mode === "reschedule";

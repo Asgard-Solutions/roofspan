@@ -84,5 +84,8 @@ ok(conf.length === 2 && conf[0].fid === "a" && conf[0].canApplyMine && !conf[1].
 ok(f.nextActionOf({ follow_ups: [], next_action: { type: "follow_up", text: "Call: old", fallback: { text: "Book or record the roof inspection." } } }).text === "Book or record the roof inspection.",
   "after completing the last follow-up offline, next action falls back to the stage guidance (not the stale follow-up)");
 
+ok(f.nextActionOf({ status: "won", follow_ups: [{ id: 9, status: "open", kind: "call", due_at: "2026-06-01T10:00:00Z" }], next_action: { type: "stage", text: "Schedule the job." } }).text === "Schedule the job.",
+  "won lead: open follow-ups don't override the stage answer (same as Office)");
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
 console.log("\nall follow-up helper checks passed");

@@ -5,7 +5,9 @@
  * token and retries the SAME request (same idempotency key) — so field work syncs instead of
  * getting stuck on HTTP 401.
  *
- * Run: REACT_APP_BACKEND_URL=http://localhost:8001 node src/tests/refresh.node.test.js
+ * Integration test: it creates a real lead in the Office database, so it is gated. Run it only inside a
+ * cleanup window (backend: tests._test_data_cleanup manual_begin / manual_end):
+ *   FIELD_RUN_OFFICE_INTEGRATION=1 REACT_APP_BACKEND_URL=http://localhost:8001 node src/tests/refresh.node.test.js
  */
 const axios = require("axios");
 const queue = require("../queue");
@@ -45,6 +47,11 @@ async function send(m) {
 }
 
 function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); process.exit(1); } console.log("  ✓", msg); }
+
+if (process.env.FIELD_RUN_OFFICE_INTEGRATION !== "1") {
+  console.log("SKIPPED: set FIELD_RUN_OFFICE_INTEGRATION=1 (writes a real lead to Office; run inside manual_begin/manual_end)");
+  process.exit(0);
+}
 
 (async () => {
   const lr = await axios.post(`${API}/auth/login`, { email: EMAIL, password: PASSWORD });

@@ -123,6 +123,11 @@ def test_same_next_action_everywhere(owner, rep_a):
     assert acts[0]["fallback"]["text"] == "Inspection booked"  # what Field shows offline after completing it
     _patch(rep_a, f["id"], {"status": "done"})
     assert {a["text"] for a in _next_actions(rep_a, lid)} == {"Inspection booked"}
+    # a Won lead with a leftover open follow-up: every surface shows stage guidance, not an overdue reminder
+    _fu(rep_a, lid, kind="call", note="TEST leftover", due_at=_iso(when - timedelta(days=5)))
+    assert requests.patch(f"{API}/leads/{lid}", json={"status": "won"}, headers=owner, timeout=20).status_code == 200
+    acts = _next_actions(rep_a, lid)
+    assert len({a["text"] for a in acts}) == 1 and {a["type"] for a in acts} <= {"stage", "inspection"} and "TEST leftover" not in acts[0]["text"]
 
 
 def test_door_visit_in_office_history_once(owner, rep_a):

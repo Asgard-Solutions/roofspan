@@ -1,0 +1,34 @@
+{
+  "summary": "Frontend-only Playwright validation (desktop 1920, browser TZ UTC) of the Sales follow-ups/reminders closing round on 4 TEST_UI leads created via API and assigned to sales_bk (Main, Open, Won, Lost). Cleanup was done with manual_end: inspections 1, leads 4, properties 4 deleted; follow-ups cascade-deleted. Every requested flow PASSED. (1) A fresh lead's banner reads 'Create the customer record to start the sale.' with no Go there button. Viewing the Inspection stage shows 'Go there', which goes back to Overview. The Leads list cell has the same text. (2) Scheduling a follow-up with note 'TEST banner' sets the banner to 'Call: TEST banner · Upcoming Nov 27, 9:00 AM' (no Go there button). The list shows 'Call: TEST banner' with the badge 'Upcoming · Nov 27, 9:00 AM'. Done with the next toggle unticked (pre-ticked by default) sets the banner back to the stage text, matching the list. (3) Booking an inspection sets the banner to 'Inspection booked · Upcoming Nov 27, 9:00 AM' and the list to 'Inspection booked' with a badge. The lead is left out of No follow-up while booked. Record results sets the banner back to the stage text, matching the list. (4) Views: Won and Lost leads, each with one overdue and one due-today follow-up, never appear under Overdue, Due today or No follow-up. An open lead with an overdue follow-up appears only under Overdue, and a lead with a follow-up due today only under Due today. Open leads with nothing scheduled appear under No follow-up. Chip counts equal the rows shown in every view checked. (5) Cancel with Undo: the row disappears at once; Undo restores it and sends no PATCH, and it is still there after reload. Without Undo, one PATCH is sent after 5s, the row stays gone after reload, and history shows 'Call cancelled · TEST cancel'. (6) A stale action against the server's 409 rule shows the toast 'This follow-up was already cancelled.' A stale Done is a no-op success, as the spec says. (7) Home: the owner sees the follow-ups, inspections, proposals, no-follow-up and unassigned cards ('1 overdue · 1 due today', 'Overdue: Sales Backup Test 1'). sales_bk sees the same cards minus Unassigned, has no Mine/Unassigned chips, and gets 37 rows in All, all assigned to Sales Backup Test.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/follow-ups/{id} {status:'cancelled'}", "issue": "Carried over from iteration_134 and still not fixed. Cancelling leaves completed_at and completed_by null (confirmed through the API). Contact history therefore dates the cancel entry by its future due date (Nov 29, 3:04 AM, while today is Nov 26) and sorts it above real past contacts, with no 'by' user."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Reschedule/Done on a follow-up already closed elsewhere (409)", "issue": "The error toast shows, but the dialog stays open and the panel and Next step banner still show the closed follow-up as open until a manual reload. FollowUpDialog.save should call onSaved/load (and close) when it gets a 409.", "affected_selectors": ["followup-save", "lead-next-action-text"]}
+    ],
+    "design_issues": [
+      {"screen": "Leads list (Won / All views)", "issues": ["A Won lead that still has open follow-ups shows 'Call: TEST won' with a red 'Overdue' badge in its Next action cell, because next_action ranks follow-ups ahead of stage guidance even for won leads. Consider auto-cancelling open follow-ups when a lead is marked won or lost, or ignoring them in next_action for non-open leads."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/ui_setup_iter136.py", "/app/tests/ui_setup2_iter136.py"],
+  "action_items": [
+    "Set completed_at=now and completed_by when a follow-up is cancelled (backend routers/follow_ups.py), so Contact history shows when and by whom.",
+    "In FollowUpDialog, on a 409 response, reload the panel and the workflow (onSaved) and close the dialog, so the stale item and banner refresh.",
+    "Optional: handle open follow-ups on Won leads (auto-cancel on won/lost, or skip them in next_action), so Won rows don't show red Overdue badges."
+  ],
+  "critical_code_review_comments": [
+    "FollowUpsPanel cancel uses a 5s setTimeout that is not cleared on unmount. If the user leaves the page within 5s, the PATCH still fires (that is fine), but load()/onChanged run on an unmounted component.",
+    "LeadDetail banner works out the 'when' label on the client (whenOf) and ignores the server's na.when. Both use local midnight so they agree now, but using na.when would keep the label identical to Field."
+  ],
+  "updated_files": ["/app/tests/ui_setup_iter136.py", "/app/tests/ui_setup2_iter136.py"],
+  "success_rate": {"backend": "not tested (frontend only)", "frontend": "100% of requested flows (3 minor issues)"},
+  "seed_data_creation": "4 TEST_UI leads and properties with follow-ups and 1 inspection. All removed by manual_end (inspections 1, leads 4, properties 4).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use the manual_begin/manual_end cleanup around UI runs. The setup scripts in /app/tests/ui_setup*_iter136.py create the leads, assign them to sales_bk and add follow-ups. Browser TZ is UTC. The backend pytest suite was not run, as requested."
+}
