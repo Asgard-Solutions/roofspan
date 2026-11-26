@@ -180,7 +180,7 @@ export default function AbcSupply() {
   return (
     <div>
       <PageHeader title="ABC Supply" description="Connect your myABCSupply account for products, pricing, and ordering." testid="page-abc-supply"
-        actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
+        actions={<Link to="/settings" className="text-sm font-medium text-orange-400 hover:underline" data-testid="back-to-settings">All settings</Link>} />
       <div className="space-y-6 p-6 sm:p-8">
         {status.is_mock && (
           <div className="max-w-2xl rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800" data-testid="abc-mock-banner">

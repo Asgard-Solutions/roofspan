@@ -88,7 +88,7 @@ export default function Takeoff() {
   };
 
   return <div>
-    <PageHeader title="Roof Takeoff Setup" description="Roof systems (takeoff templates) turn roof measurements into estimate materials." testid="page-takeoff" actions={<Link to="/settings" className="text-sm font-medium text-orange-700 hover:underline" data-testid="back-to-settings">All settings</Link>} />
+    <PageHeader title="Roof Takeoff Setup" description="Roof systems (takeoff templates) turn roof measurements into estimate materials." testid="page-takeoff" actions={<Link to="/settings" className="text-sm font-medium text-orange-400 hover:underline" data-testid="back-to-settings">All settings</Link>} />
     <div className="space-y-6 p-6 sm:p-8">
       <section className="rounded-md border bg-white p-4" data-testid="takeoff-settings">
         <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="font-semibold text-slate-900">Company takeoff settings</div><div className="text-sm text-slate-500">Waste is an estimating assumption, not a roof measurement.</div></div><div className="flex items-end gap-2"><div><Label className="text-xs">Default waste %</Label><Input className="w-28" type="number" value={settings.default_waste_percent} onChange={(e) => setSettings({ ...settings, default_waste_percent: e.target.value })} /></div><Button variant="outline" onClick={saveDefaultWaste}><Save className="h-4 w-4" /> Save</Button></div></div>

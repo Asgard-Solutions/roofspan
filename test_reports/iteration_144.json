@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only visual/regression check of the restored RoofSpan theme colors (Office, owner login). I visited 28 routes at 1920px and ran an automated contrast check on every page header: Home, Leads, Customers, Quotes, Lead detail, Map, Jobs, Job detail, Inventory, Suppliers, Material detail, Catalog, Locations, Transactions, Billing, Reports, Settings, Crews, admin Users, Roles, Audit, Backups, Subscription, Company & Integrations, ABC Supply, Takeoff, Assemblies and Price Books. Sidebar is navy rgb(11,26,51) with white/slate-300 text, and the active item has an orange left bar on every page. Every PageHeader is navy with a white h1 and an orange 2px bottom line. The Sales and Materials sub-tabs are navy, and the active tab is white with an orange (#f97316) underline. Primary buttons are blue rgb(11,107,224). The Change password and Follow-up dialogs render white and readable, and Cancel closes them. At 420px the top bar is navy with an orange line and a visible menu button, the slide-out menu is navy and readable, and navigating from it works. Login, sidebar navigation, opening a lead, opening a job and opening/cancelling the follow-up dialog all work. No page errors. 3 header elements are unreadable on navy because they were left with hard-coded dark text classes from the old white headers.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "JobDetail PageHeader actions", "issue": "Job total (e.g. $0.00) uses text-slate-900 on the navy header, so it is effectively invisible (contrast 1.03:1). Happens at desktop and mobile.", "selector": "[data-testid='page-job-detail'] .rs-header-actions span.font-heading (JobDetail.jsx line ~72, no testid)", "priority": "HIGH"},
+      {"component": "LeadDetail PageHeader actions", "issue": "'Stage: <stage>' uses text-slate-500 for the label and text-slate-800 for the value on the navy header, so it is unreadable (contrast 1.19:1 for the value). Shows at sm and wider.", "selector": "[data-testid='lead-current-stage'] (LeadDetail.jsx line ~417)", "priority": "HIGH"},
+      {"component": "Settings sub-page header back link", "issue": "The 'All settings' link uses text-orange-700 on navy. Contrast is 3.35:1, below the 4.5:1 minimum for small text, and it looks dim and reddish.", "selector": "[data-testid='back-to-settings'] on /admin/settings, /admin/settings/abc, /estimating/takeoff (Settings.jsx:308, AbcSupply.jsx:183, Takeoff.jsx:91)", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Map", "issues": ["MapView has no navy PageHeader; the left panel header 'Territories & Canvassing' stays white. This matches the 'no layout changes' choice, so it is a note only."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "JobDetail.jsx ~line 72: change the job total span text-slate-900 to text-white",
+    "LeadDetail.jsx ~line 417: change lead-current-stage text-slate-500 to text-slate-300 and the inner value text-slate-800 to text-white",
+    "Settings.jsx:308, AbcSupply.jsx:183, Takeoff.jsx:91: change back-to-settings text-orange-700 to text-orange-400 (or text-orange-300)",
+    "Optional: grep for other text-slate-[6-9]xx / text-orange-[6-9]xx classes passed in PageHeader `actions` or `description`, because .rs-header-actions only fixes inherited color, not explicit Tailwind text classes"
+  ],
+  "critical_code_review_comments": [
+    "The .rs-header-actions { color:#fff } rule only covers elements that inherit color. Any action that sets its own dark text class stays dark on navy, which is the root cause of all 3 bugs. A safer guard would be a CSS override for .rs-header-actions [class*='text-slate-'] when there is no bg, or a review of every PageHeader actions prop.",
+    "Inputs and SelectTriggers in headers use bg-transparent. They read fine today with white inherited text, but data-[placeholder]:text-muted-foreground on navy would be low contrast if a header ever shows a select or input with a placeholder."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "93% (theme correct on all 28 pages; 3 unreadable header elements)"},
+  "seed_data_creation": "None. No data was modified (dialogs were cancelled).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The theme check works by running a JS contrast scan on 'main div.border-orange-500.border-b-2' (the PageHeader). Test ids: lead 291d9ef1-2c1e-4bad-945b-50184ed2e5ae (won; shows the stage text), Michael Davis lead 04ef90c2-6258-47a9-809d-87583b65dcdc (new; has the follow-up button), job fd4dd127-11ee-4f2f-82d6-76c3c98501bc, material 48e6a2a1-a21b-481e-8dbb-3578f891f764. Office has no 'New lead' dialog (no such button or testid), so it was not tested. Field mobile app was not tested."
+}
