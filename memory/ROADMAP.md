@@ -17,4 +17,4 @@ The 356 legacy TEST_ customers and everything linked to them are KEPT on purpose
 
 ## Product rounds
 - DONE 2026-06: Sales follow-up and reminders (see PRD). Validation round done; waiting on: device checklist by user,
-  decision on the 122 ex-Converted TEST_ leads, decision on auto-cancelling open follow-ups when a lead is Won/Lost.
+  (122-lead correction and Won/Lost auto-cancel DONE 2026-06.)

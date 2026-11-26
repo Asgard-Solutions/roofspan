@@ -1,0 +1,18 @@
+{
+  "summary": "Retest of the 2 issues from iteration_137/138 (frontend, plus quick API checks). Both are FIXED. FIX 1: on Won and Lost leads, the Log contact dialog has no followup-next-toggle and no schedule-followup-button. Saving creates exactly one 'done' row (API: won=[done 'TEST_UI won call'], lost=[done 'TEST_UI lost call']) and no cancelled row. There are 0 followup-done-* buttons. On an open lead, the toggle is shown and pre-ticked (data-state=checked) for both Log contact and Done. FIX 2: the Lost lead next action is 'Lead lost. Change the status to reopen it.' on Leads list views lost and all (lead-next-{id}) and on the Lead Detail banner, with no lead-next-action-go. GET /api/leads (owner and sales_bk) and /api/mobile/leads (sales_bk) return next_action.type='closed' with that text. Regression: the Won lead shows 'Create the customer record to start the sale.' on both the list and the banner. Setting it to Contacted via lead-status-select brings back schedule-followup-button and the pre-ticked toggle. Data: manual_begin/manual_end were used; 3 leads and 3 properties were removed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [
+    {"screen": "FollowUp dialog (open lead)", "issues": ["The next follow-up date uses the browser's native datetime-local input, not the shadcn calendar. This was already there before; low priority."]}
+  ]},
+  "test_report_links": ["/app/backend/tests/_mk_ui_leads_iter139.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "LeadDetail.jsx line 212 still has a client-side fallback text for a null next_action. The server now always returns 'closed' for lost and archived leads, so this fallback is dead code. It is harmless."
+  ],
+  "updated_files": ["/app/backend/tests/_mk_ui_leads_iter139.py"],
+  "success_rate": {"backend": "N/A (quick API checks 100%)", "frontend": "100%"},
+  "seed_data_creation": "3 TEST_UI leads and properties were created, then removed by manual_end ({'leads': 3, 'properties': 3, 'users': 0}).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Lead status is changed with PATCH /api/leads/{id} (PUT returns 405). Helper script: tests/_mk_ui_leads_iter139.py create|check '<json ids>'."
+}
