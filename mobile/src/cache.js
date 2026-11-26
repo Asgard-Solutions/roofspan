@@ -15,6 +15,12 @@ async function readThrough(name, fetcher) {
     if (data !== undefined && data !== null) await putCache(name, data);
     return { data, stale: false };
   } catch (e) {
+    const status = e && e.response && e.response.status;
+    if ((status === 403 || status === 404) && /^(lead|job|property):/.test(name)) {
+      // No longer allowed (e.g. lead reassigned) or deleted: drop the cached copy so it can't be shown offline.
+      await putCache(name, null);
+      return { data: null, stale: false, forbidden: true, error: e };
+    }
     const cached = await getCache(name);
     const meta = await getCacheMeta(name);
     return { data: cached, stale: true, cachedAt: meta && meta.updated_at, error: e };

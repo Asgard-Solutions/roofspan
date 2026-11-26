@@ -47,19 +47,21 @@ async def list_leads(status: str | None = None, tz: str | None = None, user: Use
         stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
     umap = await _user_name_map(db, [l.assigned_user_id for l in rows])
-    extra = await fu.enrich(db, rows, tz)
+    extra = await fu.enrich(db, rows, tz, user)
     return [_out(l, user_name=umap.get(l.assigned_user_id)).model_copy(update=extra[l.id]) for l in rows]
 
 
 @router.get("/{lead_id}/workflow")
-async def get_lead_workflow(lead_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_lead_workflow(lead_id: str, tz: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from services.lead_workflow import lead_workflow
     lead = await db.get(Lead, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     if user.role == "sales" and lead.assigned_user_id != user.id:
         raise HTTPException(status_code=403, detail="This lead is not assigned to you")
-    return await lead_workflow(db, lead)
+    wf = await lead_workflow(db, lead)
+    wf["next_action"] = (await fu.enrich(db, [lead], tz, user))[lead.id]["next_action"]
+    return wf
 
 
 @router.get("/{lead_id}", response_model=LeadDetailOut)

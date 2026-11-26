@@ -12,7 +12,7 @@ function whenOf(due, now = new Date()) {
   if (!due) return "none";
   const d = new Date(due);
   const s = startOfDay(now);
-  const e = new Date(s.getTime() + 86400000);
+  const e = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1); // next local midnight (DST-safe: 23/25h days)
   return d < s ? "overdue" : d < e ? "today" : "upcoming";
 }
 
@@ -61,7 +61,37 @@ function applyToMyDay(md, lead, fu) {
 function nextActionOf(lead) {
   const open = ((lead && lead.follow_ups) || []).filter((f) => f.status === "open").sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
   if (open[0]) return { text: `${kindLabel(open[0].kind)}${open[0].note ? ": " + open[0].note : ""}`, due_at: open[0].due_at, when: whenOf(open[0].due_at) };
-  return (lead && lead.next_action) || null;
+  const na = lead && lead.next_action;
+  if (!na) return null;
+  return na.type === "follow_up" ? (na.fallback || null) : na; // the server's answer without follow-ups
 }
 
-module.exports = { KIND_LABELS, LEAD_STATUSES, OPEN_STATUSES, DAY_PICKS, TIME_PICKS, whenOf, pickDate, kindLabel, fmt, myDayView, applyToMyDay, nextActionOf };
+const FU_UPDATE_PREFIX = "follow-up-update:";
+const updateClientId = (fid) => FU_UPDATE_PREFIX + fid;
+const isActive = (m) => m && (m.state === "pending" || m.state === "failed");
+
+// Overlay this lead's unsynced Field follow-up changes on a (possibly fresher) server copy, so a queued
+// create never vanishes and a queued done/cancel never "reappears" as open before the push lands.
+function overlayPending(serverList, mutations, leadId) {
+  const list = (serverList || []).map((f) => ({ ...f }));
+  for (const m of mutations || []) {
+    if (!isActive(m) || !m.body || m.body.lead_id !== leadId) continue;
+    if (m.kind === "follow_up") {
+      if (!list.some((f) => f.id === m.body.id)) list.push({ id: m.body.id, lead_id: leadId, kind: m.body.kind, due_at: m.body.due_at, note: m.body.note, status: "open", _pending: true });
+    } else if (m.kind === "follow_up_update") {
+      const fid = String(m.client_id).slice(FU_UPDATE_PREFIX.length);
+      const f = list.find((x) => x.id === fid);
+      if (f && f.status === "open") Object.assign(f, { status: m.body.status, _pending: true });
+    }
+  }
+  return list;
+}
+
+// Conflicts for this lead's follow-ups. "Apply mine" is only offered while Office still has it open.
+function followUpConflicts(mutations, leadId) {
+  return (mutations || []).filter((m) => m.state === "conflict" && m.kind === "follow_up_update" && m.body && m.body.lead_id === leadId)
+    .map((m) => ({ client_id: m.client_id, fid: String(m.client_id).slice(FU_UPDATE_PREFIX.length), mine: m.body.status,
+      server: m.serverValue || null, canApplyMine: !!(m.serverValue && m.serverValue.status === "open") }));
+}
+
+module.exports = { updateClientId, overlayPending, followUpConflicts, KIND_LABELS, LEAD_STATUSES, OPEN_STATUSES, DAY_PICKS, TIME_PICKS, whenOf, pickDate, kindLabel, fmt, myDayView, applyToMyDay, nextActionOf };

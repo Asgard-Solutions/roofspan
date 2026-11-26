@@ -100,8 +100,11 @@ async def update_follow_up(follow_up_id: str, payload: FollowUpPatch, request: R
         raise HTTPException(status_code=422, detail="Status must be open, done or cancelled")
     if "due_at" in data and data["due_at"] is None:
         raise HTTPException(status_code=422, detail="A follow-up needs a due date")
-    if data.get("status") and data["status"] == f.status and f.status != "open" and len(data) == 1:
-        return fu.fu_out(f)  # repeat complete/cancel (offline replay) is a no-op
+    if data.get("status") and data["status"] == f.status and f.status != "open":
+        return fu.fu_out(f)  # repeat complete/cancel (offline/interrupted retry) is a no-op
+    if f.status != "open" and data.get("status") != "open":
+        # Already done/cancelled elsewhere (e.g. in Office while Field was offline): never silently change it.
+        raise HTTPException(status_code=409, detail={"message": f"This follow-up was already {'completed' if f.status == 'done' else 'cancelled'}.", "server": fu.fu_out(f)})
     token = fu.fu_out(f)["if_match"]
     if if_match and token and if_match != token:
         raise HTTPException(status_code=409, detail={"message": "This follow-up changed since your copy.", "server": fu.fu_out(f)})

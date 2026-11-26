@@ -27,14 +27,17 @@ def validate_status(value, allow_archived: bool = False):
     return value
 
 
-def day_bounds(tz: str | None):
+def day_bounds(tz: str | None, now: datetime | None = None):
+    """Start/end of the caller's local calendar day, in UTC. Wall-clock midnight to midnight, so a DST day is 23 or 25 hours."""
     try:
         z = ZoneInfo(tz) if tz else timezone.utc
     except Exception:
         z = timezone.utc
-    now = datetime.now(z)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start.astimezone(timezone.utc), (start + timedelta(days=1)).astimezone(timezone.utc)
+    local = (now or datetime.now(timezone.utc)).astimezone(z)
+    start = datetime(local.year, local.month, local.day, tzinfo=z)
+    nxt = start.date() + timedelta(days=1)
+    end = datetime(nxt.year, nxt.month, nxt.day, tzinfo=z)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
 def _iso(d):
@@ -55,63 +58,60 @@ def parse_uuid(v, what="record"):
         raise HTTPException(status_code=404, detail=f"{what.capitalize()} not found")
 
 
-async def lead_facts(db: AsyncSession, lead_ids: list) -> dict:
-    """Per lead: earliest open follow-up, open follow-up count, next scheduled inspection, proposal facts."""
-    out = {lid: {"next_fu": None, "open_fu": 0, "insp": None, "drafts": 0, "sent": 0} for lid in lead_ids}
-    if not lead_ids:
+async def lead_facts(db: AsyncSession, leads: list) -> dict:
+    """Per lead: earliest open follow-up, open follow-up count, next booked inspection, workflow facts/stage."""
+    from services.lead_workflow import lead_workflows
+    wfs = await lead_workflows(db, leads)
+    out = {l.id: {"next_fu": None, "open_fu": 0, "insp": None, "wf": wfs.get(l.id)} for l in leads}
+    ids = [l.id for l in leads]
+    if not ids:
         return out
-    fus = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id.in_(lead_ids), LeadFollowUp.status == "open")
+    fus = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id.in_(ids), LeadFollowUp.status == "open")
                             .order_by(LeadFollowUp.due_at.asc()))).scalars().all()
     for f in fus:
         o = out[f.lead_id]
         o["open_fu"] += 1
         if o["next_fu"] is None:
             o["next_fu"] = f
-    ins = (await db.execute(select(Inspection).where(Inspection.lead_id.in_(lead_ids), Inspection.status == "scheduled")
+    ins = (await db.execute(select(Inspection).where(Inspection.lead_id.in_(ids), Inspection.status == "scheduled")
                             .order_by(Inspection.inspection_date.asc().nullslast()))).scalars().all()
     for i in ins:
         if out[i.lead_id]["insp"] is None:
             out[i.lead_id]["insp"] = i
-    qs = (await db.execute(select(Quote.lead_id, Quote.status).where(Quote.lead_id.in_(lead_ids)))).all()
-    for lid, st in qs:
-        if st == "draft":
-            out[lid]["drafts"] += 1
-        elif st == "sent":
-            out[lid]["sent"] += 1
     return out
 
 
-def next_action(lead: Lead, f: dict, today_start: datetime, today_end: datetime) -> dict | None:
-    """The single next-action wording shown in Office and Field."""
-    if lead.status not in OPEN_LEAD_STATUSES:
+def _when(d, s, e):
+    return "overdue" if d < s else "today" if d < e else "upcoming"
+
+
+def next_action(lead: Lead, f: dict, today_start: datetime, today_end: datetime, is_manage: bool) -> dict | None:
+    """The single next-action wording shown in Office (list + Lead Detail) and Field.
+    Earliest open follow-up first, then a booked inspection, then the stage guidance. `fallback` is the
+    answer without follow-ups, so Field can show the right text offline after completing one."""
+    from services.lead_workflow import stage_action
+    if lead.status in ("lost", "archived"):
         return None
+    sa = stage_action(f["wf"], is_manage)
+    base = {"text": sa["text"], "due_at": None, "when": "none", "type": "stage", "stage": sa["stage"],
+            "job_id": sa.get("jobId"), "done": bool(sa.get("done"))}
+    insp = f["insp"]
+    if insp and insp.inspection_date:
+        base = {**base, "text": "Inspection booked", "due_at": _iso(insp.inspection_date),
+                "when": _when(insp.inspection_date, today_start, today_end), "type": "inspection", "stage": "inspection"}
     fu = f["next_fu"]
     if fu:
-        when = "overdue" if fu.due_at < today_start else "today" if fu.due_at < today_end else "upcoming"
         return {"text": f"{KIND_LABELS.get(fu.kind, 'Follow up')}: {fu.note}" if fu.note else KIND_LABELS.get(fu.kind, "Follow up"),
-                "due_at": _iso(fu.due_at), "when": when, "type": "follow_up"}
-    insp = f["insp"]
-    if insp:
-        when = "overdue" if insp.inspection_date and insp.inspection_date < today_start else \
-            "today" if insp.inspection_date and insp.inspection_date < today_end else "upcoming"
-        return {"text": "Inspection booked", "due_at": _iso(insp.inspection_date), "when": when, "type": "inspection"}
-    if f["sent"]:
-        text = "Follow up on the proposal"
-    elif f["drafts"]:
-        text = "Send the proposal"
-    elif lead.status == "new":
-        text = "Make first contact"
-    elif lead.status == "contacted":
-        text = "Book the inspection"
-    else:
-        text = "Schedule a follow-up"
-    return {"text": text, "due_at": None, "when": "none", "type": "suggestion"}
+                "due_at": _iso(fu.due_at), "when": _when(fu.due_at, today_start, today_end), "type": "follow_up",
+                "stage": base["stage"], "job_id": base["job_id"], "done": False, "fallback": base}
+    return {**base, "fallback": base}
 
 
-async def enrich(db: AsyncSession, leads: list, tz: str | None) -> dict:
+async def enrich(db: AsyncSession, leads: list, tz: str | None, user=None) -> dict:
     s, e = day_bounds(tz)
-    facts = await lead_facts(db, [l.id for l in leads])
-    return {l.id: {"next_action": next_action(l, facts[l.id], s, e), "open_follow_ups": facts[l.id]["open_fu"]} for l in leads}
+    manage = bool(user and user.role in ("owner", "administrator", "office"))
+    facts = await lead_facts(db, leads)
+    return {l.id: {"next_action": next_action(l, facts[l.id], s, e, manage), "open_follow_ups": facts[l.id]["open_fu"]} for l in leads}
 
 
 async def assert_lead(db: AsyncSession, lead_id, user) -> Lead:
@@ -127,10 +127,10 @@ def _row(title, subtitle, date, link, **kw):
     return {"title": title, "subtitle": subtitle, "date": _iso(date), "link": link, **kw}
 
 
-async def sales_attention(db: AsyncSession, user: User, tz: str | None, only_mine: bool, limit: int = 6) -> dict:
+async def sales_attention(db: AsyncSession, user: User, tz: str | None, only_mine: bool, limit: int = 6, now: datetime | None = None) -> dict:
     """Follow-up, inspection and proposal attention lists. Sales (or only_mine) see only their assigned leads."""
-    now = datetime.now(timezone.utc)
-    s, e = day_bounds(tz)
+    now = now or datetime.now(timezone.utc)
+    s, e = day_bounds(tz, now)
     mine = user.role == "sales" or only_mine
     manage = user.role in ("owner", "administrator", "office") and not only_mine
 
@@ -178,7 +178,7 @@ async def sales_attention(db: AsyncSession, user: User, tz: str | None, only_min
     if mine:
         lq = lq.where(Lead.assigned_user_id == user.id)
     open_leads = (await db.execute(lq)).scalars().all()
-    facts = await lead_facts(db, [l.id for l in open_leads])
+    facts = await lead_facts(db, open_leads)
     no_fu = [l for l in open_leads if not facts[l.id]["next_fu"] and not facts[l.id]["insp"]]
 
     out = {
@@ -191,7 +191,7 @@ async def sales_attention(db: AsyncSession, user: User, tz: str | None, only_min
             for i, l in insp[:limit]]},
         "proposals": {"count": len(props), "total": round(sum(float(p["amount"] or 0) for p in props), 2), "items": props[:limit]},
         "no_follow_up": {"count": len(no_fu), "items": [
-            _row(l.name or l.address or "Unnamed lead", next_action(l, facts[l.id], s, e)["text"], l.created_at, f"/leads/{l.id}",
+            _row(l.name or l.address or "Unnamed lead", next_action(l, facts[l.id], s, e, user.role in ("owner", "administrator", "office"))["text"], l.created_at, f"/leads/{l.id}",
                  id=str(l.id), lead_id=str(l.id), status=l.status) for l in no_fu[:limit]]},
     }
     if manage:

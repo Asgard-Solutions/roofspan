@@ -20,7 +20,7 @@ const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 export function whenOf(due) {
   if (!due) return "none";
   const d = new Date(due), s = startOfDay(new Date());
-  const e = new Date(s.getTime() + 86400000);
+  const e = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1); // next local midnight (DST-safe: 23/25h days)
   return d < s ? "overdue" : d < e ? "today" : "upcoming";
 }
 export const WHEN_STYLE = { overdue: "bg-red-50 text-red-700", today: "bg-orange-50 text-orange-700", upcoming: "bg-slate-100 text-slate-600" };
