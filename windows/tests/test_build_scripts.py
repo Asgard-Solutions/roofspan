@@ -73,7 +73,7 @@ def test_build_exes_uses_repo_venv_without_activation():
 
 def test_stage_always_syncs_yarn():
     txt = (INSTALLER / "stage.ps1").read_text(encoding="utf-8")
-    assert "yarn install --frozen-lockfile" in txt
+    assert "yarn.cmd install --frozen-lockfile" in txt
     # Must NOT gate the install solely on node_modules existing.
     assert 'Test-Path ".\\node_modules"' not in txt, "stage must not skip yarn install when node_modules exists"
     assert "yarn.lock" in txt and "package.json" in txt, "stage must fail-fast on missing frontend lockfiles"

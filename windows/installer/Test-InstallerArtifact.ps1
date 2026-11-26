@@ -59,8 +59,25 @@ if (Test-Path $WorkDir) { Remove-Item -Recurse -Force $WorkDir }
 $iso = Join-Path $WorkDir "isolated"; $ac = Join-Path $WorkDir "attached"; $ba = Join-Path $WorkDir "ba"
 New-Item -ItemType Directory -Force -Path $iso, $ac, $ba | Out-Null
 Copy-Item $setup (Join-Path $iso $setupName)
-wix burn extract (Join-Path $iso $setupName) -out $ac -outba $ba
-Assert-That ($LASTEXITCODE -eq 0) "wix burn extract failed (exit $LASTEXITCODE)"
+# WiX native CAB extraction can occasionally return Windows ERROR_NO_DATA
+# (0x800700e8, 'pipe is being closed') on hosted runners. Retry ONLY that
+# transport error with clean output directories. Never skip the subsequent
+# byte-for-byte MSI/prerequisite verification, and never retry hash failures.
+$extractOk = $false
+$extractRc = $null
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  if ($attempt -gt 1) {
+    Remove-Item -LiteralPath $ac, $ba -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $ac, $ba | Out-Null
+  }
+  wix burn extract (Join-Path $iso $setupName) -out $ac -outba $ba
+  $extractRc = $LASTEXITCODE
+  if ($extractRc -eq 0) { $extractOk = $true; break }
+  if ($extractRc -ne -2147024664 -or $attempt -eq 2) { break }
+  Write-Warning "WiX extraction hit ERROR_NO_DATA (pipe closed); retrying once with clean output directories."
+  Start-Sleep -Seconds 10
+}
+Assert-That $extractOk "wix burn extract failed (exit $extractRc); verified payload hashes were NOT obtained"
 $embedded = @{}
 Get-ChildItem $ac -Recurse -File | ForEach-Object { $embedded[(Get-Sha $_.FullName)] = $_.Name }
 Assert-That ($embedded.ContainsKey($msiSha)) "the bundle does not embed the published Office MSI ($msiName)"

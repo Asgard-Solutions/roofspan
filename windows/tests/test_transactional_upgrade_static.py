@@ -16,10 +16,10 @@ def test_service_start_is_conditional_on_not_coordinated():
 
 
 def test_bundle_routes_fresh_installs_to_msi_and_upgrades_to_coordinator():
-    assert 'InstallCondition="NOT RoofSpanOfficeInstalledVersion OR RoofSpanOfficeInstalledVersion = WixBundleVersion"' in BUNDLE
+    assert 'InstallCondition="NOT RoofSpanOfficeInstalledVersion OR RoofSpanOfficeInstalledVersion = v0.0.0.0 OR RoofSpanOfficeInstalledVersion = WixBundleVersion"' in BUNDLE
     coord = BUNDLE[BUNDLE.index('<ExePackage Id="RoofSpanUpgradeCoordinator"'):BUNDLE.index("</ExePackage>", BUNDLE.index('<ExePackage Id="RoofSpanUpgradeCoordinator"'))]
     assert 'Vital="yes"' in coord and 'SourceFile="$(var.UpgradeExe)"' in coord
-    assert 'InstallCondition="RoofSpanOfficeInstalledVersion AND RoofSpanOfficeInstalledVersion &lt; WixBundleVersion"' in coord
+    assert 'InstallCondition="RoofSpanOfficeInstalledVersion AND RoofSpanOfficeInstalledVersion &gt; v0.0.0.0 AND RoofSpanOfficeInstalledVersion &lt; WixBundleVersion"' in coord
     assert 'run --msi' in coord and '[PREVIOUSMSI]' in coord and 'UninstallArguments="uninstall"' in coord
     assert BUNDLE.index('Id="PostgreSQLVerify"') < BUNDLE.index('Id="RoofSpanUpgradeCoordinator"')
     assert '<Variable Name="PREVIOUSMSI"' in BUNDLE
