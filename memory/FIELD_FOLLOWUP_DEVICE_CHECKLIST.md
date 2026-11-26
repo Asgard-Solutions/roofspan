@@ -70,4 +70,29 @@ Mark each step **Pass** or **Fail** and note what you saw.
     - **Expect:** a follow-up that was due "Today" yesterday shows as **Overdue**, even while offline.
 19. Optional, on a daylight saving change day: a follow-up at 11:30 PM still shows "Today". 12:30 AM the next day shows "Upcoming".
 
+## E. Won / Lost closes follow-ups
+20. Give a test lead two open follow-ups, one completed follow-up and one you cancelled yourself.
+    - In **Office**, set the lead to **Won**.
+    - **Expect (Field, after a refresh):** both open follow-ups are gone from Follow-ups and from My Day.
+    - **Expect:** "+ Follow-up" is hidden and you see "Lead is won. Change the status to reopen it…".
+    - **Expect (Office contact history):** the two show as cancelled with the reason "Lead marked Won". The completed one and your own cancellation are unchanged.
+21. Same setup, but in **Field** edit the lead and set the status to **Lost** while **offline**.
+    - **Expect:** the open follow-ups disappear on the phone straight away.
+    - Close and reopen Field while still offline. **Expect:** they stay gone.
+    - Go online. **Expect (Office):** they're cancelled with "Lead marked Lost". Nothing was deleted.
+22. Field is offline and has **Done** waiting on a follow-up. Meanwhile, Office marks the lead Won.
+    - Bring Field online.
+    - **Expect:** a "Changed in Office" card offering only **Keep Office version**. The follow-up stays cancelled ("Lead marked Won") and is never reopened.
+23. Accept a proposal for a lead that has an open follow-up.
+    - **Expect:** the lead becomes Won and the follow-up is cancelled with "Lead marked Won".
+    - **Expect:** the new job, its dates and its crew are unchanged.
+    - Then set the lead to Lost. **Expect:** the job is still unchanged.
+24. Reopen a Won or Lost lead by setting it to Contacted.
+    - **Expect:** the old cancelled follow-ups stay cancelled.
+    - **Expect:** "+ Follow-up" is back, and a new follow-up shows up as open in Office, Field and My Day.
+25. Field is offline, a follow-up was scheduled offline, and Office marks the lead Lost before the phone syncs.
+    - **Expect after sync:** the follow-up exists in Office but is already cancelled ("Lead marked Lost"), so it never shows as overdue.
+26. Office Home and Field My Day counts: after steps 20–25, the lead isn't counted under Follow-ups due or No follow-up while it's Won or Lost.
+    - **Expect:** its next step is the stage guidance (for example "Schedule the job."), the same in both apps.
+
 Note: proposal email and ABC Supply are still MOCKED (simulated); neither is part of this checklist.

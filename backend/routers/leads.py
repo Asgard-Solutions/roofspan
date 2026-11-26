@@ -110,11 +110,15 @@ async def update_lead(lead_id: str, payload: LeadPatch, request: Request, user: 
         raise HTTPException(status_code=403, detail="This lead is not assigned to you")
     fields = payload.model_dump(exclude_unset=True)
     fu.validate_status(fields.get("status"), allow_archived=lead.status == "archived")
+    old_status = lead.status
     for k, v in fields.items():
         setattr(lead, k, v)
+    cancelled = await fu.cancel_on_close(db, lead, old_status, user.email)
     await db.commit()
     await db.refresh(lead)
-    await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=lead.id, request=request)
+    await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=lead.id, request=request,
+                     detail={"fields": sorted(fields.keys()), **({"status": [old_status, lead.status]} if old_status != lead.status else {})})
+    await fu.log_auto_cancel(db, lead, cancelled, user, request)
     return _out(lead)
 
 

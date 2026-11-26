@@ -91,7 +91,9 @@ def next_action(lead: Lead, f: dict, today_start: datetime, today_end: datetime,
     answer without follow-ups, so Field can show the right text offline after completing one."""
     from services.lead_workflow import stage_action
     if lead.status in ("lost", "archived"):
-        return None
+        text = "Lead lost. Change the status to reopen it." if lead.status == "lost" else "Lead archived."
+        closed = {"text": text, "due_at": None, "when": "none", "type": "closed", "stage": None, "job_id": None, "done": False}
+        return {**closed, "fallback": closed}
     sa = stage_action(f["wf"], is_manage)
     base = {"text": sa["text"], "due_at": None, "when": "none", "type": "stage", "stage": sa["stage"],
             "job_id": sa.get("jobId"), "done": bool(sa.get("done"))}
@@ -225,3 +227,29 @@ def inspection_status(data: dict, current_status: str | None = None, current_dat
     if st is None and current_status == "scheduled" and any(data.get(k) for k in _RESULT_FIELDS):
         return "completed"
     return st
+
+
+CLOSED_LEAD_STATUSES = ("won", "lost")
+
+
+def closed_reason(status: str) -> str:
+    return f"Lead marked {status.capitalize()}"
+
+
+async def cancel_on_close(db: AsyncSession, lead: Lead, old_status: str | None, actor: str | None) -> list:
+    """Lead moved to Won/Lost: cancel its OPEN sales follow-ups (never delete; done/cancelled untouched).
+    Caller commits and writes the audit entry. Only on an actual transition; reopening never restores them."""
+    if lead.status not in CLOSED_LEAD_STATUSES or old_status == lead.status:
+        return []
+    rows = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id == lead.id, LeadFollowUp.status == "open"))).scalars().all()
+    now = datetime.now(timezone.utc)
+    for f in rows:
+        f.status, f.outcome, f.completed_at, f.completed_by = "cancelled", closed_reason(lead.status), now, actor or "system"
+    return [str(f.id) for f in rows]
+
+
+async def log_auto_cancel(db: AsyncSession, lead: Lead, ids: list, user, request=None):
+    if ids:
+        from core import log_action
+        await log_action(db, user=user, action="followup.auto_cancel", entity_type="lead", entity_id=lead.id,
+                         detail={"reason": closed_reason(lead.status), "follow_up_ids": ids}, request=request)

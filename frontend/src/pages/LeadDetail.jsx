@@ -208,7 +208,7 @@ export default function LeadDetail() {
   const na = wf.next_action;
   const action = na
     ? { text: na.due_at ? `${na.text} · ${WHEN_LABEL[whenOf(na.due_at)]} ${dateTime(na.due_at)}` : na.text,
-        stage: na.type === "follow_up" ? viewing : na.stage, jobId: na.job_id, done: na.done }
+        stage: na.type === "follow_up" || na.type === "closed" ? viewing : na.stage, jobId: na.job_id, done: na.done }
     : { text: lead.status === "lost" ? "Lead lost. Change the status to reopen it." : "Lead archived.", stage: viewing };
   const f = wf.facts;
 
@@ -423,7 +423,7 @@ export default function LeadDetail() {
       <div className="space-y-5 p-6 sm:p-8">
         <StageBar stages={wf.stages} current={wf.stage} viewing={viewing} onSelect={setView} />
         <NextActionBanner action={action} viewing={viewing} onGo={setView} navigateToJob={() => navigate(`/jobs/${action.jobId}`)} />
-        <FollowUpsPanel leadId={id} visits={lead.visits} onChanged={load} />
+        <FollowUpsPanel key={lead.status} leadId={id} leadStatus={lead.status} visits={lead.visits} onChanged={load} />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2" data-testid={`stage-panel-${viewing}`}>
           {PANELS[viewing]}
         </div>

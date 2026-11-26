@@ -1064,14 +1064,17 @@ async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, 
     data = payload.model_dump(exclude_unset=True)
     fu.validate_status(data.get("status"))
     extra_note = (data.pop("append_note", None) or "").strip()
+    old_status = l.status
     for k, v in data.items():
         setattr(l, k, v)
+    cancelled = await fu.cancel_on_close(db, l, old_status, user.email)
     if extra_note:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         l.notes = f"{l.notes}\n\n[{stamp} · {user.full_name or user.email}] {extra_note}" if l.notes else f"[{stamp} · {user.full_name or user.email}] {extra_note}"
     await db.commit()
     await db.refresh(l)
     await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=l.id, detail={"via": "mobile", "fields": sorted(payload.model_dump(exclude_unset=True).keys())}, request=request)
+    await fu.log_auto_cancel(db, l, cancelled, user, request)
     return await _lead_detail(db, l, user=user)
 
 

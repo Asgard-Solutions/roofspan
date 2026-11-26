@@ -7,7 +7,7 @@ import { getCache, putCache, loadAllMutations } from "../storage";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import FollowUpSheet from "../components/FollowUpSheet";
-const { LEAD_STATUSES, whenOf, kindLabel, fmt, applyToMyDay, nextActionOf, overlayPending, followUpConflicts, updateClientId } = require("../followups");
+const { LEAD_STATUSES, CLOSED_STATUSES, closeLeadLocally, whenOf, kindLabel, fmt, applyToMyDay, nextActionOf, overlayPending, followUpConflicts, updateClientId } = require("../followups");
 const { uuidv4 } = require("../queue");
 
 const OUTCOMES = ["no_answer", "interested", "callback", "appointment", "not_interested", "do_not_knock"];
@@ -105,9 +105,13 @@ export default function LeadDetail({ route, navigation }) {
 
   const saveEdit = async () => {
     await queueMutation({ kind: "lead_update", method: "patch", path: `/mobile/leads/${id}`, body: { ...form }, ifMatch: lead.if_match, label: "Edit lead" });
-    setLead((l) => ({ ...l, ...form }));
-    await patchCachedDetail(`lead:${id}`, form);
+    const fus = closeLeadLocally(lead.follow_ups, lead.status, form.status);
+    setLead((l) => ({ ...l, ...form, follow_ups: fus }));
+    await patchCachedDetail(`lead:${id}`, { ...form, follow_ups: fus });
     await patchCachedList("leads", id, { name: form.name, status: form.status });
+    if (fus !== lead.follow_ups) {
+      try { let md = await getCache("myday"); for (const f of fus.filter((x) => x.status === "cancelled")) md = applyToMyDay(md, lead, f); await putCache("myday", md); } catch (e) { /* best effort */ }
+    }
     setEditing(false);
     Alert.alert("Saved offline", "Lead changes queued.");
   };
@@ -221,7 +225,7 @@ function FollowUpsBlock({ lead, onSchedule, onBook, onFinish }) {
         </View>
       ) : null}
       <Text style={s.h}>Follow-ups</Text>
-      {open.length === 0 && <Text style={s.empty}>Nothing scheduled.</Text>}
+      {open.length === 0 && <Text style={s.empty}>{CLOSED_STATUSES.includes(lead.status) ? `Lead is ${lead.status}. Change the status to reopen it and schedule follow-ups.` : "Nothing scheduled."}</Text>}
       {open.map((f) => (
         <View key={f.id} style={s.visit} testID={`followup-${f.id}`}>
           <Text style={[s.visitOut, { color: WHEN_COLOR[whenOf(f.due_at)] }]}>{kindLabel(f.kind)} · {fmt(f.due_at)}{f._pending ? " · waiting to sync" : ""}</Text>
@@ -239,7 +243,7 @@ function FollowUpsBlock({ lead, onSchedule, onBook, onFinish }) {
         </View>
       ))}
       <View style={s.editBtns}>
-        <TouchableOpacity style={[s.btnOutline, { flex: 1 }]} onPress={onSchedule} testID="lead-schedule-followup"><Text style={s.btnOutlineText}>+ Follow-up</Text></TouchableOpacity>
+        {CLOSED_STATUSES.includes(lead.status) ? null : <TouchableOpacity style={[s.btnOutline, { flex: 1 }]} onPress={onSchedule} testID="lead-schedule-followup"><Text style={s.btnOutlineText}>+ Follow-up</Text></TouchableOpacity>}
         <TouchableOpacity style={[s.btnOutline, { flex: 1 }]} onPress={onBook} testID="lead-book-inspection"><Text style={s.btnOutlineText}>Book inspection</Text></TouchableOpacity>
       </View>
     </View>

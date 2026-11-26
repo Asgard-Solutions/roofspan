@@ -24,7 +24,7 @@ function KindSelect({ value, onChange, testid }) {
 }
 
 // One dialog for every follow-up action: schedule, log a contact, complete (with optional next one), reschedule.
-export function FollowUpDialog({ mode, leadId, target, onClose, onSaved }) {
+export function FollowUpDialog({ mode, leadId, target, closed, onClose, onSaved }) {
   const [kind, setKind] = useState("call");
   const [when, setWhen] = useState("");
   const [note, setNote] = useState("");
@@ -38,8 +38,8 @@ export function FollowUpDialog({ mode, leadId, target, onClose, onSaved }) {
     if (!mode) return;
     setKind(target?.kind || "call"); setNote(target?.note || ""); setOutcome(""); setNextNote("");
     setWhen(target?.due_at ? toLocalInput(new Date(target.due_at)) : toLocalInput(quickPicks()[1].date));
-    setNext(mode === "log" || mode === "complete"); setNextWhen(toLocalInput(quickPicks()[2].date));
-  }, [mode, target]);
+    setNext(!closed && (mode === "log" || mode === "complete")); setNextWhen(toLocalInput(quickPicks()[2].date));
+  }, [mode, target, closed]);
 
   const save = async () => {
     setBusy(true);
@@ -72,7 +72,7 @@ export function FollowUpDialog({ mode, leadId, target, onClose, onSaved }) {
           {needsWhen && <div className="space-y-1.5"><Label>When</Label><DateTimeField value={when} onChange={setWhen} testid="followup-when" /></div>}
           {mode !== "complete" && <div className="space-y-1.5"><Label>{mode === "log" ? "What happened?" : "Note"}</Label><Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === "log" ? "Talked to homeowner, wants pricing" : "Call about the proposal"} data-testid="followup-note" /></div>}
           {mode === "complete" && <div className="space-y-1.5"><Label>Outcome (optional)</Label><Textarea value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="Left voicemail" data-testid="followup-outcome" /></div>}
-          {(mode === "log" || mode === "complete") && (
+          {(mode === "log" || mode === "complete") && !closed && (
             <div className="space-y-2 rounded-md border border-border p-3">
               <label className="flex items-center gap-2 text-sm font-medium text-slate-800"><Checkbox checked={next} onCheckedChange={(v) => setNext(!!v)} data-testid="followup-next-toggle" /> Schedule the next follow-up</label>
               {next && <><DateTimeField value={nextWhen} onChange={setNextWhen} testid="followup-next-when" />

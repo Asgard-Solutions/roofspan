@@ -2971,3 +2971,17 @@ reminders = Office Home + Field My Day lists only (no email/push).
   (115 no proposals at all, 7 with jobs on the customer but none from an accepted proposal); 0 without customer; all 122 are TEST_ named;
   all 28 real-named Won leads have an accepted proposal. Recommendation pending user decision.
 - Device testing NOT performed (no emulator/simulator available). Checklist: memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md
+
+## 2026-06 Status correction + Won/Lost auto-cancel (approved)
+- scripts/fix_converted_won_leads.py (frozen ids in scripts/data/converted_won_correction_ids.txt): 122 test-data leads Won->Contacted,
+  audit action `lead.status_correction`; rerun = 0 changes. Now: won 149 (all with accepted proposal), contacted 122. Sweep of Won/Lost
+  leads with open follow-ups: 0 found. Same script re-applies the sweep idempotently.
+- services/follow_ups.cancel_on_close(): any transition to Won/Lost (Office PATCH /leads, Field PATCH /mobile/leads, quote acceptance incl.
+  public link) cancels OPEN follow-ups with outcome "Lead marked Won/Lost" + audit `followup.auto_cancel`. Done/cancelled untouched,
+  nothing deleted, jobs/schedules untouched, reopen restores nothing. Done/cancelled follow-ups are fully terminal (409 for any change,
+  same-status repeat = no-op). Open follow-up created on a closed lead (e.g. offline replay) is stored as cancelled with the reason.
+  Lost/archived next_action = type "closed" text (same in Office + Field). Office/Field hide "+ Follow-up" (and the "next follow-up"
+  option in Log contact) on Won/Lost leads. Field applies the rule locally/offline (closeLeadLocally + overlayPending).
+- Tests: test_follow_ups_autocancel_iter137.py, test_follow_ups_autocancel_gaps_iter138.py; node followups test extended.
+  Full suite: 1175 passed, 56 skipped, 1 xfailed, 0 failed; counts/stock unchanged. UI: iteration_137 + 139 passed.
+- Physical-device acceptance: OUTSTANDING (user). Checklist sections A–E in memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md.
