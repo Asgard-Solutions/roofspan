@@ -35,6 +35,11 @@ export function startTunnelHeartbeat(intervalMs = 20000) {
   beat();
   _hb = setInterval(beat, intervalMs);
 }
+// Office GET /api/version (public) — used by the Office/Field compatibility gate.
+export function fetchOfficeVersion() {
+  return getTransport().request({ method: "GET", path: "/version", headers: {} });
+}
+
 export function stopTunnelHeartbeat() { if (_hb) { clearInterval(_hb); _hb = null; } }
 
 // pairingContext calls this so transport selection follows pairing state (no per-call SecureStore).

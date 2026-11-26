@@ -25,6 +25,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_CONTROL_PLANE_BASE_URL": "https://cp.roofspan.io",
         "EXPO_PUBLIC_RELAY_WSS_URL": "wss://relay.roofspan.io"

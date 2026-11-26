@@ -3011,3 +3011,15 @@ reminders = Office Home + Field My Day lists only (no email/push).
 - Version inventory, migration scenarios A/B, photo-404 root cause, build-source checks recorded in ROADMAP.md (RC-3, RC-5, RC-7..RC-10).
 - Scenario A (pre-status-migration install -> head): passes (scripts/upgrade_rehearsal.sh). Scenario B (ran original b1f0 from
   f240635): NOT corrected by current code — corrective migration proposed (RC-7), awaiting approval.
+
+## 2026-11-26 — RC corrections (feature freeze): Office 0.5.0 / Field 1.1.0 prerelease
+- Versions set (windows/VERSION 0.5.0, mobile app.json 1.1.0, EAS preview autoIncrement on remote counter). Details: RELEASE_RC_0.5.0.md.
+- Corrective migration c7e2a9b4d1f3 (positive-evidence Won->Contacted, ambiguous -> lead.status_review_needed audit). Rehearsals A/B/C pass.
+- Office/Field gate: Office rejects Field < 1.1.0 (426; relayed requests without version = Field 1.0.x); Field 1.1.0 refuses Office < 0.5.0
+  (mobile/src/compat.js, "RoofSpan Office needs an update" screen); queue keeps 426'd work pending; legacy "interested" -> "qualified".
+- Windows: installer/build-office-frontend.js (sets aside .env*/REACT_APP_*, strips preview scripts, stamps roofspan-build.json, rejects
+  preview/hosted addresses); stage.ps1 + build.ps1 use/verify it.
+- CP: SECRETS_ENCRYPTION_KEY now required in production; deployment plan CONTROL_PLANE_DEPLOYMENT_RC.md (NOT deployed).
+- Field test deps react-test-renderer 19.2.3 + @babel/preset-react; root package-lock.json re-synced (npm ci had been failing).
+- Tests: backend 1177 passed (3 outdated expectations updated, then pass), Windows 292 passed/105 skipped, Field node 53/53,
+  testing agent iteration_143 100%.

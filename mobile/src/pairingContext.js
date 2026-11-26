@@ -2,18 +2,18 @@
 // welcome/connect (unpaired) -> update-required / subscription-lock / device-revoked /
 // server-unavailable / offline -> sign-in -> main app. Never deletes offline queued work.
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
 
 import { clearPairing, loadPairing, savePairing } from "./pairingStore";
 import { probeConnection, resolvePairing, checkVersion } from "./relay";
-import { setActivePairing } from "./transport";
+import { setActivePairing, fetchOfficeVersion } from "./transport";
+import compat from "./compat";
+import { APP_VERSION } from "./appVersion";
 import { setInstallationScope } from "./storage";
 import { runSync } from "./sync";
 import { versionGate } from "./version";
 import { STATES, mapRelayError } from "./connectionState";
 
-const APP_VERSION = (Constants.expoConfig && Constants.expoConfig.version) || "1.0.0";
 const Ctx = createContext(null);
 
 export function PairingProvider({ children }) {
@@ -21,6 +21,15 @@ export function PairingProvider({ children }) {
   const [pairing, setPairing] = useState(null);
   const [conn, setConn] = useState(STATES.CONNECTING);
   const [optionalUpdate, setOptionalUpdate] = useState(false);
+  const [officeVersion, setOfficeVersion] = useState(null);
+
+  // Office rejected this Field (426) or is too old for it: show the matching update screen. Pairing,
+  // cache and the offline queue are kept as they are.
+  useEffect(() => compat.onBlocked((b) => {
+    if (!b) return;
+    if (b.app === "office") setOfficeVersion(b.officeVersion);
+    setConn(b.app === "office" ? STATES.OFFICE_UPDATE_REQUIRED : STATES.UPDATE_REQUIRED);
+  }), []);
 
   const evaluate = useCallback(async (p) => {
     if (!p) return;
@@ -43,8 +52,11 @@ export function PairingProvider({ children }) {
 
     setConn(STATES.CONNECTING);
     const r = await probeConnection(p);
-    setConn(r.ok ? STATES.CONNECTED : mapRelayError(r.code));
-    if (r.ok) runSync().catch(() => {});
+    if (!r.ok) { setConn(mapRelayError(r.code)); return; }
+    compat.reset();
+    if ((await compat.ensureCompatible(fetchOfficeVersion)) === false) return;  // onBlocked sets the screen
+    setConn(STATES.CONNECTED);
+    runSync().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -98,7 +110,7 @@ export function PairingProvider({ children }) {
 
   return (
     <Ctx.Provider value={{
-      ready, pairing, conn, optionalUpdate, setOptionalUpdate,
+      ready, pairing, conn, optionalUpdate, setOptionalUpdate, officeVersion,
       isPaired: !!pairing, appVersion: APP_VERSION, pair, unpair, retry,
     }}>
       {children}

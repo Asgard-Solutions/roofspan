@@ -104,11 +104,12 @@ def test_version_check_states():
 
 def test_local_mobile_version_gate():
     owner = _login()
-    # below the local minimum (1.0.0) -> 426 must_update
-    r = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": "0.9.0"}, timeout=15)
-    assert r.status_code == 426
+    # below the local minimum (1.1.0) -> 426 must_update
+    for old in ("0.9.0", "1.0.0"):
+        r = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": old}, timeout=15)
+        assert r.status_code == 426 and r.json()["detail"]["code"] == "must_update"
     # current version passes the gate
-    r2 = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": "1.0.0"}, timeout=15)
+    r2 = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": "1.1.0"}, timeout=15)
     assert r2.status_code == 200
 
 
@@ -118,7 +119,7 @@ def test_mobile_license_lock_when_suspended():
         requests.post(f"{API}/dev/licensing/set-state", json={"state": state, "seats_licensed": seats}, headers=owner, timeout=15)
     try:
         set_state("SUSPENDED")
-        r = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": "1.0.0"}, timeout=15)
+        r = requests.get(f"{API}/mobile/leads", headers={**owner, "X-RoofSpan-App-Version": "1.1.0"}, timeout=15)
         assert r.status_code == 403 and r.json().get("code") == "subscription_inactive"
         # licensing status remains readable so Mobile can show a license-lock screen
         assert requests.get(f"{API}/subscription", headers=owner, timeout=15).status_code == 200

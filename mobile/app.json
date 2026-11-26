@@ -3,7 +3,7 @@
     "name": "RoofSpan Field",
     "slug": "roofspan",
     "owner": "asgard-solution-llc",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "scheme": "roofspan",
     "userInterfaceStyle": "light",

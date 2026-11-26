@@ -1,9 +1,9 @@
-# RoofSpan Field — Follow-ups & My Day: manual device acceptance checklist
+# RoofSpan Field — Follow-ups, My Day, photos and upgrade: manual device acceptance checklist
 
 Nobody has run this on a real phone, emulator or simulator yet. No Android emulator or iOS simulator was available.
-**Before you start:** install the release-candidate Office build first and let it finish upgrading. The database must be at
-migration `b1f0c2d3e4a5`, otherwise Field follow-ups and My Day return errors. Then install the Field build from the same
-release candidate (Field and Office must come from the same release).
+**Before you start:** install the release-candidate Office build (0.5.0) first and let it finish upgrading. The database must be at
+migration `c7e2a9b4d1f3`. Then install the Field build (1.1.0) from the same release candidate. Field 1.1.0 refuses to sync
+with an older Office and Office 0.5.0 refuses Field 1.0.0 (section G).
 
 Do it on one Android phone and one iPhone, signed in as a salesperson. Keep RoofSpan Office open in a browser as an owner.
 Use a test lead assigned to that salesperson. Turn on Airplane mode for the offline steps.
@@ -98,5 +98,32 @@ Mark each step **Pass** or **Fail** and note what you saw.
     - **Expect after sync:** the follow-up exists in Office but is already cancelled ("Lead marked Lost"), so it never shows as overdue.
 26. Office Home and Field My Day counts: after steps 20–25, the lead isn't counted under Follow-ups due or No follow-up while it's Won or Lost.
     - **Expect:** its next step is the stage guidance (for example "Schedule the job."), the same in both apps.
+
+## F. Photos: capture, upload, retrieval, Office ↔ Field
+Use a lead or job created for this test. The older test photos that show "not found" in preview are damaged test data and are left as they are.
+27. Online: on a lead, tap **Take photo**, take a picture, add a note.
+    - **Expect:** the photo appears on the lead in Field within a few seconds, then in Office on the same lead (Photos) with the same note.
+28. Online: on a job, tap **Library** and pick an existing picture.
+    - **Expect:** it uploads and shows in Office on the job. Open it full size in Office and in Field.
+29. Offline (airplane mode): take two photos on a lead.
+    - **Expect:** they show on the phone straight away as waiting to upload; nothing is lost when you close and reopen the app.
+    - Go back online. **Expect:** both upload once (no duplicates) and appear in Office.
+30. Office uploads a photo to a lead (Receiving / Photos). **Expect:** Field shows it on that lead after refresh.
+31. Close Field, reopen it, open the lead again. **Expect:** all photos from steps 27–30 still load (none show "Photo file unavailable").
+32. Installed Office: after steps 27–31, restart the computer and open the same lead in Office. **Expect:** every photo still loads (installed Office keeps photos on its own disk).
+
+## G. Office / Field versions and upgrading (RoofSpan Office 0.5.0, RoofSpan Field 1.1.0)
+Supported order: upgrade **Office first**, then Field on every phone. Sync any pending work before upgrading where possible; it is never deleted either way.
+33. Field 1.1.0 with Office 0.5.0. **Expect:** connects and syncs normally. Check the version in Android Settings → Apps → RoofSpan Field (or iPhone Settings / TestFlight): 1.1.0.
+34. Field 1.1.0 with an Office still on 0.4.8.
+    - **Expect:** "RoofSpan Office needs an update" with the Office version shown and **Try Again**. Nothing syncs.
+    - Upgrade Office to 0.5.0, tap **Try Again**. **Expect:** Field connects and any waiting changes sync.
+35. Field 1.0.0 with Office 0.5.0 (an un-updated phone).
+    - **Expect:** Field 1.0.0 can't load or send data (it shows its usual error). Office rejects every request until the phone is updated, so nothing partial is saved.
+36. Upgrade Field with pending offline changes:
+    - On Field 1.0.0, go offline, change a lead's status (for example to "Interested") and add a visit and a photo.
+    - Install Field 1.1.0 over it (don't uninstall). **Expect:** still paired and signed in, the changes are still waiting.
+    - Go online. **Expect:** everything syncs once; the "Interested" lead shows as **Qualified** in Office and Field.
+37. Android: the 1.1.0 test build installs over the existing app as an update (no uninstall prompt). iOS: the TestFlight/ad-hoc 1.1.0 build replaces the old one.
 
 Note: proposal email and ABC Supply are still MOCKED (simulated); neither is part of this checklist.
