@@ -2949,3 +2949,25 @@ reminders = Office Home + Field My Day lists only (no email/push).
 - Final full suite 2026-06: 1159 passed, 1 failed (test_licensing_api network connect timeout to preview URL; passes 8/8 on rerun),
   56 skipped, 1 xfailed. Working-data counts and stock (sum delta 13196.5) unchanged after cleanup.
 - UI testing: iteration_134 all flows pass; follow-ups: Home "View all" now opens Due today when nothing is overdue; icon buttons labelled; cancel has Undo.
+
+## 2026-06 Sales follow-up round — closing validation (sync, offline, permissions, dates, migration review)
+- Next action is now computed only on the server (services/lead_workflow.stage_action + follow_ups.next_action) and returned by
+  /api/leads, /api/leads/{id}/workflow?tz=, /api/mobile/leads, /api/mobile/leads/{id}; Office Lead Detail banner uses it (JS copy removed).
+  Batched lead_workflows() verified identical to the old per-lead facts on all 543 leads. `fallback` = answer without follow-ups (Field offline).
+  Won leads: open follow-ups no longer drive next action/reminders.
+- Follow-up PATCH: done/cancelled are terminal (any other change -> 409 with server copy); repeat of the same terminal status = no-op.
+- Field: stable client id per follow-up update (follow-up-update:<id>) so re-applying replaces the queued change; If-Match sent from cached copy;
+  overlayPending() keeps queued creates visible and queued done/cancel from reappearing; conflict card on Lead Detail
+  (Keep Office version / Apply mine — Apply mine only while Office still has it open); More->conflict routes to the lead;
+  403/404 on lead/job/property read-through purges the cached copy ("Lead not available"). whenOf DST-safe (Office + Field).
+- Office: FollowUpDialog reloads + closes on 409. Leads Overdue/Due today/No follow-up views = open leads only.
+- Tests: backend/tests/test_follow_ups_sync_iter135.py (8), mobile/src/tests/followups.node.test.js (TZ=America/Chicago + Australia/Sydney).
+  mobile/src/tests/refresh.node.test.js was leaking a real lead -> now gated by FIELD_RUN_OFFICE_INTEGRATION=1.
+  test_kiss_r4_materials_quick::test_create_and_po now checks its own material's list membership (global count deltas raced).
+- Final full suite: 1168 passed, 56 skipped, 1 xfailed, 0 failed. Counts + stock unchanged.
+- Licensing timeout root cause: public preview ingress (2 Cloudflare edge IPs) intermittently stalls TCP connect 6-40s while the local
+  API answers in <0.02s (probe: memory/_conn_probe.py). Not an app/licensing defect -> TB-6.
+- Migration review (no data changed): 271 Won (all ex-Converted): 149 accepted proposal; 122 customer but no accepted proposal
+  (115 no proposals at all, 7 with jobs on the customer but none from an accepted proposal); 0 without customer; all 122 are TEST_ named;
+  all 28 real-named Won leads have an accepted proposal. Recommendation pending user decision.
+- Device testing NOT performed (no emulator/simulator available). Checklist: memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md

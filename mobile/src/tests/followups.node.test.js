@@ -51,5 +51,41 @@ const na = f.nextActionOf({ follow_ups: [
 ok(na.text === "Call: first", "next action = earliest open follow-up");
 ok(f.nextActionOf({ follow_ups: [], next_action: { text: "Book the inspection" } }).text === "Book the inspection", "falls back to server suggestion");
 
+// DST (run with TZ=America/Chicago): Nov 1 2026 is a 25h day, Mar 8 2026 is 23h.
+const fallBack = new Date(2026, 10, 1, 12, 0);
+ok(f.whenOf(new Date(2026, 10, 1, 23, 30), fallBack) === "today", "23:30 on the fall-back day is still today");
+ok(f.whenOf(new Date(2026, 10, 2, 0, 0), fallBack) === "upcoming", "next midnight after fall-back is upcoming");
+const spring = new Date(2026, 2, 8, 12, 0);
+ok(f.whenOf(new Date(2026, 2, 8, 23, 30), spring) === "today", "23:30 on the spring-forward day is today");
+ok(f.whenOf(new Date(2026, 2, 9, 0, 30), spring) === "upcoming", "00:30 after spring-forward is upcoming (not today)");
+ok(f.pickDate(1, 9, new Date(2026, 2, 7, 12)).getHours() === 9, "Tomorrow 9 AM across spring-forward stays 9 AM");
+
+// Offline overlay: queued create shows; queued done/cancel never reappears as open; other leads untouched.
+const server = [{ id: "s1", status: "open", due_at: "2026-06-10T15:00:00Z" }, { id: "s2", status: "open", due_at: "2026-06-11T15:00:00Z" }];
+const muts = [
+  { kind: "follow_up", state: "pending", body: { id: "p1", lead_id: "L", kind: "call", due_at: "2026-06-12T15:00:00Z" } },
+  { kind: "follow_up_update", state: "failed", client_id: f.updateClientId("s1"), body: { status: "done", lead_id: "L" } },
+  { kind: "follow_up_update", state: "synced", client_id: f.updateClientId("s2"), body: { status: "cancelled", lead_id: "L" } },
+  { kind: "follow_up", state: "pending", body: { id: "x", lead_id: "OTHER" } },
+];
+const ov = f.overlayPending(server, muts, "L");
+ok(ov.find((x) => x.id === "p1" && x._pending), "pending offline create is shown");
+ok(ov.find((x) => x.id === "s1").status === "done", "queued done is not shown as open again");
+ok(ov.find((x) => x.id === "s2").status === "open", "already-synced change defers to server copy");
+ok(!ov.find((x) => x.id === "x"), "other lead's queued follow-up is not mixed in");
+ok(f.overlayPending([{ id: "p1", status: "open" }], muts, "L").filter((x) => x.id === "p1").length === 1, "no duplicate once the create has synced");
+ok(f.overlayPending([{ id: "s1", status: "cancelled" }], muts, "L")[0].status === "cancelled", "server terminal state is never overwritten by a queued change");
+
+const conf = f.followUpConflicts([
+  { kind: "follow_up_update", state: "conflict", client_id: f.updateClientId("a"), body: { status: "done", lead_id: "L" }, serverValue: { status: "open", if_match: "t" } },
+  { kind: "follow_up_update", state: "conflict", client_id: f.updateClientId("b"), body: { status: "done", lead_id: "L" }, serverValue: { status: "cancelled" } },
+], "L");
+ok(conf.length === 2 && conf[0].fid === "a" && conf[0].canApplyMine && !conf[1].canApplyMine, "conflicts: apply-mine only while Office still has it open");
+ok(f.nextActionOf({ follow_ups: [], next_action: { type: "follow_up", text: "Call: old", fallback: { text: "Book or record the roof inspection." } } }).text === "Book or record the roof inspection.",
+  "after completing the last follow-up offline, next action falls back to the stage guidance (not the stale follow-up)");
+
+ok(f.nextActionOf({ status: "won", follow_ups: [{ id: 9, status: "open", kind: "call", due_at: "2026-06-01T10:00:00Z" }], next_action: { type: "stage", text: "Schedule the job." } }).text === "Schedule the job.",
+  "won lead: open follow-ups don't override the stage answer (same as Office)");
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
 console.log("\nall follow-up helper checks passed");

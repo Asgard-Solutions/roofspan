@@ -95,6 +95,7 @@ export default function More({ navigation }) {
     const pathId = idm ? idm[2] : null;
     const k = m.kind || "";
     if (k.startsWith("lead") && pathId) return { tab: "LeadsTab", screen: "LeadDetail", params: { id: pathId } };
+    if (k.startsWith("follow_up") && b.lead_id) return { tab: "LeadsTab", screen: "LeadDetail", params: { id: b.lead_id } };
     if (k.startsWith("job") && pathId) return { tab: "JobsTab", screen: "JobDetail", params: { id: pathId } };
     if (k === "visit" && b.property_id) return { tab: "Map", screen: "Property", params: { id: b.property_id } };
     if (k.startsWith("inspection") && b.property_id) return { tab: "Map", screen: "Property", params: { id: b.property_id } };

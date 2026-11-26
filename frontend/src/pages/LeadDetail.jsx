@@ -13,10 +13,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StageBar, STAGE_LABELS } from "@/components/lead/StageBar";
-import { nextAction, NextActionBanner } from "@/components/lead/NextAction";
+import { NextActionBanner } from "@/components/lead/NextAction";
 import { FollowUpsPanel } from "@/components/lead/FollowUpsPanel";
 import { DateTimeField } from "@/components/lead/DateTimeField";
-import { LEAD_STATUSES, LEAD_STATUS_COLOR, kindLabel, whenOf, WHEN_LABEL, dateTime, quickPicks, toLocalInput } from "@/lib/followups";
+import { LEAD_STATUSES, LEAD_STATUS_COLOR, whenOf, WHEN_LABEL, dateTime, quickPicks, toLocalInput, tz } from "@/lib/followups";
 import PhotoGallery from "@/components/PhotoGallery";
 import MeasurementWorksheet from "@/components/MeasurementWorksheet";
 import { CalendarClock, Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
@@ -64,7 +64,6 @@ export default function LeadDetail() {
   const [assignable, setAssignable] = useState([]);
   const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [nextFu, setNextFu] = useState([]);
   const [inspTarget, setInspTarget] = useState(null);
   const [bookOpen, setBookOpen] = useState(false);
   const [book, setBook] = useState({ when: "", inspector: "", notes: "" });
@@ -80,7 +79,7 @@ export default function LeadDetail() {
         l.customer_id ? api.get(`/jobs?customer_id=${l.customer_id}`) : Promise.resolve({ data: [] }),
       ]);
       setInspections(insR.data); setEstimates(estR.data); setQuotes(quoR.data); setJobs(jobR.data);
-      api.get(`/leads/${id}/workflow`).then((r) => setWf(r.data)).catch((e) => setLoadError(apiError(e)));
+      api.get(`/leads/${id}/workflow`, { params: { tz: tz() } }).then((r) => setWf(r.data)).catch((e) => setLoadError(apiError(e)));
       if (isManage && l.customer_id) {
         try { setInvoices((await api.get(`/invoices?customer_id=${l.customer_id}`)).data); } catch (e) { /* noop */ }
       }
@@ -205,11 +204,12 @@ export default function LeadDetail() {
   const jobIds = leadJobs.map((j) => j.id);
   const leadInvoices = invoices.filter((i) => quoteIds.includes(i.quote_id) || jobIds.includes(i.job_id));
   const invoicedQuoteIds = leadInvoices.filter((i) => i.status !== "void").map((i) => i.quote_id);
-  const fu0 = nextFu[0];
-  const stageAction = nextAction(wf, isManage);
-  const action = fu0 && OPEN.includes(lead.status)
-    ? { text: `${kindLabel(fu0.kind)}${fu0.note ? `: ${fu0.note}` : ""} · ${WHEN_LABEL[whenOf(fu0.due_at)]} ${dateTime(fu0.due_at)}`, stage: viewing }
-    : stageAction;
+  // Next step comes from the server so Office and Field always show the same wording.
+  const na = wf.next_action;
+  const action = na
+    ? { text: na.due_at ? `${na.text} · ${WHEN_LABEL[whenOf(na.due_at)]} ${dateTime(na.due_at)}` : na.text,
+        stage: na.type === "follow_up" ? viewing : na.stage, jobId: na.job_id, done: na.done }
+    : { text: lead.status === "lost" ? "Lead lost. Change the status to reopen it." : "Lead archived.", stage: viewing };
   const f = wf.facts;
 
   const assignment = (
@@ -423,7 +423,7 @@ export default function LeadDetail() {
       <div className="space-y-5 p-6 sm:p-8">
         <StageBar stages={wf.stages} current={wf.stage} viewing={viewing} onSelect={setView} />
         <NextActionBanner action={action} viewing={viewing} onGo={setView} navigateToJob={() => navigate(`/jobs/${action.jobId}`)} />
-        <FollowUpsPanel leadId={id} visits={lead.visits} onOpenChange={setNextFu} onChanged={load} />
+        <FollowUpsPanel leadId={id} visits={lead.visits} onChanged={load} />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2" data-testid={`stage-panel-${viewing}`}>
           {PANELS[viewing]}
         </div>

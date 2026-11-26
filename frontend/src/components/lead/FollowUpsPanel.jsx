@@ -42,15 +42,12 @@ function Activity({ items }) {
 }
 
 // Follow-ups + contact history for one lead. Shown above the stage panels so it's visible at every stage.
-export function FollowUpsPanel({ leadId, visits, onChanged, onOpenChange }) {
+export function FollowUpsPanel({ leadId, visits, onChanged }) {
   const [rows, setRows] = useState([]);
   const [mode, setMode] = useState(null);
   const [target, setTarget] = useState(null);
   const [showAll, setShowAll] = useState(false);
-  const load = useCallback(() => api.get(`/leads/${leadId}/follow-ups`).then((r) => {
-    setRows(r.data);
-    onOpenChange?.(r.data.filter((x) => x.status === "open").sort((a, b) => new Date(a.due_at) - new Date(b.due_at)));
-  }).catch((e) => toast.error(apiError(e))), [leadId, onOpenChange]);
+  const load = useCallback(() => api.get(`/leads/${leadId}/follow-ups`).then((r) => setRows(r.data)).catch((e) => toast.error(apiError(e))), [leadId]);
   useEffect(() => { load(); }, [load]);
 
   const act = async (m, f) => {

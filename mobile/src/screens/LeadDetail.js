@@ -2,12 +2,12 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { cache, patchCachedDetail, patchCachedList } from "../cache";
-import { queueMutation, refreshLead, registerActiveLead } from "../sync";
-import { getCache, putCache } from "../storage";
+import { queueMutation, refreshLead, registerActiveLead, removeMutation } from "../sync";
+import { getCache, putCache, loadAllMutations } from "../storage";
 import { C } from "../theme";
 import PhotoSection from "../components/PhotoSection";
 import FollowUpSheet from "../components/FollowUpSheet";
-const { LEAD_STATUSES, whenOf, kindLabel, fmt, applyToMyDay, nextActionOf } = require("../followups");
+const { LEAD_STATUSES, whenOf, kindLabel, fmt, applyToMyDay, nextActionOf, overlayPending, followUpConflicts, updateClientId } = require("../followups");
 const { uuidv4 } = require("../queue");
 
 const OUTCOMES = ["no_answer", "interested", "callback", "appointment", "not_interested", "do_not_knock"];
@@ -22,10 +22,19 @@ export default function LeadDetail({ route, navigation }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [sheet, setSheet] = useState(null); // "followup" | "inspection" | null
+  const [gone, setGone] = useState(false);
+  const [conflicts, setConflicts] = useState([]);
 
   const load = useCallback(async () => {
     const r = await cache.lead(id);
-    if (r.data) { setLead(r.data); setForm({ name: r.data.name, phone: r.data.phone, email: r.data.email, status: r.data.status }); }
+    if (r.forbidden) { setGone(true); setLead(null); return; }
+    const muts = await loadAllMutations();
+    setConflicts(followUpConflicts(muts, id));
+    if (r.data) {
+      const fus = overlayPending(r.data.follow_ups, muts, id);
+      setLead({ ...r.data, follow_ups: fus, next_action: nextActionOf({ ...r.data, follow_ups: fus }) });
+      setForm({ name: r.data.name, phone: r.data.phone, email: r.data.email, status: r.data.status });
+    }
     setStale(!!r.stale);
     // Lead-aware sync: opening a lead registers it + pulls the canonical measurements for it (screen-independent).
     registerActiveLead({ lead_id: id });
@@ -34,6 +43,7 @@ export default function LeadDetail({ route, navigation }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  if (gone) return <View style={s.wrap} testID="lead-gone"><Text style={s.h}>Lead not available</Text><Text style={s.empty}>This lead is no longer assigned to you, so it was removed from this phone.</Text></View>;
   if (!lead) return <View style={s.wrap}><Text>Loading…</Text></View>;
   const dnk = lead.do_not_knock;
 
@@ -71,7 +81,7 @@ export default function LeadDetail({ route, navigation }) {
       return Alert.alert("Inspection booked", `${fmt(due_at)} — syncs when Office is available.`);
     }
     const fu = { id: uuidv4(), lead_id: id, kind, due_at, note: n, status: "open", _pending: true };
-    await queueMutation({ kind: "follow_up", method: "post", path: `/leads/${id}/follow-ups`, body: { id: fu.id, kind, due_at, note: n }, label: "Follow-up" });
+    await queueMutation({ kind: "follow_up", method: "post", path: `/leads/${id}/follow-ups`, body: { id: fu.id, kind, due_at, note: n, lead_id: id }, label: "Follow-up" });
     await setFollowUps([...(lead.follow_ups || []), fu], fu);
   };
 
@@ -83,8 +93,11 @@ export default function LeadDetail({ route, navigation }) {
     try { await putCache("myday", applyToMyDay(await getCache("myday"), lead, changed)); } catch (e) { /* best effort */ }
   };
 
-  const finishFollowUp = async (f, status) => {
-    await queueMutation({ kind: "follow_up_update", method: "patch", path: `/follow-ups/${f.id}`, body: { status }, label: status === "done" ? "Follow-up done" : "Follow-up cancelled" });
+  // Stable client id per follow-up: re-applying after a conflict replaces the queued change instead of stacking.
+  const finishFollowUp = async (f, status, ifMatch) => {
+    await queueMutation({ kind: "follow_up_update", method: "patch", path: `/follow-ups/${f.id}`, clientId: updateClientId(f.id),
+      body: { status, lead_id: id }, ifMatch: ifMatch !== undefined ? ifMatch : (f._pending ? null : f.if_match || null),
+      label: status === "done" ? "Follow-up done" : "Follow-up cancelled" });
     const changed = { ...f, status };
     await setFollowUps((lead.follow_ups || []).map((x) => (x.id === f.id ? changed : x)), changed);
     if (status === "done") Alert.alert("Done", "Schedule the next follow-up?", [{ text: "Not now", style: "cancel" }, { text: "Schedule", onPress: () => setSheet("followup") }]);
@@ -151,6 +164,16 @@ export default function LeadDetail({ route, navigation }) {
         </View>
       )}
 
+      {conflicts.map((c) => (
+        <View key={c.client_id} style={s.conflict} testID={`followup-conflict-${c.fid}`}>
+          <Text style={s.conflictTitle}>Changed in Office while you were offline</Text>
+          <Text style={s.visitNote}>You marked it {c.mine === "done" ? "done" : "cancelled"}. Office now has it {c.server ? (c.server.status === "open" ? `open, due ${fmt(c.server.due_at)}` : c.server.status) : "changed"}.</Text>
+          <View style={s.editBtns}>
+            <TouchableOpacity style={[s.btnOutline, { flex: 1 }]} onPress={async () => { await removeMutation(c.client_id); load(); }} testID={`followup-conflict-keep-office-${c.fid}`}><Text style={s.btnOutlineText}>Keep Office version</Text></TouchableOpacity>
+            {c.canApplyMine ? <TouchableOpacity style={[s.btnOutline, { flex: 1 }]} onPress={async () => { await finishFollowUp({ id: c.fid }, c.mine, c.server.if_match); load(); }} testID={`followup-conflict-apply-mine-${c.fid}`}><Text style={s.btnOutlineText}>Apply mine</Text></TouchableOpacity> : null}
+          </View>
+        </View>
+      ))}
       <FollowUpsBlock lead={lead} onSchedule={() => setSheet("followup")} onBook={() => setSheet("inspection")} onFinish={finishFollowUp} />
 
       <Text style={s.h}>Field note</Text>
@@ -262,6 +285,8 @@ const s = StyleSheet.create({
   visitMeta: { fontSize: 12, color: C.sub },
   visitNote: { fontSize: 14, color: C.ink, marginTop: 4 },
   empty: { color: C.sub, fontStyle: "italic" },
+  conflict: { backgroundColor: "#FEF2F2", borderColor: "#FCA5A5", borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 12 },
+  conflictTitle: { fontWeight: "800", color: "#991B1B" },
   next: { backgroundColor: "#FFF7ED", borderColor: "#FDBA74", borderWidth: 1, borderRadius: 12, padding: 14, marginTop: 16 },
   nextLabel: { fontSize: 11, fontWeight: "800", color: C.brand, letterSpacing: 1 },
   nextText: { fontSize: 16, fontWeight: "700", color: C.ink, marginTop: 2 },

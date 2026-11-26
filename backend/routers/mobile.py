@@ -617,7 +617,7 @@ async def my_leads(scope: str = Query("auto"), tz: str | None = Query(None), use
     if _field_only(user) or scope == "mine":
         stmt = stmt.where(Lead.assigned_user_id == user.id)
     rows = (await db.execute(stmt)).scalars().all()
-    extra = await fu.enrich(db, rows, tz)
+    extra = await fu.enrich(db, rows, tz, user)
     return [{**_lead_row(l), **extra[l.id]} for l in rows]
 
 
@@ -965,7 +965,7 @@ def _lead_token(l: Lead) -> str | None:
     return ts.isoformat() if ts else None
 
 
-async def _lead_detail(db: AsyncSession, l: Lead, replayed: bool = False, existing: bool = False) -> dict:
+async def _lead_detail(db: AsyncSession, l: Lead, replayed: bool = False, existing: bool = False, user=None) -> dict:
     address = l.address
     do_not_knock = False
     visits = []
@@ -979,10 +979,12 @@ async def _lead_detail(db: AsyncSession, l: Lead, replayed: bool = False, existi
                        "visited_at": v.visited_at.isoformat(), "user_email": v.user_email} for v in vrows]
     insp = (await db.execute(select(Inspection).where(Inspection.lead_id == l.id).order_by(Inspection.created_at.desc()))).scalars().first()
     from models import LeadFollowUp
-    fus = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id == l.id).order_by(LeadFollowUp.due_at.desc()).limit(50))).scalars().all()
+    fus = (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id == l.id, LeadFollowUp.status == "open").order_by(LeadFollowUp.due_at.asc()))).scalars().all()
+    fus += (await db.execute(select(LeadFollowUp).where(LeadFollowUp.lead_id == l.id, LeadFollowUp.status != "open")
+                             .order_by(LeadFollowUp.updated_at.desc()).limit(30))).scalars().all()
     booked = (await db.execute(select(Inspection).where(Inspection.lead_id == l.id, Inspection.status == "scheduled")
                                .order_by(Inspection.inspection_date.asc()))).scalars().all()
-    na = (await fu.enrich(db, [l], None))[l.id]["next_action"]
+    na = (await fu.enrich(db, [l], None, user))[l.id]["next_action"]
     return {
         "follow_ups": [fu.fu_out(f) for f in fus], "scheduled_inspections": [_insp_out(b) for b in booked], "next_action": na,
         "id": str(l.id), "name": l.name, "phone": l.phone, "email": l.email,
@@ -1003,7 +1005,7 @@ async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_k
     if replay and prior and prior != "pending":
         l = await db.get(Lead, prior)
         if l:
-            return await _lead_detail(db, l, replayed=True)
+            return await _lead_detail(db, l, replayed=True, user=user)
     prop = None
     if payload.property_id:
         prop = await mauthz.assert_property_access(db, payload.property_id, user)  # sales must own the property
@@ -1018,7 +1020,7 @@ async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_k
                 if k:
                     k.entity_id = str(existing.id)
                 await db.commit()
-            return await _lead_detail(db, existing, existing=True)
+            return await _lead_detail(db, existing, existing=True, user=user)
     name = payload.name or (prop.formatted_address if prop else None) or "New Lead"
     address = payload.address or (prop.formatted_address if prop else None)
     l = Lead(name=name, phone=payload.phone, email=payload.email, address=address,
@@ -1036,7 +1038,7 @@ async def create_lead(payload: MobileLeadCreate, request: Request, idempotency_k
     await db.refresh(l)
     await log_action(db, user=user, action="lead.create", entity_type="lead", entity_id=l.id,
                      detail={"via": "mobile", "from_property": bool(prop)}, request=request)
-    return await _lead_detail(db, l)
+    return await _lead_detail(db, l, user=user)
 
 
 @router.get("/leads/{lead_id}")
@@ -1045,7 +1047,7 @@ async def get_lead(lead_id: str, user: User = Depends(require_roles(*FIELD_ROLES
     if not l:
         raise HTTPException(status_code=404, detail="Lead not found")
     await mauthz.assert_lead_access(db, l, user)
-    return await _lead_detail(db, l)
+    return await _lead_detail(db, l, user=user)
 
 
 @router.patch("/leads/{lead_id}")
@@ -1058,7 +1060,7 @@ async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, 
     server_token = _lead_token(l)
     if if_match and server_token and if_match != server_token:
         raise HTTPException(status_code=409, detail={"message": "This lead changed on the server since your copy.",
-                                                     "server": await _lead_detail(db, l)})
+                                                     "server": await _lead_detail(db, l, user=user)})
     data = payload.model_dump(exclude_unset=True)
     fu.validate_status(data.get("status"))
     extra_note = (data.pop("append_note", None) or "").strip()
@@ -1070,7 +1072,7 @@ async def update_lead(lead_id: str, payload: MobileLeadPatch, request: Request, 
     await db.commit()
     await db.refresh(l)
     await log_action(db, user=user, action="lead.update", entity_type="lead", entity_id=l.id, detail={"via": "mobile", "fields": sorted(payload.model_dump(exclude_unset=True).keys())}, request=request)
-    return await _lead_detail(db, l)
+    return await _lead_detail(db, l, user=user)
 
 
 @router.delete("/leads/{lead_id}")

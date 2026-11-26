@@ -126,14 +126,18 @@ class TestQuickLifecycle:
     state = {}
 
     def test_create_and_po(self, owner):
-        base = _counts(owner)["counts"]
+        # Judge only this test's own material (membership in each quick list). Global count deltas are not
+        # isolated: concurrent suites create materials/POs at the same time. Count/list agreement is covered
+        # by TestQuickCounts.
+        def ids(quick, name):
+            return [m["id"] for m in owner.get(f"{BASE_URL}/api/materials", params={"quick": quick, "q": name}, timeout=60).json()]
         name = f"TEST_KISS4_{uuid.uuid4().hex[:6]}"
         r = owner.post(f"{BASE_URL}/api/materials", json={"name": name, "reorder_threshold": 50, "quantity_on_hand": 5}, timeout=30)
         assert r.status_code == 201, r.text
         mid = r.json()["id"]
         self.state["mid"] = mid
-        c1 = _counts(owner)["counts"]
-        assert c1["needs_ordering"] == base["needs_ordering"] + 1
+        assert ids("needs_ordering", name) == [mid]
+        assert ids("on_order", name) == [] and ids("arriving_week", name) == []
         sup = owner.get(f"{BASE_URL}/api/suppliers", timeout=30).json()
         exp = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
         po = owner.post(f"{BASE_URL}/api/purchase-orders", json={
@@ -142,13 +146,10 @@ class TestQuickLifecycle:
             "items": [{"material_id": mid, "description": name, "quantity": 10, "unit_cost": 1}]}, timeout=30)
         assert po.status_code == 201, po.text
         self.state["po"] = po.json()
-        c2 = _counts(owner)["counts"]
-        assert c2["on_order"] == c1["on_order"] + 1
-        assert c2["arriving_week"] == c1["arriving_week"] + 1
+        assert ids("on_order", name) == [mid]
+        assert ids("arriving_week", name) == [mid]
         # 5 + 10 < 50 -> still needs ordering
-        assert c2["needs_ordering"] == c1["needs_ordering"]
-        lst = owner.get(f"{BASE_URL}/api/materials", params={"quick": "arriving_week", "q": name}, timeout=60).json()
-        assert [m["id"] for m in lst] == [mid]
+        assert ids("needs_ordering", name) == [mid]
 
     def test_receive_full_clears_on_order(self, owner):
         po = self.state.get("po")
