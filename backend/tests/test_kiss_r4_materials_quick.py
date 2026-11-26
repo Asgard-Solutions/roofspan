@@ -48,13 +48,22 @@ class TestQuickCounts:
         print("COUNTS", d["counts"])
 
     def test_counts_match_lists(self, owner):
-        d = _counts(owner)
+        # Concurrent suites create/receive materials and POs; per key, only compare a list read whose count
+        # was identical immediately before and after it (a tight window instead of one spanning every key).
         for k in KEYS:
-            r = owner.get(f"{BASE_URL}/api/materials", params={"quick": k, "active": "true"}, timeout=120)
-            assert r.status_code == 200, r.text
-            assert len(r.json()) == d["counts"][k], f"{k}: list {len(r.json())} != count {d['counts'][k]}"
+            for _ in range(8):
+                before = _counts(owner)
+                r = owner.get(f"{BASE_URL}/api/materials", params={"quick": k, "active": "true"}, timeout=120)
+                assert r.status_code == 200, r.text
+                after = _counts(owner)
+                if before["counts"][k] == after["counts"][k] and before.get("short_for_jobs_ids") == after.get("short_for_jobs_ids"):
+                    break
+            else:
+                pytest.skip(f"{k} kept changing under concurrent suites; no stable snapshot")
+            lst, d = r.json(), before
+            assert len(lst) == d["counts"][k], f"{k}: list {len(lst)} != count {d['counts'][k]}"
             if k == "short_for_jobs":
-                assert sorted(m["id"] for m in r.json()) == sorted(d["short_for_jobs_ids"])
+                assert sorted(m["id"] for m in lst) == sorted(d["short_for_jobs_ids"])
 
     def test_short_subset_of_needs_ordering(self, owner):
         d = _counts(owner)
@@ -99,9 +108,12 @@ class TestQuickCounts:
                 if (row.get("shortage") or 0) > 0:
                     short_from_plans.add(row["material_id"])
         print(f"checked {checked} active jobs; plan-short={len(short_from_plans)}")
-        # Only active materials are counted by quick filters
-        assert set(d["short_for_jobs_ids"]) <= short_from_plans
-        diff = short_from_plans - set(d["short_for_jobs_ids"])
+        # Walking every job plan takes a while and concurrent suites create/plan materials meanwhile, so judge
+        # against the counts read before AND after the walk (a material may only appear/disappear in between).
+        after = _counts(owner)
+        before_ids, after_ids = set(d["short_for_jobs_ids"]), set(after["short_for_jobs_ids"])
+        assert (before_ids & after_ids) <= short_from_plans
+        diff = short_from_plans - (before_ids | after_ids)
         if diff:
             # any extras must be inactive materials
             for mid in diff:

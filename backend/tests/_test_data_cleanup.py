@@ -2,6 +2,8 @@
 
 Only names matching the exact test naming + ID patterns are ever touched.
 """
+import json
+from pathlib import Path
 import asyncio
 import re
 
@@ -20,6 +22,9 @@ def _session():
     import os
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
     from sqlalchemy.pool import NullPool
+    if "DATABASE_URL" not in os.environ:  # standalone helper scripts
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     eng = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
     return eng, async_sessionmaker(eng, expire_on_commit=False, class_=AsyncSession)
 
@@ -110,7 +115,8 @@ def purge_users(only_new_since=None) -> int:
 # ---------------- business records created during a test session ----------------
 # Tracked by id: anything in these tables that did not exist when the session started was created by the run.
 TRACKED = ("properties", "customers", "leads", "inspections", "measurement_sets", "estimates", "quotes",
-           "jobs", "invoices", "purchase_orders", "materials", "suppliers", "visits")
+           "jobs", "invoices", "purchase_orders", "materials", "suppliers", "visits",
+           "territories", "canvass_sections", "import_jobs", "assemblies", "inventory_locations")
 
 
 async def _business_ids():
@@ -215,10 +221,25 @@ async def _purge_business(start: dict) -> dict:
         await run("property_contacts", "delete from property_contacts where property_id::text = any(:ids)", props)
         await run("properties", "delete from properties where id::text = any(:ids)", props)
 
+        held_a = set()
+        for t in ("job_materials", "price_book_entries", "estimate_line_items", "takeoff_rules"):
+            held_a |= await q(f"select assembly_id::text from {t} where assembly_id is not null")
+        await run("assemblies", "delete from assemblies where id::text = any(:ids)", [x for x in new["assemblies"] if x not in held_a])
+
         mats = list(test_mats - await held_materials(list(test_mats)))  # re-check against what is staying
         await run("supplier_price_history", "delete from supplier_price_history where material_id::text = any(:ids)", mats)
         await run("supplier_materials", "delete from supplier_materials where material_id::text = any(:ids)", mats)
         await run("materials", "delete from materials where id::text = any(:ids)", mats)  # its own txns/balances cascade
+
+        await run("canvass_sections", "delete from canvass_sections where id::text = any(:ids)", new["canvass_sections"])
+        await run("import_jobs", "delete from import_jobs where id::text = any(:ids)", new["import_jobs"])
+        held_t = await q("select territory_id::text from properties where territory_id is not null") | \
+            await q("select territory_id::text from canvass_sections") | await q("select territory_id::text from import_jobs where territory_id is not null")
+        await run("territories", "delete from territories where id::text = any(:ids)", [x for x in new["territories"] if x not in held_t])
+        held_l = await q("select source_location_id::text from inventory_txns where source_location_id is not null") | \
+            await q("select destination_location_id::text from inventory_txns where destination_location_id is not null") | \
+            await q("select location_id::text from inventory_balances where quantity_on_hand <> 0")
+        await run("inventory_locations", "delete from inventory_locations where id::text = any(:ids)", [x for x in new["inventory_locations"] if x not in held_l])
 
         held_s = (await q("select supplier_id::text from purchase_orders where supplier_id is not null")
                   | await q("select supplier_id::text from supplier_materials where supplier_id is not null")
@@ -237,3 +258,67 @@ async def _purge_business(start: dict) -> dict:
 
 def purge_business(start: dict) -> dict:
     return asyncio.run(_purge_business(start))
+
+
+# ---------------- company default price book (shared singleton) ----------------
+async def _default_pb():
+    eng, maker = _session()
+    async with maker() as s:
+        v = (await s.execute(text("select id::text from price_books where is_default"))).scalars().first()
+    await eng.dispose()
+    return v
+
+
+async def _set_default_pb(pb_id):
+    eng, maker = _session()
+    async with maker() as s:
+        if (await s.execute(text("select 1 from price_books where id::text = :i"), {"i": pb_id})).first():
+            await s.execute(text("update price_books set is_default = (id::text = :i)"), {"i": pb_id})
+            await s.commit()
+    await eng.dispose()
+
+
+def default_price_book():
+    return asyncio.run(_default_pb())
+
+
+def restore_default_price_book(pb_id):
+    if pb_id:
+        asyncio.run(_set_default_pb(pb_id))
+
+
+# ---------------- manual / one-off helper sessions (outside pytest) ----------------
+# One-off setup scripts and testing-agent probes create data for UI checks, so it cannot vanish when the
+# script exits. They call manual_begin() (records a snapshot once); after the manual/UI testing, run
+#   python tests/_test_data_cleanup.py end
+# to remove everything created since the snapshot (same rules as the pytest session cleanup).
+MANUAL_SNAPSHOT = Path("/app/memory/.manual_test_snapshot.json")
+
+
+def manual_begin() -> None:
+    if MANUAL_SNAPSHOT.exists():
+        return
+    biz = {t: sorted(v) for t, v in business_snapshot().items()}
+    MANUAL_SNAPSHOT.write_text(json.dumps({"business": biz, "users": sorted(user_snapshot())}))
+    print(f"[manual test data] snapshot recorded -> run `python tests/_test_data_cleanup.py end` when finished")
+
+
+def manual_end() -> dict:
+    if not MANUAL_SNAPSHOT.exists():
+        return {}
+    snap = json.loads(MANUAL_SNAPSHOT.read_text())
+    out = purge_business({t: set(v) for t, v in snap["business"].items()})
+    out["users"] = purge_users(only_new_since=set(snap["users"]))
+    MANUAL_SNAPSHOT.unlink()
+    return out
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    cmd = _sys.argv[1] if len(_sys.argv) > 1 else "status"
+    if cmd == "begin":
+        manual_begin()
+    elif cmd == "end":
+        print(manual_end() or "no manual snapshot open")
+    else:
+        print("manual snapshot open" if MANUAL_SNAPSHOT.exists() else "no manual snapshot open")

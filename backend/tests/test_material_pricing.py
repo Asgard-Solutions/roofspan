@@ -1,3 +1,4 @@
+import pytest
 """Material effective Cost + Default-Price-Book Price — HTTP integration tests.
 
 Covers rule priority (Item>Supplier>Manufacturer>Category>Default), supplier-rule aligned to the
@@ -42,6 +43,16 @@ def _mk_sm(h, material_id, supplier_id, cost):
         "supplier_item_number": f"SI-{_tag()}", "current_cost": cost}, timeout=30)
     assert r.status_code == 201, r.text[:200]
     return r.json()["id"]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_default_price_book():
+    """These tests make a temporary book the company default; put the original default back afterwards."""
+    h = _login(*OWNER)
+    orig = next((b["id"] for b in requests.get(f"{API}/estimating/price-books", headers=h, timeout=30).json() if b["is_default"]), None)
+    yield
+    if orig:
+        requests.patch(f"{API}/estimating/price-books/{orig}", headers=_login(*OWNER), json={"is_default": True}, timeout=30)
 
 
 def _default_pb(h, entries):

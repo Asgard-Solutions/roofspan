@@ -444,10 +444,21 @@ class TestRBACSales:
         r = _get(f"/jobs/{chain['job_id']}/actual-costs", headers=h)
         assert r.status_code == 403
 
-    def test_sales_can_view_customer_proposal(self, chain, sales_headers):
+    def test_sales_proposal_access_follows_lead_assignment(self, chain, sales_headers, owner_headers):
+        # Approved rule: a salesperson only sees quotes/proposals on leads assigned to them.
         h, _ = sales_headers
-        r = _get(f"/quotes/{chain['quote_id']}/proposal", headers=h)
-        assert r.status_code == 200, f"sales should be able to view proposal, got {r.status_code}"
+        assert _get(f"/quotes/{chain['quote_id']}/proposal", headers=h).status_code == 403
+        lead_id = _get(f"/quotes/{chain['quote_id']}", headers=owner_headers).json()["lead_id"]
+        if not lead_id:
+            return  # this chain's quote has no lead: only owner/admin/office may open it
+        me = _get("/auth/me", headers=h).json()["id"]
+        before = _get(f"/leads/{lead_id}", headers=owner_headers).json().get("assigned_user_id")
+        assert requests.put(f"{API}/leads/{lead_id}/assign", json={"user_id": me}, headers=owner_headers, timeout=30).status_code == 200
+        try:
+            r = _get(f"/quotes/{chain['quote_id']}/proposal", headers=h)
+            assert r.status_code == 200, f"assigned sales should view proposal, got {r.status_code}"
+        finally:
+            requests.put(f"{API}/leads/{lead_id}/assign", json={"user_id": before}, headers=owner_headers, timeout=30)
 
 
 class TestEdgeCases:

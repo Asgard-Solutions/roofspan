@@ -4,7 +4,6 @@ import os, uuid, pytest, requests
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
 OWNER = {"email": "pjacobsen@asgardsolution.io", "password": "RoofSpan#Owner2026"}
 SALES = {"email": "sales_bk@example.com", "password": "SalesBk#2026"}
-EST_1041 = "61cd2edb-3ca3-4020-9098-b69d3509d664"
 
 
 def _login(creds):
@@ -49,15 +48,29 @@ def _save(s, e, items):
                  headers={"If-Match": str(e["version"])})
 
 
-def test_est1041_locked_owner(owner):
-    r = owner.get(f"{BASE_URL}/api/estimates/{EST_1041}")
+@pytest.fixture(scope="module")
+def locked_estimate(owner, sales, cleanup):
+    """A run-owned estimate on a lead the salesperson owns, locked by accepting its quote
+    (replaces the hard-coded working-data estimate EST-1041)."""
+    lid, cust = _mk_lead(sales, "lock")
+    r = sales.post(f"{BASE_URL}/api/estimates", json={"lead_id": lid, "customer_id": cust, "tax_rate": 0,
+                                                     "items": [{"description": "TEST_lock", "quantity": 1, "unit": "ea", "selling_unit_price": 10}]})
+    assert r.status_code in (200, 201), r.text
+    e = r.json(); cleanup["estimates"].append(e["id"])
+    q = owner.post(f"{BASE_URL}/api/quotes", json={"estimate_id": e["id"]}).json()
+    assert owner.post(f"{BASE_URL}/api/quotes/{q['id']}/accept", json={"acceptance_name": "TEST User"}).status_code in (200, 201)
+    return e
+
+
+def test_locked_estimate_owner(owner, locked_estimate):
+    r = owner.get(f"{BASE_URL}/api/estimates/{locked_estimate['id']}")
     assert r.status_code == 200, r.text
-    assert r.json()["number"] == "EST-1041"
+    assert r.json()["number"] == locked_estimate["number"]
     assert r.json()["locked"] is True
 
 
-def test_est1041_locked_sales(sales):
-    r = sales.get(f"{BASE_URL}/api/estimates/{EST_1041}")
+def test_locked_estimate_sales_own_lead(sales, locked_estimate):
+    r = sales.get(f"{BASE_URL}/api/estimates/{locked_estimate['id']}")
     assert r.status_code == 200, r.text
     assert r.json()["locked"] is True
     assert r.json().get("can_see_cost") is False

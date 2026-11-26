@@ -5,13 +5,14 @@ import { cache } from "../cache";
 import { pendingSummary, runSync, lastSyncAt, measurementAttention, onSyncChange } from "../sync";
 import SyncStatusChip from "../components/SyncStatusChip";
 import { C, badge } from "../theme";
-
-const ACTION_STATUSES = ["new", "contacted", "interested", "qualified"];
+const { myDayView, fmt, OPEN_STATUSES } = require("../followups");
 
 export default function Home({ navigation }) {
   const [leads, setLeads] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [sections, setSections] = useState([]);
+  const [myDay, setMyDay] = useState(null);
+  const [myDayStale, setMyDayStale] = useState(false);
   const [summary, setSummary] = useState({ counts: { pending: 0, failed: 0, conflict: 0 }, label: "All changes synced", waiting: 0 });
   const [last, setLast] = useState(null);
   const [attention, setAttention] = useState({ conflicts: [], failures: [] });
@@ -20,7 +21,9 @@ export default function Home({ navigation }) {
   const load = useCallback(async () => {
     setRefreshing(true);
     await runSync().catch(() => {});
-    const [l, j, s] = await Promise.all([cache.leads(), cache.jobs(), cache.sections()]);
+    const [l, j, s, md] = await Promise.all([cache.leads(), cache.jobs(), cache.sections(), cache.myDay()]);
+    setMyDay(md.data || null);
+    setMyDayStale(!!md.stale);
     setLeads(l.data || []);
     setJobs(j.data || []);
     setSections((s.data && s.data.sections) || []);
@@ -51,8 +54,9 @@ export default function Home({ navigation }) {
     else navigation.navigate("Map");
   };
 
-  const open = leads.filter((l) => l.status !== "won" && l.status !== "lost" && l.status !== "archived");
-  const needAction = open.filter((l) => ACTION_STATUSES.includes(l.status));
+  const open = leads.filter((l) => OPEN_STATUSES.includes(l.status));
+  const day = myDayView(myDay);
+  const goLead = (leadId) => navigation.navigate("LeadsTab", { screen: "LeadDetail", params: { id: leadId } }, { pop: true });
   const today = new Date().toDateString();
   const todayJobs = jobs.filter((j) => j.scheduled_start && new Date(j.scheduled_start).toDateString() === today);
   const hasIssues = (summary.counts.conflict || 0) > 0 || (summary.counts.failed || 0) > 0 || (summary.counts.locked || 0) > 0;
@@ -108,15 +112,32 @@ export default function Home({ navigation }) {
         </TouchableOpacity>
       )}
 
-      <Text style={s.h2}>Leads needing action</Text>
-      {needAction.slice(0, 6).map((l) => (
-        <TouchableOpacity key={l.id} style={s.card} onPress={() => navigation.navigate("LeadsTab", { screen: "LeadDetail", params: { id: l.id } }, { pop: true })} testID={`home-lead-${l.id}`}>
-          <Text style={s.cardTitle}>{l.name}</Text>
-          <Text style={s.cardSub}>{l.property_address || l.address || "—"} · {l.status}</Text>
+      {myDayStale ? <Text style={s.stale} testID="myday-offline">My Day as of last sync — due times use this phone's clock</Text> : null}
+      <DayList title="Overdue" tone="overdue" items={day.overdue} onOpen={goLead} empty="Nothing overdue." testID="myday-overdue" />
+      <DayList title="Due today" tone="today" items={day.today} onOpen={goLead} empty="No follow-ups due today." testID="myday-today" />
+      <DayList title="Inspections" items={day.inspections} onOpen={goLead} empty="No inspections booked this week." testID="myday-inspections"
+        meta={(i) => (i.when === "overdue" ? "Results missing" : fmt(i.date))} />
+      <DayList title="Proposals needing attention" items={day.proposals} onOpen={goLead} empty="No proposals need attention." testID="myday-proposals"
+        meta={(i) => i.reason} />
+      <DayList title={`No follow-up set (${day.noFollowUp.count})`} items={(day.noFollowUp.items || []).slice(0, 5)} onOpen={goLead}
+        empty="Every open lead has a next step." testID="myday-no-followup" meta={(i) => i.subtitle} hideSub />
+    </ScrollView>
+  );
+}
+
+function DayList({ title, items, onOpen, empty, testID, tone, meta, hideSub }) {
+  return (
+    <View testID={testID}>
+      <Text style={[s.h2, tone === "overdue" && items.length ? { color: C.danger } : null]}>{title}{items.length ? ` · ${items.length}` : ""}</Text>
+      {items.map((i, n) => (
+        <TouchableOpacity key={i.id || n} style={[s.card, tone === "overdue" && { borderColor: "#FCA5A5" }]} onPress={() => onOpen(i.lead_id)} testID={`${testID}-${n}`}>
+          <Text style={s.cardTitle}>{i.title}</Text>
+          {!hideSub && i.subtitle ? <Text style={s.cardSub}>{i.subtitle}</Text> : null}
+          <Text style={[s.cardSub, { fontWeight: "700" }]}>{meta ? meta(i) : fmt(i.date)}{i._pending ? " · waiting to sync" : ""}</Text>
         </TouchableOpacity>
       ))}
-      {needAction.length === 0 && <Text style={s.empty}>Nothing needs action right now.</Text>}
-    </ScrollView>
+      {items.length === 0 && <Text style={s.empty}>{empty}</Text>}
+    </View>
   );
 }
 
@@ -154,4 +175,5 @@ const s = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: "700", color: C.ink },
   cardSub: { fontSize: 14, color: C.sub, marginTop: 2 },
   empty: { color: C.sub, fontStyle: "italic" },
+  stale: { backgroundColor: "#FEF3C7", color: "#92400E", textAlign: "center", paddingVertical: 6, fontSize: 12, fontWeight: "600", borderRadius: 8, marginTop: 14 },
 });

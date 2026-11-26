@@ -76,7 +76,8 @@ def test_owner_login_and_me(owner_headers):
 
 
 def test_login_wrong_password():
-    r = requests.post(f"{API}/auth/login", json={"email": OWNER_EMAIL, "password": "wrong-password-xyz"}, timeout=15)
+    # Never burn the real owner's failed-login budget (5 per 15 min locks it out for every other test).
+    r = requests.post(f"{API}/auth/login", json={"email": f"test_nouser_{uuid.uuid4().hex[:8]}@example.com", "password": "wrong-password-xyz"}, timeout=15)
     assert r.status_code == 401
 
 
@@ -224,17 +225,23 @@ def test_map_config_default(owner_headers):
     d = r.json()
     assert d["base_provider"] == "openstreetmap"
     assert "openstreetmap.org" in d["osm_tile_url"]
-    assert d["maptiler_configured"] is False
-    assert d["satellite_enabled"] is False
+    # Satellite can only be effective when MapTiler is configured (this workspace may have a MapTiler key).
+    assert not d["satellite_enabled"] or d["maptiler_configured"]
 
 
 def test_map_config_satellite_effectively_false_without_maptiler(owner_headers):
-    r = requests.put(f"{API}/map-config", json={"satellite_enabled": True}, headers=owner_headers, timeout=15)
-    assert r.status_code == 200
-    d = r.json()
-    # Even though we set satellite_enabled=True, since MapTiler isn't configured+enabled, effective is False
-    assert d["satellite_enabled"] is False
-    assert d["maptiler_configured"] is False
+    before = requests.get(f"{API}/map-config", headers=owner_headers, timeout=15).json()
+    if before["maptiler_configured"]:
+        pytest.skip("MapTiler is configured in this environment; the 'without MapTiler' case does not apply")
+    try:
+        r = requests.put(f"{API}/map-config", json={"satellite_enabled": True}, headers=owner_headers, timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["satellite_enabled"] is False
+        assert d["maptiler_configured"] is False
+    finally:
+        requests.put(f"{API}/map-config", json={"satellite_enabled": before.get("satellite_requested", before["satellite_enabled"])},
+                     headers=owner_headers, timeout=15)
 
 
 # --------- Audit ---------

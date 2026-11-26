@@ -73,12 +73,25 @@ def test_low_stock_filter_global_and_dashboard(owner):
 
 
 # Quick counts == filtered rows; needs_ordering == short ∪ (RP>0 && projected<=RP) over active rows
-def test_quick_counts_agree(owner):
+def _quick_snapshot(owner):
     qc = owner.get(f"{BASE_URL}/api/materials/quick-counts").json()
-    for k, v in qc["counts"].items():
-        rows = owner.get(f"{BASE_URL}/api/materials", params={"quick": k, "active": True}, timeout=60).json()
-        assert len(rows) == v, k
+    lists = {k: len(owner.get(f"{BASE_URL}/api/materials", params={"quick": k, "active": True}, timeout=60).json()) for k in qc["counts"]}
     allm = owner.get(f"{BASE_URL}/api/materials", params={"active": True}, timeout=60).json()
+    after = owner.get(f"{BASE_URL}/api/materials/quick-counts").json()
+    return qc, lists, allm, after == qc
+
+
+def test_quick_counts_agree(owner):
+    # Other suites create/adjust materials concurrently, so compare only a snapshot whose quick-counts were
+    # identical before and after the list reads (no materials changed in between).
+    for _ in range(5):
+        qc, lists, allm, stable = _quick_snapshot(owner)
+        if stable:
+            break
+    else:
+        pytest.skip("materials kept changing under concurrent suites; no stable snapshot")
+    for k, v in qc["counts"].items():
+        assert lists[k] == v, k
     reorder = {m["id"] for m in allm if (m["reorder_threshold"] or 0) > 0 and m["projected"] <= m["reorder_threshold"]}
     assert set(qc["needs_ordering_ids"]) == reorder | set(qc["short_for_jobs_ids"])
 

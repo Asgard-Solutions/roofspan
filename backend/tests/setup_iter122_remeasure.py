@@ -1,5 +1,7 @@
 # Helper (not a test): builds a TEST_ lead with rev1 applied + verified rev2 (bigger area, same waste) for UI checks; prints ids as JSON
 import os, uuid, json, requests
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _test_data_cleanup import manual_begin; manual_begin()  # data stays for UI checks; clean with: python tests/_test_data_cleanup.py end
 B = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 s = requests.Session()
 s.headers["Authorization"] = "Bearer " + s.post(f"{B}/api/auth/login", json={"email": "pjacobsen@asgardsolution.io", "password": "RoofSpan#Owner2026"}).json()["access_token"]

@@ -32,6 +32,8 @@ export default function Leads({ navigation }) {
           <TouchableOpacity style={s.card} onPress={() => navigation.navigate("LeadDetail", { id: item.id })} testID={`lead-${item.id}`}>
             <Text style={s.title}>{item.name}</Text>
             <Text style={s.sub}>{item.property_address || item.address || "—"}</Text>
+            {item.next_action ? <Text style={[s.sub, { fontWeight: "700", color: item.next_action.when === "overdue" ? "#B91C1C" : "#334155" }]} testID={`lead-next-${item.id}`}>
+              {item.next_action.when === "overdue" ? "Overdue · " : item.next_action.when === "today" ? "Today · " : ""}{item.next_action.text}</Text> : null}
             <View style={s.rowB}>
               <Text style={s.status}>{item.status}</Text>
               {item._pending ? <Text style={s.pending} testID={`lead-pending-${item.id}`}>Waiting to sync</Text> : null}

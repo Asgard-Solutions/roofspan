@@ -181,6 +181,8 @@ class LeadOut(BaseModel):
     property_address: Optional[str] = None
     assigned_user_id: Optional[str] = None
     assigned_user_name: Optional[str] = None
+    next_action: Optional[dict] = None
+    open_follow_ups: int = 0
 
 
 class LeadPatch(BaseModel):

@@ -86,8 +86,10 @@ def test_ready_reports_local_signer():
     r = requests.get(f"{CP}/ready", timeout=10)
     assert r.status_code == 200
     j = r.json()
-    assert j["ready"] is True and j["checks"]["db"] is True and j["checks"]["signing_key"] is True
-    assert j["signer"] == "local"
+    # /ready now reports the schema-readiness model (no per-check/signer fields). Local signing itself is
+    # proven by test_activation_issues_verifiable_entitlement below.
+    assert j["ready"] is True and j["state"] == "ready"
+    assert j["missing_tables"] == [] and j["missing_columns"] == []
 
 
 def test_activation_issues_verifiable_entitlement():

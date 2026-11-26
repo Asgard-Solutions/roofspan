@@ -1,0 +1,35 @@
+{
+  "summary": "Frontend-only E2E (Playwright, desktop 1920 + one mobile 390 check) of the Sales follow-ups & reminders round, run on a dedicated TEST_UI lead (TEST_UI FollowUp 3286, created via API and assigned to sales_bk; cleaned up with manual_end -> inspections 3, leads 1, properties 1 deleted, follow-ups cascade-deleted, 0 left over). Every requested flow works: Follow-ups panel on every stage; scheduling two follow-ups (kind select, quick picks, note) lists them earliest first with '2 open' and the Next step banner showing the earliest one; Done dialog (outcome + next follow-up toggle pre-ticked) moves the item to Contact history, creates the next follow-up and changes status new->contacted; Reschedule (Next week) and Cancel ('Email cancelled' in history); Log contact (Text, next toggle unticked) shows in history; status select has only New/Contacted/Qualified/Won/Lost and Qualified persists after reload; Inspection Book -> 'Booked · date' items, 'Record inspection results' dialog (prefilled inspector/notes) turns a booking into a recorded inspection, Cancel shows 'Booking cancelled'; Leads view chips, counts, Assigned/Next action columns, ?view=unassigned from URL; Home cards for owner (incl. Unassigned) and sales_bk (follow-up due earlier today shows as '1 due today' with 8:00 AM, booked inspection listed, no Unassigned card); sales_bk sees no Mine/Unassigned chips, ?view=unassigned falls back to Open, and opening another rep's lead shows 'This lead is not assigned to you' (403). Found 2 minor issues, no blockers.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/follow-ups/{id} {status:'cancelled'}", "issue": "Cancelling does not set completed_at or completed_by (routers/follow_ups.py ~L112-117 handles only 'done' and 'open'). FollowUpsPanel puts history entries at completed_at || due_at, so a cancelled follow-up shows its future due date (e.g. 'Dec 2, 9:00 AM') instead of the time it was cancelled, sorts to the top of Contact history above real past contacts, and has no 'by' user."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Home 'Follow-ups due' View all", "issue": "The link always goes to /leads?view=overdue. When the card only has items due today (0 overdue · 1 due today), View all opens an empty list (0 rows). It should open view=today when there are no overdue items, or a combined due view.", "affected_selectors": ["attention-follow-ups-view-all"]}
+    ],
+    "design_issues": [
+      {"screen": "Lead Detail Follow-ups panel", "issues": ["The Reschedule and Cancel buttons show only an icon, with no tooltip or aria-label.", "Cancel removes the follow-up at once, with no confirm and no undo (estimate and quote delete have undo)."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Set completed_at = now and completed_by = user.email when a follow-up is cancelled, so history shows the time it was cancelled and who cancelled it.",
+    "Point the Follow-ups due 'View all' link to view=today when overdue_count is 0 (or add a combined due view).",
+    "Optional: add a title or aria-label to the reschedule and cancel icon buttons, and an undo toast for cancel."
+  ],
+  "critical_code_review_comments": [
+    "LeadDetail.addInspection: recording results on a booked inspection overwrites inspection_date with now(). This is fine as the actual date, but the booked time is lost.",
+    "FollowUpDialog: in log/complete mode the next follow-up kind is always 'call' and cannot be changed.",
+    "Leads.jsx loads every lead (544 for owner) and filters on the client. This is OK for now but will need paging later."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped as requested)", "frontend": "100% of requested flows pass; 2 minor issues"},
+  "seed_data_creation": "Created TEST_UI lead ee46d1d8-15a4-4af0-8a55-f7729812ad01 with property 3286 TEST_UI Way, plus its follow-ups and inspections. All removed with manual_end. No existing leads were touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use the manual_begin/manual_end helper in tests/_test_data_cleanup.py with an API-created TEST_UI lead assigned to sales_bk. Follow-ups are stored in the lead_follow_ups table (CASCADE on lead delete). Browser timezone is UTC. Proposals card flagging was not exercised in the UI (no quotes created); backend tests cover it."
+}

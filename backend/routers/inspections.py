@@ -6,6 +6,8 @@ from db import get_db
 from models import Inspection, User
 from core import get_current_user, require_roles, FIELD_ROLES, log_action
 from services import mobile_authz as mauthz
+from services import follow_ups as fu
+from datetime import datetime, timezone
 from schemas_phase3 import InspectionIn, InspectionOut
 
 router = APIRouter(prefix="/api/inspections", tags=["inspections"])
@@ -18,7 +20,7 @@ def _out(i: Inspection) -> InspectionOut:
         property_id=str(i.property_id) if i.property_id else None,
         inspection_date=i.inspection_date, inspector=i.inspector, roof_condition=i.roof_condition,
         findings=i.findings, recommended_work=i.recommended_work, measurements=i.measurements,
-        notes=i.notes, created_by=i.created_by, created_at=i.created_at,
+        notes=i.notes, status=i.status, created_by=i.created_by, created_at=i.created_at,
     )
 
 
@@ -46,7 +48,18 @@ async def list_inspections(lead_id: str | None = Query(None), customer_id: str |
 
 @router.post("", response_model=InspectionOut, status_code=201)
 async def create_inspection(payload: InspectionIn, request: Request, user: User = Depends(require_roles(*FIELD_ROLES)), db: AsyncSession = Depends(get_db)):
-    i = Inspection(**payload.model_dump(), created_by=user.email)
+    if mauthz.is_sales(user):  # same rule as Field: sales only attach inspections to their own lead/property
+        if payload.lead_id:
+            await fu.assert_lead(db, payload.lead_id, user)
+        if payload.property_id:
+            await mauthz.assert_property_access(db, payload.property_id, user)
+        if not payload.lead_id and not payload.property_id:
+            raise HTTPException(status_code=403, detail="An inspection must be tied to your lead or property.")
+    data = payload.model_dump()
+    data["status"] = fu.inspection_status(data) or "completed"
+    if data["status"] != "scheduled" and not data.get("inspection_date"):
+        data["inspection_date"] = datetime.now(timezone.utc)
+    i = Inspection(**data, created_by=user.email)
     db.add(i)
     await db.commit()
     await db.refresh(i)
@@ -69,7 +82,11 @@ async def update_inspection(inspection_id: str, payload: InspectionIn, request: 
     if not i:
         raise HTTPException(status_code=404, detail="Inspection not found")
     await mauthz.assert_inspection_access(db, i, user)
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    st = fu.inspection_status(data, i.status, i.inspection_date)
+    if st:
+        data["status"] = st
+    for k, v in data.items():
         setattr(i, k, v)
     await db.commit()
     await db.refresh(i)

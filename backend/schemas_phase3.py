@@ -114,6 +114,7 @@ class InspectionIn(BaseModel):
     recommended_work: Optional[str] = None
     measurements: Optional[str] = None
     notes: Optional[str] = None
+    status: Optional[str] = None  # scheduled | completed | cancelled
 
 
 class InspectionOut(InspectionIn):

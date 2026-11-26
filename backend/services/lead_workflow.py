@@ -43,7 +43,8 @@ async def lead_workflow(db: AsyncSession, lead: Lead) -> dict:
         inv_rows = (await db.execute(select(Invoice.status).where(or_(*conds), Invoice.status != "void"))).scalars().all()
     f = {
         "has_customer": bool(lead.customer_id),
-        "inspections": await _count(db, select(func.count(Inspection.id)).where(Inspection.lead_id == lead.id)),
+        "inspections": await _count(db, select(func.count(Inspection.id)).where(Inspection.lead_id == lead.id, Inspection.status == "completed")),
+        "inspections_scheduled": await _count(db, select(func.count(Inspection.id)).where(Inspection.lead_id == lead.id, Inspection.status == "scheduled")),
         "has_measurements": await _count(db, select(func.count(MeasurementRevision.id))
                                          .join(MeasurementSet, MeasurementSet.id == MeasurementRevision.set_id)
                                          .where(MeasurementSet.lead_id == lead.id)) > 0,

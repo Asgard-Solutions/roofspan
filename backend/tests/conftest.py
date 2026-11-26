@@ -1,3 +1,4 @@
+import pytest
 import os
 from pathlib import Path
 
@@ -85,3 +86,91 @@ def pytest_sessionfinish(session, exitstatus):
                 print(f"[test cleanup] removed {n} automated-test user(s)")
         except Exception as exc:
             print(f"[test cleanup] user purge skipped: {exc}")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_db_pools():
+    """Each test may run its own event loop (asyncio.run). Pooled asyncpg connections are bound to the loop
+    that opened them, so drop (without awaiting) any pool left by an earlier test in this worker."""
+    import sys as _sys
+    for mod in ("db", "control_plane.db"):
+        m = _sys.modules.get(mod)
+        eng = getattr(m, "engine", None) if m else None
+        if eng is not None:
+            eng.sync_engine.dispose(close=False)
+    yield
+
+
+# Suites that change the company's live subscription/licence state (suspended, grace, seat counts) or
+# rotate relay/pairing state. While one runs, every other test would see "subscription requires attention",
+# so they hold an EXCLUSIVE cross-worker lock for the whole module and every other module holds a SHARED lock.
+GLOBAL_STATE_MODULES = {"test_licensing_api", "test_billing", "test_stripe_billing", "test_seat_enforcement",
+                        "test_pairing", "test_relay"}
+_LOCK_PATH = "/tmp/roofspan_pytest_global_state.lock"
+
+
+def _module_name(request):
+    return request.module.__name__.rsplit(".", 1)[-1]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _global_state_exclusive(request):
+    if _module_name(request) not in GLOBAL_STATE_MODULES:
+        yield
+        return
+    import fcntl
+    with open(_LOCK_PATH, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _global_state_shared(request):
+    if _module_name(request) in GLOBAL_STATE_MODULES:
+        yield
+        return
+    import fcntl
+    with open(_LOCK_PATH, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+# Shared singleton state that some suites change and others assert on. Modules in the same group run one at a
+# time across workers (other tests are unaffected):
+#  - abc: the ONE shared (MOCKED) ABC Supply connection (connect/disconnect/environment/ship-to)
+#  - pricebook: which price book is the company default
+_GROUP_LOCKS = {
+    "abc": lambda src: "/integrations/abc/" in src,
+    "pricebook": lambda src: "price-books" in src and ("is_default" in src or "set-default" in src),
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _shared_state_groups(request, _global_state_shared, _global_state_exclusive):
+    try:
+        src = Path(request.module.__file__).read_text(errors="ignore")
+    except Exception:
+        src = ""
+    groups = sorted(g for g, hit in _GROUP_LOCKS.items() if hit(src))  # fixed order -> no lock-order deadlock
+    if not groups:
+        yield
+        return
+    import contextlib
+    import fcntl
+    with contextlib.ExitStack() as stack:
+        for g in groups:
+            fh = stack.enter_context(open(f"/tmp/roofspan_pytest_{g}.lock", "a"))
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            stack.callback(fcntl.flock, fh, fcntl.LOCK_UN)
+        orig_pb = _cleanup_module().default_price_book() if "pricebook" in groups else None
+        try:
+            yield
+        finally:
+            if orig_pb:  # a module that made its own book the default must not leak that to later modules
+                _cleanup_module().restore_default_price_book(orig_pb)

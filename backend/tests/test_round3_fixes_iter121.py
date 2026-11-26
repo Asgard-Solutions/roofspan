@@ -88,11 +88,14 @@ def test_edit_price_with_ids_then_review_and_replace_no_dup(owner, ctx):
 
 
 def test_save_without_ids_no_edit_then_reapply_no_dup(owner, ctx):
+    # Approved rule (KISS round 3): a save without line ids is REFUSED when takeoff-calculated lines exist,
+    # so older clients can't silently re-create/duplicate generated lines. The estimate stays untouched.
     eid = _new_est(owner, ctx)
     assert _apply(owner, eid, ctx["body"]).status_code == 200
-    e = _get(owner, eid); n1 = len(e["items"])
+    e = _get(owner, eid); n1 = len(e["items"]); ids1 = {i["id"] for i in e["items"]}
     items = [{k: i.get(k) for k in ITEM_KEYS if k != "id"} for i in e["items"]]
-    assert _save(owner, e, items).status_code == 200
+    assert _save(owner, e, items).status_code == 409
+    assert {i["id"] for i in _get(owner, eid)["items"]} == ids1
     p = owner.post(f"{BASE_URL}/api/takeoff/estimates/{eid}/preview", json=ctx["body"]).json()
     assert p["generated_line_ids_to_replace"] and not p["review_required"]
     assert _apply(owner, eid, ctx["body"]).status_code == 200

@@ -1,5 +1,38 @@
 # RoofSpan — Product Requirements & Status
 
+## Test-suite stabilization (2026-06) — full suite green (final run: 1209 tests = 1152 passed / 0 failed / 0 errors / 56 skipped / 1 xfailed; counts + stock unchanged)
+- Isolation infrastructure (tests/conftest.py):
+  - Fresh DB pools per test (asyncpg pools are bound to the loop that opened them).
+  - Cross-worker locks:
+    - EXCLUSIVE for suites that change the live licence/subscription/relay state (licensing_api, billing, stripe_billing, seat_enforcement, pairing, relay), SHARED for every other module.
+    - Per-group EXCLUSIVE for the shared MOCKED ABC connection and for the company default price book. The original default is restored after each price-book module.
+- Run-scoped cleanup now also tracks territories, canvass_sections, import_jobs, assemblies and inventory_locations.
+- Manual/helper scripts (tests/_setup_round3_e2e.py, setup_iter122_remeasure.py) call `manual_begin()`. After UI checks, run `python tests/_test_data_cleanup.py end` to remove everything created since.
+- Outdated tests updated to approved behaviour:
+  - Sales sees only assigned leads, estimates, quotes and properties (phase2, phase3, final_e2e, round3_lock).
+  - An estimate save without line ids is refused (409) when takeoff lines exist (iter121).
+  - Idempotency-Key reused with a different body -> 409 (measurements).
+  - Relay tiles use an office-signed tile token, and MapTiler may be configured.
+  - The /ready readiness model changed; source-string checks follow current code (location pipeline).
+- Environment fixes:
+  - aiosqlite added to requirements.txt.
+  - The Stripe suite skips explicitly when the sandbox key is rejected.
+  - The fake asyncpg in test_windows_cp_db_bootstrap is restored after each test.
+  - The hermetic SQLite mobile-revision cases run in a fresh interpreter (tests/_mobile_new_revision_cases.py via test_mobile_new_revision.py).
+  - The migration downgrade test skips once later migrations exist.
+- Test-data dependency fixes:
+  - phase2 password change uses a temp user, never the real owner (it was causing 401s in parallel workers).
+  - backend_test wrong-password test no longer burns the owner's lockout budget.
+  - The outbox lease test only claims its own event.
+  - Measurements use a run-owned property.
+  - The map-config test no longer flips satellite on.
+- Concurrency: quick-count comparisons read inside a stable window (iter127, kiss_r4).
+- KNOWN ENV ISSUES:
+  - The STRIPE_SECRET_KEY test sandbox key is EXPIRED, so the Stripe billing lifecycle is not verified.
+  - uvicorn --reload watches backend/tests, so editing a test file restarts the backend mid-run.
+  - Overlapping pytest sessions can each miss the other's records.
+- Legacy data: about 349 of the 356 customers match current test generators. 7 are probable test data but have no current source (TEST_QuoteBug x2, TEST_Q, TEST_SalesView, UITest, TEST_E2E_ac, TEST_I124UI). Nothing has been deleted yet; it needs the user's decision.
+
 ## Test-data hygiene + Field lead assign validation (2026-06) — DONE (pytest; full suite run twice, business counts unchanged)
 - Field app `POST /api/mobile/leads/{id}/assign` and Office `PUT /api/leads/{id}/assign` now use the shared `services/assignees.resolve_assignee` (user must exist, be active and have an assignable role; 422 otherwise; malformed lead id -> 404). Validation runs before any change, and mobile now writes the `lead.assign` audit entry (via=mobile). Mobile job assign uses the same helper.
 - Tests: `tests/_test_data_cleanup.py` snapshots the ids of tracked tables (properties, customers, leads, inspections, measurement_sets, estimates, quotes, jobs, invoices, purchase_orders, materials, suppliers, visits) at pytest_configure. `purge_business` runs at pytest_sessionfinish, after price books and before users, and removes only the rows created during the run, children included.
@@ -2883,3 +2916,36 @@ FIX (mobile + backend, no MapLibre upgrade — evidence-driven per instruction):
 - POST /installation/recover: code -> same company on the new PC's key, previous PCs REPLACED (403 on next check-in); refused if company was admin-REVOKED or license inactive; 10 wrong codes / 15 min per client -> 429; failures audited.
 - Office first-run "Restore my company": /api/setup/recover/verify -> /backups (folder) -> /restore-folder or /restore-upload; after restore the backup's old CP ids are re-pointed to this PC. Only while zero users exist.
 - Tests: tests/test_company_recovery.py (+testing agent's test_company_recovery_extra.py), migrations live tests (CP_RUN_INTEGRATION=1) pass. iteration_116 issues all fixed. Restore wizard UI not e2e-tested (preview has users).
+
+## 2026-06 Test-suite baseline ACCEPTED; legacy TEST_ data kept
+- Baseline: 1152 passed / 56 skipped / 1 xfailed / 0 failed. Technical backlog TB-1..TB-5 is in ROADMAP.md.
+- Sales follow-up round: review only so far (no code changes). Waiting on user decisions.
+
+## 2026-06 Sales follow-up & reminders round — IMPLEMENTED
+Decisions: several follow-ups per lead; one status list New/Contacted/Qualified/Won/Lost (+archived for Field soft-archive);
+inspections booked as future inspection records; proposals flagged when draft/no answer 3+ days or expiring within 3 days;
+reminders = Office Home + Field My Day lists only (no email/push).
+- DB (alembic b1f0c2d3e4a5): `lead_follow_ups` (open = scheduled, done = logged contact, cancelled); `inspections.status`
+  (scheduled|completed|cancelled, existing rows = completed); lead statuses migrated working→contacted, interested→qualified, converted→won.
+- Backend: services/follow_ups.py (single rule set: statuses, due/overdue by caller tz, next action, attention lists);
+  routers/follow_ups.py: GET /api/lead-statuses, GET/POST /api/leads/{id}/follow-ups (client id = offline idempotency),
+  PATCH /api/follow-ups/{id} (If-Match conflict, repeat done/cancel no-op), GET /api/mobile/my-day?tz=.
+  /api/dashboard/attention?tz= now: follow_ups(overdue+today), inspections(booked), proposals(attention), no_follow_up,
+  + managers: unassigned, overdue_by_rep. /api/leads and /api/mobile/leads return next_action + open_follow_ups.
+  Lead status validated server-side (Office + Field). Creating a customer: new→contacted (no longer "converted");
+  accepting a quote: lead→won. Emailing a proposal (when email is really on) marks a draft sent. Logging a contact on a New lead → Contacted.
+  Recording results on a booked inspection completes it. Office POST /inspections now enforces sales lead ownership (was missing).
+  Field "Add note" now appends server-side (append_note) instead of replacing notes.
+- Office UI: Lead Detail Follow-ups panel (schedule / log contact / done / reschedule / cancel + contact history incl. door visits),
+  Book inspection, status select; Leads list views (Open/Mine/Unassigned/Overdue/Due today/No follow-up/Won/Lost/All) + Next action column;
+  Home cards updated.
+- Field: My Day (Overdue, Due today, Inspections, Proposals, No follow-up), follow-ups + book inspection on Lead Detail (offline queue),
+  callback/appointment visit outcomes prompt for a follow-up/booking, next action on Leads list. Helpers: mobile/src/followups.js
+  (node src/tests/followups.node.test.js). Device testing NOT done.
+- Tests: backend/tests/test_follow_ups_iter133.py.
+- Also fixed (found by the suite): an expired/unconfigured MOCKED ABC Supply connection returned "Internal Server Error";
+  server.py now maps AbcError -> 409 (reconnect/not connected) or 502 with the user message. test_abc_supply_pricing_v2 now always
+  reconnects (mock keeps tokens in memory, lost on backend reload). test_kiss_r4_materials_quick count/list check uses a per-key window.
+- Final full suite 2026-06: 1159 passed, 1 failed (test_licensing_api network connect timeout to preview URL; passes 8/8 on rerun),
+  56 skipped, 1 xfailed. Working-data counts and stock (sum delta 13196.5) unchanged after cleanup.
+- UI testing: iteration_134 all flows pass; follow-ups: Home "View all" now opens Due today when nothing is overdue; icon buttons labelled; cancel has Undo.

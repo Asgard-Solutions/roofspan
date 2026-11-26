@@ -14,12 +14,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StageBar, STAGE_LABELS } from "@/components/lead/StageBar";
 import { nextAction, NextActionBanner } from "@/components/lead/NextAction";
+import { FollowUpsPanel } from "@/components/lead/FollowUpsPanel";
+import { DateTimeField } from "@/components/lead/DateTimeField";
+import { LEAD_STATUSES, LEAD_STATUS_COLOR, kindLabel, whenOf, WHEN_LABEL, dateTime, quickPicks, toLocalInput } from "@/lib/followups";
 import PhotoGallery from "@/components/PhotoGallery";
 import MeasurementWorksheet from "@/components/MeasurementWorksheet";
-import { Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
+import { CalendarClock, Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
 
 const MANAGE = ["owner", "administrator", "office"];
 const UNASSIGNED = "__unassigned__";
+const OPEN = ["new", "contacted", "qualified"];
 
 function Section({ icon: Icon, title, action, children, testid }) {
   return (
@@ -33,7 +37,7 @@ function Section({ icon: Icon, title, action, children, testid }) {
   );
 }
 
-const statusColor = { new: "bg-blue-50 text-blue-700", working: "bg-amber-50 text-amber-700", converted: "bg-orange-50 text-orange-700", draft: "bg-slate-100 text-slate-600", sent: "bg-blue-50 text-blue-700", accepted: "bg-green-50 text-green-700", declined: "bg-red-50 text-red-700", paid: "bg-green-50 text-green-700", issued: "bg-blue-50 text-blue-700", void: "bg-slate-100 text-slate-500" };
+const statusColor = { ...LEAD_STATUS_COLOR, draft: "bg-slate-100 text-slate-600", sent: "bg-blue-50 text-blue-700", accepted: "bg-green-50 text-green-700", declined: "bg-red-50 text-red-700", paid: "bg-green-50 text-green-700", issued: "bg-blue-50 text-blue-700", void: "bg-slate-100 text-slate-500" };
 
 export default function LeadDetail() {
   const { id } = useParams();
@@ -60,6 +64,10 @@ export default function LeadDetail() {
   const [assignable, setAssignable] = useState([]);
   const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [nextFu, setNextFu] = useState([]);
+  const [inspTarget, setInspTarget] = useState(null);
+  const [bookOpen, setBookOpen] = useState(false);
+  const [book, setBook] = useState({ when: "", inspector: "", notes: "" });
 
   const load = useCallback(async () => {
     try {
@@ -106,9 +114,28 @@ export default function LeadDetail() {
   const addInspection = async () => {
     setBusy(true);
     try {
-      await api.post("/inspections", { lead_id: id, customer_id: lead.customer_id, property_id: lead.property_id, inspection_date: new Date().toISOString(), ...insp });
-      toast.success("Inspection recorded"); setInspOpen(false); setInsp({ inspector: "", roof_condition: "", findings: "", recommended_work: "", measurements: "", notes: "" }); load();
+      if (inspTarget) await api.patch(`/inspections/${inspTarget.id}`, { ...insp, status: "completed", inspection_date: new Date().toISOString() });
+      else await api.post("/inspections", { lead_id: id, customer_id: lead.customer_id, property_id: lead.property_id, inspection_date: new Date().toISOString(), ...insp });
+      toast.success("Inspection recorded"); setInspOpen(false); setInspTarget(null); setInsp({ inspector: "", roof_condition: "", findings: "", recommended_work: "", measurements: "", notes: "" }); load();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  const openRecord = (i) => { setInspTarget(i || null); setInsp({ inspector: i?.inspector || "", roof_condition: "", findings: "", recommended_work: "", measurements: "", notes: i?.notes || "" }); setInspOpen(true); };
+  const openBook = () => { setBook({ when: toLocalInput(quickPicks()[1].date), inspector: user?.full_name || "", notes: "" }); setBookOpen(true); };
+  const bookInspection = async () => {
+    setBusy(true);
+    try {
+      await api.post("/inspections", { lead_id: id, customer_id: lead.customer_id, property_id: lead.property_id, status: "scheduled",
+        inspection_date: new Date(book.when).toISOString(), inspector: book.inspector || null, notes: book.notes || null });
+      toast.success("Inspection booked"); setBookOpen(false); load();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  const cancelBooking = async (i) => {
+    try { await api.patch(`/inspections/${i.id}`, { status: "cancelled" }); toast.success("Booking cancelled"); load(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const changeStatus = async (status) => {
+    try { await api.patch(`/leads/${id}`, { status }); toast.success("Status updated"); load(); }
+    catch (e) { toast.error(apiError(e)); }
   };
 
   const createDraftEstimate = async () => {
@@ -178,7 +205,11 @@ export default function LeadDetail() {
   const jobIds = leadJobs.map((j) => j.id);
   const leadInvoices = invoices.filter((i) => quoteIds.includes(i.quote_id) || jobIds.includes(i.job_id));
   const invoicedQuoteIds = leadInvoices.filter((i) => i.status !== "void").map((i) => i.quote_id);
-  const action = nextAction(wf, isManage);
+  const fu0 = nextFu[0];
+  const stageAction = nextAction(wf, isManage);
+  const action = fu0 && OPEN.includes(lead.status)
+    ? { text: `${kindLabel(fu0.kind)}${fu0.note ? `: ${fu0.note}` : ""} · ${WHEN_LABEL[whenOf(fu0.due_at)]} ${dateTime(fu0.due_at)}`, stage: viewing }
+    : stageAction;
   const f = wf.facts;
 
   const assignment = (
@@ -236,12 +267,24 @@ export default function LeadDetail() {
 
   const inspectionsSection = (
     <Section icon={ClipboardCheck} title="Inspections" testid="section-inspections"
-      action={<Button size="sm" variant="outline" onClick={() => setInspOpen(true)} data-testid="add-inspection-button"><Plus className="h-4 w-4" /> Add</Button>}>
-      {inspections.length === 0 ? <p className="text-sm text-slate-500">No inspections yet.</p> : (
+      action={<div className="flex gap-2"><Button size="sm" variant="outline" onClick={openBook} data-testid="book-inspection-button"><CalendarClock className="h-4 w-4" /> Book</Button>
+        <Button size="sm" variant="outline" onClick={() => openRecord(null)} data-testid="add-inspection-button"><Plus className="h-4 w-4" /> Record</Button></div>}>
+      {inspections.filter((i) => i.status === "scheduled").map((i) => (
+        <div key={i.id} className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded border border-orange-200 bg-orange-50/50 p-2 text-sm" data-testid={`inspection-booked-${i.id}`}>
+          <div><span className="font-medium text-slate-900">Booked · {dateTime(i.inspection_date)}</span>
+            <Badge variant="secondary" className="ml-2">{WHEN_LABEL[whenOf(i.inspection_date)]}</Badge>
+            {(i.inspector || i.notes) && <div className="text-xs text-slate-500">{[i.inspector && `with ${i.inspector}`, i.notes].filter(Boolean).join(" · ")}</div>}</div>
+          <div className="flex gap-1">
+            <Button size="sm" onClick={() => openRecord(i)} data-testid={`record-booked-${i.id}`}>Record results</Button>
+            <Button size="sm" variant="ghost" onClick={() => cancelBooking(i)} data-testid={`cancel-booked-${i.id}`}>Cancel</Button>
+          </div>
+        </div>
+      ))}
+      {inspections.filter((i) => i.status !== "scheduled").length === 0 ? <p className="text-sm text-slate-500">No inspections recorded yet.</p> : (
         <div className="space-y-2">
-          {inspections.map((i) => (
+          {inspections.filter((i) => i.status !== "scheduled").map((i) => (
             <div key={i.id} className="rounded border border-border p-2 text-sm" data-testid={`inspection-${i.id}`}>
-              <div className="flex justify-between"><span className="font-medium text-slate-800">{i.roof_condition || "Inspection"}</span><span className="text-xs text-slate-400">{shortDate(i.inspection_date)}</span></div>
+              <div className="flex justify-between"><span className="font-medium text-slate-800">{i.status === "cancelled" ? "Booking cancelled" : i.roof_condition || "Inspection"}</span><span className="text-xs text-slate-400">{shortDate(i.inspection_date)}</span></div>
               {i.findings && <div className="mt-1 text-slate-600 whitespace-pre-wrap" data-testid={`inspection-findings-${i.id}`}>Findings: {i.findings}</div>}
               {i.recommended_work && <div className="text-slate-500 whitespace-pre-wrap" data-testid={`inspection-recommended-${i.id}`}>Recommended: {i.recommended_work}</div>}
               {i.measurements && <div className="text-slate-500 whitespace-pre-wrap" data-testid={`inspection-measurements-${i.id}`}>Measurements: {i.measurements}</div>}
@@ -371,11 +414,16 @@ export default function LeadDetail() {
         title={lead.name}
         description={<span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {lead.property_address || lead.address || "No property"}</span>}
         testid="page-lead-detail"
-        actions={<><span className="hidden text-xs text-slate-500 sm:inline" data-testid="lead-current-stage">Stage: <span className="font-semibold text-slate-800">{STAGE_LABELS[wf.stage]}</span></span><Badge className={statusColor[lead.status] || ""} variant="secondary" data-testid="lead-status-badge">{lead.status}</Badge></>}
+        actions={<><span className="hidden text-xs text-slate-500 sm:inline" data-testid="lead-current-stage">Stage: <span className="font-semibold text-slate-800">{STAGE_LABELS[wf.stage]}</span></span>
+          <Select value={lead.status} onValueChange={changeStatus}>
+            <SelectTrigger className="h-8 w-[130px]" data-testid="lead-status-select"><Badge className={statusColor[lead.status] || ""} variant="secondary" data-testid="lead-status-badge">{lead.status}</Badge></SelectTrigger>
+            <SelectContent>{LEAD_STATUSES.map((st) => <SelectItem key={st.value} value={st.value} data-testid={`lead-status-option-${st.value}`}>{st.label}</SelectItem>)}</SelectContent>
+          </Select></>}
       />
       <div className="space-y-5 p-6 sm:p-8">
         <StageBar stages={wf.stages} current={wf.stage} viewing={viewing} onSelect={setView} />
         <NextActionBanner action={action} viewing={viewing} onGo={setView} navigateToJob={() => navigate(`/jobs/${action.jobId}`)} />
+        <FollowUpsPanel leadId={id} visits={lead.visits} onOpenChange={setNextFu} onChanged={load} />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2" data-testid={`stage-panel-${viewing}`}>
           {PANELS[viewing]}
         </div>
@@ -384,7 +432,7 @@ export default function LeadDetail() {
       {/* Inspection dialog */}
       <Dialog open={inspOpen} onOpenChange={setInspOpen}>
         <DialogContent data-testid="inspection-dialog">
-          <DialogHeader><DialogTitle>Record inspection</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{inspTarget ? "Record inspection results" : "Record inspection"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5"><Label>Inspector</Label><Input value={insp.inspector} onChange={(e) => setInsp({ ...insp, inspector: e.target.value })} data-testid="insp-inspector" /></div>
             <div className="space-y-1.5"><Label>Roof condition</Label><Input value={insp.roof_condition} onChange={(e) => setInsp({ ...insp, roof_condition: e.target.value })} placeholder="Good / Fair / Poor" data-testid="insp-condition" /></div>
@@ -394,6 +442,18 @@ export default function LeadDetail() {
             <div className="space-y-1.5"><Label>Notes</Label><Textarea value={insp.notes} onChange={(e) => setInsp({ ...insp, notes: e.target.value })} data-testid="insp-notes" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setInspOpen(false)}>Cancel</Button><Button onClick={addInspection} disabled={busy} data-testid="save-inspection">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bookOpen} onOpenChange={setBookOpen}>
+        <DialogContent data-testid="book-inspection-dialog">
+          <DialogHeader><DialogTitle>Book an inspection</DialogTitle><DialogDescription>It shows on Home and in RoofSpan Field until the results are recorded.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label>When</Label><DateTimeField value={book.when} onChange={(v) => setBook({ ...book, when: v })} testid="book-when" /></div>
+            <div className="space-y-1.5"><Label>Inspector</Label><Input value={book.inspector} onChange={(e) => setBook({ ...book, inspector: e.target.value })} data-testid="book-inspector" /></div>
+            <div className="space-y-1.5"><Label>Note (optional)</Label><Textarea value={book.notes} onChange={(e) => setBook({ ...book, notes: e.target.value })} placeholder="Gate code, dog in yard…" data-testid="book-notes" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setBookOpen(false)}>Cancel</Button><Button onClick={bookInspection} disabled={busy || !book.when} data-testid="book-save">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Book"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
