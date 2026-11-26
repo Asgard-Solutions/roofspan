@@ -1,7 +1,7 @@
 """Lead follow-ups, scheduled inspections, one shared lead status list.
 
 Lead statuses become New / Contacted / Qualified / Won / Lost (+ archived, Field soft-archive):
-working -> contacted, interested -> qualified, converted -> won.
+working -> contacted, interested -> qualified, converted -> won (accepted proposal) or contacted (customer record only).
 
 Revision ID: b1f0c2d3e4a5
 Revises: a9c8e7d6f5b4
@@ -40,7 +40,11 @@ def upgrade() -> None:
     conn = op.get_bind()
     conn.execute(sa.text("UPDATE leads SET status='contacted' WHERE status='working'"))
     conn.execute(sa.text("UPDATE leads SET status='qualified' WHERE status='interested'"))
-    conn.execute(sa.text("UPDATE leads SET status='won' WHERE status='converted'"))
+    # "Converted" was set when a customer record was created, so it is NOT proof of a sale: only leads with an
+    # accepted proposal become Won; the rest become Contacted (approved rule, 2026-06).
+    conn.execute(sa.text("UPDATE leads SET status='won' WHERE status='converted' AND EXISTS "
+                         "(SELECT 1 FROM quotes q WHERE q.lead_id = leads.id AND q.status = 'accepted')"))
+    conn.execute(sa.text("UPDATE leads SET status='contacted' WHERE status='converted'"))
 
 
 def downgrade() -> None:

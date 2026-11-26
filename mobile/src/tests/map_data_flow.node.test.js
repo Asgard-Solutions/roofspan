@@ -190,10 +190,11 @@ ok(RT3.offlineNoCache === false, "RT3: cache hit keeps map usable");
 // with an empty fallback). We assert this by inspecting MapScreen.js source.
 const fs = require("fs"); const path = require("path");
 const mapSrc = fs.readFileSync(path.join(__dirname, "..", "screens", "MapScreen.js"), "utf8");
-const loadMapPropsMatch = mapSrc.match(/const loadMapProps[\s\S]*?\n  \}, \[\]\);/);
-ok(!!loadMapPropsMatch, "RT3: loadMapProps callback located in MapScreen.js");
-ok(loadMapPropsMatch && !/catch[\s\S]*?putCache\s*\(\s*CACHE_MAP_PROPS/.test(loadMapPropsMatch[0]),
-  "RT3: loadMapProps catch path does NOT putCache (never overwrites CACHE_MAP_PROPS on failure)");
+// (Map Areas round renamed loadMapProps -> loadPropsForArea; cache key is per area: `${CACHE_MAP_PROPS}:${area.id}`.)
+const loadMapPropsMatch = mapSrc.match(/const loadPropsForArea[\s\S]*?\n  \}, \[\]\);/);
+ok(!!loadMapPropsMatch, "RT3: loadPropsForArea callback located in MapScreen.js");
+ok(loadMapPropsMatch && !/catch[\s\S]*?putCache\s*\(/.test(loadMapPropsMatch[0]),
+  "RT3: loadPropsForArea catch path does NOT putCache (never overwrites the cached area properties on failure)");
 
 // RT4 — Section selection with props inside AND outside the section.
 // Master collection unchanged; returning to all-properties requires NO refetch.
@@ -213,9 +214,9 @@ ok(RT4.features === RT4_before, "RT4: selecting a section is a pure setter (iden
 ok(RT4.features.length === 3, "RT4: master collection STILL contains inside+outside properties");
 RT4 = reducer(RT4, { type: "SELECT_SECTION", id: null });
 ok(RT4.features === RT4_before, "RT4: clearing selection requires NO refetch (features untouched)");
-// Wiring assertion: selectSection is literally a setter.
-ok(/const selectSection\s*=\s*\(id\)\s*=>\s*setSelId\(id\)/.test(mapSrc),
-  "RT4: MapScreen.selectSection is a pure setSelId setter");
+// Wiring assertion: area selection is literally a setter (Map Areas round: selectSection -> selectArea).
+ok(/const selectArea\s*=\s*\(id\)\s*=>\s*setSelectedAreaId\(id\)/.test(mapSrc),
+  "RT4: MapScreen.selectArea is a pure setSelectedAreaId setter");
 
 // RT5 — Offline reopen after a successful online load. All three caches were populated;
 // on reopen with network unavailable, cached cfg + props + sections all load. Valid cache is

@@ -20,7 +20,35 @@ The 356 legacy TEST_ customers and everything linked to them are KEPT on purpose
 - **Attempted vs completed contact** in contact logging (e.g. "Called — no answer" vs "Spoke with homeowner").
 - **Lost reason** captured when a lead is marked Lost.
 
-## Product rounds
-- ACCEPTED 2026-06: Sales follow-up and reminders + automated baseline (1175 passed). Office follow-up date/time now uses the
-  RoofSpan calendar picker. OUTSTANDING: physical Android/iOS acceptance (user, FIELD_FOLLOWUP_DEVICE_CHECKLIST.md).
-  Next phase: production-readiness validation (no new feature rounds).
+## Product rounds (KISS redesign — COMPLETE, feature freeze from 2026-06)
+All accepted by the owner:
+1. Simplified seven-area navigation.
+2. Settings hub for administrative configuration.
+3. Dynamic five-stage Lead workflow.
+4. Simplified Estimate / Takeoff and Materials workflows.
+5. Jobs: Job Manager + managed Crews, scheduling with the RoofSpan date-range calendar, automatic Ready to install, full-width Job materials.
+6. Job closeout: Job Manager type-ahead, sales cannot see purchasing costs, confirmed test jobs/users cleaned up.
+7. Test-suite stabilisation and test-data leak prevention; Field lead-assignment validation.
+8. Sales follow-up and reminders: several follow-ups per lead, contact history, booked inspections, proposal attention,
+   Office Home + Field My Day, one status list (New/Contacted/Qualified/Won/Lost), offline sync + conflicts,
+   Won/Lost auto-cancel, 122-lead status correction, Office calendar date/time picker.
+
+## Release candidate (feature freeze) — production-readiness items
+Done in the preview environment (2026-06):
+- Full backend suite, Office production build, Field compile/config/API compatibility check, Windows packaging test suite,
+  and an upgrade rehearsal on a copy of the working database (pre-redesign schema -> head) all completed. See PRD.md.
+- Upgrade migration b1f0c2d3e4a5 now maps Converted -> Won only with an accepted proposal, otherwise Contacted
+  (the same rule as the approved preview correction), so customer upgrades don't need the one-off script.
+
+Outstanding before production:
+- **RC-1 Physical Android + iOS acceptance** (owner) — memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md. NOT yet performed.
+- **RC-2 Installed Windows Office build + upgrade test** (owner, outside preview): fresh install AND upgrade of an existing install
+  (upgrade coordinator `--migrate` runs Alembic to b1f0c2d3e4a5). The Windows-only installer/service tests (105) were skipped on Linux.
+- **RC-3 Version number**: windows/VERSION is still 0.4.8 and app.json 1.0.0; set the release-candidate version before building.
+- **RC-4 Expo SDK patch drift**: `expo install --check` lists 10 packages one patch behind (expo 57.0.20 vs ~57.0.34, etc.).
+  Not a build blocker; decide whether to align before the RC build (would need a full device retest).
+- **RC-5 Field UI test dependency**: src/tests/roof_preview_ui.node.test.js needs `react-test-renderer` (not installed) — the test
+  cannot run here. Not an app dependency.
+- **RC-6 Office bundle size**: main JS 643 kB (CRA warning). Not a blocker.
+- MOCKED integrations still MOCKED: **proposal / acceptance email** and **ABC Supply**. Stripe sandbox key expired (TB-3).
+- TB-1 … TB-7 above; TB-5 (gated integration suites) must be done before production.
