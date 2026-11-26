@@ -33,8 +33,8 @@ const linkClass = (active) =>
   cn(
     "flex items-center gap-3 border-l-4 px-4 py-2.5 text-sm font-medium transition-colors",
     active
-      ? "border-orange-600 bg-slate-100 text-slate-900"
-      : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+      ? "border-orange-500 bg-white/10 text-white"
+      : "border-transparent text-slate-300 hover:bg-white/5 hover:text-white"
   );
 
 function NavContent({ onNavigate, isManage }) {
@@ -55,7 +55,7 @@ function SettingsLink({ onNavigate, isManage }) {
   const { pathname } = useLocation();
   if (!isManage) return null;
   return (
-    <div className="border-t border-border">
+    <div className="border-t border-white/10">
       <Link to="/settings" className={linkClass(isOn(pathname, SETTINGS_MATCH))} onClick={onNavigate} data-testid="nav-settings">
         <Settings2 className="h-4 w-4" /> Settings
       </Link>
@@ -65,11 +65,11 @@ function SettingsLink({ onNavigate, isManage }) {
 
 function Brand() {
   return (
-    <div className="flex items-center gap-2.5 border-b border-border px-5 py-4">
+    <div className="flex items-center gap-2.5 border-b border-white/10 px-5 py-4">
       <img src={APPICON} alt="RoofSpan" className="h-9 w-9 rounded-md" />
       <div>
-        <div className="font-heading text-base font-bold leading-none text-slate-900">RoofSpan</div>
-        <div className="text-[11px] text-slate-400">Office</div>
+        <div className="font-heading text-base font-bold leading-none text-white">RoofSpan</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-orange-400">Office</div>
       </div>
     </div>
   );
@@ -94,20 +94,20 @@ export default function AppShell() {
   const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : "";
 
   const UserFooter = () => (
-    <div className="border-t border-border p-4">
+    <div className="border-t border-white/10 p-4">
       <div className="mb-2">
-        <div className="truncate text-sm font-semibold text-slate-900" data-testid="current-user-name">{user?.full_name || user?.email}</div>
-        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+        <div className="truncate text-sm font-semibold text-white" data-testid="current-user-name">{user?.full_name || user?.email}</div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-400">
           <KeyRound className="h-3 w-3" />
           <span data-testid="current-user-role">{roleLabel}</span>
         </div>
       </div>
       <ChangePasswordDialog />
-      <Button variant="outline" size="sm" className="mt-1 w-full justify-start gap-2" onClick={handleLogout} data-testid="logout-button">
+      <Button variant="outline" size="sm" className="mt-1 w-full justify-start gap-2 border-white/20 bg-transparent text-slate-200 hover:bg-white/10 hover:text-white" onClick={handleLogout} data-testid="logout-button">
         <LogOut className="h-4 w-4" /> Sign out
       </Button>
       {appVersion && (
-        <div className="mt-3 text-[11px] text-slate-400" data-testid="app-version" title="RoofSpan Office version (for support)">
+        <div className="mt-3 text-[11px] text-slate-500" data-testid="app-version" title="RoofSpan Office version (for support)">
           RoofSpan Office v{appVersion}
         </div>
       )}
@@ -116,20 +116,20 @@ export default function AppShell() {
 
   return (
     <div className="App flex min-h-screen bg-background">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-border bg-white md:flex" data-testid="desktop-sidebar">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-white/10 bg-[#0B1A33] md:flex" data-testid="desktop-sidebar">
         <Brand />
         <div className="flex-1 overflow-y-auto"><NavContent isManage={isManage} /></div>
         <SettingsLink isManage={isManage} />
         <UserFooter />
       </aside>
 
-      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b border-border bg-white px-4 py-2.5 md:hidden">
+      <div className="fixed inset-x-0 top-0 z-20 flex items-center justify-between border-b-2 border-orange-500 bg-[#0B1A33] px-4 py-2.5 md:hidden">
         <img src={WORDMARK_LIGHT} alt="RoofSpan" className="h-8 rounded" />
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" data-testid="mobile-menu-button"><Menu className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white" data-testid="mobile-menu-button"><Menu className="h-5 w-5" /></Button>
           </SheetTrigger>
-          <SheetContent side="left" className="w-72 p-0">
+          <SheetContent side="left" className="flex w-72 flex-col border-white/10 bg-[#0B1A33] p-0 text-white">
             <Brand />
             <div className="flex-1 overflow-y-auto"><NavContent isManage={isManage} onNavigate={() => setOpen(false)} /></div>
             <SettingsLink isManage={isManage} onNavigate={() => setOpen(false)} />

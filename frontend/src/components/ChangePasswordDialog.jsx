@@ -35,7 +35,7 @@ export default function ChangePasswordDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-slate-600" data-testid="open-change-password">
+        <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-slate-300 hover:bg-white/10 hover:text-white" data-testid="open-change-password">
           <KeyRound className="h-4 w-4" /> Change password
         </Button>
       </DialogTrigger>

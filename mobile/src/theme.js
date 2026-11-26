@@ -1,11 +1,12 @@
 // Field-optimized: high contrast, large touch targets, minimal chrome.
 export const C = {
-  bg: "#0F172A",
+  bg: "#0B1A33",       // RoofSpan navy (app chrome, headers)
   surface: "#FFFFFF",
   ink: "#0F172A",
   sub: "#475569",
   line: "#E2E8F0",
-  brand: "#EA580C",
+  brand: "#0B6BDE",    // RoofSpan blue (buttons, links)
+  accent: "#EA580C",   // RoofSpan orange (highlights, active tab)
   ok: "#059669",
   warn: "#B45309",
   danger: "#DC2626",
