@@ -3006,3 +3006,8 @@ reminders = Office Home + Field My Day lists only (no email/push).
 - Windows packaging tests 286 passed / 105 skipped (Windows-only). PyInstaller spec ships alembic dir; new modules are statically imported.
 - Pre-existing, not changed (freeze): /api/mobile/photos/{id}/content returns 502 when the stored object is missing (old test photo).
 - Outstanding: RC-1..RC-6 in ROADMAP.md; physical device acceptance (owner).
+
+## 2026-06 — Final release handoff (feature freeze, investigation only — no version/code changes)
+- Version inventory, migration scenarios A/B, photo-404 root cause, build-source checks recorded in ROADMAP.md (RC-3, RC-5, RC-7..RC-10).
+- Scenario A (pre-status-migration install -> head): passes (scripts/upgrade_rehearsal.sh). Scenario B (ran original b1f0 from
+  f240635): NOT corrected by current code — corrective migration proposed (RC-7), awaiting approval.

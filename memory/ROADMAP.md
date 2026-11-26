@@ -44,11 +44,34 @@ Outstanding before production:
 - **RC-1 Physical Android + iOS acceptance** (owner) — memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md. NOT yet performed.
 - **RC-2 Installed Windows Office build + upgrade test** (owner, outside preview): fresh install AND upgrade of an existing install
   (upgrade coordinator `--migrate` runs Alembic to b1f0c2d3e4a5). The Windows-only installer/service tests (105) were skipped on Linux.
-- **RC-3 Version number**: windows/VERSION is still 0.4.8 and app.json 1.0.0; set the release-candidate version before building.
+- **RC-3 Version number** (awaiting owner approval, NOT changed): windows/VERSION 0.4.8 -> proposed 0.5.0 (drives MSI, bundle,
+  all service exes, /api/version); mobile/app.json expo.version 1.0.0 -> proposed 1.1.0. Android versionCode / iOS buildNumber are
+  held remotely by EAS (eas.json appVersionSource=remote; only the `production` profile auto-increments) — check with
+  `eas build:version:get`, every RC build must be higher than what's on test devices (uninstalling wipes the offline queue).
+  Installed Office shows "-dev" unless ROOFSPAN_CHANNEL=stable (not set by the installer). frontend/package.json 0.1.0 is unused.
+- **RC-7 Corrective migration for installs that ran the ORIGINAL b1f0c2d3e4a5** (git f240635, 2026-11-25 22:21 -> fixed af01072
+  2026-11-26 04:22): Alembic sees them at head, so the corrected file never re-runs (rehearsal: 121 leads stay wrongly Won).
+  Proposed new migration: Won -> Contacted only when no accepted proposal AND no audited user status edit (Office
+  detail.status[1]='won' or Field detail.fields contains 'status'); log each change to audit history. Rehearsal: corrects 119,
+  leaves 2 user-edited for manual review, touches 0 accepted-proposal leads; 0 changes on the current preview DB / clean upgrades.
+  Needed only if any installer was built from that window. scripts/upgrade_rehearsal_incorrect.sh reproduces it.
+- **RC-8 Hosted Control Plane is behind source**: cp.roofspan.io returns 404 for /installation/company, /precheck, /recover,
+  /recovery-code (company recovery, added after 0.4.8). Office degrades gracefully (warning; pairing still works) but
+  "Restore my company" / recovery code will fail. Redeploy the Railway central service from the RC commit (CP migration
+  f3a9c1d2b7e4 applies on start). Relay protocol unchanged ("1").
+- **RC-9 Windows frontend build env**: stage.ps1 clears REACT_APP_BACKEND_URL with `$env:X = ""`, which REMOVES the variable on
+  Windows PowerShell 5.1 / pwsh < 7.5, so a stray frontend/.env would bake its URL into the installed UI. frontend/.env is
+  gitignored — build from a clean Git clone (or pwsh 7.5+) and confirm the staged JS has no preview URL.
+- **RC-10 Office/Field pairing not version-enforced**: Field's update gate is the global Control Plane policy (mobile_min 1.0.0,
+  latest 1.0.0), not the Office version. Ship and install Office 0.5.0 and Field 1.1.0 together.
 - **RC-4 Expo SDK patch drift**: `expo install --check` lists 10 packages one patch behind (expo 57.0.20 vs ~57.0.34, etc.).
   Not a build blocker; decide whether to align before the RC build (would need a full device retest).
-- **RC-5 Field UI test dependency**: src/tests/roof_preview_ui.node.test.js needs `react-test-renderer` (not installed) — the test
-  cannot run here. Not an app dependency.
+- **RC-5 Field UI test dependency**: `react-test-renderer` (used only by src/tests/helpers/renderField.js, never by app code, not in
+  package.json) is missing, so roof_preview_ui.node.test.js can't run. No effect on EAS/production builds. To run it, add it as a
+  devDependency pinned to react 19.2.3 (deprecated upstream in React 19 but still published).
+- **Historical photo 404s (preview data only, not a defect)**: 282 of 418 photo records (all uploaded 2026-08-08 .. 2026-09-10)
+  404 in hosted preview object storage; all 136 from 2026-11-22 onward load. No interleaving -> storage namespace reset, not
+  upload/sync. Upload writes the object before the DB row. Installed Office uses local disk (ProgramData\RoofSpan\images).
 - **RC-6 Office bundle size**: main JS 643 kB (CRA warning). Not a blocker.
 - MOCKED integrations still MOCKED: **proposal / acceptance email** and **ABC Supply**. Stripe sandbox key expired (TB-3).
 - TB-1 … TB-7 above; TB-5 (gated integration suites) must be done before production.
