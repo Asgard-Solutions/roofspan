@@ -1,64 +1,97 @@
-# Hosted Control Plane — release-candidate deployment (NOT deployed; awaiting owner approval)
+# Hosted Control Plane — release-candidate deployment handoff (NOT deployed; awaiting owner approval)
 
-Service: Railway "RoofSpan Production" → central service (`backend/cp_asgi.py`), serves BOTH
-`cp.roofspan.io` (Control Plane) and `relay.roofspan.io` (Relay) from one node. Customer business data is not here.
-Deploy from the same Git commit used for Office 0.5.0 / Field 1.1.0 (see RELEASE_RC_0.5.0.md).
+Service: Railway project "RoofSpan Production" → Control Plane service (`backend/cp_asgi.py`, built from
+`deploy/railway/Dockerfile` per `railway.json`). It serves BOTH `cp.roofspan.io` and `relay.roofspan.io`.
+No customer business data lives here (companies, installations, licences, subscriptions, device pairings only).
+Deploy the release-candidate commit (RELEASE_RC_0.5.0.md). No secret values belong in this file, logs or Git.
 
-## What changes on the hosted service
-| Area | Live today (probed 2026-11-26) | After deploy |
-|---|---|---|
-| Company recovery (`/installation/precheck`, `/recover`, `/recovery-code`, `/company`) | 404 | available |
-| CP database | head unknown (expected `e1f2a3b4c5d6`) | `f3a9c1d2b7e4` (C6 company recovery), applied automatically at start |
-| Relay protocol | "1" | "1" (unchanged; relay code unchanged since 0.4.8) |
-| Version policy (`mobile_min_supported` / `mobile_latest`) | 1.0.0 / 1.0.0 | unchanged — do NOT raise it (it is global; Office 0.5.0 enforces Field 1.1.0 itself) |
+## 1. SECRETS_ENCRYPTION_KEY
+- Format: exactly 32 random bytes encoded as URL-safe Base64 with padding = **44 characters**, ending in `=`
+  (alphabet A–Z a–z 0–9 `-` `_`). Used as an AES-256-GCM key (`core._enc_key`) to encrypt company recovery codes.
+- Generate locally (prints only to your terminal; don't paste it anywhere except Railway and your password manager):
+  - macOS/Linux: `python3 -c "import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
+  - or: `openssl rand -base64 32 | tr '+/' '-_'`
+  - Windows PowerShell: `$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).Replace('+','-').Replace('/','_')`
+- Check a value without printing it: `python3 -c "import base64,getpass;k=getpass.getpass('key: ');print(len(k), len(base64.urlsafe_b64decode(k)))"` → `44 32`.
+- Never rotate or lose it: recovery codes already issued could no longer be shown (their hashes still validate restores).
 
-## Migration f3a9c1d2b7e4 (only CP migration in this release)
-- Adds to `companies`: `phone`, `address` (default ''), `match_key`, `recovery_code_hash`, `recovery_code_enc` (NULL for existing rows).
-- Unique index on active `match_key` (new column, so no existing row can collide).
-- Installations sharing one public key: keeps the newest ACTIVE row, marks older ACTIVE duplicates `REPLACED`,
-  then adds a unique index so a key can only have one ACTIVE installation. **This is the only change to existing records.**
-- Existing companies get a recovery code lazily (first time Office Settings shows it / an operator reveals it).
-- Subscriptions, licenses, devices, billing events: untouched.
+## 2. Where to set it
+Railway → RoofSpan Production → **Control Plane service** (not the Postgres service) → **Variables** → New Variable
+`SECRETS_ENCRYPTION_KEY` (mark it sealed). Railway stages variable changes; applying them redeploys the CURRENTLY
+deployed commit (harmless: today's build ignores the variable). Keep it identical in every future environment of this
+Control Plane. From the RC onward, `CP_ENV=production` refuses to start without it, so a missing key can't silently break
+registration — Railway keeps the previous deployment serving.
 
-## Required environment (Railway → Variables) — check BEFORE deploying
-Everything already in deploy/railway/README.md §3, plus:
-- **`SECRETS_ENCRYPTION_KEY`** (NEW requirement, secret): 32 random bytes, url-safe base64
-  (`python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`).
-  Encrypts recovery codes. Store it in your password manager; never rotate or lose it (existing codes become unreadable).
-  With `CP_ENV=production` the service now refuses to start without it, so Railway keeps the old deployment live.
-- `CP_DEV_BOOTSTRAP_SECRET` must stay the value installed Offices send (unchanged).
+**Before pushing the RC to GitHub:** check Railway → service → Settings → Source: if auto-deploy is on for the branch you
+push to, pushing deploys immediately. Disable auto-deploy (or push to a branch Railway doesn't watch) until you approve.
 
-## Pre-deploy checklist (read-only SQL in the Railway Postgres console)
-1. Take a Railway Postgres backup/snapshot and note the current deployment ID (for rollback).
-2. `SELECT version_num FROM alembic_version;` → note it (expected `e1f2a3b4c5d6`).
-3. Duplicate ACTIVE installations that the migration will mark REPLACED (expect 0 rows; review any):
-   `SELECT md5(public_key_pem), count(*), array_agg(id ORDER BY created_at DESC) FROM installations WHERE status='ACTIVE' GROUP BY 1 HAVING count(*) > 1;`
-4. Record counts for comparison:
-   `SELECT (SELECT count(*) FROM companies), (SELECT count(*) FROM installations WHERE status='ACTIVE'), (SELECT count(*) FROM subscriptions), (SELECT count(*) FROM mobile_devices WHERE revoked_at IS NULL);`
-5. Confirm `SECRETS_ENCRYPTION_KEY` is set.
+## 3. Backup and restore (Railway Postgres)
+Run from your computer with PostgreSQL client tools of the same or newer major version as the server
+(`SELECT version();`). Use the Postgres service's `DATABASE_PUBLIC_URL` (Postgres service → Variables; copy into an
+environment variable, don't type it into commands that are saved to shell history).
+1. Railway → Postgres service → **Backups** → create a manual backup (if your plan offers it) and note its time.
+2. Logical backup (always):
+   `pg_dump --format=custom --no-owner --no-privileges --file roofspan-cp-$(date +%Y%m%d-%H%M).dump "$CP_DB_URL"`
+3. Verify the file: `pg_restore --list roofspan-cp-*.dump | grep -c "TABLE DATA"` (non-zero), and record row counts (§5 step 1).
+   Store the dump encrypted (it contains customer contact details and hashed credentials).
+4. Restore (only for rollback, service stopped/paused first):
+   `pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$CP_DB_URL" roofspan-cp-YYYYMMDD-HHMM.dump`
+   or Railway → Postgres → Backups → Restore. Anything written after the backup (new registrations, pairings, Stripe events)
+   is lost; Stripe events can be re-sent from the Stripe dashboard.
 
-## Deploy
-1. Push the release-candidate commit to GitHub ("Save to GitHub"); Railway builds `deploy/railway/Dockerfile` on push to the
-   connected branch (watch patterns `/backend/**`). Or trigger Deploy on that commit in Railway.
-2. Logs must show `Control Plane schema ready (migrations applied).`; the health check `/health` must pass.
+## 4. Database migration
+- Only one Control Plane migration in this release: `e1f2a3b4c5d6 → f3a9c1d2b7e4` (C6 company recovery).
+  Adds `companies.phone`, `address`, `match_key`, `recovery_code_hash`, `recovery_code_enc`; unique indexes on active
+  `match_key` and on one ACTIVE installation per public key (older ACTIVE duplicates with the same key → `REPLACED`).
+  Subscriptions, licences, devices and billing are untouched.
+- Applied automatically at startup (`init_control_plane()` → `run_cp_migrations()`, advisory-locked). Logs:
+  `Control Plane migration inspection: ... revision=e1f2a3b4c5d6 head=f3a9c1d2b7e4` then `Control Plane schema ready (migrations applied).`
+- Manual equivalents (Railway → service → shell, or `railway run`, working directory `/app`):
+  - status: `alembic -c control_plane/alembic.ini current`
+  - upgrade: `python -c "from control_plane.migrations_runner import run_cp_migrations as r; print(r())"`
+    (same code path as startup; prefer this over raw `alembic upgrade head`)
+  - downgrade (rollback only): `alembic -c control_plane/alembic.ini downgrade e1f2a3b4c5d6`
+- Read-only pre-checks (Postgres → Data → Query, or psql):
+  - `SELECT version_num FROM alembic_version;` → expect `e1f2a3b4c5d6`
+  - duplicates the migration will mark REPLACED (expect 0 rows; stop and review any):
+    `SELECT md5(public_key_pem), count(*) FROM installations WHERE status='ACTIVE' GROUP BY 1 HAVING count(*) > 1;`
 
-## Post-deploy validation
-1. `GET https://cp.roofspan.io/health` → `control_plane.ready: true`; same for `https://relay.roofspan.io/health`.
-2. `GET https://cp.roofspan.io/api/control-plane/version-policy` → unchanged values.
-3. `POST https://cp.roofspan.io/api/control-plane/installation/precheck` with `{}` → 422 (route exists), not 404.
-4. Re-run pre-deploy query 4: same counts; query 2 → `f3a9c1d2b7e4`.
-5. Existing installed Office (0.4.8): still licensed, Field devices still connect and sync (no re-pairing).
-6. Office 0.5.0 (test PC): Settings shows the company recovery code; setup with an existing company name/phone/address
-   offers "Restore my company"; restoring with the code works.
-7. Pair a new Field 1.1.0 device (QR and numeric code); existing devices remain listed; revoke/re-pair works.
-8. Subscription state and seat counts in Office unchanged; Stripe webhook deliveries succeed (Stripe dashboard).
-   (Stripe sandbox key in preview is expired — TB-3; live Stripe is configured only on Railway.)
+## 5. Deployment procedure (after you approve)
+1. Record: `SELECT (SELECT count(*) FROM companies), (SELECT count(*) FROM installations WHERE status='ACTIVE'), (SELECT count(*) FROM subscriptions), (SELECT count(*) FROM mobile_devices WHERE revoked_at IS NULL);`
+   and the current Railway deployment ID.
+2. Confirm `SECRETS_ENCRYPTION_KEY` is set (§2) and the backup is verified (§3).
+3. Push the RC commit (Save to GitHub) to the branch Railway deploys, or Railway → Deployments → deploy that commit.
+4. Watch logs for the migration lines (§4) and `/health` passing. Railway only switches traffic after the health check.
 
-## Rollback
-- Code only, keeping the new schema: NOT supported — the previous build doesn't know revision `f3a9c1d2b7e4` and its
-  Control Plane would stay "not ready" (Relay keeps working).
-- Full rollback: (a) redeploy the previous Railway deployment AND restore the pre-deploy Postgres backup
-  (loses any registrations/pairings made after deploy), or (b) with the NEW image run
-  `alembic downgrade e1f2a3b4c5d6` against the CP database, then redeploy the previous deployment
-  (installations marked REPLACED stay REPLACED; recovery codes are dropped).
-- Installed Offices need no change for either path; recovery features are simply unavailable again.
+## 6. Rollback procedure
+- Code-only rollback with the new schema is NOT supported (the previous build doesn't know `f3a9c1d2b7e4`; its Control
+  Plane would stay "not ready", Relay would keep working).
+- Option A (preferred if little time has passed): pause the service → restore the §3 backup → Railway → Deployments →
+  previous deployment → Redeploy.
+- Option B (keeps data written since deploy): in the NEW deployment's shell run the §4 downgrade, then redeploy the previous
+  deployment. Recovery codes are dropped; installations marked REPLACED stay REPLACED.
+- Installed Offices need no change either way; restore/recovery features are simply unavailable again.
+
+## 7. Post-deployment validation
+Health and schema
+1. `https://cp.roofspan.io/health` and `https://relay.roofspan.io/health` → `status: ok`, `control_plane.ready: true`.
+2. `SELECT version_num FROM alembic_version;` → `f3a9c1d2b7e4`; §5 step 1 counts unchanged.
+3. `GET /api/control-plane/version-policy` → unchanged (mobile_min_supported stays 1.0.0 — Office 0.5.0 enforces Field 1.1.0).
+Licensing and existing subscriptions
+4. An existing Office 0.4.8 install: Settings → Subscription still Active with the same seats; licence refresh succeeds
+   (no "offline grace" banner after a restart).
+5. Stripe dashboard → webhook endpoint: recent deliveries 2xx. No subscription changes appear. (Live Stripe was never
+   exercised from preview — TB-3; treat as unverified until checked here.)
+Device pairing
+6. Existing paired Field devices keep connecting and syncing without re-pairing (Office → Settings → Devices list unchanged).
+7. Office 0.5.0 test PC: pair a new Field 1.1.0 device (QR and numeric code); revoke it and pair again.
+Recovery codes
+8. Office 0.5.0, signed in as the owner → Settings → Company & Integrations → the company recovery code is shown (generated on first view for existing companies); viewing again
+   shows the same code.
+9. `POST /api/control-plane/installation/precheck` with `{}` → 422 (route exists), not 404.
+Company recovery
+10. Fresh Office 0.5.0 test install with the SAME company name, phone and address → setup offers "Restore my company".
+11. Wrong code → refused (repeated failures are throttled); correct code → the same company, licence, subscription and seats
+    are attached to the new installation and the old installation becomes REPLACED. Field devices paired with the old
+    installation must be paired again with the new one.
+12. A different company name/phone/address → creates a new company (no restore offered).
