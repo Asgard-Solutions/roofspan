@@ -2985,3 +2985,12 @@ reminders = Office Home + Field My Day lists only (no email/push).
 - Tests: test_follow_ups_autocancel_iter137.py, test_follow_ups_autocancel_gaps_iter138.py; node followups test extended.
   Full suite: 1175 passed, 56 skipped, 1 xfailed, 0 failed; counts/stock unchanged. UI: iteration_137 + 139 passed.
 - Physical-device acceptance: OUTSTANDING (user). Checklist sections A–E in memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md.
+
+## 2026-06 Sales follow-up round ACCEPTED; Office follow-up picker consistency
+- User accepted the follow-up/reminder work and the automated baseline (1175 passed / 56 skipped / 1 xfailed).
+- components/lead/DateTimeField.jsx now uses the RoofSpan Popover + Calendar (single day, `required`) + 15-min time Select
+  (keeps off-grid saved times) + quick picks; same local "YYYY-MM-DDTHH:mm" value as before -> storage/tz/reminders/sync unchanged.
+  Used by follow-up schedule/reschedule/log-next and Book inspection. "Later today" chip hidden once it would land tomorrow;
+  dialog defaults use pickDate(label) instead of array indexes. UI tests iteration_140 + 141 passed (DST, midnight, reschedule, existing dates).
+- Future enhancements recorded in ROADMAP (not approved): one-tap call/text, attempted vs completed contact, Lost reason.
+- Physical Android/iOS acceptance: OUTSTANDING (user, memory/FIELD_FOLLOWUP_DEVICE_CHECKLIST.md).

@@ -35,11 +35,14 @@ export function toLocalInput(d) {
 }
 export function quickPicks() {
   const at = (days, h) => { const d = startOfDay(new Date()); d.setDate(d.getDate() + days); d.setHours(h, 0, 0, 0); return d; };
+  const later = new Date(); later.setMinutes(0, 0, 0); later.setHours(later.getHours() + 2);
   return [
-    { label: "Later today", date: (() => { const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 2); return d; })() },
+    // "Later today" only while two hours from now is still today (late evening it would land tomorrow)
+    ...(later.getDate() === new Date().getDate() ? [{ label: "Later today", date: later }] : []),
     { label: "Tomorrow 9am", date: at(1, 9) },
     { label: "In 3 days", date: at(3, 9) },
     { label: "Next week", date: at(7, 9) },
   ];
 }
+export const pickDate = (label) => quickPicks().find((q) => q.label === label).date;
 export const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;

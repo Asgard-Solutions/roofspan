@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DateTimeField } from "@/components/lead/DateTimeField";
-import { KINDS, kindLabel, quickPicks, toLocalInput } from "@/lib/followups";
+import { KINDS, kindLabel, pickDate, toLocalInput } from "@/lib/followups";
 import { Loader2 } from "lucide-react";
 
 const TITLES = { schedule: "Schedule a follow-up", log: "Log a contact", complete: "Mark follow-up done", reschedule: "Reschedule follow-up" };
@@ -37,8 +37,8 @@ export function FollowUpDialog({ mode, leadId, target, closed, onClose, onSaved 
   useEffect(() => {
     if (!mode) return;
     setKind(target?.kind || "call"); setNote(target?.note || ""); setOutcome(""); setNextNote("");
-    setWhen(target?.due_at ? toLocalInput(new Date(target.due_at)) : toLocalInput(quickPicks()[1].date));
-    setNext(!closed && (mode === "log" || mode === "complete")); setNextWhen(toLocalInput(quickPicks()[2].date));
+    setWhen(target?.due_at ? toLocalInput(new Date(target.due_at)) : toLocalInput(pickDate("Tomorrow 9am")));
+    setNext(!closed && (mode === "log" || mode === "complete")); setNextWhen(toLocalInput(pickDate("In 3 days")));
   }, [mode, target, closed]);
 
   const save = async () => {
