@@ -32,8 +32,8 @@ export function DateTimeField({ value, onChange, testid }) {
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto p-0" align="start" data-testid={`${testid}-popover`}>
-            <Calendar mode="single" defaultMonth={cur || new Date()} selected={cur || undefined}
-              onSelect={(d) => { if (d) { set(d, hm); setOpen(false); } }} />
+            <Calendar mode="single" required defaultMonth={cur || new Date()} selected={cur || undefined}
+              onSelect={(d) => { if (d) set(d, hm); setOpen(false); }} />
           </PopoverContent>
         </Popover>
         <Select value={hm} onValueChange={(t) => set(cur || new Date(), t)}>

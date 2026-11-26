@@ -16,7 +16,7 @@ import { StageBar, STAGE_LABELS } from "@/components/lead/StageBar";
 import { NextActionBanner } from "@/components/lead/NextAction";
 import { FollowUpsPanel } from "@/components/lead/FollowUpsPanel";
 import { DateTimeField } from "@/components/lead/DateTimeField";
-import { LEAD_STATUSES, LEAD_STATUS_COLOR, whenOf, WHEN_LABEL, dateTime, quickPicks, toLocalInput, tz } from "@/lib/followups";
+import { LEAD_STATUSES, LEAD_STATUS_COLOR, whenOf, WHEN_LABEL, dateTime, pickDate, toLocalInput, tz } from "@/lib/followups";
 import PhotoGallery from "@/components/PhotoGallery";
 import MeasurementWorksheet from "@/components/MeasurementWorksheet";
 import { CalendarClock, Home, User, ClipboardCheck, FileText, FileCheck2, Receipt, Hammer, Plus, Check, Send, Ban, Loader2, MapPin, UserCheck, Camera, Download, Trash2 } from "lucide-react";
@@ -119,7 +119,7 @@ export default function LeadDetail() {
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
   const openRecord = (i) => { setInspTarget(i || null); setInsp({ inspector: i?.inspector || "", roof_condition: "", findings: "", recommended_work: "", measurements: "", notes: i?.notes || "" }); setInspOpen(true); };
-  const openBook = () => { setBook({ when: toLocalInput(quickPicks()[1].date), inspector: user?.full_name || "", notes: "" }); setBookOpen(true); };
+  const openBook = () => { setBook({ when: toLocalInput(pickDate("Tomorrow 9am")), inspector: user?.full_name || "", notes: "" }); setBookOpen(true); };
   const bookInspection = async () => {
     setBusy(true);
     try {

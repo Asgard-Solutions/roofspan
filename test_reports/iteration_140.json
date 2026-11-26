@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend tests (Playwright, America/Chicago browser context; current local time 2026-11-25 ~22:00 CST) of the new DateTimeField (popover Calendar single mode + 15-min time Select + quick picks) in FollowUpDialog (schedule, reschedule, log next-when) and the Book inspection dialog. Saved values were checked through the API. All requested checks PASS. Schedule Nov 30 2:45 PM saved due_at 2026-11-30T20:45Z, the expected value. Default is tomorrow 9:00 AM. There are 96 time options. The popover closes after a day is picked and the dialog stays open. All 4 quick picks update the day label and the time. Reschedule of an off-grid time (API-created 10:07): prefills Fri Nov 27 | 10:07 AM; the extra 10:07 option is present and checked (97 options); an unchanged save keeps 2026-11-27T16:07Z; moving to Nov 29 saves 2026-11-29T16:07Z. Midnight boundary: 23:45 today shows the 'Today' badge and 00:00 tomorrow shows 'Upcoming'. Home Follow-ups due (/dashboard/attention?tz=America/Chicago and the Home card) includes the 23:45 one and not the 00:00 one. DST: 2026-11-01 11:30 PM -> 2026-11-02T05:30Z; 2026-03-08 11:30 PM -> 2026-03-09T04:30Z (calendar navigated back 8 months). Reopening reschedule shows the same day and 11:30 PM for both. DST gap 2026-03-08 02:30: the UI label changes straight to 3:30 AM before saving, saves 2026-03-08T08:30Z, and reopens as Mar 8 | 3:30 AM. Book inspection: Dec 10 1:30 PM -> inspection_date 2026-12-10T19:30:00Z, with the inspector and notes saved. After the popover was used, typing still worked in the dialog inputs, so there is no focus-trap issue. The Job page DateRangePicker (job-dates-trigger) opens a 2-month popover and closes on Escape; nothing was saved. No console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "DateTimeField calendar", "issue": "Clicking the day that is already selected does nothing: react-day-picker single mode sends undefined (deselect), the onSelect guard ignores it, and the popover stays open. The value is kept and Save stays enabled, which is harmless. Possible fix: close the popover in that case too (onSelect={(d)=>{ if (d) set(d,hm); setOpen(false); }}) or use the `required` prop.", "selector": "[data-testid=followup-when-popover] button[aria-selected=true]", "priority": "LOW"},
+      {"component": "Quick picks (pre-existing)", "issue": "'Later today' = now rounded down to the hour + 2h. After about 22:00 local time it gives a time after midnight, so it lands tomorrow (at 21:57 it gave 11 PM; from 22:00 it gives 12 AM the next day). This is pre-existing quickPicks logic.", "selector": "[data-testid=followup-when-pick-later-today]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional (LOW): close the DateTimeField popover when the already-selected day is clicked again",
+    "Optional (LOW): limit or hide 'Later today' when now+2h is after midnight"
+  ],
+  "critical_code_review_comments": [
+    "DateTimeField keeps the 'YYYY-MM-DDTHH:mm' contract through toLocalInput(new Date(y,m,d,h,min)), so storage, time-zone and DST handling are unchanged; verified with saved values.",
+    "The Save-disabled-when-empty path (needsWhen && !when) cannot be reached from the UI because the field always has a value (default plus no clear control). The 'Pick a day' placeholder only shows if a parent passes an empty value."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped as requested)", "frontend": "100%"},
+  "seed_data_creation": "Created through the owner API: property '2186 TEST_UI Way' and lead 'TEST_UI Cal 2186' (505706a5-8557-4912-bf5a-bd766b6557c1), assigned to sales_bk, plus 9 follow-ups and 1 inspection on that lead. All removed with manual_end: {inspections:1, leads:1, properties:1}. Lead GET now returns 404 and no TEST_ follow-ups remain on Home. No real jobs were modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Calendar is react-day-picker 8.10.1. Selectors: popover '[data-testid=<testid>-popover]'; day buttons 'button[name=day]:not(.day-outside)'; month nav 'button[name=previous-month|next-month]'; caption '[aria-live=polite]'. Book button is on the stage-inspection panel (click [data-testid=stage-inspection] first). Home data: GET /api/dashboard/attention?tz=..."
+}
